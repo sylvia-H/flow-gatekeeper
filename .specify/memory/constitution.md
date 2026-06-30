@@ -1,6 +1,28 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.4.0 → 1.4.1
+Rationale: 釐清 Principle III 的「型別來源分層」——需 runtime 驗證的 payload（如
+DiagnosisResult、AI 結果）MUST 用 Zod + z.infer；純做型別分派的傳輸／控制訊息（WebSocket
+envelope、ping/pong、system/connected、machine/subscribed、system/unauthorized 等
+discriminated union）MAY 直接以 TS 型別定義，仍以 packages/contracts 為單一來源且 MUST NOT
+另寫平行定義。此為消除 002 analyze 發現的字面衝突（C1：events.ts 控制／事件型別為手寫 TS、
+非 z.infer 衍生），並對齊 001 既已採用、002 延續的實作（僅 DiagnosisResult 用 Zod）。屬釐清、
+非語意變更（未移除或放寬既有 MUST，僅界定其適用範圍），依版本政策以 PATCH（1.4.1）處理。
+
+Modified principles:
+- III. 契約優先與全棧型別安全 — 新增「型別來源分層」澄清段；既有 MUST 不變
+
+Templates requiring updates:
+- ✅ .specify/templates/plan-template.md（Constitution Check gate 為泛用，自動對齊）
+- ✅ .specify/templates/spec-template.md（無 constitution 專屬內容）
+- ✅ .specify/templates/tasks-template.md（無 constitution 專屬內容）
+- ℹ️ CLAUDE.md「Zod schema 為單一來源，type 由 z.infer 推導」為高層摘要，經本次釐清後仍成立
+  （適用於需驗證的 payload），無需修改
+
+Follow-up TODOs: none
+
+----- Prior amendment (1.3.0 → 1.4.0) -----
 Version change: 1.3.0 → 1.4.0
 Rationale: 新增「merge 回 develop MUST 用 --no-ff」規則——禁止 fast-forward 併入，
 強制產生明確的 merge commit，使每個 feature 在 git 歷史中有可辨識的收尾點（起因：
@@ -83,9 +105,14 @@ commit 訊息格式以 `CLAUDE.md` 為準。
 
 ### III. 契約優先與全棧型別安全（Contract-First & Type Safety）
 
-`packages/contracts` 的 Zod schema 是通訊契約的唯一來源，型別 MUST 由 `z.infer`
-推導，MUST NOT 手寫平行型別定義。新增 event/payload MUST 先改契約，再改
-API/worker/web。
+`packages/contracts` 是通訊契約的唯一來源，新增 event/payload MUST 先改契約，再改
+API/worker/web，MUST NOT 在各端另寫平行型別定義。
+
+**型別來源分層**：需要 runtime 驗證的 payload（如 `DiagnosisResult`、AI 結果）MUST 以 Zod
+schema 定義並由 `z.infer` 推導型別（呼應 Principle V 的 `DiagnosisResultSchema.parse()`）；
+純做型別分派的傳輸／控制訊息（WebSocket envelope、`ping`/`pong`、`system/connected`、
+`machine/subscribed`、`system/unauthorized` 等 discriminated union）MAY 直接以 TypeScript
+型別定義，惟仍 MUST 以 `packages/contracts` 為單一來源、MUST NOT 另寫平行定義。
 
 全棧 MUST 使用 strict TypeScript，並避免 `any` 擴散。
 
@@ -183,4 +210,4 @@ lock 等暫態用途。
 - **合規審查**：所有 PR / review MUST 驗證是否符合本憲章；複雜度 MUST 有正當理由。
   日常開發的操作層指引以 `CLAUDE.md` 為輔，但其內容 MUST NOT 與本憲章相牴觸。
 
-**Version**: 1.4.0 | **Ratified**: 2026-06-30 | **Last Amended**: 2026-06-30
+**Version**: 1.4.1 | **Ratified**: 2026-06-30 | **Last Amended**: 2026-06-30

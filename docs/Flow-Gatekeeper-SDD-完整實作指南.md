@@ -222,7 +222,7 @@ flow-gatekeeper/
 | 工具 | 建議版本 | 用途 | 確認指令 |
 | --- | --- | --- | --- |
 | Git | 最新穩定版 | branch、commit、Spec Kit feature flow | `git -v` |
-| Node.js | 20 LTS+ | web/api/worker runtime | `node -v` |
+| Node.js | 24 LTS（20 LTS+ 亦可；CI 以 Node 24 驗證） | web/api/worker runtime | `node -v` |
 | pnpm | 9+ | monorepo workspace | `pnpm -v` |
 | Docker Desktop | 最新穩定版 | Redis + MongoDB | `docker -v` |
 | uv | 最新穩定版 | 安裝 Spec Kit CLI | `uv --version` |
@@ -257,7 +257,7 @@ npm i -g pnpm
 pnpm -v
 ```
 
-建議使用 Node 20 LTS。若你用 nvm/nvs/fnm，先切好版本再初始化專案。
+建議使用 Node 24 LTS（CI 亦以 Node 24 驗證）。若你用 nvm/nvs/fnm，先切好版本再初始化專案。
 
 ### 3.4 Docker Desktop 檢查
 
