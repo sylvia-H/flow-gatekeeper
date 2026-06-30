@@ -36,13 +36,61 @@ flow-gatekeeper 是一個致敬 Argo CD 的即時流程監控與 AI 診斷 side 
 
 ## Commit 規範
 
-- 沿用 Conventional Commits 前綴（`feat:`、`fix:`、`chore:`、`docs:`、`refactor:`、`test:`…），**前綴後的描述一律用中文撰寫**。
+- 沿用 Conventional Commits 前綴（`feat:`、`fix:`、`build:`、`ci:`、`chore:`、`docs:`、`refactor:`、`test:`…），**前綴後的描述一律用中文撰寫**。
+- **type 選用準則**（依該 commit 的主要性質擇一）：
+  - `feat`：交付對使用者/產品有意義的**能力增量**（如共用契約、可連線 infra、祕密防護門檻）。
+  - `fix`：修正錯誤行為。
+  - `build`：建置系統、相依與工具設定（`pnpm-workspace`、root/套件 `package.json`、`tsconfig`、`eslint` 設定、lockfile、`vite.config` 等）。
+  - `ci`：CI 設定（如 `.github/workflows/*`）。
+  - `chore`：上述未涵蓋的雜項維護與純鷹架（如尚無內容的 placeholder 模組）。
+  - `docs` / `test` / `refactor`：文件 / 測試 / 不改行為的重構。
 - 可帶 scope，例如 feature 編號：`feat(001): ...`。
 - 範例：
   - `feat(004): 加入高頻 WebSocket gatekeeper 與監控 UI`
   - `fix: 修正 worker dedupe lock 過期後重複呼叫 LLM`
-  - `chore: 初始化 spec kit workspace`
-- 只在使用者要求時才 commit；在開發主支 `develop` 上要先開 feature branch。
+  - `build: 初始化 pnpm workspace 與 tsconfig`
+  - `ci: 新增 GitHub Actions 契約 lint 與 typecheck 流程`
+- **預設**：只在使用者要求時才 commit；在開發主支 `develop` 上要先開 feature branch。
+
+### `/speckit.implement` 階段的 phase-by-phase 自動 commit（預設規則的例外）
+
+在執行 `/speckit.implement` 時，**以 tasks.md 的 phase 為遞交單位，每完成一個 phase 就自動
+commit**，不需逐次徵詢；流程為：
+
+1. 完成該 phase 的所有任務並就地驗證（typecheck/test/lint 等該 phase 可驗的部分）。
+2. 先在 `tasks.md` 把該 phase 的對應任務勾選為 `[X]`。
+3. 就該 phase 的成果建立 commit。**目標：讓人看 commit 歷史就能還原開發的順序與過程。**
+   顆粒度規則：
+   - **基本規律**：一個 phase 一個 commit。
+   - **大 phase 拆細**：當該 phase 更動範圍大、檔案多，或混入不同性質產物時，SHOULD 依
+     **主要開發大項**（子模組或性質）拆成顆粒度更細的多個 commit，使過程更清楚（例如
+     Foundational 可拆成「packages 骨架」「apps 骨架」「安裝與 lockfile」）。
+   - **顆粒度以「開發大項」為界**：不設死的數字上限——以「自然的大項」決定切幾個即可，
+     依大項拆成 6 個也屬合理；真正要避免的是**切得過細的零碎 commit**。若一個 phase 切出
+     明顯瑣碎、難以一眼看懂順序的 commit，應回頭合併同性質者（一般落在數個以內）。
+   - 拆分後每個 commit 仍標記**同一 phase**，並以子題中文描述區分；commit 順序須反映實際
+     建置順序。
+4. **commit 標題 MUST 標記 phase**：格式為
+   `<type>(<feature>): [Phase <n>: <名稱>] <中文描述>`。
+   - `<type>` 依該 commit 主要性質擇一（見上方「type 選用準則」）：Setup 的工具/設定 → `build`；
+     相依/lockfile → `build`；CI 設定 → `ci`；純鷹架（空骨架）→ `chore`；User Story 能力增量 →
+     `feat`；測試 → `test`；Polish/文件 → `docs`。同一 phase 拆出的多個 commit 可有不同 type。
+   - 單一 phase 範例（未拆）：
+     - `build(001): [Phase 1: Setup] 初始化 pnpm workspace 與工具鏈`
+     - `feat(001): [Phase 3: US1] 一鍵啟動可驗證工作區與本機 infra`
+     - `feat(001): [Phase 4: US2] 共用契約、AsyncAPI 與三端匯入`
+     - `docs(001): [Phase 6: Polish] 驗收與 tasks/checklist 勾選`
+   - 大 phase 拆細範例（依主要開發大項，type 可不同）：
+     - `chore(001): [Phase 2: Foundational] 建立 packages 契約與 shared 骨架`
+     - `chore(001): [Phase 2: Foundational] 建立 api/worker/web app 骨架`
+     - `build(001): [Phase 2: Foundational] 安裝相依並產生 lockfile`
+     - `ci(001): [Phase 5: US3] 新增 GitHub Actions 四道檢查`
+5. 該 phase 的 `tasks.md` 勾選變更**併入該 phase 的 commit**（若拆多個，併入收尾的那個），
+   使勾選與成果在 git 歷史對齊。
+
+> 注意：此自動 commit 僅限 `/speckit.implement` 執行期間。其餘所有情境仍回到「只在使用者
+> 要求時才 commit」的預設。仍 MUST 在 feature branch 上進行（不在 `develop` 直接 commit），
+> 且絕不提交祕密（見工程硬規則 7）。
 
 ## SDD 流程提醒
 
