@@ -44,12 +44,12 @@ monorepo：`apps/api/src/...`、`packages/contracts/src/...`、repo 根的 `asyn
 
 **⚠️ CRITICAL**: 完成本相之前，任何 user story 不得開工
 
-- [ ] T004 [P] 擴充 `packages/contracts/src/events.ts`：新增 `Ping`、`SystemConnected`、`MachineSubscribed`、`Pong`、`SystemUnauthorized` 型別與 `ClientControlMessage`／`ServerControlMessage` 聯集（依 contracts/control-messages.contract.md），完成後 `pnpm --filter @flow-gatekeeper/contracts build` 以更新 dist 供 api 取用
-- [ ] T005 [P] 擴充 `asyncapi.yaml`：新增 `system/connected`、`machine/subscribed`、`pong`、`system/unauthorized`（server→client）與 `ping`（client→server）通道/訊息；確保 `pnpm contract:lint` 0 違規
-- [ ] T006 建立 `apps/api/src/modules/config/config.module.ts`（與 `config.service.ts`）：`import 'dotenv/config'` 載入 `apps/api/.env`，型別化讀取 `MOCK_TELEMETRY_INTERVAL_MS`(預設 50)、`WS_HEARTBEAT_MS`(預設 15000)、`WS_AUTH_SECRET`、`MONGO_URL`、`MONGO_DB`、`TELEMETRY_TTL_SECONDS`(預設 604800)
-- [ ] T007 建立 `apps/api/src/app.module.ts`：彙整 Config、MonitoringGateway、MockTelemetryService、HistoryService 等 provider（後續任務逐步補齊 provider 本體）
-- [ ] T008 改寫 `apps/api/src/main.ts`：`NestFactory.create(AppModule)` → `await app.listen(API_PORT)` → `app.get(MonitoringGateway).attach(app.getHttpServer())`；**保留 entry import 為 side-effect-free 的守衛**（`if (import.meta.url …)` 才啟動），使 001 的 `main.test.ts` smoke 仍通過（必要時同步調整該測試）
-- [ ] T009 建立 `apps/api/src/modules/websocket/monitoring.gateway.ts` 骨架：`attach(server)` 以 `new WebSocketServer({ server, path: '/ws' })`；維護 `clients: Map<ClientId, WebSocket>` 與 `subscriptions: Map<ClientId, Set<string>>`；連線時以 `randomUUID()` 配 clientId 並送 `system/connected`；`close` 事件清理 maps；公開 `send(clientId, payload)` 方法（003 relay 銜接點，FR-015）
+- [X] T004 [P] 擴充 `packages/contracts/src/events.ts`：新增 `Ping`、`SystemConnected`、`MachineSubscribed`、`Pong`、`SystemUnauthorized` 型別與 `ClientControlMessage`／`ServerControlMessage` 聯集（依 contracts/control-messages.contract.md），完成後 `pnpm --filter @flow-gatekeeper/contracts build` 以更新 dist 供 api 取用
+- [X] T005 [P] 擴充 `asyncapi.yaml`：新增 `system/connected`、`machine/subscribed`、`pong`、`system/unauthorized`（server→client）與 `ping`（client→server）通道/訊息；確保 `pnpm contract:lint` 0 違規
+- [X] T006 建立 `apps/api/src/modules/config/config.module.ts`（與 `config.service.ts`）：`import 'dotenv/config'` 載入 `apps/api/.env`，型別化讀取 `MOCK_TELEMETRY_INTERVAL_MS`(預設 50)、`WS_HEARTBEAT_MS`(預設 15000)、`WS_AUTH_SECRET`、`MONGO_URL`、`MONGO_DB`、`TELEMETRY_TTL_SECONDS`(預設 604800)
+- [X] T007 建立 `apps/api/src/app.module.ts`：彙整 Config、MonitoringGateway、MockTelemetryService、HistoryService 等 provider（後續任務逐步補齊 provider 本體）
+- [X] T008 改寫 `apps/api/src/main.ts`：`NestFactory.create(AppModule)` → `await app.listen(API_PORT)` → `app.get(MonitoringGateway).attach(app.getHttpServer())`；**保留 entry import 為 side-effect-free 的守衛**（`if (import.meta.url …)` 才啟動），使 001 的 `main.test.ts` smoke 仍通過（必要時同步調整該測試）
+- [X] T009 建立 `apps/api/src/modules/websocket/monitoring.gateway.ts` 骨架：`attach(server)` 以 `new WebSocketServer({ server, path: '/ws' })`；維護 `clients: Map<ClientId, WebSocket>` 與 `subscriptions: Map<ClientId, Set<string>>`；連線時以 `randomUUID()` 配 clientId 並送 `system/connected`；`close` 事件清理 maps；公開 `send(clientId, payload)` 方法（003 relay 銜接點，FR-015）
 
 **Checkpoint**: 契約已擴充、API 可啟動並接受 ws 連線、連線/斷線基本生命週期就緒。
 
