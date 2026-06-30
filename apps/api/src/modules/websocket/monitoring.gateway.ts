@@ -6,6 +6,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { MachineSubscribed, Pong, SystemConnected } from "@flow-gatekeeper/contracts";
 import { AppConfigService } from "../config/config.service.js";
 import { MockTelemetryService } from "../telemetry/mock-telemetry.service.js";
+import { HistoryService } from "../history/history.service.js";
 import { filterPointsForSubscription } from "../../lib/subscription-filter.js";
 
 type ClientId = string;
@@ -29,6 +30,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly config: AppConfigService,
     private readonly telemetry: MockTelemetryService,
+    private readonly history: HistoryService,
   ) {}
 
   onModuleInit(): void {
@@ -94,15 +96,20 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** 每 tick：只把訂閱機台的 TelemetryPoint[] 推給各訂閱者（FR-004）。 */
+  /** 每 tick：只把訂閱機台的 TelemetryPoint[] 推給各訂閱者（FR-004）；全量落地與推送解耦。 */
   private publishTelemetry(): void {
     const points = this.telemetry.nextBatch();
+
+    // 即時推送：只送訂閱者（FR-004）。
     for (const [clientId, machineIds] of this.subscriptions) {
       const selected = filterPointsForSubscription(points, machineIds);
       if (selected.length > 0) {
         this.send(clientId, selected);
       }
     }
+
+    // 持久化：全部機台、與訂閱無關（FR-009）；fire-and-forget，不 await 阻塞 cadence（FR-010）。
+    void this.history.persistBatch(points);
   }
 
   private cleanup(clientId: ClientId, reason: string): void {

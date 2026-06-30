@@ -88,14 +88,14 @@ monorepo：`apps/api/src/...`、`packages/contracts/src/...`、repo 根的 `asyn
 
 ### Tests for User Story 2 (FR-016 必需)
 
-- [ ] T015 [P] [US2] 建立純函式 `apps/api/src/lib/errorlog-transition.ts`：`detectErrorTransitions(points, lastState): ErrorLogDoc[]`（僅「轉入 warning/critical」產生，回傳更新後 lastState）
-- [ ] T016 [P] [US2] 建立 `apps/api/src/lib/errorlog-transition.test.ts`（Vitest）：斷言連續同狀態不重複、healthy 轉入不記錄、warning↔critical 轉換各記一筆（SC-003 去重佐證）
+- [X] T015 [P] [US2] 建立純函式 `apps/api/src/lib/errorlog-transition.ts`：`detectErrorTransitions(points, lastState): ErrorLogDoc[]`（僅「轉入 warning/critical」產生，回傳更新後 lastState）
+- [X] T016 [P] [US2] 建立 `apps/api/src/lib/errorlog-transition.test.ts`（Vitest）：斷言連續同狀態不重複、healthy 轉入不記錄、warning↔critical 轉換各記一筆（SC-003 去重佐證）
 
 ### Implementation for User Story 2
 
-- [ ] T017 [US2] 建立 `apps/api/src/modules/history/history.service.ts`：`onModuleInit` 連 Mongo 並 `ensureCollections()`（`telemetry` time-series + `expireAfterSeconds=TELEMETRY_TTL_SECONDS`；`errorlogs` index `{machineId:1,timestamp:-1}`；`maintenanceRecords` index `{machineId:1,performedAt:-1}`）；`persistBatch(points)`：`insertMany` 全部機台遙測（`ordered:false`）+ 用 `detectErrorTransitions` 寫 errorlogs；落地錯誤 `catch` 並以 Logger `error` 記錄（不丟出，FR-010/FR-017）
-- [ ] T018 [US2] 於 `monitoring.gateway.ts` 的 `publishTelemetry()` 末端加入 `void this.history.persistBatch(points)`（fire-and-forget，與推送解耦；落地不得 await 阻塞 cadence，SC-008）
-- [ ] T019 [US2] 建立 `apps/api/src/scripts/seed.ts`：`maintenanceRecords` `deleteMany({})` 後 `insertMany([...])` 種入示範維修紀錄（決定性、可重播；`pnpm --filter @flow-gatekeeper/api seed` 可跑）
+- [X] T017 [US2] 建立 `apps/api/src/modules/history/history.service.ts`：`onModuleInit` 連 Mongo 並 `ensureCollections()`（`telemetry` time-series + `expireAfterSeconds=TELEMETRY_TTL_SECONDS`；`errorlogs` index `{machineId:1,timestamp:-1}`；`maintenanceRecords` index `{machineId:1,performedAt:-1}`）；`persistBatch(points)`：`insertMany` 全部機台遙測（`ordered:false`）+ 用 `detectErrorTransitions` 寫 errorlogs；落地錯誤 `catch` 並以 Logger `error` 記錄（不丟出，FR-010/FR-017）
+- [X] T018 [US2] 於 `monitoring.gateway.ts` 的 `publishTelemetry()` 末端加入 `void this.history.persistBatch(points)`（fire-and-forget，與推送解耦；落地不得 await 阻塞 cadence，SC-008）
+- [X] T019 [US2] 建立 `apps/api/src/scripts/seed.ts`：`maintenanceRecords` `deleteMany({})` 後 `insertMany([...])` 種入示範維修紀錄（決定性、可重播；`pnpm --filter @flow-gatekeeper/api seed` 可跑）
 
 **Checkpoint**: US1 + US2 皆可獨立驗收——即時推送 + 可追溯歷史。
 
