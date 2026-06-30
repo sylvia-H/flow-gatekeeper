@@ -3,7 +3,12 @@ import type { OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import type { Server as HttpServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
-import type { MachineSubscribed, Pong, SystemConnected } from "@flow-gatekeeper/contracts";
+import type {
+  MachineSubscribed,
+  Pong,
+  SystemConnected,
+  SystemUnauthorized,
+} from "@flow-gatekeeper/contracts";
 import { AppConfigService } from "../config/config.service.js";
 import { MockTelemetryService } from "../telemetry/mock-telemetry.service.js";
 import { HistoryService } from "../history/history.service.js";
@@ -14,18 +19,22 @@ type ClientId = string;
 /**
  * 原生 `ws` Gateway（掛在 NestJS HTTP server，path `/ws`），非 Socket.IO（憲章 IV、ADR-001）。
  *
- * 跨多相演進的中心檔：
- * - Foundational：連線生命週期、ping→pong、send() 銜接點（FR-015）。
- * - US1（本相）：machine/subscribe（取代式 + 授權 happy-path）、producer tick、依訂閱推送。
- * - US3：伺服器端心跳探活回收、system/unauthorized 回執、生命週期記錄。
+ * - 連線生命週期：連線→system/connected、close/心跳逾時→清理（FR-001/FR-008）。
+ * - 訂閱：machine/subscribe 取代式 + 授權（FR-002/FR-003）；未訂閱者不收遙測（FR-004）。
+ * - 心跳：應用層 ping→pong（FR-007a）+ 伺服器端探活回收半死連線（FR-007b/SC-005）。
+ * - 落地：全量 fire-and-forget 交給 HistoryService（FR-009/FR-010）。
+ * - 記錄：連線/斷線/授權失敗/逾時回收（FR-017）。
+ * - send()：對單一連線推送任意 payload，003 AI relay 銜接點（FR-015）。
  */
 @Injectable()
 export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MonitoringGateway.name);
   private wss?: WebSocketServer;
   private producerTimer?: ReturnType<typeof setInterval>;
+  private heartbeatTimer?: ReturnType<typeof setInterval>;
   private readonly clients = new Map<ClientId, WebSocket>();
   private readonly subscriptions = new Map<ClientId, Set<string>>();
+  private readonly alive = new Map<ClientId, boolean>();
 
   constructor(
     private readonly config: AppConfigService,
@@ -39,10 +48,13 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
       () => this.publishTelemetry(),
       this.config.mockTelemetryIntervalMs,
     );
+    // 伺服器端心跳探活：回收網路硬中斷的「半死」連線（FR-007b/SC-005）。
+    this.heartbeatTimer = setInterval(() => this.sweepDeadConnections(), this.config.wsHeartbeatMs);
   }
 
   onModuleDestroy(): void {
     if (this.producerTimer) clearInterval(this.producerTimer);
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
   }
 
   /** 由 main.ts 在 app.listen() 後呼叫，與 HTTP 共用同一個 port（ws://host:port/ws）。 */
@@ -55,10 +67,13 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     const clientId = randomUUID();
     this.clients.set(clientId, socket);
     this.subscriptions.set(clientId, new Set());
+    this.alive.set(clientId, true);
     this.send(clientId, { type: "system/connected", clientId } satisfies SystemConnected);
     this.logger.log(`client connected: ${clientId}`);
 
     socket.on("message", (raw) => this.handleMessage(clientId, raw.toString()));
+    // protocol-level pong（回應伺服器的 ping()）→ 標記存活。
+    socket.on("pong", () => this.alive.set(clientId, true));
     socket.on("close", () => this.cleanup(clientId, "close"));
   }
 
@@ -78,7 +93,9 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
       case "machine/subscribe": {
         const secret = this.config.wsAuthSecret;
         if (secret && msg.token !== secret) {
-          // 無效授權：不建立/變更訂閱。明確的 system/unauthorized 回執於 US3（T021）補上。
+          // 無效授權：回 system/unauthorized 且不建立/變更訂閱（FR-003/SC-006）。
+          this.logger.warn(`unauthorized subscribe from ${clientId}`);
+          this.send(clientId, { type: "system/unauthorized" } satisfies SystemUnauthorized);
           return;
         }
         const machineIds = msg.machineIds ?? [];
@@ -112,9 +129,28 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     void this.history.persistBatch(points);
   }
 
+  /**
+   * 心跳探活掃描：上一輪未回 pong 者判定失效並回收（涵蓋網路硬中斷的半死連線）；
+   * 存活者標記為待驗證並送 ping()。回收上限約 2 × WS_HEARTBEAT_MS（SC-005）。
+   */
+  private sweepDeadConnections(): void {
+    for (const [clientId, socket] of this.clients) {
+      if (this.alive.get(clientId) === false) {
+        this.logger.warn(`heartbeat timeout, terminating ${clientId}`);
+        socket.terminate();
+        this.cleanup(clientId, "heartbeat-timeout");
+        continue;
+      }
+      this.alive.set(clientId, false);
+      socket.ping();
+    }
+  }
+
   private cleanup(clientId: ClientId, reason: string): void {
+    if (!this.clients.has(clientId)) return; // 冪等：避免 terminate→close 重複清理/記錄
     this.clients.delete(clientId);
     this.subscriptions.delete(clientId);
+    this.alive.delete(clientId);
     this.logger.log(`client disconnected (${reason}): ${clientId}`);
   }
 

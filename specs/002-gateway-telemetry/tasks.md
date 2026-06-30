@@ -110,9 +110,9 @@ monorepo：`apps/api/src/...`、`packages/contracts/src/...`、repo 根的 `asyn
 
 ### Implementation for User Story 3
 
-- [ ] T020 [US3] 在 `monitoring.gateway.ts` 實作伺服器端心跳：每 socket `isAlive` 旗標，protocol `pong` 事件置 true；`setInterval(WS_HEARTBEAT_MS)` 掃描，`isAlive` 為 false 者 `terminate()` 並清理 `clients`/`subscriptions`，否則置 false 後 `socket.ping()`（回收 ≤2×`WS_HEARTBEAT_MS`，FR-007b/FR-008/SC-005）
-- [ ] T021 [US3] 強化 `handleMessage`：JSON 解析失敗或未知 `type` 安全忽略（FR-014）；`machine/subscribe` token 無效時回 `system/unauthorized` 且**不**建立/變更訂閱（FR-003/SC-006）
-- [ ] T022 [US3] 補齊 FR-017 生命週期記錄（Nest `Logger`）：連線建立（含 clientId）、連線中斷（含心跳逾時回收，標原因）、授權失敗——分 `log`/`warn` 等級，跨 `monitoring.gateway.ts`
+- [X] T020 [US3] 在 `monitoring.gateway.ts` 實作伺服器端心跳：每 socket `isAlive` 旗標，protocol `pong` 事件置 true；`setInterval(WS_HEARTBEAT_MS)` 掃描，`isAlive` 為 false 者 `terminate()` 並清理 `clients`/`subscriptions`，否則置 false 後 `socket.ping()`（回收 ≤2×`WS_HEARTBEAT_MS`，FR-007b/FR-008/SC-005）
+- [X] T021 [US3] 強化 `handleMessage`：JSON 解析失敗或未知 `type` 安全忽略（FR-014）；`machine/subscribe` token 無效時回 `system/unauthorized` 且**不**建立/變更訂閱（FR-003/SC-006）
+- [X] T022 [US3] 補齊 FR-017 生命週期記錄（Nest `Logger`）：連線建立（含 clientId）、連線中斷（含心跳逾時回收，標原因）、授權失敗——分 `log`/`warn` 等級，跨 `monitoring.gateway.ts`
 
 **Checkpoint**: 三個 user story 皆可獨立驗收。
 
