@@ -364,7 +364,7 @@ Spec Kit 初始化後，Claude Code 應能使用：
 005-copilot-ui-design
 ```
 
-每條 feature branch 都要**從 `main` 開**，做完 merge 回 `main` 再開下一條：
+每條 feature branch 都要**從 `develop` 開**，做完 merge 回 `develop` 再開下一條：
 
 ```bash
 git checkout main

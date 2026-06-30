@@ -41,10 +41,10 @@ flow-gatekeeper 是一個致敬 Argo CD 的即時流程監控與 AI 診斷 side 
   - `feat(004): 加入高頻 WebSocket gatekeeper 與監控 UI`
   - `fix: 修正 worker dedupe lock 過期後重複呼叫 LLM`
   - `chore: 初始化 spec kit workspace`
-- 只在使用者要求時才 commit；在預設分支上要先開 feature branch。
+- 只在使用者要求時才 commit；在開發主支 `develop` 上要先開 feature branch。
 
 ## SDD 流程提醒
 
-- 每個正式 feature 從 `main` 開新 branch，走完整流程：
-  `/speckit.specify -> clarify -> plan -> checklist -> tasks -> analyze -> implement -> 驗收 -> commit/merge`。
+- 開發主支為 `develop`。每個正式 feature 從 `develop` 開新 branch，走完整流程：
+  `/speckit.specify -> clarify -> plan -> checklist -> tasks -> analyze -> implement -> 驗收 -> merge 回 develop`，完成後再從 `develop` 開下一條 feature branch。
 - 不要在同一 branch 混多個大 feature；不要又手貼完整 code 又跑 `/speckit.implement`（會互相覆蓋）。
