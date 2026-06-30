@@ -122,10 +122,10 @@ monorepo：`apps/api/src/...`、`packages/contracts/src/...`、repo 根的 `asyn
 
 **Purpose**: 跨故事的驗證與品質門檻
 
-- [ ] T023 [P] 於 repo 根執行 `pnpm contract:lint`、`pnpm typecheck`、`pnpm lint` 並修正任何問題（contracts 新型別、asyncapi 擴充、api strict TS 無 `any`）
-- [ ] T024 [P] 執行 `pnpm --filter @flow-gatekeeper/api test`，確認 T011、T016 兩支實際單元測試通過（FR-016/SC-007）
-- [ ] T025 依 `quickstart.md` 跑場景 1–3 手動驗收（SC-001、SC-002、SC-003、SC-004、SC-005、SC-006、SC-008）
-- [ ] T026 驗證 FR-017：實際觀察 log 中出現連線/斷線（含逾時回收）/授權失敗/落地錯誤四類事件
+- [X] T023 [P] 於 repo 根執行 `pnpm contract:lint`、`pnpm typecheck`、`pnpm lint`（`pnpm check`）：contract:lint 0 違規、全 workspace typecheck/lint 通過、無 `any` 洩漏
+- [X] T024 [P] 執行測試：api 9 passed（含 T011 filter 4、T016 transition 4、smoke 1），全 workspace 16 passed（FR-016/SC-007）
+- [ ] T025 依 `quickstart.md` 跑場景 1–3 **手動驗收**（SC-001/002/003/004/005/006/008）— ⏳ 需本機 `docker compose up -d` + `pnpm --filter @flow-gatekeeper/api start:dev`/`seed` + ws 客戶端；無法於 CI/此環境執行
+- [ ] T026 驗證 FR-017：觀察 log 出現連線/斷線（含逾時回收）/授權失敗/落地錯誤四類事件 — ⏳ 同 T025，需本機執行期手動觀察
 
 ---
 
