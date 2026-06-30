@@ -1,8 +1,11 @@
 name: ci
 
+# CI 暫停自動觸發（私有 repo 期間節省 Actions 分鐘數）。
+# 開發完畢、clone 到正式私有庫後，解開下面 push / pull_request 兩行即可恢復自動 CI。
 on:
-  push:
-  pull_request:
+  workflow_dispatch: # 僅保留手動觸發（Actions 頁可手動 Run workflow）
+  # push:
+  # pull_request:
 
 jobs:
   check:
