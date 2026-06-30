@@ -1,0 +1,6 @@
+extends:
+  - spectral:asyncapi
+rules:
+  # 本專案刻意採用 AsyncAPI 2.6.0（原生 ws 通道文件，見 docs/adr-001），
+  # 不升 3.x；關閉「使用最新版本」建議以維持 0 違規。
+  asyncapi-latest-version: off

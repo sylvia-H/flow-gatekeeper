@@ -1,0 +1,219 @@
+asyncapi: 2.6.0
+info:
+  title: flow-gatekeeper Realtime Events
+  version: 0.1.0
+  description: WebSocket events for telemetry, diagnosis jobs, and AI streaming.
+  contact:
+    name: flow-gatekeeper
+    url: https://github.com/flow-gatekeeper
+    email: dev@flow-gatekeeper.local
+  license:
+    name: MIT
+
+tags:
+  - name: telemetry
+    description: High-frequency machine telemetry channels.
+  - name: diagnosis
+    description: Diagnosis job lifecycle and AI streaming channels.
+
+servers:
+  local:
+    url: ws://localhost:3000/ws
+    protocol: ws
+
+channels:
+  machine/subscribe:
+    publish:
+      operationId: machineSubscribe
+      summary: Client subscribes to machine telemetry.
+      description: Client sends a subscribe control message with auth token and the machine ids it wants telemetry for.
+      message:
+        $ref: "#/components/messages/MachineSubscribe"
+
+  machine/data:
+    subscribe:
+      operationId: machineData
+      summary: Server pushes high-frequency machine telemetry.
+      description: Server streams telemetry points for subscribed machines at high frequency.
+      message:
+        $ref: "#/components/messages/MachineData"
+
+  job/status:
+    subscribe:
+      operationId: jobStatus
+      summary: Server pushes diagnosis job status.
+      description: Server emits lifecycle status updates for a diagnosis job, optionally carrying the final result.
+      message:
+        $ref: "#/components/messages/JobStatus"
+
+  ai/token:
+    subscribe:
+      operationId: aiToken
+      summary: Server pushes streamed AI token chunks.
+      description: Server forwards streamed AI token chunks for an in-progress diagnosis job.
+      message:
+        $ref: "#/components/messages/AiToken"
+
+  ai/done:
+    subscribe:
+      operationId: aiDone
+      summary: Server pushes final AI diagnosis.
+      description: Server emits the validated final diagnosis result for a job, flagging whether it was served from cache.
+      message:
+        $ref: "#/components/messages/AiDone"
+
+  ai/error:
+    subscribe:
+      operationId: aiError
+      summary: Server pushes AI provider or worker errors.
+      description: Server emits an error event when the AI provider or worker fails for a job.
+      message:
+        $ref: "#/components/messages/AiError"
+
+components:
+  messages:
+    MachineSubscribe:
+      payload:
+        type: object
+        required: [type, token, machineIds]
+        properties:
+          type:
+            const: machine/subscribe
+          token:
+            type: string
+          machineIds:
+            type: array
+            items:
+              type: string
+
+    MachineData:
+      payload:
+        $ref: "#/components/schemas/TelemetryPoint"
+
+    JobStatus:
+      payload:
+        type: object
+        required: [type, jobId, machineId, status]
+        properties:
+          type:
+            const: job/status
+          jobId:
+            type: string
+          machineId:
+            type: string
+          status:
+            enum: [waiting, active, completed, failed]
+          progress:
+            type: number
+            minimum: 0
+            maximum: 100
+          result:
+            $ref: "#/components/schemas/DiagnosisResult"
+          error:
+            type: string
+
+    AiToken:
+      payload:
+        type: object
+        required: [type, jobId, seq, text]
+        properties:
+          type:
+            const: ai/token
+          jobId:
+            type: string
+          seq:
+            type: integer
+          text:
+            type: string
+
+    AiDone:
+      payload:
+        type: object
+        required: [type, jobId, cached, result]
+        properties:
+          type:
+            const: ai/done
+          jobId:
+            type: string
+          cached:
+            type: boolean
+          result:
+            $ref: "#/components/schemas/DiagnosisResult"
+
+    AiError:
+      payload:
+        type: object
+        required: [type, jobId, code, message]
+        properties:
+          type:
+            const: ai/error
+          jobId:
+            type: string
+          code:
+            type: string
+          message:
+            type: string
+
+  schemas:
+    TelemetryPoint:
+      type: object
+      required: [type, machineId, timestamp, telemetry, state]
+      properties:
+        type:
+          const: machine/data
+        machineId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        telemetry:
+          type: object
+          required: [temperature, vibration, throughput, errorRate]
+          properties:
+            temperature:
+              type: number
+            vibration:
+              type: number
+            throughput:
+              type: number
+            errorRate:
+              type: number
+        state:
+          enum: [healthy, warning, critical]
+
+    DiagnosisResult:
+      type: object
+      required: [summary, severity, likelyCauses, suggestedActions, evidence]
+      properties:
+        summary:
+          type: string
+        severity:
+          enum: [ok, warning, critical]
+        likelyCauses:
+          type: array
+          items:
+            type: string
+        suggestedActions:
+          type: array
+          items:
+            type: object
+            required: [label, priority]
+            properties:
+              label:
+                type: string
+              priority:
+                enum: [low, medium, high]
+              command:
+                type: string
+        evidence:
+          type: array
+          items:
+            type: object
+            required: [source, excerpt]
+            properties:
+              source:
+                enum: [telemetry, errorlog, maintenance]
+              id:
+                type: string
+              excerpt:
+                type: string

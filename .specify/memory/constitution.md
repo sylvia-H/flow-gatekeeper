@@ -1,34 +1,45 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 1.2.0 → 1.2.1
-Rationale: Housekeeping consolidation — 移除滲入憲章的 operational 細節、把與
-CLAUDE.md 逐字重複的環境/commit 慣例改為指標、並將「可重播 Demo」由 Core Principle
-降格為品質門檻的驗收條件。因 1.2.0 為本輪 session 才生、尚無下游依賴，且本次屬
-「拿掉重複/釐清層級」而非實質移除架構規則，故依專案當下狀態以 PATCH（1.2.1）處理；
-待有 code 依賴後，原則層級的移除將正式按 MAJOR 走。
+Version change: 1.3.0 → 1.4.0
+Rationale: 新增「merge 回 develop MUST 用 --no-ff」規則——禁止 fast-forward 併入，
+強制產生明確的 merge commit，使每個 feature 在 git 歷史中有可辨識的收尾點（起因：
+001 實際 merge 時誤用 fast-forward，使 16 個 commit 被攤平進 develop、無從一眼看出
+feature 邊界，已撤銷重來）。屬對既有 Principle I「merge MUST 回 develop」的實質擴充
+（新增此前未規定的合併機制要求），依版本政策以 MINOR（1.4.0）處理。具體指令與 merge
+commit 訊息格式置於 CLAUDE.md，本憲章僅立治理層原則並指向之。
 
 Modified principles:
-- V. AI 診斷紀律 — Cache 條目移除簽章欄位清單與 cache/lock key 命名等實作細節，
-  改述為「signature 反映嚴重度/promptVersion/model 並去重」，細節指向指南 §8.7
-
-Removed/relocated principles:
-- VIII. 可重播 Demo（Demo-First）— 由 Core Principle 降格；「可重播 demo/seed」併入
-  「開發工作流程與品質門檻」當驗收條件，「首屏為監控台」回歸 design-spec
-
-Modified sections:
-- 技術約束與環境 — 由逐條重述改為指向 CLAUDE.md 的指標，避免與 CLAUDE.md 重複
-- 開發工作流程與品質門檻 — Commit/分支慣例改為指向 CLAUDE.md；測試門檻移除
-  `--passWithNoTests` 等 CI 操作細節；新增「可重播驗收」條目（承接原 VIII）
+- I. 規格驅動開發 — 新增一句：merge 回 develop MUST 為 `--no-ff`、MUST NOT
+  fast-forward；操作細節指向 CLAUDE.md
 
 Templates requiring updates:
 - ✅ .specify/templates/plan-template.md (Constitution Check gate 為泛用，自動同步)
 - ✅ .specify/templates/spec-template.md (無 constitution 專屬內容)
 - ✅ .specify/templates/tasks-template.md (無 constitution 專屬內容)
-- ✅ CLAUDE.md (環境/commit 慣例本就在此，現為憲章指向來源，無需變更)
+- ✅ CLAUDE.md (已新增「Merge 回 develop 的方式：MUST --no-ff」章節與執行步驟)
 
 Follow-up TODOs: none
+
+----- Prior amendment (1.2.1 → 1.3.0) -----
+Rationale: 新增「Phase 化可追溯遞交」工作流程指引——`implement` 階段以 tasks.md 的
+phase 為遞交節奏單位，每完成一 phase 即勾選並建立標記該 phase 的 commit；大 phase 可依
+主要開發大項拆成更細的多個 commit（不設死的數字上限，依大項自然拆分、避免過細），目標
+是讓 git 歷史能還原開發順序與過程。
+- 開發工作流程與品質門檻 — 新增「Phase 化可追溯遞交」條目（治理層），細節指向 CLAUDE.md
+
+----- Prior amendment (1.2.0 → 1.2.1) -----
+Rationale: Housekeeping consolidation — 移除滲入憲章的 operational 細節、把與
+CLAUDE.md 逐字重複的環境/commit 慣例改為指標、並將「可重播 Demo」由 Core Principle
+降格為品質門檻的驗收條件。因 1.2.0 為本輪 session 才生、尚無下游依賴，且本次屬
+「拿掉重複/釐清層級」而非實質移除架構規則，故依專案當下狀態以 PATCH（1.2.1）處理；
+待有 code 依賴後，原則層級的移除將正式按 MAJOR 走。
+- V. AI 診斷紀律 — Cache 條目移除簽章欄位清單與 cache/lock key 命名等實作細節，
+  改述為「signature 反映嚴重度/promptVersion/model 並去重」，細節指向指南 §8.7
+- VIII. 可重播 Demo（Demo-First）— 由 Core Principle 降格；「可重播 demo/seed」併入
+  「開發工作流程與品質門檻」當驗收條件，「首屏為監控台」回歸 design-spec
 -->
+
 
 # flow-gatekeeper Constitution
 
@@ -45,6 +56,10 @@ Spec Kit 流程：`specify → clarify → plan → checklist → tasks → anal
 implement → 驗收 → merge`，merge MUST 回 `develop`，完成後再從 `develop` 開下一條
 feature branch。開發步驟 MUST 依 `docs/Flow-Gatekeeper-SDD-完整實作指南.md`；指南中的
 完整 code 區塊是「期望產出 / reference」，正式產出仍 MUST 經由 Spec Kit 流程生成。
+
+Merge 回 `develop` MUST 以明確的 merge commit 完成（`--no-ff`），MUST NOT 以
+fast-forward 方式併入，使每個 feature 的收尾點在 git 歷史中可清楚辨識。具體指令與
+commit 訊息格式以 `CLAUDE.md` 為準。
 
 同一 branch MUST NOT 混入多個大型 feature。MUST NOT 同時手貼完整 code 又執行
 `/speckit.implement`（兩者會互相覆蓋）。
@@ -139,6 +154,11 @@ lock 等暫態用途。
 - **Commit 與分支慣例**（Conventional Commits 前綴、前綴後中文描述、commit 時機、
   從 `develop` 開 feature branch、merge 回 `develop` 等操作細節）以 `CLAUDE.md` 為準，
   本憲章不重述；分支主規則見 Principle I。
+- **Phase 化可追溯遞交**：`implement` 階段 MUST 以 `tasks.md` 的 phase 為遞交節奏單位——
+  每完成一個 phase，MUST 先勾選該 phase 的任務，再就該 phase 成果建立**標記該 phase 的
+  commit（一至數個）**，使實作進度與 tasks/spec 在 git 歷史中逐 phase 可追溯、可還原開發
+  順序。commit 訊息格式、type 分類與顆粒度拆分原則（依開發大項拆分、避免過細）等操作層
+  內容以 `CLAUDE.md` 為準。
 - 每個 feature 在進入 `implement` 前 MUST 通過 `analyze` 的跨工件一致性檢查；
   在 merge 前 MUST 完成驗收。
 - **測試門檻**：每個 feature MUST 至少提供純函式單元測試作為驗收佐證（例如 signature
@@ -163,4 +183,4 @@ lock 等暫態用途。
 - **合規審查**：所有 PR / review MUST 驗證是否符合本憲章；複雜度 MUST 有正當理由。
   日常開發的操作層指引以 `CLAUDE.md` 為輔，但其內容 MUST NOT 與本憲章相牴觸。
 
-**Version**: 1.2.1 | **Ratified**: 2026-06-30 | **Last Amended**: 2026-06-30
+**Version**: 1.4.0 | **Ratified**: 2026-06-30 | **Last Amended**: 2026-06-30
