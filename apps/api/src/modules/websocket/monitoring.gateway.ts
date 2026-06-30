@@ -1,26 +1,47 @@
 import { Injectable, Logger } from "@nestjs/common";
+import type { OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import type { Server as HttpServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
-import type { Pong, SystemConnected } from "@flow-gatekeeper/contracts";
+import type { MachineSubscribed, Pong, SystemConnected } from "@flow-gatekeeper/contracts";
+import { AppConfigService } from "../config/config.service.js";
+import { MockTelemetryService } from "../telemetry/mock-telemetry.service.js";
+import { filterPointsForSubscription } from "../../lib/subscription-filter.js";
 
 type ClientId = string;
 
 /**
  * 原生 `ws` Gateway（掛在 NestJS HTTP server，path `/ws`），非 Socket.IO（憲章 IV、ADR-001）。
  *
- * 本檔為跨多相演進的中心檔：
- * - Foundational（本相）：連線生命週期骨架（連線→system/connected、close 清理）、ping→pong、
- *   send() 銜接點（003 AI relay 用，FR-015）。
- * - US1（T013）：machine/subscribe 訂閱（取代式 + 授權）、producer tick、依訂閱推送。
- * - US3（T020/T021/T022）：伺服器端心跳探活回收、授權拒絕/壞訊息強化、生命週期記錄。
+ * 跨多相演進的中心檔：
+ * - Foundational：連線生命週期、ping→pong、send() 銜接點（FR-015）。
+ * - US1（本相）：machine/subscribe（取代式 + 授權 happy-path）、producer tick、依訂閱推送。
+ * - US3：伺服器端心跳探活回收、system/unauthorized 回執、生命週期記錄。
  */
 @Injectable()
-export class MonitoringGateway {
+export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MonitoringGateway.name);
   private wss?: WebSocketServer;
+  private producerTimer?: ReturnType<typeof setInterval>;
   private readonly clients = new Map<ClientId, WebSocket>();
   private readonly subscriptions = new Map<ClientId, Set<string>>();
+
+  constructor(
+    private readonly config: AppConfigService,
+    private readonly telemetry: MockTelemetryService,
+  ) {}
+
+  onModuleInit(): void {
+    // 高頻 producer tick：每 MOCK_TELEMETRY_INTERVAL_MS 產生一批並依訂閱推送。
+    this.producerTimer = setInterval(
+      () => this.publishTelemetry(),
+      this.config.mockTelemetryIntervalMs,
+    );
+  }
+
+  onModuleDestroy(): void {
+    if (this.producerTimer) clearInterval(this.producerTimer);
+  }
 
   /** 由 main.ts 在 app.listen() 後呼叫，與 HTTP 共用同一個 port（ws://host:port/ws）。 */
   attach(server: HttpServer): void {
@@ -40,21 +61,47 @@ export class MonitoringGateway {
   }
 
   private handleMessage(clientId: ClientId, raw: string): void {
-    let msg: { type?: string };
+    let msg: { type?: string; token?: string; machineIds?: string[] };
     try {
-      msg = JSON.parse(raw) as { type?: string };
+      msg = JSON.parse(raw) as typeof msg;
     } catch {
       return; // 無法解析的訊息安全忽略（FR-014）
     }
 
     switch (msg.type) {
       case "ping":
-        // ping→pong 為 US1/US3 共用基礎，於此先建（見 tasks O1 註）。
         this.send(clientId, { type: "pong", ts: Date.now() } satisfies Pong);
         break;
-      // machine/subscribe 於 US1（T013）填入；其餘 type 安全忽略（FR-014）。
-      default:
+
+      case "machine/subscribe": {
+        const secret = this.config.wsAuthSecret;
+        if (secret && msg.token !== secret) {
+          // 無效授權：不建立/變更訂閱。明確的 system/unauthorized 回執於 US3（T021）補上。
+          return;
+        }
+        const machineIds = msg.machineIds ?? [];
+        // 取代式：新集合即為當前訂閱的唯一真實狀態（FR-002）。
+        this.subscriptions.set(clientId, new Set(machineIds));
+        this.send(clientId, {
+          type: "machine/subscribed",
+          machineIds,
+        } satisfies MachineSubscribed);
         break;
+      }
+
+      default:
+        break; // 未知 type 安全忽略（FR-014）
+    }
+  }
+
+  /** 每 tick：只把訂閱機台的 TelemetryPoint[] 推給各訂閱者（FR-004）。 */
+  private publishTelemetry(): void {
+    const points = this.telemetry.nextBatch();
+    for (const [clientId, machineIds] of this.subscriptions) {
+      const selected = filterPointsForSubscription(points, machineIds);
+      if (selected.length > 0) {
+        this.send(clientId, selected);
+      }
     }
   }
 

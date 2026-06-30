@@ -64,15 +64,15 @@ monorepo：`apps/api/src/...`、`packages/contracts/src/...`、repo 根的 `asyn
 
 ### Tests for User Story 1 (FR-016 必需)
 
-- [ ] T010 [P] [US1] 建立純函式 `apps/api/src/lib/subscription-filter.ts`：`filterPointsForSubscription(points, machineIds): TelemetryPoint[]`
-- [ ] T011 [P] [US1] 建立 `apps/api/src/lib/subscription-filter.test.ts`（Vitest）：斷言只回傳訂閱機台、空集合回傳空、不相交集合互不外洩（SC-001 決定性佐證）
+- [X] T010 [P] [US1] 建立純函式 `apps/api/src/lib/subscription-filter.ts`：`filterPointsForSubscription(points, machineIds): TelemetryPoint[]`
+- [X] T011 [P] [US1] 建立 `apps/api/src/lib/subscription-filter.test.ts`（Vitest）：斷言只回傳訂閱機台、空集合回傳空、不相交集合互不外洩（SC-001 決定性佐證）
 
 ### Implementation for User Story 1
 
-- [ ] T012 [US1] 建立 `apps/api/src/modules/telemetry/mock-telemetry.service.ts`：固定 5 台（`mixer-01`/`press-02`/`pack-03`/`oven-04`/`sorter-05`），`nextBatch(): TelemetryPoint[]` 以決定性規律產生並內含週期性 warning/critical 尖峰，門檻與欄位範圍依指南 §7.3
-- [ ] T013 [US1] 在 `monitoring.gateway.ts` 實作訊息分派：`machine/subscribe`（先以 `WS_AUTH_SECRET` 驗 token，通過則以新集合**取代**訂閱並回 `machine/subscribed`）、`ping`→`pong`；啟動 producer tick（`setInterval(MOCK_TELEMETRY_INTERVAL_MS)`）於 `publishTelemetry()` 內用 `filterPointsForSubscription` 對每個訂閱者送其機台的 `TelemetryPoint[]`
+- [X] T012 [US1] 建立 `apps/api/src/modules/telemetry/mock-telemetry.service.ts`：固定 5 台（`mixer-01`/`press-02`/`pack-03`/`oven-04`/`sorter-05`），`nextBatch(): TelemetryPoint[]` 以決定性規律產生並內含週期性 warning/critical 尖峰，門檻與欄位範圍依指南 §7.3
+- [X] T013 [US1] 在 `monitoring.gateway.ts` 實作訊息分派：`machine/subscribe`（先以 `WS_AUTH_SECRET` 驗 token，通過則以新集合**取代**訂閱並回 `machine/subscribed`）、`ping`→`pong`；啟動 producer tick（`setInterval(MOCK_TELEMETRY_INTERVAL_MS)`）於 `publishTelemetry()` 內用 `filterPointsForSubscription` 對每個訂閱者送其機台的 `TelemetryPoint[]`
   - 註：`ping`→`pong`（FR-007a）與 token 驗證 happy-path（FR-003）為 US1/US3 共用基礎，於此先建；US3 的 T020/T021 再補伺服器端探活回收與「無效 token 拒絕／壞訊息忽略」行為
-- [ ] T014 [US1] 於 `app.module.ts` 完成 `MockTelemetryService` 注入並由 Gateway 取用；確認 `pnpm --filter @flow-gatekeeper/api typecheck` 通過
+- [X] T014 [US1] 於 `app.module.ts` 完成 `MockTelemetryService` 注入並由 Gateway 取用；確認 `pnpm --filter @flow-gatekeeper/api typecheck` 通過
 
 **Checkpoint**: US1 可獨立驗收——MVP 達成（依訂閱即時推送、互不串流）。
 
