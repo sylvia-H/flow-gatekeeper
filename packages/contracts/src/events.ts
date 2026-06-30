@@ -65,3 +65,34 @@ export type AiError = {
 };
 
 export type AiStreamEvent = AiToken | AiDone | AiError;
+
+/**
+ * 傳輸／控制訊息（002 新增）。這些是用來在 `switch(type)` 做分派的 discriminated union，
+ * 依憲章 Principle III「型別來源分層」——純做型別分派的控制訊息 MAY 以 TS 型別直接定義，
+ * 仍以本套件為單一來源；需 runtime 驗證的 payload（如 DiagnosisResult）才用 Zod。
+ */
+
+/** ping：客戶端應用層心跳請求。 */
+export type Ping = { type: "ping" };
+
+/** system/connected：連線建立確認，派發 clientId。 */
+export type SystemConnected = { type: "system/connected"; clientId: string };
+
+/** machine/subscribed：訂閱成功回執（回報當前訂閱集合）。 */
+export type MachineSubscribed = { type: "machine/subscribed"; machineIds: string[] };
+
+/** pong：伺服器對應用層 ping 的回應。 */
+export type Pong = { type: "pong"; ts: number };
+
+/** system/unauthorized：訂閱授權失敗。 */
+export type SystemUnauthorized = { type: "system/unauthorized" };
+
+/** 客戶端→伺服器的控制訊息聯集（供 Gateway narrow）。 */
+export type ClientControlMessage = Ping | MachineSubscribe;
+
+/** 伺服器→客戶端的控制訊息聯集。 */
+export type ServerControlMessage =
+  | SystemConnected
+  | MachineSubscribed
+  | Pong
+  | SystemUnauthorized;

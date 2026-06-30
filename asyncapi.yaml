@@ -70,6 +70,46 @@ channels:
       message:
         $ref: "#/components/messages/AiError"
 
+  ping:
+    publish:
+      operationId: ping
+      summary: Client application-level heartbeat request.
+      description: Client sends an application-level heartbeat; server replies with pong.
+      message:
+        $ref: "#/components/messages/Ping"
+
+  system/connected:
+    subscribe:
+      operationId: systemConnected
+      summary: Server confirms the connection and assigns a client id.
+      description: Sent once per connection right after the socket opens.
+      message:
+        $ref: "#/components/messages/SystemConnected"
+
+  machine/subscribed:
+    subscribe:
+      operationId: machineSubscribed
+      summary: Server acknowledges a subscription with the current machine id set.
+      description: Sent after a valid subscribe; the machineIds reflect the new authoritative set.
+      message:
+        $ref: "#/components/messages/MachineSubscribed"
+
+  pong:
+    subscribe:
+      operationId: pong
+      summary: Server reply to an application-level ping.
+      description: Server replies with pong (carrying a timestamp) to a client application-level ping.
+      message:
+        $ref: "#/components/messages/Pong"
+
+  system/unauthorized:
+    subscribe:
+      operationId: systemUnauthorized
+      summary: Server rejects a subscribe request carrying an invalid token.
+      description: Server emits this when a subscribe request fails token authorization; no subscription is created.
+      message:
+        $ref: "#/components/messages/SystemUnauthorized"
+
 components:
   messages:
     MachineSubscribe:
@@ -153,6 +193,54 @@ components:
             type: string
           message:
             type: string
+
+    Ping:
+      payload:
+        type: object
+        required: [type]
+        properties:
+          type:
+            const: ping
+
+    SystemConnected:
+      payload:
+        type: object
+        required: [type, clientId]
+        properties:
+          type:
+            const: system/connected
+          clientId:
+            type: string
+
+    MachineSubscribed:
+      payload:
+        type: object
+        required: [type, machineIds]
+        properties:
+          type:
+            const: machine/subscribed
+          machineIds:
+            type: array
+            items:
+              type: string
+
+    Pong:
+      payload:
+        type: object
+        required: [type, ts]
+        properties:
+          type:
+            const: pong
+          ts:
+            type: integer
+
+    SystemUnauthorized:
+      payload:
+        type: object
+        required: [type]
+        properties:
+          type:
+            const: system/unauthorized
 
   schemas:
     TelemetryPoint:
