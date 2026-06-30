@@ -35,12 +35,14 @@ export class HistoryService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async ensureCollections(db: Db): Promise<void> {
-    const names = (await db.listCollections().toArray()).map((c) => c.name);
-    if (!names.includes("telemetry")) {
+    try {
       await db.createCollection("telemetry", {
         timeseries: { timeField: "timestamp", metaField: "metadata", granularity: "seconds" },
         expireAfterSeconds: this.config.telemetryTtlSeconds,
       });
+    } catch (err) {
+      // 已存在則略過（重啟冪等）；NamespaceExists=48，其餘錯誤照拋。
+      if ((err as { code?: number }).code !== 48) throw err;
     }
     await db.collection("errorlogs").createIndex({ machineId: 1, timestamp: -1 });
     await db.collection("maintenanceRecords").createIndex({ machineId: 1, performedAt: -1 });

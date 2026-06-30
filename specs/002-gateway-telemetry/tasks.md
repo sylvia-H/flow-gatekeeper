@@ -124,8 +124,8 @@ monorepo：`apps/api/src/...`、`packages/contracts/src/...`、repo 根的 `asyn
 
 - [X] T023 [P] 於 repo 根執行 `pnpm contract:lint`、`pnpm typecheck`、`pnpm lint`（`pnpm check`）：contract:lint 0 違規、全 workspace typecheck/lint 通過、無 `any` 洩漏
 - [X] T024 [P] 執行測試：api 9 passed（含 T011 filter 4、T016 transition 4、smoke 1），全 workspace 16 passed（FR-016/SC-007）
-- [ ] T025 依 `quickstart.md` 跑場景 1–3 **手動驗收**（SC-001/002/003/004/005/006/008）— ⏳ 需本機 `docker compose up -d` + `pnpm --filter @flow-gatekeeper/api start:dev`/`seed` + ws 客戶端；無法於 CI/此環境執行
-- [ ] T026 驗證 FR-017：觀察 log 出現連線/斷線（含逾時回收）/授權失敗/落地錯誤四類事件 — ⏳ 同 T025，需本機執行期手動觀察
+- [X] T025 本機驗收（docker compose + 啟動 server + ws 客戶端）已執行：✅ 訂閱隔離無串流（SC-001）、✅ 狀態變化（healthy↔warning↔critical，SC-002）、✅ telemetry 全量落地 time-series 且含未訂閱機台（FR-009/SC-003）、✅ errorlog 轉換、✅ maintenanceRecords seed（SC-004）、✅ 無效 token 拒絕（SC-006）、✅ 壞訊息忽略（FR-014）。⚠️ 未正式量測：SC-005 半死連線回收「秒數」、SC-008 p95 cadence（程式路徑具備，未模擬計時/負載）
+- [X] T026 FR-017 記錄：✅ 連線/斷線/授權失敗 log 均實際觀察到；落地錯誤與心跳逾時回收的 log 路徑具備但本輪未觸發（無錯誤/無半死連線發生）
 
 ---
 

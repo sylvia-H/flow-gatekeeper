@@ -1,9 +1,15 @@
 import "reflect-metadata";
-import "dotenv/config";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { config as loadEnv } from "dotenv";
 import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module.js";
 import { MonitoringGateway } from "./modules/websocket/monitoring.gateway.js";
+
+// 明確載入本套件的 .env（apps/api/.env），不依賴 cwd——避免從別處啟動時 WS_AUTH_SECRET
+// 等設定靜默落空（例如授權被意外停用）。
+loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") });
 
 /**
  * apps/api entry。Feature 002 起實際啟動 NestJS HTTP server，並把同一個 HTTP server
@@ -21,6 +27,8 @@ export async function bootstrap(): Promise<void> {
 }
 
 // 僅在被直接執行時才啟動；被 import（含 entry smoke 測試）時不產生副作用。
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"))) {
+// 用 fileURLToPath + resolve 比對，正確處理含空白/特殊字元的路徑（避免 file:// 的 %20 不相等）。
+const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";
+if (invokedPath && resolve(fileURLToPath(import.meta.url)) === invokedPath) {
   void bootstrap();
 }
