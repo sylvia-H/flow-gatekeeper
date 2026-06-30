@@ -1,26 +1,32 @@
 <!--
 SYNC IMPACT REPORT
 ==================
-Version change: 1.2.1 → 1.3.0
-Rationale: 新增「Phase 化可追溯遞交」工作流程指引——`implement` 階段以 tasks.md 的
-phase 為遞交節奏單位，每完成一 phase 即勾選並建立標記該 phase 的 commit；大 phase 可依
-主要開發大項拆成更細的多個 commit（不設死的數字上限，依大項自然拆分、避免過細），目標
-是讓 git 歷史能還原開發順序與過程。屬實質擴充指引（非釐清、非移除），依版本政策以
-MINOR（1.3.0）處理。操作層細節（commit 訊息格式、type 分類、顆粒度拆分原則）置於
-CLAUDE.md，本憲章僅立治理層原則並指向之。
+Version change: 1.3.0 → 1.4.0
+Rationale: 新增「merge 回 develop MUST 用 --no-ff」規則——禁止 fast-forward 併入，
+強制產生明確的 merge commit，使每個 feature 在 git 歷史中有可辨識的收尾點（起因：
+001 實際 merge 時誤用 fast-forward，使 16 個 commit 被攤平進 develop、無從一眼看出
+feature 邊界，已撤銷重來）。屬對既有 Principle I「merge MUST 回 develop」的實質擴充
+（新增此前未規定的合併機制要求），依版本政策以 MINOR（1.4.0）處理。具體指令與 merge
+commit 訊息格式置於 CLAUDE.md，本憲章僅立治理層原則並指向之。
 
-Modified sections:
-- 開發工作流程與品質門檻 — 新增「Phase 化可追溯遞交」條目（治理層），細節指向 CLAUDE.md
-
-Modified principles: none（無原則新增或重定義）
+Modified principles:
+- I. 規格驅動開發 — 新增一句：merge 回 develop MUST 為 `--no-ff`、MUST NOT
+  fast-forward；操作細節指向 CLAUDE.md
 
 Templates requiring updates:
 - ✅ .specify/templates/plan-template.md (Constitution Check gate 為泛用，自動同步)
 - ✅ .specify/templates/spec-template.md (無 constitution 專屬內容)
-- ✅ .specify/templates/tasks-template.md (phase 結構本就存在，無需變更)
-- ✅ CLAUDE.md (已新增「/speckit.implement 階段的 phase-by-phase 自動 commit」操作細節)
+- ✅ .specify/templates/tasks-template.md (無 constitution 專屬內容)
+- ✅ CLAUDE.md (已新增「Merge 回 develop 的方式：MUST --no-ff」章節與執行步驟)
 
 Follow-up TODOs: none
+
+----- Prior amendment (1.2.1 → 1.3.0) -----
+Rationale: 新增「Phase 化可追溯遞交」工作流程指引——`implement` 階段以 tasks.md 的
+phase 為遞交節奏單位，每完成一 phase 即勾選並建立標記該 phase 的 commit；大 phase 可依
+主要開發大項拆成更細的多個 commit（不設死的數字上限，依大項自然拆分、避免過細），目標
+是讓 git 歷史能還原開發順序與過程。
+- 開發工作流程與品質門檻 — 新增「Phase 化可追溯遞交」條目（治理層），細節指向 CLAUDE.md
 
 ----- Prior amendment (1.2.0 → 1.2.1) -----
 Rationale: Housekeeping consolidation — 移除滲入憲章的 operational 細節、把與
@@ -50,6 +56,10 @@ Spec Kit 流程：`specify → clarify → plan → checklist → tasks → anal
 implement → 驗收 → merge`，merge MUST 回 `develop`，完成後再從 `develop` 開下一條
 feature branch。開發步驟 MUST 依 `docs/Flow-Gatekeeper-SDD-完整實作指南.md`；指南中的
 完整 code 區塊是「期望產出 / reference」，正式產出仍 MUST 經由 Spec Kit 流程生成。
+
+Merge 回 `develop` MUST 以明確的 merge commit 完成（`--no-ff`），MUST NOT 以
+fast-forward 方式併入，使每個 feature 的收尾點在 git 歷史中可清楚辨識。具體指令與
+commit 訊息格式以 `CLAUDE.md` 為準。
 
 同一 branch MUST NOT 混入多個大型 feature。MUST NOT 同時手貼完整 code 又執行
 `/speckit.implement`（兩者會互相覆蓋）。
@@ -173,4 +183,4 @@ lock 等暫態用途。
 - **合規審查**：所有 PR / review MUST 驗證是否符合本憲章；複雜度 MUST 有正當理由。
   日常開發的操作層指引以 `CLAUDE.md` 為輔，但其內容 MUST NOT 與本憲章相牴觸。
 
-**Version**: 1.3.0 | **Ratified**: 2026-06-30 | **Last Amended**: 2026-06-30
+**Version**: 1.4.0 | **Ratified**: 2026-06-30 | **Last Amended**: 2026-06-30

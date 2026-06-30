@@ -97,3 +97,27 @@ commit**，不需逐次徵詢；流程為：
 - 開發主支為 `develop`。每個正式 feature 從 `develop` 開新 branch，走完整流程：
   `/speckit.specify -> clarify -> plan -> checklist -> tasks -> analyze -> implement -> 驗收 -> merge 回 develop`，完成後再從 `develop` 開下一條 feature branch。
 - 不要在同一 branch 混多個大 feature；不要又手貼完整 code 又跑 `/speckit.implement`（會互相覆蓋）。
+
+### Merge 回 `develop` 的方式：MUST `--no-ff`，不得 fast-forward
+
+- 驗收通過、要把 feature branch 併回 `develop` 時，**MUST** 使用
+  `git merge --no-ff <feature-branch>`，明確建立一個 merge commit。
+  **MUST NOT** 用 fast-forward（不可用 `--ff-only`，也不可讓預設行為悄悄 fast-forward）。
+- **理由**：fast-forward 會把 feature 的所有 commit 直接攤平接到 `develop` 的歷史上，
+  不會留下任何「這個 feature 在此結束」的標記。`--no-ff` 強制產生一個 merge commit，
+  讓 `develop` 的 git log（`git log --oneline --graph`）能清楚看出每個 feature 的收尾點，
+  也方便之後用 `git log develop --merges` 快速列出每次 feature 完成的時間點。
+- **執行步驟**：
+  ```bash
+  git checkout develop
+  git merge --no-ff <feature-branch>
+  git push origin develop
+  ```
+- **merge commit 訊息**：MUST 標記 feature 編號與名稱，格式為
+  `merge(<feature>): 併入 <feature-branch>`，例如：
+  `merge(001): 併入 001-foundation-contracts`。
+- 若 `git merge --no-ff` 因故仍判定為 fast-forward 而未產生 merge commit（例如 git 版本
+  差異），MUST 改用 `git merge --no-ff --no-edit` 或確認後手動補一個空 merge commit，
+  不得放任 fast-forward 結果留在 `develop` 上。
+- merge 完成後 push 屬於影響共享狀態的操作，依專案慣例（見最上層「執行動作」原則）
+  仍 SHOULD 先與使用者確認再 push，除非使用者已明確授權。
