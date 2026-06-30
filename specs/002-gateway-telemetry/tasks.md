@@ -30,9 +30,9 @@ monorepo：`apps/api/src/...`、`packages/contracts/src/...`、repo 根的 `asyn
 
 **Purpose**: 補齊本 feature 需要的相依與指令
 
-- [ ] T001 在 `apps/api/package.json` 新增相依 `mongodb`、`@nestjs/platform-express`、`dotenv`，以及 devDependency `tsx`
-- [ ] T002 在 `apps/api/package.json` 的 `scripts` 新增 `"start:dev": "tsx watch src/main.ts"`（或 `nest start --watch`）與 `"seed": "tsx src/scripts/seed.ts"`
-- [ ] T003 於 repo 根執行 `pnpm install` 安裝新相依並更新 `pnpm-lock.yaml`（依賴 T001、T002 同檔，須先完成）
+- [X] T001 在 `apps/api/package.json` 新增相依 `mongodb`、`@nestjs/platform-express`、`dotenv`，以及 devDependency `tsx`、`@nestjs/cli`（`nest start` 需要，因 tsconfig 用 `emitDecoratorMetadata`，須走 tsc 而非 esbuild/tsx）
+- [X] T002 在 `apps/api/package.json` 的 `scripts` 新增 `"start:dev": "nest start --watch"` 與 `"seed": "tsx src/scripts/seed.ts"`；新增 `apps/api/nest-cli.json`（指向 `tsconfig.build.json`）
+- [X] T003 於 repo 根執行 `pnpm install` 安裝新相依並更新 `pnpm-lock.yaml`（依賴 T001、T002 同檔，須先完成）
 
 **Checkpoint**: 相依就緒，可開始 Foundational。
 
