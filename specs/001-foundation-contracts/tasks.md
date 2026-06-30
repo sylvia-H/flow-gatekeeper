@@ -29,11 +29,11 @@ pnpm monorepo（plan.md「Project Structure」）：repo root 放工作區設定
 
 **Purpose**: monorepo 初始化——所有 story 都依賴的工作區設定與工具鏈。
 
-- [ ] T001 建立 `pnpm-workspace.yaml`（packages: `apps/*`, `packages/*`）
-- [ ] T002 建立 root `package.json`：scripts（`lint`/`typecheck`/`test`/`build`/`contract:lint`/`check`）、devDeps（`typescript`、`@stoplight/spectral-cli`、`eslint`、`vitest`）、`packageManager: pnpm@9`、`type: module`
-- [ ] T003 [P] 建立 `tsconfig.base.json`（strict TS、ESM、`noImplicitAny`，供各 workspace extends）
-- [ ] T004 [P] 建立 root `eslint.config.js`（TypeScript flat config，落實「避免 `any` 擴散」紀律）
-- [ ] T005 [P] 建立基礎 `.gitignore`（`node_modules`、`dist`、`build`、`coverage`、logs、editor/OS；祕密規則於 US3 補上）
+- [X] T001 建立 `pnpm-workspace.yaml`（packages: `apps/*`, `packages/*`）
+- [X] T002 建立 root `package.json`：scripts（`lint`/`typecheck`/`test`/`build`/`contract:lint`/`check`）、devDeps（`typescript`、`@stoplight/spectral-cli`、`eslint`、`vitest`）、`packageManager: pnpm@9`、`type: module`
+- [X] T003 [P] 建立 `tsconfig.base.json`（strict TS、ESM、`noImplicitAny`，供各 workspace extends）
+- [X] T004 [P] 建立 root `eslint.config.js`（TypeScript flat config，落實「避免 `any` 擴散」紀律）
+- [X] T005 [P] 建立基礎 `.gitignore`（`node_modules`、`dist`、`build`、`coverage`、logs、editor/OS；祕密規則於 US3 補上）
 
 ---
 
@@ -45,12 +45,12 @@ pnpm monorepo（plan.md「Project Structure」）：repo root 放工作區設定
 
 > **所有 workspace 的 `package.json` MUST 定義 `lint`、`typecheck`、`test` 三個 script**（`test` 用 `vitest run --passWithNoTests`），否則 `pnpm -r <script>` 只會在有該 script 的 workspace fan-out，使 CI 的 lint/test 涵蓋出現靜默缺口（對齊 FR-010/FR-011/SC-006）。
 
-- [ ] T006 [P] 建立 `packages/contracts` 骨架：`package.json`（`@flow-gatekeeper/contracts`、dep `zod`、scripts `lint`/`typecheck`/`test`，`test: vitest run --passWithNoTests`）、`tsconfig.json`（extends base）、佔位 `src/index.ts`
-- [ ] T007 [P] 建立 `packages/shared` 骨架：`package.json`（scripts `lint`/`typecheck`/`test`）、`tsconfig.json`、`src/index.ts`
-- [ ] T008 [P] 建立 `apps/api` 骨架：`package.json`（NestJS 最小依賴；scripts `lint`/`typecheck`/`test`/`build`）、`tsconfig.json`、可乾淨 import 的 `src/main.ts`
-- [ ] T009 [P] 建立 `apps/worker` 骨架：`package.json`（BullMQ 最小依賴；scripts `lint`/`typecheck`/`test`/`build`）、`tsconfig.json`、`src/main.ts`
-- [ ] T010 [P] 建立 `apps/web` 骨架：`package.json`（Vue 3 + Vite + Pinia + Tailwind 最小依賴；scripts `lint`/`typecheck`/`test`/`build`）、`tsconfig.json`、`vite.config.ts`、`src/main.ts`
-- [ ] T011 執行 `pnpm install` 產生 `pnpm-lock.yaml`，確認 5 個 workspace 全部解析成功（依賴 T006–T010）
+- [X] T006 [P] 建立 `packages/contracts` 骨架：`package.json`（`@flow-gatekeeper/contracts`、dep `zod`、scripts `lint`/`typecheck`/`test`，`test: vitest run --passWithNoTests`）、`tsconfig.json`（extends base）、佔位 `src/index.ts`
+- [X] T007 [P] 建立 `packages/shared` 骨架：`package.json`（scripts `lint`/`typecheck`/`test`）、`tsconfig.json`、`src/index.ts`
+- [X] T008 [P] 建立 `apps/api` 骨架：`package.json`（NestJS 最小依賴；scripts `lint`/`typecheck`/`test`/`build`）、`tsconfig.json`、可乾淨 import 的 `src/main.ts`
+- [X] T009 [P] 建立 `apps/worker` 骨架：`package.json`（BullMQ 最小依賴；scripts `lint`/`typecheck`/`test`/`build`）、`tsconfig.json`、`src/main.ts`
+- [X] T010 [P] 建立 `apps/web` 骨架：`package.json`（Vue 3 + Vite + Pinia + Tailwind 最小依賴；scripts `lint`/`typecheck`/`test`/`build`）、`tsconfig.json`、`vite.config.ts`、`src/main.ts`
+- [X] T011 執行 `pnpm install` 產生 `pnpm-lock.yaml`，確認 5 個 workspace 全部解析成功（依賴 T006–T010）
 
 **Checkpoint**: 工作區可安裝——user story 可開始。
 
@@ -62,11 +62,11 @@ pnpm monorepo（plan.md「Project Structure」）：repo root 放工作區設定
 
 **Independent Test**: 乾淨環境執行安裝＋啟動資料服務後，工作區 typecheck 全數通過、Redis 與 MongoDB 皆可連線（spec US1 Independent Test）。
 
-- [ ] T012 [US1] 建立 repo root `docker-compose.yml`（`redis:7-alpine` + `mongo:7`，ports、named volumes，依 quickstart §5）
-- [ ] T013 [US1] 執行 `pnpm typecheck` 確認 5 個 workspace 全通過（strict、0 個 `any` 洩漏）— SC-002
-- [ ] T014 [US1] 執行 `pnpm build` 確認 api/worker/web 三骨架可編譯產出（不要求啟動）— FR-013／SC-007
-- [ ] T015 [P] [US1] 新增 entry-module smoke 測試，斷言各 app entry 可乾淨 import：`apps/api/src/main.test.ts`、`apps/worker/src/main.test.ts`、`apps/web/src/main.test.ts` — FR-014
-- [ ] T016 [US1] 驗證 infra 可連線：`docker compose up -d` → `docker compose ps` healthy（有工具則 `redis-cli ping`／`mongosh ping`）— US1 AS2/AS3
+- [X] T012 [US1] 建立 repo root `docker-compose.yml`（`redis:7-alpine` + `mongo:7`，ports、named volumes，依 quickstart §5）
+- [X] T013 [US1] 執行 `pnpm typecheck` 確認 5 個 workspace 全通過（strict、0 個 `any` 洩漏）— SC-002
+- [X] T014 [US1] 執行 `pnpm build` 確認 api/worker/web 三骨架可編譯產出（不要求啟動）— FR-013／SC-007
+- [X] T015 [P] [US1] 新增 entry-module smoke 測試，斷言各 app entry 可乾淨 import：`apps/api/src/main.test.ts`、`apps/worker/src/main.test.ts`、`apps/web/src/main.test.ts` — FR-014
+- [X] T016 [US1] 驗證 infra 可連線：`docker compose up -d` → `docker compose ps` healthy（有工具則 `redis-cli ping`／`mongosh ping`）— US1 AS2/AS3
 
 **Checkpoint**: 工作區可驗證、infra 可連線——MVP 達成，可獨立展示。
 
@@ -78,14 +78,14 @@ pnpm monorepo（plan.md「Project Structure」）：repo root 放工作區設定
 
 **Independent Test**: 三端各寫一支匯入契約的最小檔並 typecheck 通過；`spectral lint asyncapi.yaml` 0 違規；`DiagnosisResultSchema.parse()` 對壞資料丟錯（spec US2 Independent Test）。
 
-- [ ] T017 [P] [US2] 實作 `packages/contracts/src/schemas.ts`：`DiagnosisResultSchema`（Zod），型別 `export type DiagnosisResult = z.infer<...>` — FR-005／FR-007
-- [ ] T018 [P] [US2] 實作 `packages/contracts/src/events.ts`：6 條通道事件型別（TelemetryPoint/MachineSubscribe/JobStatus/AiToken/AiDone/AiError），`DiagnosisResult` 由 schemas re-export，MUST NOT 手寫平行型別 — FR-004
-- [ ] T019 [US2] 改寫 `packages/contracts/src/index.ts` re-export `./schemas` 與 `./events`（依賴 T017、T018）
-- [ ] T020 [P] [US2] 建立 repo root `asyncapi.yaml`：6 channels + `components.schemas` 的 `TelemetryPoint`（`state: healthy|warning|critical`）與 `DiagnosisResult`（`severity: ok|warning|critical`）— FR-008
-- [ ] T021 [P] [US2] 建立 `.spectral.yaml`（`extends: [spectral:asyncapi]`）
-- [ ] T022 [US2] 在三端各加一支契約匯入驗證檔，import `TelemetryPoint` 與 `DiagnosisResult` 並通過 typecheck：`apps/api/src/contracts.check.ts`、`apps/worker/src/contracts.check.ts`、`apps/web/src/contracts.check.ts`。**這些檔為長期保留的型別佐證**（被 `typecheck` 涵蓋），MUST 不被 `build` 打包進產出（透過 `*.check.ts` 命名於各 app build 設定排除），避免 build/lint 雜訊 — FR-006／SC-003
-- [ ] T023 [US2] 實作 `packages/contracts/src/schemas.test.ts`（Vitest）：`DiagnosisResultSchema.parse()` 對「缺必填／enum 非法／巢狀結構錯誤」丟 `ZodError` — FR-014／FR-007
-- [ ] T024 [US2] 執行 `pnpm contract:lint`，確認 `asyncapi.yaml` 0 違規 — SC-004
+- [X] T017 [P] [US2] 實作 `packages/contracts/src/schemas.ts`：`DiagnosisResultSchema`（Zod），型別 `export type DiagnosisResult = z.infer<...>` — FR-005／FR-007
+- [X] T018 [P] [US2] 實作 `packages/contracts/src/events.ts`：6 條通道事件型別（TelemetryPoint/MachineSubscribe/JobStatus/AiToken/AiDone/AiError），`DiagnosisResult` 由 schemas re-export，MUST NOT 手寫平行型別 — FR-004
+- [X] T019 [US2] 改寫 `packages/contracts/src/index.ts` re-export `./schemas` 與 `./events`（依賴 T017、T018）
+- [X] T020 [P] [US2] 建立 repo root `asyncapi.yaml`：6 channels + `components.schemas` 的 `TelemetryPoint`（`state: healthy|warning|critical`）與 `DiagnosisResult`（`severity: ok|warning|critical`）— FR-008
+- [X] T021 [P] [US2] 建立 `.spectral.yaml`（`extends: [spectral:asyncapi]`）
+- [X] T022 [US2] 在三端各加一支契約匯入驗證檔，import `TelemetryPoint` 與 `DiagnosisResult` 並通過 typecheck：`apps/api/src/contracts.check.ts`、`apps/worker/src/contracts.check.ts`、`apps/web/src/contracts.check.ts`。**這些檔為長期保留的型別佐證**（被 `typecheck` 涵蓋），MUST 不被 `build` 打包進產出（透過 `*.check.ts` 命名於各 app build 設定排除），避免 build/lint 雜訊 — FR-006／SC-003
+- [X] T023 [US2] 實作 `packages/contracts/src/schemas.test.ts`（Vitest）：`DiagnosisResultSchema.parse()` 對「缺必填／enum 非法／巢狀結構錯誤」丟 `ZodError` — FR-014／FR-007
+- [X] T024 [US2] 執行 `pnpm contract:lint`，確認 `asyncapi.yaml` 0 違規 — SC-004
 
 **Checkpoint**: 契約單一來源就緒、三端共用、文件 lint 過、schema 可驗證。
 
@@ -97,11 +97,11 @@ pnpm monorepo（plan.md「Project Structure」）：repo root 放工作區設定
 
 **Independent Test**: 放一份本機設定檔確認不被追蹤；CI 觸發一次，四道檢查皆執行且回報（spec US3 Independent Test）。
 
-- [ ] T025 [P] [US3] 建立 repo root `.env.example`（資料服務／WS／AI provider／資料生命週期等設定鍵，依 guide §6.4，無真實值）— FR-009
-- [ ] T026 [US3] 於 `.gitignore` 補祕密規則：`.env`、`.env.*`、`!.env.example` — FR-009／SC-005
-- [ ] T027 [P] [US3] 建立 `.github/workflows/ci.yml`：`on: [push, pull_request]`，步驟 `pnpm install --frozen-lockfile` → `contract:lint` → `typecheck` → `lint` → `test` — FR-010
-- [ ] T028 [US3] 確認每個 workspace 的 `test` script 使用 `vitest run --passWithNoTests`，使空測試 package 不讓 CI 紅燈 — FR-011
-- [ ] T029 [US3] 驗證祕密衛生：`Copy-Item .env.example apps/api/.env` 後 `git status --short` 確認 `.env` 未被追蹤、僅 `.env.example` 在版控 — SC-005
+- [X] T025 [P] [US3] 建立 repo root `.env.example`（資料服務／WS／AI provider／資料生命週期等設定鍵，依 guide §6.4，無真實值）— FR-009
+- [X] T026 [US3] 於 `.gitignore` 補祕密規則：`.env`、`.env.*`、`!.env.example` — FR-009／SC-005
+- [X] T027 [P] [US3] 建立 `.github/workflows/ci.yml`：`on: [push, pull_request]`，步驟 `pnpm install --frozen-lockfile` → `contract:lint` → `typecheck` → `lint` → `test` — FR-010
+- [X] T028 [US3] 確認每個 workspace 的 `test` script 使用 `vitest run --passWithNoTests`，使空測試 package 不讓 CI 紅燈 — FR-011
+- [X] T029 [US3] 驗證祕密衛生：`Copy-Item .env.example apps/api/.env` 後 `git status --short` 確認 `.env` 未被追蹤、僅 `.env.example` 在版控 — SC-005
 
 **Checkpoint**: 三個 user story 皆可獨立驗收。
 
@@ -111,9 +111,9 @@ pnpm monorepo（plan.md「Project Structure」）：repo root 放工作區設定
 
 **Purpose**: 跨 story 的收尾與驗收。
 
-- [ ] T030 [P] 本機執行 `pnpm check`（contract:lint + typecheck + lint + test）作為 CI 預演
-- [ ] T031 依 [quickstart.md](./quickstart.md) 端到端跑完 7 段驗收序列（對齊 SC-001…007）
-- [ ] T032 [P] 對照 [checklists/foundation.md](./checklists/foundation.md) 做 merge 前需求自檢
+- [X] T030 [P] 本機執行 `pnpm check`（contract:lint + typecheck + lint + test）作為 CI 預演
+- [X] T031 依 [quickstart.md](./quickstart.md) 端到端跑完 7 段驗收序列（對齊 SC-001…007）
+- [X] T032 [P] 對照 [checklists/foundation.md](./checklists/foundation.md) 做 merge 前需求自檢
 
 ---
 
