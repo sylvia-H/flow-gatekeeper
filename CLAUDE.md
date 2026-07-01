@@ -1,7 +1,7 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/002-gateway-telemetry/plan.md`
+`specs/003-bullmq-ai-streaming/plan.md`
 <!-- SPECKIT END -->
 
 # flow-gatekeeper — Agent 操作指引
