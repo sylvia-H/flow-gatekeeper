@@ -166,6 +166,37 @@ export async function bootstrap(): Promise<void> {
   });
 
   worker.on("ready", () => log("log", `worker ready, consuming queue '${DIAGNOSIS_QUEUE}'`));
+
+  // 失敗處理（US3）：僅在 attempts **用盡**（最終終態）後通知 ai/error（FR-020／US3 案例3）；
+  // 尚有重試時只記 warn，交由 BullMQ 指數退避重試。
+  worker.on("failed", (job, err) => {
+    if (!job) return;
+    const jobId = job.data?.jobId ?? String(job.id);
+    const attempts = job.opts.attempts ?? 1;
+    if (job.attemptsMade >= attempts) {
+      log("error", `job failed (final): ${jobId} ${err.message}`);
+      publish(pub, jobId, { type: "ai/error", jobId, code: "worker_failed", message: err.message });
+    } else {
+      log("warn", `job attempt failed (will retry): ${jobId} ${err.message}`);
+    }
+  });
+
+  // 優雅關閉（US3）：worker.close → mongo.close → redis quit，確保崩潰/關閉不殘留、可被 BullMQ 重派。
+  const shutdown = async (signal: string): Promise<void> => {
+    log("log", `received ${signal}, shutting down worker...`);
+    try {
+      await worker.close();
+      await mongoClient.close();
+      await pub.quit();
+      await cache.quit();
+    } catch (err) {
+      log("error", `shutdown error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+
   log("log", "flow-gatekeeper worker (003) bootstrapped");
 }
 

@@ -123,8 +123,8 @@ monorepo：`apps/api/src/...`、`apps/worker/src/...`、`packages/contracts/src/
 
 ### Implementation for User Story 3
 
-- [ ] T026 [US3] 在 `apps/worker/src/main.ts` 加入 `worker.on('failed', (job, err) => publish {type:'ai/error',code:'worker_failed',message})`（`attempts` 用盡後通知），以及 `SIGTERM`/`SIGINT` 優雅關閉：`worker.close()` → `mongo.close()` → 各 Redis 連線 `quit()`（同檔接 T025；確保崩潰/關閉不殘留、可被 BullMQ 重派）
-- [ ] T027 [US3] 強化 api 端 relay 韌性：`ai-stream-relay.service.ts` 與 `job-status-relay.service.ts` 的 `onModuleInit` 以 try/catch 包 subscribe/QueueEvents 初始化並 Logger 記錄，確保 worker/Redis 狀態異常時 **api 仍能啟動**且 `POST /diagnoses` 照回 `jobId`（SC-005/SC-006，跨 T017/T020 兩檔）
+- [X] T026 [US3] 在 `apps/worker/src/main.ts` 加入 `worker.on('failed', (job, err) => publish {type:'ai/error',code:'worker_failed',message})`（`attempts` 用盡後通知），以及 `SIGTERM`/`SIGINT` 優雅關閉：`worker.close()` → `mongo.close()` → 各 Redis 連線 `quit()`（同檔接 T025；確保崩潰/關閉不殘留、可被 BullMQ 重派）
+- [X] T027 [US3] 強化 api 端 relay 韌性：`ai-stream-relay.service.ts` 與 `job-status-relay.service.ts` 的 `onModuleInit` 以 try/catch 包 subscribe/QueueEvents 初始化並 Logger 記錄，確保 worker/Redis 狀態異常時 **api 仍能啟動**且 `POST /diagnoses` 照回 `jobId`（SC-005/SC-006，跨 T017/T020 兩檔）
 
 **Checkpoint**: 三個 user story 皆可獨立驗收。
 
