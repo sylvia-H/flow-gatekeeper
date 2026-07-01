@@ -33,10 +33,10 @@ monorepo：`apps/api/src/...`、`apps/worker/src/...`、`packages/contracts/src/
 
 **Purpose**: 補齊本 feature 需要的相依、指令與環境範例
 
-- [ ] T001 在 `apps/api/package.json` 新增相依 `@nestjs/bullmq`、`bullmq`、`ioredis`（api 端產 job 與 QueueEvents／psubscribe 轉發）
-- [ ] T002 在 `apps/worker/package.json` 新增相依 `mongodb`、`@google/generative-ai`、`dotenv` 與 devDependency `tsx`；`scripts` 新增 `"start:dev": "tsx watch src/main.ts"` 與 `"smoke:gemini": "tsx src/ai/smoke-gemini.ts"`
-- [ ] T003 在 `.env.example` 的「AI provider」段新增 `AI_TIMEOUT_MS=30000`（其餘 `GEMINI_*`／`AI_RPM`／`AI_CACHE_TTL_SECONDS`／`AI_DEDUPE_LOCK_SECONDS`／`REDIS_*` 已存在）
-- [ ] T004 於 repo 根執行 `pnpm install` 安裝新相依並更新 `pnpm-lock.yaml`（依賴 T001、T002 同檔，須先完成）
+- [X] T001 在 `apps/api/package.json` 新增相依 `@nestjs/bullmq`、`bullmq`、`ioredis`（api 端產 job 與 QueueEvents／psubscribe 轉發）
+- [X] T002 在 `apps/worker/package.json` 新增相依 `mongodb`、`@google/generative-ai`、`dotenv` 與 devDependency `tsx`；`scripts` 新增 `"start:dev": "tsx watch src/main.ts"` 與 `"smoke:gemini": "tsx src/ai/smoke-gemini.ts"`
+- [X] T003 在 `.env.example` 的「AI provider」段新增 `AI_TIMEOUT_MS=30000`（其餘 `GEMINI_*`／`AI_RPM`／`AI_CACHE_TTL_SECONDS`／`AI_DEDUPE_LOCK_SECONDS`／`REDIS_*` 已存在）
+- [X] T004 於 repo 根執行 `pnpm install` 安裝新相依並更新 `pnpm-lock.yaml`（依賴 T001、T002 同檔，須先完成）
 
 **Checkpoint**: 相依與環境範例就緒，可開始 Foundational。
 
