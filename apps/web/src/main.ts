@@ -1,4 +1,5 @@
 import { createApp, h } from "vue";
+import "./styles/tailwind.css";
 
 /**
  * apps/web entry — Feature 001 僅為可編譯的最小骨架（FR-013）。
@@ -9,7 +10,9 @@ import { createApp, h } from "vue";
  */
 export function createGatekeeperApp() {
   return createApp({
-    render: () => h("div", "flow-gatekeeper web skeleton (001)"),
+    // class 僅為 Tailwind token 落地的煙霧驗證（bg-base/text-fg），非監控 UI。
+    render: () =>
+      h("div", { class: "bg-base text-fg" }, "flow-gatekeeper web skeleton (001)"),
   });
 }
 
