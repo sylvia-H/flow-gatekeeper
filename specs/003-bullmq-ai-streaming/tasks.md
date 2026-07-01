@@ -137,7 +137,17 @@ monorepo：`apps/api/src/...`、`apps/worker/src/...`、`packages/contracts/src/
 - [X] T028 [P] 於 repo 根執行 `pnpm contract:lint`（asyncapi 未新增 WS 訊息，維持 0 違規）、`pnpm -r typecheck`、`pnpm -r lint`：全 workspace 通過、無 `any` 洩漏
 - [X] T029 [P] 執行 `pnpm --filter @flow-gatekeeper/worker test` 與全 workspace 測試：`parse-result`（T010）與 `signature`（T023）通過（FR-018/SC-009）
 - [X] T030 補齊 FR-019 記錄（worker `main.ts` + api jobs/relays）：任務建立、任務進入處理、快取命中、LLM 呼叫、任務完成、任務失敗六類事件分 `log`/`warn`/`error` 記錄
-- [ ] T031 本機驗收（依 quickstart.md）：`smoke:gemini`（Step 0）→ 觸發串流（SC-001，含首個 token ≤ 5 秒）→ cache hit（SC-002）→ 20 連發限流與並發去重（SC-003/SC-004）→ worker 韌性（SC-005/SC-006，**明確驗證：worker 停機時入列的 job，於 worker 重啟後被消化**）→ 驗證失敗路徑（SC-007）→ `diagnoses`/`diagnosisTriggers` 追溯（SC-008）；記錄已觀察與未量測項 — **待人工執行**：需 `docker compose up`（Redis+Mongo）、本機 `.env` 的 `GEMINI_API_KEY`（祕密，未提交）、同時啟 api+worker；程式面已就緒，此步為 live 驗收
+- [X] T031 本機驗收（依 quickstart.md，2026-07-01 實跑，Redis+Mongo docker + 本機 GEMINI_API_KEY）：
+  - Step 0 `smoke:gemini` ✅ 模型回覆正常。
+  - SC-001 串流 ✅：POST→`201{jobId,waiting}`；`job/status` waiting→active→progress5/20/100；16 個 `ai/token`（seq 自 0 連續）→ `ai/done` 通過 schema；單次 18s（≤35s）。⚠️ **首個 token 14.9s，超過 ≤5s 目標**——gemini-2.5-flash「thinking」延遲所致（見驗收備註，可設 `thinkingBudget:0` 改善）。
+  - SC-002 cache hit ✅：同機台同狀態第二次 `ai/done cached:true`、0 token、67ms、共用結果。
+  - SC-003/SC-004 ✅：冷快取 20 併發 → **實際 LLM 呼叫恰 1 次**、其餘去重共用；全程實際 LLM 呼叫遠 ≤ `AI_RPM=8`；積壓 compute 時觀察到 limiter 節流。
+  - SC-005/SC-006 ✅：worker 停機時 POST 仍 `201{jobId}`、api 存活（400 probe 正常）；重啟後積壓 23→0 全數消化。
+  - SC-007 ✅：強制模型回散文 → 3 次 attempt 皆 `ai/error schema_invalid` → 用盡後 final 失敗；該 jobId 在 `diagnoses` 為 **0 筆**（未驗證結果不落地）。
+  - SC-008 ✅：`diagnoses`=5（全 `cached:false`、`cached:true` 0 筆）；`diagnosisTriggers`=44（`cached:false` 5 + `cached:true` 39）——命中不膨脹結果集合、每次觸發可追溯。
+  - SC-009 ✅：`pnpm --filter worker test` 13 綠（signature 7 / parse-result 5 / entry 1）。
+  - 驗收中另修兩個阻擋實跑的問題（見 `fix(003)` commit）：contracts/shared exports 指向 dist、entry guard 去副檔名比對使 `start:dev` 可服務。
+  - 未量測/待改進：①SC-001 首 token ≤5s 未達（模型 thinking 延遲）；②schema 全失敗的 job 目前不寫 `diagnosisTriggers`（FR-013a 對「失敗觸發」的稽核可補）。
 
 ---
 
