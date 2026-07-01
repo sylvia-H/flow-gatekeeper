@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #0B1014; }
+  body { font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; color: #E7EDF2; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #26323D; border-radius: 999px; border: 2px solid #111820; }
+  ::-webkit-scrollbar-thumb:hover { background: #3E5266; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  * { scrollbar-width: thin; scrollbar-color: #26323D transparent; }
+  @keyframes fg-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(255,92,102,0.5); } 50% { box-shadow: 0 0 0 5px rgba(255,92,102,0); } }
+  @keyframes fg-caret { 0%,49% { opacity:1; } 50%,100% { opacity:0; } }
+  @keyframes fg-slide { 0% { transform:translateX(-100%);} 100% { transform:translateX(400%);} }
+  @keyframes fg-spin { to { transform:rotate(360deg);} }
+  @keyframes fg-blink { 0%,100%{opacity:1;} 50%{opacity:0.35;} }
+</style>
+</helmet>
+
+<div style="min-width:max-content; padding:36px 40px 60px; background:#0B1014; background-image:linear-gradient(#0E151B 1px, transparent 1px), linear-gradient(90deg, #0E151B 1px, transparent 1px); background-size:24px 24px;">
+
+  <div style="display:flex; align-items:flex-end; gap:14px; margin-bottom:6px;">
+    <div style="width:28px; height:28px; border-radius:6px; background:#102A42; border:1px solid #3E5266; display:flex; align-items:center; justify-content:center;">
+      <div style="width:12px; height:12px; border:2px solid #4FA3FF; border-radius:2px; transform:rotate(45deg);"></div>
+    </div>
+    <h1 style="margin:0; font-size:22px; font-weight:700;">AI Copilot drawer — states</h1>
+    <span style="font-family:'JetBrains Mono',monospace; font-size:13px; color:#687684; padding-bottom:2px;">flow-gatekeeper / components</span>
+  </div>
+  <p style="margin:0 0 26px; font-size:14px; line-height:20px; color:#9AA8B5; max-width:760px;">404px right drawer, fixed 640px shown here for comparison. Same header + input rail on every state; only the body between them changes. Job lifecycle mirrors a BullMQ worker: queued → active → streaming → completed / failed.</p>
+
+  <!-- DRAWER ROW -->
+  <div style="display:flex; gap:22px; align-items:flex-start;">
+    <sc-for list="{{ drawers }}" as="d" hint-placeholder-count="5">
+      <div>
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:11px; height:20px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600; color:#687684;">{{ d.tag }}</span>
+          <span style="font-size:14px; font-weight:600; color:#E7EDF2;">{{ d.title }}</span>
+        </div>
+
+        <!-- DRAWER -->
+        <div style="width:404px; height:640px; background:#111820; border:1px solid #26323D; border-radius:10px; box-shadow:-18px 0 36px rgba(0,0,0,0.35); display:flex; flex-direction:column; overflow:hidden;">
+          <!-- header -->
+          <div style="height:46px; flex:0 0 46px; display:flex; align-items:center; gap:9px; padding:0 14px; border-bottom:1px solid #26323D;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4FA3FF" stroke-width="2" stroke-linecap="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="4"/></svg>
+            <span style="font-size:14px; font-weight:600;">AI Copilot</span>
+            <div style="flex:1;"></div>
+            <span style="{{ d.chipStyle }}">
+              <sc-if value="{{ d.chipSpin }}" hint-placeholder-val="{{ false }}"><span style="display:inline-block; width:9px; height:9px; margin-right:5px; border:1.5px solid currentColor; border-top-color:transparent; border-radius:999px; animation:fg-spin 0.7s linear infinite; vertical-align:-1px;"></span></sc-if>{{ d.chip }}</span>
+          </div>
+
+          <div style="flex:1; overflow-y:auto; min-height:0; padding:14px;">
+            <!-- machine header -->
+            <div style="display:flex; align-items:center; gap:9px; padding:10px 12px; background:#17212B; border:1px solid #26323D; border-radius:8px;">
+              <span style="{{ d.dotStyle }}"></span>
+              <div style="min-width:0; flex:1;">
+                <div style="font-size:14px; font-weight:600; color:#E7EDF2;">{{ d.name }}</div>
+                <div style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#687684;">{{ d.id }}</div>
+              </div>
+              <span style="{{ d.sevBadgeStyle }}">{{ d.sev }}</span>
+            </div>
+
+            <!-- IDLE empty state -->
+            <sc-if value="{{ d.isIdle }}" hint-placeholder-val="{{ false }}">
+              <div>
+                <div style="margin-top:14px; padding:26px 16px; background:#0E151B; border:1px dashed #3E5266; border-radius:8px; text-align:center;">
+                  <div style="width:34px; height:34px; margin:0 auto 11px; border-radius:8px; background:#102A42; border:1px solid #3E5266; display:flex; align-items:center; justify-content:center;">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#4FA3FF" stroke-width="2" stroke-linecap="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="4"/></svg>
+                  </div>
+                  <div style="font-size:14px; font-weight:600; color:#E7EDF2;">No active diagnosis</div>
+                  <div style="font-size:13px; line-height:18px; color:#9AA8B5; margin-top:4px;">Select a machine and run Diagnose to enqueue a worker job.</div>
+                  <button style="margin-top:13px; height:32px; padding:0 15px; background:#102A42; border:1px solid #4FA3FF; border-radius:6px; color:#E7EDF2; font-family:'Inter',sans-serif; font-size:13px; font-weight:600; cursor:pointer;">Diagnose press-05</button>
+                </div>
+                <div style="margin-top:16px;">
+                  <div style="font-size:11px; color:#687684; text-transform:uppercase; letter-spacing:0.6px; font-weight:600; margin-bottom:9px;">Recent jobs</div>
+                  <div style="display:flex; flex-direction:column; gap:6px;">
+                    <sc-for list="{{ d.recent }}" as="rj" hint-placeholder-count="3">
+                      <div style="display:flex; align-items:center; gap:10px; padding:8px 11px; background:#17212B; border:1px solid #26323D; border-radius:6px;">
+                        <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#9AA8B5;">{{ rj.job }}</span>
+                        <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#687684;">{{ rj.id }}</span>
+                        <div style="flex:1;"></div>
+                        <span style="{{ rj.badge }}">{{ rj.state }}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- JOB BLOCK (active/streaming/completed/failed) -->
+            <sc-if value="{{ d.showJob }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:14px;">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                  <span style="font-size:11px; color:#687684; text-transform:uppercase; letter-spacing:0.6px; font-weight:600;">BullMQ job</span>
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#9AA8B5;">{{ d.jobId }}</span>
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#687684;">{{ d.attempt }}</span>
+                  <div style="flex:1;"></div>
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:{{ d.progColor }};">{{ d.progLabel }}</span>
+                </div>
+                <div style="height:6px; border-radius:999px; background:#0E151B; border:1px solid #26323D; overflow:hidden; position:relative;">
+                  <sc-if value="{{ d.indeterminate }}" hint-placeholder-val="{{ false }}">
+                    <div style="position:absolute; inset:0; width:25%; background:linear-gradient(90deg, transparent, #4FA3FF, transparent); animation:fg-slide 1.1s linear infinite;"></div>
+                  </sc-if>
+                  <sc-if value="{{ d.determinate }}" hint-placeholder-val="{{ false }}">
+                    <div style="height:100%; width:{{ d.progPct }}; background:{{ d.progColor }};"></div>
+                  </sc-if>
+                </div>
+                <div style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#687684; margin-top:7px;">queue: diagnosis · concurrency 4</div>
+              </div>
+            </sc-if>
+
+            <!-- ACTIVE step log -->
+            <sc-if value="{{ d.isActive }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:16px; background:#0E151B; border:1px solid #26323D; border-radius:8px; padding:11px 12px; font-family:'JetBrains Mono',monospace; font-size:12px; line-height:19px;">
+                <sc-for list="{{ d.log }}" as="l" hint-placeholder-count="4">
+                  <div style="display:flex; gap:9px;">
+                    <span style="color:{{ l.color }}; flex:0 0 auto;">{{ l.mark }}</span>
+                    <span style="color:{{ l.textColor }};">{{ l.text }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <!-- streaming / completed diagnosis text -->
+            <sc-if value="{{ d.showDiag }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:16px;">
+                <div style="font-size:11px; color:#687684; text-transform:uppercase; letter-spacing:0.6px; font-weight:600; margin-bottom:8px;">Diagnosis</div>
+                <div style="font-size:14px; line-height:21px; color:#E7EDF2;">{{ d.summary }}<sc-if value="{{ d.streaming }}" hint-placeholder-val="{{ false }}"><span style="display:inline-block; width:8px; height:16px; background:#4FA3FF; vertical-align:-2px; margin-left:1px; animation:fg-caret 1s step-end infinite;"></span></sc-if></div>
+              </div>
+            </sc-if>
+
+            <!-- completed sections -->
+            <sc-if value="{{ d.completed }}" hint-placeholder-val="{{ false }}">
+              <div>
+                <div style="margin-top:18px;">
+                  <div style="font-size:11px; color:#687684; text-transform:uppercase; letter-spacing:0.6px; font-weight:600; margin-bottom:9px;">Likely causes</div>
+                  <div style="display:flex; flex-direction:column; gap:7px;">
+                    <sc-for list="{{ d.causes }}" as="cz" hint-placeholder-count="3">
+                      <div style="display:flex; align-items:baseline; gap:9px; padding:9px 11px; background:#17212B; border:1px solid #26323D; border-radius:6px;">
+                        <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#4FA3FF; font-weight:600;">{{ cz.pct }}</span>
+                        <span style="flex:1; font-size:13px; line-height:18px; color:#E7EDF2;">{{ cz.text }}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+                <div style="margin-top:16px;">
+                  <div style="font-size:11px; color:#687684; text-transform:uppercase; letter-spacing:0.6px; font-weight:600; margin-bottom:9px;">Evidence</div>
+                  <div style="display:flex; flex-direction:column; gap:6px;">
+                    <sc-for list="{{ d.evidence }}" as="ev" hint-placeholder-count="4">
+                      <div style="display:flex; align-items:center; gap:9px; font-family:'JetBrains Mono',monospace; font-size:12px; line-height:16px;">
+                        <span style="width:5px; height:5px; border-radius:999px; background:{{ ev.color }}; flex:0 0 auto;"></span>
+                        <span style="color:#9AA8B5;">{{ ev.text }}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+                <div style="margin-top:16px;">
+                  <div style="font-size:11px; color:#687684; text-transform:uppercase; letter-spacing:0.6px; font-weight:600; margin-bottom:9px;">Suggested actions</div>
+                  <div style="display:flex; flex-direction:column; gap:7px;">
+                    <sc-for list="{{ d.actions }}" as="ac" hint-placeholder-count="3">
+                      <div style="display:flex; align-items:center; gap:10px; padding:10px 11px; background:#102A42; border:1px solid #26323D; border-radius:6px;" style-hover="display:flex; align-items:center; gap:10px; padding:10px 11px; background:#143a5c; border:1px solid #4FA3FF; border-radius:6px; cursor:pointer;">
+                        <span style="width:20px; height:20px; border-radius:4px; background:#0E151B; border:1px solid #3E5266; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:11px; color:#4FA3FF; flex:0 0 auto;">{{ ac.n }}</span>
+                        <span style="flex:1; font-size:13px; line-height:18px; color:#E7EDF2;">{{ ac.text }}</span>
+                      </div>
+                    </sc-for>
+                  </div>
+                </div>
+              </div>
+            </sc-if>
+
+            <!-- FAILED -->
+            <sc-if value="{{ d.failed }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:16px; padding:13px; background:#3B151A; border:1px solid #FF5C66; border-radius:8px;">
+                <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#FF5C66" stroke-width="2"><path d="M12 8v5M12 16v.5"/><circle cx="12" cy="12" r="9"/></svg>
+                  <span style="font-size:14px; font-weight:600; color:#FF8A91;">Diagnosis failed</span>
+                  <div style="flex:1;"></div>
+                  <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#ff9aa0;">attempt 3/3</span>
+                </div>
+                <div style="font-size:13px; line-height:18px; color:#c9a3a6;">Worker timed out fetching the 5-minute telemetry window (30s deadline). No partial result stored.</div>
+                <div style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#8f6a6d; margin-top:8px;">err: ETIMEDOUT · telemetry-svc</div>
+              </div>
+              <div style="display:flex; gap:8px; margin-top:11px;">
+                <button style="flex:1; height:34px; background:#102A42; border:1px solid #4FA3FF; border-radius:6px; color:#E7EDF2; font-family:'Inter',sans-serif; font-size:13px; font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:7px;">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#76B8FF" stroke-width="2" stroke-linecap="round"><path d="M20 11a8 8 0 10-2.3 5.7M20 4v5h-5"/></svg>
+                  Retry job
+                </button>
+                <button style="height:34px; padding:0 13px; background:#111820; border:1px solid #26323D; border-radius:6px; color:#9AA8B5; font-family:'Inter',sans-serif; font-size:13px; font-weight:600; cursor:pointer;">View logs</button>
+              </div>
+            </sc-if>
+          </div>
+
+          <!-- input rail -->
+          <div style="border-top:1px solid #26323D; padding:12px 14px;">
+            <div style="display:flex; align-items:center; gap:8px; height:38px; padding:0 12px; background:#0E151B; border:1px solid #26323D; border-radius:6px;">
+              <input placeholder="{{ d.inputPlaceholder }}" style="flex:1; background:transparent; border:none; outline:none; color:#E7EDF2; font-family:'Inter',sans-serif; font-size:14px;" />
+              <button style="width:26px; height:26px; display:flex; align-items:center; justify-content:center; background:#102A42; border:1px solid #4FA3FF; border-radius:5px; cursor:pointer;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#76B8FF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-for>
+
+    <!-- MOBILE BOTTOM SHEET -->
+    <div>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:11px; height:20px;">
+        <span style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600; color:#687684;">M</span>
+        <span style="font-size:14px; font-weight:600; color:#E7EDF2;">Mobile — bottom sheet</span>
+      </div>
+      <div style="width:340px; height:640px; border-radius:26px; border:1px solid #26323D; background:#0B1014; overflow:hidden; position:relative; box-shadow:0 12px 28px rgba(0,0,0,0.22);">
+        <!-- console peeking behind -->
+        <div style="position:absolute; inset:0; padding:44px 14px 0; background-image:linear-gradient(#0E151B 1px, transparent 1px), linear-gradient(90deg, #0E151B 1px, transparent 1px); background-size:20px 20px;">
+          <div style="height:34px; background:#111820; border:1px solid #26323D; border-radius:8px; margin-bottom:12px;"></div>
+          <div style="height:96px; background:#111820; border:1px solid #26323D; border-radius:8px;"></div>
+        </div>
+        <!-- status bar -->
+        <div style="position:absolute; top:0; left:0; right:0; height:30px; display:flex; align-items:center; justify-content:space-between; padding:0 18px; font-family:'JetBrains Mono',monospace; font-size:12px; color:#9AA8B5;">
+          <span>9:41</span><span style="letter-spacing:2px;">● ● ●</span>
+        </div>
+        <!-- scrim -->
+        <div style="position:absolute; inset:0; background:rgba(0,0,0,0.5);"></div>
+        <!-- sheet -->
+        <div style="position:absolute; left:0; right:0; bottom:0; height:520px; background:#111820; border-top:1px solid #3E5266; border-radius:16px 16px 0 0; box-shadow:0 -18px 36px rgba(0,0,0,0.45); display:flex; flex-direction:column;">
+          <div style="padding:8px 0 4px; display:flex; justify-content:center;">
+            <div style="width:36px; height:4px; border-radius:999px; background:#3E5266;"></div>
+          </div>
+          <div style="display:flex; align-items:center; gap:9px; padding:6px 16px 12px; border-bottom:1px solid #26323D;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4FA3FF" stroke-width="2" stroke-linecap="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="4"/></svg>
+            <span style="font-size:14px; font-weight:600;">AI Copilot</span>
+            <div style="flex:1;"></div>
+            <span style="display:inline-flex; align-items:center; height:20px; padding:0 9px; border-radius:999px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:600; background:#123522; color:#9df0bf; border:1px solid #1e5c38;">COMPLETE</span>
+          </div>
+          <div style="flex:1; overflow-y:auto; padding:14px 16px;">
+            <div style="display:flex; align-items:center; gap:9px; padding:10px 12px; background:#17212B; border:1px solid #26323D; border-radius:8px;">
+              <span style="width:9px; height:9px; border-radius:999px; background:#FF5C66; animation:fg-pulse 1.2s ease-in-out infinite;"></span>
+              <div style="flex:1;"><div style="font-size:14px; font-weight:600;">Stamping Press 05</div><div style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#687684;">press-05</div></div>
+              <span style="display:inline-flex; align-items:center; height:20px; padding:0 9px; border-radius:999px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:600; background:#3B151A; color:#ff9aa0; border:1px solid #7a2a30;">CRITICAL</span>
+            </div>
+            <div style="margin-top:14px; font-size:14px; line-height:21px; color:#E7EDF2;">Bearing wear on press-05 is progressing. Vibration 4.6 mm/s with temp 92.4 °C and throughput down 64% points to a failing spindle bearing under load.</div>
+            <div style="margin-top:15px; font-size:11px; color:#687684; text-transform:uppercase; letter-spacing:0.6px; font-weight:600; margin-bottom:8px;">Suggested actions</div>
+            <div style="display:flex; align-items:center; gap:10px; padding:10px 11px; background:#102A42; border:1px solid #26323D; border-radius:6px;">
+              <span style="width:20px; height:20px; border-radius:4px; background:#0E151B; border:1px solid #3E5266; display:flex; align-items:center; justify-content:center; font-family:'JetBrains Mono',monospace; font-size:11px; color:#4FA3FF;">1</span>
+              <span style="flex:1; font-size:13px; color:#E7EDF2;">Schedule controlled stop within 15 min</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SPEC PANEL -->
+  <div style="display:grid; grid-template-columns:340px 340px 1fr; gap:20px; max-width:1180px; margin-top:44px;">
+
+    <div style="background:#111820; border:1px solid #26323D; border-radius:8px; overflow:hidden;">
+      <div style="padding:12px 16px; border-bottom:1px solid #26323D; font-size:13px; font-weight:600;">State → status chip</div>
+      <sc-for list="{{ chipSpec }}" as="r" hint-placeholder-count="5">
+        <div style="display:flex; align-items:center; gap:12px; padding:10px 16px; border-bottom:1px solid rgba(38,50,61,0.5);">
+          <span style="{{ r.chipStyle }}">{{ r.chip }}</span>
+          <span style="flex:1; font-size:13px; color:#9AA8B5;">{{ r.desc }}</span>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="background:#111820; border:1px solid #26323D; border-radius:8px; overflow:hidden;">
+      <div style="padding:12px 16px; border-bottom:1px solid #26323D; font-size:13px; font-weight:600;">Spacing &amp; type</div>
+      <div style="padding:13px 16px; display:flex; flex-direction:column; gap:9px; font-size:13px; line-height:18px; color:#9AA8B5;">
+        <div><span style="color:#E7EDF2; font-weight:600;">Width</span> 404px desktop · 100% sheet. <span style="color:#E7EDF2; font-weight:600;">Header/rail</span> 46px / 62px, fixed.</div>
+        <div><span style="color:#E7EDF2; font-weight:600;">Body pad</span> 14px. <span style="color:#E7EDF2; font-weight:600;">Section gap</span> 16px (14px after header, 18px before Causes).</div>
+        <div><span style="color:#E7EDF2; font-weight:600;">Cards</span> 9–11px pad · 6px radius · 6–7px stack gap.</div>
+        <div><span style="color:#E7EDF2; font-weight:600;">Labels</span> 11px upper, 0.6px track, #687684. <span style="color:#E7EDF2; font-weight:600;">Body</span> 14/21. <span style="color:#E7EDF2; font-weight:600;">Meta/log</span> JetBrains Mono 12.</div>
+      </div>
+    </div>
+
+    <div style="background:#111820; border:1px solid #26323D; border-radius:8px; overflow:hidden;">
+      <div style="padding:12px 16px; border-bottom:1px solid #26323D; font-size:13px; font-weight:600;">Motion &amp; mobile</div>
+      <div style="padding:13px 16px; display:flex; flex-direction:column; gap:9px; font-size:13px; line-height:18px; color:#9AA8B5;">
+        <div><span style="color:#E7EDF2; font-weight:600;">Active</span> indeterminate bar slides 1.1s linear; chip shows 0.7s spinner. <span style="color:#E7EDF2; font-weight:600;">Streaming</span> determinate fill + 1s blinking caret at token tail.</div>
+        <div><span style="color:#E7EDF2; font-weight:600;">Critical light</span> 1.2s box-shadow pulse only — no reflow. <span style="color:#E7EDF2; font-weight:600;">Failed</span> is static (no motion) so it reads as settled, not busy.</div>
+        <div><span style="color:#E7EDF2; font-weight:600;">Mobile</span> drawer becomes a bottom sheet over a scrim. 36px grab handle; snap points at 55% (peek diagnosis) and 92% (full). Swipe-down dismisses; input rail sticks above the keyboard.</div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  chip(mode) {
+    const m = {
+      idle:      { t:'IDLE',      bg:'#17212B', fg:'#9AA8B5', bd:'#3E5266', spin:false },
+      active:    { t:'ACTIVE',    bg:'#3A2B12', fg:'#f2cf85', bd:'#6b5220', spin:true },
+      streaming: { t:'STREAMING', bg:'#102A42', fg:'#76B8FF', bd:'#3E5266', spin:false },
+      completed: { t:'COMPLETE',  bg:'#123522', fg:'#9df0bf', bd:'#1e5c38', spin:false },
+      failed:    { t:'FAILED',    bg:'#3B151A', fg:'#ff9aa0', bd:'#7a2a30', spin:false },
+    }[mode];
+    return m;
+  }
+  chipStyle(m) {
+    return 'display:inline-flex; align-items:center; height:20px; padding:0 9px; border-radius:999px; font-family:\'JetBrains Mono\',monospace; font-size:11px; font-weight:600; letter-spacing:0.4px; background:'+m.bg+'; color:'+m.fg+'; border:1px solid '+m.bd+';';
+  }
+  smallBadge(bg,fg,bd) {
+    return 'display:inline-flex; align-items:center; height:18px; padding:0 8px; border-radius:999px; font-family:\'JetBrains Mono\',monospace; font-size:10px; font-weight:600; letter-spacing:0.4px; background:'+bg+'; color:'+fg+'; border:1px solid '+bd+';';
+  }
+
+  drawer(cfg) {
+    const ch = this.chip(cfg.mode);
+    const sevMap = {
+      ok:      { bg:'#123522', fg:'#9df0bf', bd:'#1e5c38' },
+      warning: { bg:'#3A2B12', fg:'#f2cf85', bd:'#6b5220' },
+      critical:{ bg:'#3B151A', fg:'#ff9aa0', bd:'#7a2a30' },
+    };
+    const sv = sevMap[cfg.sev];
+    const dot = cfg.sev==='critical' ? '#FF5C66' : cfg.sev==='warning' ? '#F2B84B' : '#37C978';
+    const dotStyle = 'width:9px; height:9px; border-radius:999px; flex:0 0 auto; background:'+dot+';'+(cfg.sev==='critical'?' animation:fg-pulse 1.2s ease-in-out infinite;':'');
+
+    return {
+      tag:cfg.tag, title:cfg.title,
+      chip:ch.t, chipStyle:this.chipStyle(ch), chipSpin:ch.spin,
+      name:cfg.name, id:cfg.id, dotStyle,
+      sev:cfg.sev.toUpperCase(), sevBadgeStyle:this.smallBadge(sv.bg,sv.fg,sv.bd).replace('height:18px','height:20px').replace('font-size:10px','font-size:11px').replace('padding:0 8px','padding:0 9px'),
+      isIdle:cfg.mode==='idle', isActive:cfg.mode==='active',
+      showJob:['active','streaming','completed','failed'].includes(cfg.mode),
+      showDiag:['streaming','completed'].includes(cfg.mode),
+      streaming:cfg.mode==='streaming', completed:cfg.mode==='completed', failed:cfg.mode==='failed',
+      jobId:cfg.jobId, attempt:cfg.attempt,
+      progLabel:cfg.progLabel, progColor:cfg.progColor,
+      indeterminate:cfg.indeterminate, determinate:cfg.determinate, progPct:cfg.progPct,
+      summary:cfg.summary,
+      inputPlaceholder:cfg.mode==='idle'?'Ask about any machine…':'Ask a follow-up…',
+      recent:cfg.recent, log:cfg.log, causes:cfg.causes, evidence:cfg.evidence, actions:cfg.actions,
+    };
+  }
+
+  renderVals() {
+    const causes = [
+      { pct:'0.72', text:'Spindle bearing wear — inner race spalling under sustained radial load' },
+      { pct:'0.19', text:'Coolant flow reduction raising thermal load on the spindle' },
+      { pct:'0.09', text:'Imbalanced tooling / workpiece fixturing' },
+    ];
+    const evidence = [
+      { color:'#FF5C66', text:'vibration 4.6 mm/s (baseline 0.9, +411%)' },
+      { color:'#FF5C66', text:'temperature 92.4 °C, rising 0.8 °C/min' },
+      { color:'#F2B84B', text:'throughput 420 u/min (−64% vs 30-min avg)' },
+      { color:'#F2B84B', text:'error rate 4.2% (baseline 0.2%)' },
+    ];
+    const actions = [
+      { n:'1', text:'Schedule controlled stop of press-05 within 15 min' },
+      { n:'2', text:'Dispatch maintenance to inspect spindle bearing assembly' },
+      { n:'3', text:'Reroute stamping load to press-02 and press-08' },
+    ];
+    const okB = this.smallBadge('#123522','#9df0bf','#1e5c38');
+    const warnB = this.smallBadge('#3A2B12','#f2cf85','#6b5220');
+
+    const drawers = [
+      this.drawer({ tag:'01', title:'Idle', mode:'idle', sev:'ok', name:'Stamping Press 05', id:'press-05',
+        recent:[
+          { job:'job#4780', id:'cnc-11',  state:'done', badge:okB },
+          { job:'job#4776', id:'pump-07', state:'done', badge:okB },
+          { job:'job#4771', id:'cnc-14',  state:'warn', badge:warnB },
+        ] }),
+      this.drawer({ tag:'02', title:'Active job', mode:'active', sev:'critical', name:'Stamping Press 05', id:'press-05',
+        jobId:'job#4821', attempt:'attempt 1/3', progLabel:'running', progColor:'#4FA3FF', indeterminate:true, determinate:false, progPct:'0%',
+        log:[
+          { mark:'✓', color:'#37C978', textColor:'#9AA8B5', text:'pulled telemetry window 300s' },
+          { mark:'✓', color:'#37C978', textColor:'#9AA8B5', text:'computed rolling baselines' },
+          { mark:'▸', color:'#4FA3FF', textColor:'#E7EDF2', text:'ranking anomaly signatures…' },
+          { mark:'·', color:'#687684', textColor:'#687684', text:'draft diagnosis' },
+        ] }),
+      this.drawer({ tag:'03', title:'Streaming', mode:'streaming', sev:'critical', name:'Stamping Press 05', id:'press-05',
+        jobId:'job#4821', attempt:'attempt 1/3', progLabel:'62%', progColor:'#4FA3FF', indeterminate:false, determinate:true, progPct:'62%',
+        summary:'Vibration on press-05 has climbed past the 4.0 mm/s threshold while temperature tracks steadily upward — the signature is consistent with progressing bearing wear rather than a transient load' }),
+      this.drawer({ tag:'04', title:'Completed', mode:'completed', sev:'critical', name:'Stamping Press 05', id:'press-05',
+        jobId:'job#4821', attempt:'1.8s', progLabel:'100%', progColor:'#37C978', indeterminate:false, determinate:true, progPct:'100%',
+        summary:'Bearing wear on Stamping Press 05 (press-05) is progressing. Vibration at 4.6 mm/s with temperature 92.4 °C and throughput down 64% indicates the spindle bearing is failing under continued load. Recommend a controlled stop before secondary damage.',
+        causes, evidence, actions }),
+      this.drawer({ tag:'05', title:'Failed', mode:'failed', sev:'critical', name:'Stamping Press 05', id:'press-05',
+        jobId:'job#4821', attempt:'attempt 3/3', progLabel:'error', progColor:'#FF5C66', indeterminate:false, determinate:true, progPct:'100%' }),
+    ];
+
+    const chipSpec = ['idle','active','streaming','completed','failed'].map(mode => {
+      const ch = this.chip(mode);
+      const desc = {
+        idle:'no job queued · empty state + recent jobs',
+        active:'BullMQ job running · spinner + indeterminate bar',
+        streaming:'tokens arriving · determinate bar + caret',
+        completed:'result stored · causes / evidence / actions',
+        failed:'attempts exhausted · error + retry',
+      }[mode];
+      return { chip:ch.t, chipStyle:this.chipStyle(ch), desc };
+    });
+
+    return { drawers, chipSpec };
+  }
+}
+</script>
+</body>
+</html>
