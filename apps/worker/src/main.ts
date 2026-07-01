@@ -171,11 +171,15 @@ export async function bootstrap(): Promise<void> {
   // 尚有重試時只記 warn，交由 BullMQ 指數退避重試。
   worker.on("failed", (job, err) => {
     if (!job) return;
-    const jobId = job.data?.jobId ?? String(job.id);
+    const { jobId, machineId, requestedBy } = job.data;
     const attempts = job.opts.attempts ?? 1;
     if (job.attemptsMade >= attempts) {
       log("error", `job failed (final): ${jobId} ${err.message}`);
       publish(pub, jobId, { type: "ai/error", jobId, code: "worker_failed", message: err.message });
+      // FR-013a：失敗（含重試用盡）也是一次觸發，補寫輕量稽核（cached:false），使每次觸發皆可追溯。
+      void writeTrigger(db, machineId, jobId, requestedBy, false).catch((e) =>
+        log("error", `failure trigger write failed for ${jobId}: ${e instanceof Error ? e.message : String(e)}`),
+      );
     } else {
       log("warn", `job attempt failed (will retry): ${jobId} ${err.message}`);
     }

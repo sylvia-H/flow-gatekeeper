@@ -1,5 +1,15 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import type { GenerationConfig } from "@google/generative-ai";
 import type { AiProvider } from "./provider.js";
+
+/**
+ * gemini-2.5 系列預設開啟 thinking，會在首個 token 前先「思考」數秒~十數秒，導致 SC-001
+ * 「首 token ≤ 5s」不達標。診斷輸出為結構化 JSON、不需長推理鏈，故關閉 thinking 換取回應性。
+ * `thinkingConfig` 於 SDK 0.21 型別未涵蓋，但會被原樣送進 REST `generationConfig`（v1beta 支援）。
+ */
+type GenerationConfigWithThinking = GenerationConfig & {
+  thinkingConfig?: { thinkingBudget?: number };
+};
 
 /**
  * Gemini adapter（憲章 V／research D4）——唯一依賴 `@google/generative-ai` 之處。
@@ -20,7 +30,8 @@ export class GeminiProvider implements AiProvider {
   }
 
   async streamDiagnosis(prompt: string, onToken: (text: string) => void): Promise<string> {
-    const model = this.genAI.getGenerativeModel({ model: this.model });
+    const generationConfig: GenerationConfigWithThinking = { thinkingConfig: { thinkingBudget: 0 } };
+    const model = this.genAI.getGenerativeModel({ model: this.model, generationConfig });
     const run = (async (): Promise<string> => {
       let full = "";
       const result = await model.generateContentStream(prompt);
