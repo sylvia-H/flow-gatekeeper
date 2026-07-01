@@ -6,68 +6,139 @@ import type { Job } from "bullmq";
 import { MongoClient } from "mongodb";
 import type { Db } from "mongodb";
 import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
-import type { AiStreamEvent, DiagnosisJobPayload } from "@flow-gatekeeper/contracts";
+import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisResult } from "@flow-gatekeeper/contracts";
 import { createRedisConnection, redisConnectionOptions } from "./redis.js";
+import type { Redis } from "ioredis";
 import type { AiProvider } from "./ai/provider.js";
 import { GeminiProvider } from "./ai/gemini-provider.js";
 import { buildPrompt } from "./ai/prompt.js";
 import { buildDiagnosisContext } from "./context/context-builder.js";
+import { buildDiagnosisSignature } from "./cache/signature.js";
 import { parseResult } from "./lib/parse-result.js";
 
 /**
  * apps/worker entry（003）——BullMQ Worker 消化診斷 job（憲章 IV worker isolation）。
  *
- * 連線分離（憲章 IV／research D3）：`queueConnection`（BullMQ）／`pub`（發布 token）。
- * 流程（US1 compute path，**尚無 cache**——cache/lock 於 US2 T024 疊加）：
- *   context → prompt → AiProvider 串流（每 token → Pub/Sub `ai-stream:<jobId>`）
- *   → parseResult（失敗發 ai/error 並 throw）→ 寫 diagnoses+diagnosisTriggers → ai/done。
+ * 連線分離（憲章 IV／research D3）：`pub`（發布 token）／`cache`（cache/lock 一般 command）；
+ * BullMQ queue 連線由 BullMQ 自管。流程（US1 compute + US2 cache/lock/limiter）：
+ *   context → signature → cache 命中直接 ai/done(cached:true)；未命中取 `ai-lock` 去重
+ *   → prompt → AiProvider 串流（token → Pub/Sub `ai-stream:<jobId>`）→ parseResult（失敗
+ *   ai/error 並 throw）→ 寫 cache + diagnoses + diagnosisTriggers → ai/done(cached:false)。
  * import 保持 side-effect-free：僅在被直接執行時才 bootstrap（保 001 entry smoke）。
  */
 
+const POLL_INTERVAL_MS = 300;
+
 function log(level: "log" | "warn" | "error", msg: string): void {
-  // worker 非 NestJS process，用 console 記錄（FR-019）。
   console[level === "log" ? "log" : level](`[worker] ${msg}`);
 }
 
 /** 發布 AI 串流事件到 Redis Pub/Sub（worker MUST NOT 直接 emit ws，憲章 IV）。 */
-function publish(pub: ReturnType<typeof createRedisConnection>, jobId: string, event: AiStreamEvent): void {
+function publish(pub: Redis, jobId: string, event: AiStreamEvent): void {
   void pub.publish(`ai-stream:${jobId}`, JSON.stringify(event));
 }
 
-/** 建立 job processor（閉包持有 db／pub／ai）。 */
-function createProcessor(db: Db, pub: ReturnType<typeof createRedisConnection>, ai: AiProvider) {
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function writeTrigger(
+  db: Db,
+  machineId: string,
+  jobId: string,
+  requestedBy: string,
+  cached: boolean,
+): Promise<void> {
+  await db
+    .collection("diagnosisTriggers")
+    .insertOne({ machineId, jobId, requestedBy, cached, createdAt: new Date() });
+}
+
+/** 建立 job processor（閉包持有 db／pub／cache／ai 與可調參數）。 */
+function createProcessor(db: Db, pub: Redis, cache: Redis, ai: AiProvider) {
+  const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+  const cacheTtl = Number(process.env.AI_CACHE_TTL_SECONDS ?? 600);
+  const lockTtl = Number(process.env.AI_DEDUPE_LOCK_SECONDS ?? 45);
+  const aiTimeoutMs = Number(process.env.AI_TIMEOUT_MS ?? 30000);
+
   return async (job: Job<DiagnosisJobPayload>): Promise<void> => {
-    const { jobId, machineId, requestedBy, windowMinutes } = job.data;
+    const { jobId, machineId, requestedBy, windowMinutes, promptVersion } = job.data;
     log("log", `job active: ${jobId} machine=${machineId}`);
     await job.updateProgress(5);
 
     const context = await buildDiagnosisContext({ mongo: db, machineId, windowMinutes });
-    const prompt = buildPrompt({ machineId, context });
-    await job.updateProgress(20);
-
-    let seq = 0;
-    log("log", `LLM call: ${jobId} (compute path, no cache)`);
-    const fullText = await ai.streamDiagnosis(prompt, (text) => {
-      publish(pub, jobId, { type: "ai/token", jobId, seq: seq++, text });
+    const sig = buildDiagnosisSignature({
+      machineId,
+      state: context.latestState,
+      topErrorCodes: context.topErrorCodes,
+      promptVersion,
+      model,
     });
+    const cacheKey = `ai-cache:${sig}`;
+    const lockKey = `ai-lock:${sig}`;
 
-    let result;
-    try {
-      result = parseResult(fullText);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log("error", `schema invalid: ${jobId} ${message}`);
-      publish(pub, jobId, { type: "ai/error", jobId, code: "schema_invalid", message });
-      throw err; // 讓 BullMQ 依 attempts 判定；用盡後由 failed handler（T026）通知
+    /** cache 命中：回 ai/done(cached:true)、記 trigger、**不**寫 diagnoses（FR-013/FR-013a）。 */
+    const replyCached = async (): Promise<boolean> => {
+      const raw = await cache.get(cacheKey);
+      if (!raw) return false;
+      const result = JSON.parse(raw) as DiagnosisResult;
+      publish(pub, jobId, { type: "ai/done", jobId, cached: true, result });
+      await writeTrigger(db, machineId, jobId, requestedBy, true);
+      await job.updateProgress(100);
+      log("log", `cache hit: ${jobId} sig=${sig}`);
+      return true;
+    };
+
+    if (await replyCached()) return;
+
+    // 「取鎖或等待」迴圈（SC-004 去重；F1：持鎖者逾時/崩潰後放行重算）。
+    // lock TTL 保證進度：最遲於 lockTtl 後鎖過期，某 waiter 會搶到鎖改走計算路徑。
+    const deadline = Date.now() + aiTimeoutMs + lockTtl * 1000 + 5000;
+    for (;;) {
+      const gotLock = await cache.set(lockKey, "1", "EX", lockTtl, "NX");
+      if (gotLock) {
+        try {
+          await job.updateProgress(20);
+          let seq = 0;
+          log("log", `LLM call: ${jobId} sig=${sig}`);
+          const fullText = await ai.streamDiagnosis(
+            buildPrompt({ machineId, context }),
+            (text) => publish(pub, jobId, { type: "ai/token", jobId, seq: seq++, text }),
+          );
+
+          let result: DiagnosisResult;
+          try {
+            result = parseResult(fullText);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            log("error", `schema invalid: ${jobId} ${message}`);
+            publish(pub, jobId, { type: "ai/error", jobId, code: "schema_invalid", message });
+            throw err; // 用盡 attempts 後由 failed handler（T026）通知
+          }
+
+          await cache.set(cacheKey, JSON.stringify(result), "EX", cacheTtl);
+          await db
+            .collection("diagnoses")
+            .insertOne({ machineId, jobId, cached: false, result, createdAt: new Date() });
+          await writeTrigger(db, machineId, jobId, requestedBy, false);
+          await job.updateProgress(100);
+          publish(pub, jobId, { type: "ai/done", jobId, cached: false, result });
+          log("log", `job completed: ${jobId}`);
+        } finally {
+          await cache.del(lockKey);
+        }
+        return;
+      }
+
+      // 取不到鎖：他人正在算 → 輪詢共用其結果。
+      if (await replyCached()) return;
+      if (Date.now() > deadline) {
+        throw new Error(`dedupe wait exceeded for ${jobId}`); // 最終保護：交還 attempts 重試
+      }
+      await sleep(POLL_INTERVAL_MS);
+      // 迴圈頂端重試 SET NX：若鎖已過期但 cache 仍空（持鎖者逾時/崩潰），本 waiter 搶到鎖改走
+      // 計算路徑重算，未搶到者續輪詢——確保「放行重算」、不永久卡死（F1）。
     }
-
-    await db.collection("diagnoses").insertOne({ machineId, jobId, cached: false, result, createdAt: new Date() });
-    await db
-      .collection("diagnosisTriggers")
-      .insertOne({ machineId, jobId, requestedBy, cached: false, createdAt: new Date() });
-    await job.updateProgress(100);
-    publish(pub, jobId, { type: "ai/done", jobId, cached: false, result });
-    log("log", `job completed: ${jobId}`);
   };
 }
 
@@ -78,8 +149,9 @@ export async function bootstrap(): Promise<void> {
   await db.collection("diagnoses").createIndex({ machineId: 1, createdAt: -1 });
   await db.collection("diagnosisTriggers").createIndex({ machineId: 1, createdAt: -1 });
 
-  // pub 為 worker 專用發布連線；BullMQ 的 queue 連線由 BullMQ 以 options 自管（連線分離，憲章 IV）。
+  // 連線分離（憲章 IV）：pub 發布、cache 一般 command；BullMQ queue 連線由 BullMQ 以 options 自管。
   const pub = createRedisConnection();
+  const cache = createRedisConnection();
 
   const ai: AiProvider = new GeminiProvider(
     process.env.GEMINI_API_KEY ?? "",
@@ -87,8 +159,10 @@ export async function bootstrap(): Promise<void> {
     Number(process.env.AI_TIMEOUT_MS ?? 30000),
   );
 
-  const worker = new Worker<DiagnosisJobPayload>(DIAGNOSIS_QUEUE, createProcessor(db, pub, ai), {
+  const worker = new Worker<DiagnosisJobPayload>(DIAGNOSIS_QUEUE, createProcessor(db, pub, cache, ai), {
     connection: redisConnectionOptions(),
+    concurrency: 2,
+    limiter: { max: Number(process.env.AI_RPM ?? 8), duration: 60_000 },
   });
 
   worker.on("ready", () => log("log", `worker ready, consuming queue '${DIAGNOSIS_QUEUE}'`));

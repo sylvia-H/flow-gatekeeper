@@ -101,13 +101,13 @@ monorepo：`apps/api/src/...`、`apps/worker/src/...`、`packages/contracts/src/
 
 ### Tests for User Story 2 (FR-018 必需)
 
-- [ ] T022 [P] [US2] 新增純函式 `apps/worker/src/cache/signature.ts`：`buildDiagnosisSignature({machineId,state,topErrorCodes,promptVersion,model})`——`topErrorCodes` 排序後 `JSON.stringify` → `sha256` 取前 24 hex（指南 §8.7）
-- [ ] T023 [P] [US2] 新增 `apps/worker/src/cache/signature.test.ts`（Vitest）：斷言相同輸入決定性一致、`topErrorCodes` 順序不影響、不同 `state`／不同 `topErrorCodes`／不同 `model` 產生不同簽章（SC-009）
+- [X] T022 [P] [US2] 新增純函式 `apps/worker/src/cache/signature.ts`：`buildDiagnosisSignature({machineId,state,topErrorCodes,promptVersion,model})`——`topErrorCodes` 排序後 `JSON.stringify` → `sha256` 取前 24 hex（指南 §8.7）
+- [X] T023 [P] [US2] 新增 `apps/worker/src/cache/signature.test.ts`（Vitest）：斷言相同輸入決定性一致、`topErrorCodes` 順序不影響、不同 `state`／不同 `topErrorCodes`／不同 `model` 產生不同簽章（SC-009）
 
 ### Implementation for User Story 2
 
-- [ ] T024 [US2] 在 `apps/worker/src/main.ts` 加入 cache-aside 與去重（依賴 T015/T022）：用 `createRedisConnection()` 產 `cache` 連線；processor 內以 `buildDiagnosisSignature` 算 `sig`——**五個欄位全帶**：`machineId`、`state=context.latestState`、`topErrorCodes=context.topErrorCodes`、`promptVersion=payload.promptVersion`、`model=GEMINI_MODEL`（勿漏 `promptVersion`／`topErrorCodes`，否則簽章與 data-model §2 不一致）；`replyCached()`：`cache.get('ai-cache:'+sig)` 命中 → `publish {type:'ai/done',cached:true,result}` + 寫 `diagnosisTriggers`(`cached:true`) + `updateProgress(100)` 後回 `true`（**不**寫 `diagnoses`，FR-013/FR-013a），未命中回 `false`；miss → 進入**「取鎖或等待」迴圈**：`cache.set('ai-lock:'+sig,'1','EX',AI_DEDUPE_LOCK_SECONDS,'NX')` 取鎖；取到鎖者算完後 `cache.set('ai-cache:'+sig, result,'EX',AI_CACHE_TTL_SECONDS)`、`finally` `cache.del('ai-lock:'+sig)`；**取不到鎖者**有界輪詢 `replyCached()`（間隔如 300ms、總等待上限如 `AI_DEDUPE_LOCK_SECONDS` + 緩衝）等他人算完共用（SC-004）——**若輪詢期間鎖已消失但 cache 仍為空（持鎖者逾時／崩潰，FR-006／Edge Case），MUST 重新嘗試 `SET ai-lock … NX`：搶到鎖者改走計算路徑重算，未搶到者繼續輪詢**，確保「放行重算」、不永久卡死
-- [ ] T025 [US2] 在 `apps/worker/src/main.ts` 的 `Worker` options 加入 `concurrency: 2` 與 `limiter: { max: Number(process.env.AI_RPM ?? 8), duration: 60_000 }`（FR-003／SC-003，同檔接 T024）
+- [X] T024 [US2] 在 `apps/worker/src/main.ts` 加入 cache-aside 與去重（依賴 T015/T022）：用 `createRedisConnection()` 產 `cache` 連線；processor 內以 `buildDiagnosisSignature` 算 `sig`——**五個欄位全帶**：`machineId`、`state=context.latestState`、`topErrorCodes=context.topErrorCodes`、`promptVersion=payload.promptVersion`、`model=GEMINI_MODEL`（勿漏 `promptVersion`／`topErrorCodes`，否則簽章與 data-model §2 不一致）；`replyCached()`：`cache.get('ai-cache:'+sig)` 命中 → `publish {type:'ai/done',cached:true,result}` + 寫 `diagnosisTriggers`(`cached:true`) + `updateProgress(100)` 後回 `true`（**不**寫 `diagnoses`，FR-013/FR-013a），未命中回 `false`；miss → 進入**「取鎖或等待」迴圈**：`cache.set('ai-lock:'+sig,'1','EX',AI_DEDUPE_LOCK_SECONDS,'NX')` 取鎖；取到鎖者算完後 `cache.set('ai-cache:'+sig, result,'EX',AI_CACHE_TTL_SECONDS)`、`finally` `cache.del('ai-lock:'+sig)`；**取不到鎖者**有界輪詢 `replyCached()`（間隔如 300ms、總等待上限如 `AI_DEDUPE_LOCK_SECONDS` + 緩衝）等他人算完共用（SC-004）——**若輪詢期間鎖已消失但 cache 仍為空（持鎖者逾時／崩潰，FR-006／Edge Case），MUST 重新嘗試 `SET ai-lock … NX`：搶到鎖者改走計算路徑重算，未搶到者繼續輪詢**，確保「放行重算」、不永久卡死
+- [X] T025 [US2] 在 `apps/worker/src/main.ts` 的 `Worker` options 加入 `concurrency: 2` 與 `limiter: { max: Number(process.env.AI_RPM ?? 8), duration: 60_000 }`（FR-003／SC-003，同檔接 T024）
 
 **Checkpoint**: US1 + US2 皆可獨立驗收——串流診斷 + 快取/去重/限流。
 
