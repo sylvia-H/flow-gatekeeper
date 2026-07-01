@@ -147,7 +147,9 @@ monorepo：`apps/api/src/...`、`apps/worker/src/...`、`packages/contracts/src/
   - SC-008 ✅：`diagnoses`=5（全 `cached:false`、`cached:true` 0 筆）；`diagnosisTriggers`=44（`cached:false` 5 + `cached:true` 39）——命中不膨脹結果集合、每次觸發可追溯。
   - SC-009 ✅：`pnpm --filter worker test` 13 綠（signature 7 / parse-result 5 / entry 1）。
   - 驗收中另修兩個阻擋實跑的問題（見 `fix(003)` commit）：contracts/shared exports 指向 dist、entry guard 去副檔名比對使 `start:dev` 可服務。
-  - 未量測/待改進：①SC-001 首 token ≤5s 未達（模型 thinking 延遲）；②schema 全失敗的 job 目前不寫 `diagnosisTriggers`（FR-013a 對「失敗觸發」的稽核可補）。
+  - 驗收後改進（已修，見 `fix(003): 關閉 Gemini thinking…` commit 並 live 複驗）：
+    ①**SC-001 首 token 已達標**——`thinkingBudget:0` 關閉 gemini-2.5 thinking 後首 token 由 ~15s 降至 **1.3s**（≤5s）；
+    ②**FR-013a 失敗觸發已補稽核**——schema 全失敗的 job 現寫 1 筆 `diagnosisTriggers`(`cached:false`)、`diagnoses` 仍 0 筆。
 
 ---
 
