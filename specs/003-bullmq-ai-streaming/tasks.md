@@ -48,10 +48,10 @@ monorepo：`apps/api/src/...`、`apps/worker/src/...`、`packages/contracts/src/
 
 **⚠️ CRITICAL**: 完成本相之前，任何 user story 不得開工
 
-- [ ] T005 [P] 新增 `packages/contracts/src/jobs.ts`：`export const DIAGNOSIS_QUEUE = 'diagnosis'` 與 `DiagnosisJobPayload` 型別（`jobId`/`machineId`/`requestedBy`/`requestedAt`/`windowMinutes`/`promptVersion`，依 contracts/jobs.contract.md）；在 `packages/contracts/src/index.ts` 補 `export * from './jobs.js'`；`pnpm --filter @flow-gatekeeper/contracts build` 更新 dist 供 api/worker 取用
-- [ ] T006 [P] 新增 `apps/worker/src/redis.ts`：`createRedisConnection()`（`ioredis`，`host/port` 取自 `REDIS_HOST`/`REDIS_PORT`，`maxRetriesPerRequest: null`），供 main 產出分離的 queue/pub/cache 連線（憲章 IV、research D3）
-- [ ] T007 [P] 新增 `apps/worker/src/ai/provider.ts`：`AiProvider` interface（`streamDiagnosis(prompt, onToken): Promise<string>`；JSON 解析與 schema 驗證**不在** provider 內，憲章 V、research D4）
-- [ ] T008 擴充 `apps/api/src/modules/config/config.service.ts`：新增 `redisHost`(預設 `127.0.0.1`)、`redisPort`(預設 6379) 型別化 getter，供 jobs module 與 subscriber 連線使用
+- [X] T005 [P] 新增 `packages/contracts/src/jobs.ts`：`export const DIAGNOSIS_QUEUE = 'diagnosis'` 與 `DiagnosisJobPayload` 型別（`jobId`/`machineId`/`requestedBy`/`requestedAt`/`windowMinutes`/`promptVersion`，依 contracts/jobs.contract.md）；在 `packages/contracts/src/index.ts` 補 `export * from './jobs.js'`；`pnpm --filter @flow-gatekeeper/contracts build` 更新 dist 供 api/worker 取用
+- [X] T006 [P] 新增 `apps/worker/src/redis.ts`：`createRedisConnection()`（`ioredis`，`host/port` 取自 `REDIS_HOST`/`REDIS_PORT`，`maxRetriesPerRequest: null`），供 main 產出分離的 queue/pub/cache 連線（憲章 IV、research D3）
+- [X] T007 [P] 新增 `apps/worker/src/ai/provider.ts`：`AiProvider` interface（`streamDiagnosis(prompt, onToken): Promise<string>`；JSON 解析與 schema 驗證**不在** provider 內，憲章 V、research D4）
+- [X] T008 擴充 `apps/api/src/modules/config/config.service.ts`：新增 `redisHost`(預設 `127.0.0.1`)、`redisPort`(預設 6379) 型別化 getter，供 jobs module 與 subscriber 連線使用
 
 **Checkpoint**: 契約已擴充（api/worker 皆 import 得到 `DIAGNOSIS_QUEUE`/`DiagnosisJobPayload`）、Redis 連線工廠與 provider interface 就緒。
 

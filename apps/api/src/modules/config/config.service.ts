@@ -13,4 +13,7 @@ export class AppConfigService {
   readonly mongoUrl = process.env.MONGO_URL ?? "mongodb://127.0.0.1:27017/flow-gatekeeper";
   readonly mongoDb = process.env.MONGO_DB ?? "flow-gatekeeper";
   readonly telemetryTtlSeconds = Number(process.env.TELEMETRY_TTL_SECONDS ?? 604800);
+  // 003：jobs module（BullMQ producer）與 AI/job-status relay 連線用（憲章 IV 連線分離）。
+  readonly redisHost = process.env.REDIS_HOST ?? "127.0.0.1";
+  readonly redisPort = Number(process.env.REDIS_PORT ?? 6379);
 }
