@@ -83,6 +83,7 @@
 - 同一情境的 dedupe 保護期間，**持鎖者逾時或崩潰**時，MUST NOT 造成後續請求永久卡死（鎖具過期，逾時後可放行重算）。
 - 任務終態（完成／失敗）後，MUST 清理其「任務 → 連線」綁定，避免對應關係無限累積。
 - LLM 呼叫**逾時（≥ 30 秒）或回傳錯誤**時，MUST 轉為「診斷錯誤」事件並依重試策略處理，MUST NOT 讓發起連線無限等待而無任何回饋。
+- 建立診斷的 HTTP 入口收到**格式錯誤或缺漏必要欄位**（如缺 `machineId` 或 `socketId`）的請求時，MUST 安全拒絕（回應用戶端錯誤，如 400），MUST NOT 崩潰、MUST NOT 建立任務（`socketId` 於純後端 smoke 可為任意字串，但欄位本身 MUST 存在）。
 
 ## Requirements *(mandatory)*
 
@@ -95,7 +96,7 @@
 - **FR-005**: worker MUST 在呼叫 LLM 前，先以能反映「機台、當前嚴重度狀態、近期錯誤類型、prompt 版本、模型」的快取簽章查詢 Redis 快取；命中則直接回傳並標示「來自快取」，MUST NOT 呼叫 LLM。簽章組成與快取／鎖鍵命名以指南 §8.7 為單一來源，spec 不另訂平行定義。
 - **FR-006**: 對同一快取簽章 MUST 去重：同一情境同時湧入多筆請求時，MUST 只有一筆真正呼叫 LLM，其餘等待後共用其結果；去重鎖 MUST 具過期時間，持鎖者逾時／崩潰後 MUST NOT 使後續請求永久卡死。
 - **FR-007**: 快取未命中時，worker MUST 透過 `AiProvider` interface 以**串流方式**取得診斷；主邏輯只依賴該 interface，替換 LLM provider MUST 只需更換 adapter（憲章 Principle V）。
-- **FR-008**: worker MUST 將每段 AI 產出的 token 以帶遞增序號的事件發布到 Redis Pub/Sub 通道 `ai-stream:<jobId>`；job 生命週期狀態與 AI token 串流 MUST 分走兩條流（job 走 BullMQ 佇列事件、token 走 Pub/Sub），MUST NOT 混為同一條流（憲章 Principle IV）。
+- **FR-008**: worker MUST 將每段 AI 產出的 token 以帶**自 `0` 起連續遞增序號**（`seq`，同一 job 內從 0 開始、每段 +1、不跳號）的事件發布到 Redis Pub/Sub 通道 `ai-stream:<jobId>`；job 生命週期狀態與 AI token 串流 MUST 分走兩條流（job 走 BullMQ 佇列事件、token 走 Pub/Sub），MUST NOT 混為同一條流（憲章 Principle IV）。
 - **FR-009**: worker MUST NOT 直接對 WebSocket client emit；即時轉發 MUST 由 Gateway 統一負責：Gateway MUST 訂閱 `ai-stream:*`，把 `ai/token`、`ai/done`、`ai/error` 事件轉發給該任務所綁定的連線。
 - **FR-010**: Gateway MUST 就診斷任務的生命週期（等待中／進行中／完成／失敗／進度）組出任務狀態事件（`job/status`），並推送給發起連線。
 - **FR-011**: worker MUST 讀取 MongoDB 中該機台**近期**的遙測彙總、異常事件與維修紀錄，組成診斷 prompt 的脈絡；讀取窗口 MUST 可由任務參數（`windowMinutes`）界定。
@@ -149,6 +150,7 @@
 - 歷史脈絡讀自 MongoDB（002 落地的 telemetry／errorlogs／maintenanceRecords）；最終診斷持久化於 MongoDB `diagnoses`（憲章 Principle VII）。Redis 僅供佇列、快取、Pub/Sub、鎖等暫態用途。
 - LLM provider 於開發階段採 Gemini（`GEMINI_API_KEY`、`GEMINI_MODEL`，預設 `gemini-2.5-flash`），包在 `AiProvider` interface 後面；換 provider 只改 adapter。API key 等祕密只放本機／`.env`，只提交 `.env.example`（憲章 Principle VI）。
 - 快取有效期（`AI_CACHE_TTL_SECONDS`，預設 600 秒）、去重鎖有效期（`AI_DEDUPE_LOCK_SECONDS`，預設 45 秒）、速率上限（`AI_RPM`，預設 8）、脈絡窗口（`windowMinutes`，預設 5）與重試（`attempts` 3、指數退避）等參數可由環境／任務設定調整；預設值以指南 §8 為準。
+- worker 同時處理數（`concurrency`，預設 2）與 `AI_RPM` 速率上限屬**獨立維度**、彼此不衝突：`concurrency` 限制 worker 同時處理的 job 數，`limiter`（`max=AI_RPM`／`duration=60_000`）限制每分鐘**實際 LLM 呼叫**數；SC-003 的「一分鐘內實際 LLM 呼叫 ≤ `AI_RPM`」以 limiter 為準，不受 concurrency 影響。
 - 「任務 → 連線」綁定於開發階段以記憶體 Map 實作；client 重連後連線識別會更換、舊綁定失效，跨重連不保證續傳（屬已知限制，需於 README／驗收註明；正式做法可改存 Redis）。
 - 前端完整整合（按下「診斷」帶上連線識別、rAF 批次接收 token 串流與狀態）於 Feature 004 驗收；本 feature 的手動驗收可用命令列 HTTP／WebSocket 客戶端或最小整合腳本完成，`socketId` 於純後端 smoke test 可填任意字串（任務仍會跑完、寫入 Mongo、進快取，只是無 client 收得到串流）。
 - 診斷結果結構以 001 既有的 `DiagnosisResultSchema` 為單一來源；本 feature 不另訂平行結果結構。
