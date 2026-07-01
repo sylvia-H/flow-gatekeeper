@@ -201,8 +201,10 @@ export async function bootstrap(): Promise<void> {
 }
 
 // 僅在被直接執行時才啟動；被 import（含 001 entry smoke）時不產生副作用。
-const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";
-if (invokedPath && resolve(fileURLToPath(import.meta.url)) === invokedPath) {
+// 去 .js/.mjs/.cjs 副檔名再比對，兼容以無副檔名路徑啟動的執行器（與 api 對齊）。
+const stripJs = (p: string): string => p.replace(/\.[cm]?js$/, "");
+const invokedPath = process.argv[1] ? stripJs(resolve(process.argv[1])) : "";
+if (invokedPath && stripJs(resolve(fileURLToPath(import.meta.url))) === invokedPath) {
   void bootstrap().catch((err: unknown) => {
     log("error", `bootstrap failed: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);

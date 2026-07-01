@@ -28,7 +28,10 @@ export async function bootstrap(): Promise<void> {
 
 // 僅在被直接執行時才啟動；被 import（含 entry smoke 測試）時不產生副作用。
 // 用 fileURLToPath + resolve 比對，正確處理含空白/特殊字元的路徑（避免 file:// 的 %20 不相等）。
-const invokedPath = process.argv[1] ? resolve(process.argv[1]) : "";
-if (invokedPath && resolve(fileURLToPath(import.meta.url)) === invokedPath) {
+// 去掉 .js/.mjs/.cjs 副檔名再比對：`nest start` 以 `node dist/main`（無副檔名）啟動，
+// 若不 normalize 會與 import.meta.url 的 `dist/main.js` 不相等而永不 bootstrap（start:dev 不服務）。
+const stripJs = (p: string): string => p.replace(/\.[cm]?js$/, "");
+const invokedPath = process.argv[1] ? stripJs(resolve(process.argv[1])) : "";
+if (invokedPath && stripJs(resolve(fileURLToPath(import.meta.url))) === invokedPath) {
   void bootstrap();
 }
