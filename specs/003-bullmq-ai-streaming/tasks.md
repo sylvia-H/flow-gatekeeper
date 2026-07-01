@@ -134,10 +134,10 @@ monorepo：`apps/api/src/...`、`apps/worker/src/...`、`packages/contracts/src/
 
 **Purpose**: 跨故事的驗證與品質門檻
 
-- [ ] T028 [P] 於 repo 根執行 `pnpm contract:lint`（asyncapi 未新增 WS 訊息，維持 0 違規）、`pnpm -r typecheck`、`pnpm -r lint`：全 workspace 通過、無 `any` 洩漏
-- [ ] T029 [P] 執行 `pnpm --filter @flow-gatekeeper/worker test` 與全 workspace 測試：`parse-result`（T010）與 `signature`（T023）通過（FR-018/SC-009）
-- [ ] T030 補齊 FR-019 記錄（worker `main.ts` + api jobs/relays）：任務建立、任務進入處理、快取命中、LLM 呼叫、任務完成、任務失敗六類事件分 `log`/`warn`/`error` 記錄
-- [ ] T031 本機驗收（依 quickstart.md）：`smoke:gemini`（Step 0）→ 觸發串流（SC-001，含首個 token ≤ 5 秒）→ cache hit（SC-002）→ 20 連發限流與並發去重（SC-003/SC-004）→ worker 韌性（SC-005/SC-006，**明確驗證：worker 停機時入列的 job，於 worker 重啟後被消化**）→ 驗證失敗路徑（SC-007）→ `diagnoses`/`diagnosisTriggers` 追溯（SC-008）；記錄已觀察與未量測項
+- [X] T028 [P] 於 repo 根執行 `pnpm contract:lint`（asyncapi 未新增 WS 訊息，維持 0 違規）、`pnpm -r typecheck`、`pnpm -r lint`：全 workspace 通過、無 `any` 洩漏
+- [X] T029 [P] 執行 `pnpm --filter @flow-gatekeeper/worker test` 與全 workspace 測試：`parse-result`（T010）與 `signature`（T023）通過（FR-018/SC-009）
+- [X] T030 補齊 FR-019 記錄（worker `main.ts` + api jobs/relays）：任務建立、任務進入處理、快取命中、LLM 呼叫、任務完成、任務失敗六類事件分 `log`/`warn`/`error` 記錄
+- [ ] T031 本機驗收（依 quickstart.md）：`smoke:gemini`（Step 0）→ 觸發串流（SC-001，含首個 token ≤ 5 秒）→ cache hit（SC-002）→ 20 連發限流與並發去重（SC-003/SC-004）→ worker 韌性（SC-005/SC-006，**明確驗證：worker 停機時入列的 job，於 worker 重啟後被消化**）→ 驗證失敗路徑（SC-007）→ `diagnoses`/`diagnosisTriggers` 追溯（SC-008）；記錄已觀察與未量測項 — **待人工執行**：需 `docker compose up`（Redis+Mongo）、本機 `.env` 的 `GEMINI_API_KEY`（祕密，未提交）、同時啟 api+worker；程式面已就緒，此步為 live 驗收
 
 ---
 
