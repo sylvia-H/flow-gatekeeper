@@ -98,9 +98,9 @@ description: "Task list for Feature 005 — AI Copilot Drawer"
 
 ### Implementation for User Story 3
 
-- [ ] T023 [US3] Failed 呈現於 apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue：failed 狀態顯示可讀錯誤訊息（非原始堆疊）＋Retry 按鈕（依賴 T015；FR-007）
-- [ ] T024 [US3] Retry 接線：Retry 呼叫 `copilot.retry(machineId, clientId)`（新 jobId、重置 progress/streamText）於 CopilotDrawer.vue／App.vue；Retry 若命中後端快取 MUST 照常顯示 Cached 結果、不繞過快取（依賴 T006、T023；FR-007/FR-009、Clarifications CHK038）
-- [ ] T025 [US3] 重連中斷收尾接線於 apps/web/src/App.vue：`onConnected` 內呼叫 `copilot.onReconnect(clientId)`，使 active 台在新 clientId 時轉 failed（中斷）（依賴 T006、T018；FR-012、research R7）
+- [X] T023 [US3] Failed 呈現於 apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue：failed 狀態顯示可讀錯誤訊息（非原始堆疊）＋Retry 按鈕（依賴 T015；FR-007）
+- [X] T024 [US3] Retry 接線：Retry 呼叫 `copilot.retry(machineId, clientId)`（新 jobId、重置 progress/streamText）於 CopilotDrawer.vue／App.vue；Retry 若命中後端快取 MUST 照常顯示 Cached 結果、不繞過快取（依賴 T006、T023；FR-007/FR-009、Clarifications CHK038）
+- [X] T025 [US3] 重連中斷收尾接線於 apps/web/src/App.vue：`onConnected` 內呼叫 `copilot.onReconnect(clientId)`，使 active 台在新 clientId 時轉 failed（中斷）（依賴 T006、T018；FR-012、research R7）
 
 **Checkpoint**: 三個 user story 皆獨立可用
 

@@ -94,6 +94,8 @@ const handle = useHighFrequencyWs({
   // 每次（重）連線都會觸發：保存 clientId（供 005）並用單一名冊訂閱 5 台（dev 送空 token）。
   onConnected: (clientId: string) => {
     store.setClientId(clientId);
+    // 005：重連（新 clientId）使舊綁定失效——把仍 active 的台標中斷＋可 Retry（FR-012／R7）。
+    copilot.onReconnect(clientId);
     handle.send({
       type: "machine/subscribe",
       token: "",
