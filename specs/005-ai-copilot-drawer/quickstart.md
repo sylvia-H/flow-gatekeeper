@@ -58,3 +58,24 @@ pnpm --filter web test
 ## 回寫
 
 驗收通過後，於 tasks.md 對應 Polish 任務回寫結果（AC1–AC12 通過與否），保留可重播 demo（憲章「可重播驗收」）。
+
+### Live 驗收結果（2026-07-02，Playwright headless + Edge `msedge` channel）
+
+完整 stack：docker（Redis 7 + Mongo 7）+ `pnpm --filter api seed` + API :3000 + worker（真實 `GEMINI_API_KEY`）+ web :5173。
+
+| # | 結果 | 佐證 |
+|---|------|------|
+| AC1 | ✅ PASS | 未選取時 Diagnose disabled；選台後桌機右欄 drawer 顯示 idle 摘要 + Run diagnosis |
+| AC2 | ✅ PASS | 按 Diagnose → drawer **341ms** 進入 active（<1s，SC-001） |
+| AC3 | ✅ PASS | 串流文字於 done 前逐段成長（取樣成長 8 次、最終 791 字）+ caret |
+| AC4 | ✅ PASS | 進度取樣到 `處理中…→40%→60%`（真實階段里程碑，非只 0→100） |
+| AC5 | ✅ PASS | done 後五區塊（summary/severity/likely causes/evidence/suggested actions）齊；串流文字保留且預設收合，展開仍在 |
+| AC6 | ✅ PASS | 該台 active 期間 TopBar Diagnose disabled（去重，FR-008） |
+| AC7 | ✅ PASS | 同機台第二次診斷顯示 **Cached** badge（178ms，明顯快，FR-009） |
+| AC8 | ✅ PASS | 切到另一台為 idle、切回還原原台狀態（多台獨立，FR-010） |
+| AC9 | ✅ PASS | 壞金鑰注入 worker 失敗（Gemini 400 API_KEY_INVALID，重試耗盡）→ drawer 顯示可讀錯誤 + Retry；還原 worker 後 Retry → completed（FR-007） |
+| AC10 | ✅ PASS | active 期間殺 API→重啟→前端以新 clientId 重連 → 該台標「連線中斷」failed + Retry（FR-012） |
+| AC11 | ✅ PASS | 四 viewport（1366/1440/768/390）皆無水平溢出；桌機右欄常駐、手機 bottom-sheet 且頂欄未被遮住 |
+| AC12 | ✅ PASS | 診斷期間 BackpressureBadge 比值維持 12:1（遙測 rAF 批次未被診斷串流破壞，FR-017/SC-007） |
+
+> 觀察（非阻斷）：AC9 的可讀錯誤目前直接顯示 provider 原文（Gemini 400 訊息），符合 FR-007「非原始堆疊之可讀訊息」；未來可加一層對應更精簡的使用者訊息（polish，non-goal）。

@@ -111,9 +111,9 @@ description: "Task list for Feature 005 — AI Copilot Drawer"
 **Purpose**: 跨 story 的無障礙、響應式、品質門檻與驗收回寫
 
 - [X] T026 [P] 無障礙加固：drawer 全控制項（Diagnose／Retry／close／收合）具 `aria-label`，狀態不只靠顏色，focus ring 用 `accent`，手機 sheet 可 Escape 關閉，ProgressBar aria 正確（FR-015/016、design-spec §10）
-- [ ] T027 [P] 四 viewport 響應式檢查（寬桌機／桌機／平板／手機 390×844）：桌機常駐右欄、手機 bottom-sheet；不溢出、不遮頂欄、不重疊（SC-006）— **待 live/視覺驗證**：響應式由 AppLayout `md:` breakpoint 以建構方式落實（桌機 `md:flex` 常駐右欄、手機 `hidden`+bottom-sheet、遮罩起於 `top-14` 不遮頂欄），本 implement 環境無瀏覽器工具無法截圖，併入 T029 live 驗收
+- [X] T027 [P] 四 viewport 響應式檢查（寬桌機／桌機／平板／手機 390×844）：桌機常駐右欄、手機 bottom-sheet；不溢出、不遮頂欄、不重疊（SC-006）— **PASS（live，Playwright/Edge headless）**：四 viewport（1366/1440/768/390）皆無水平溢出；截圖確認桌機 1440 右欄常駐五區塊、手機 390 bottom-sheet 且頂欄未被遮住
 - [X] T028 品質門檻：`pnpm --filter web typecheck`、`pnpm --filter web lint`、`pnpm --filter web test` 全綠；若動 apps/worker/src/main.ts 一併 `pnpm --filter worker typecheck`（憲章 III）
-- [ ] T029 執行 [quickstart.md](./quickstart.md) live 驗收 AC1–AC12（含 AC12 遙測背壓不受干擾＝FR-017/SC-007），回寫結果 — **待執行**：需完整 live stack（API+worker+LLM key）與瀏覽器，本 implement 環境未具備（無 Playwright、未起後端）；純函式／store 單元測試（40 綠）＋ typecheck/lint/build 已通過，UI 行為 AC 待使用者依 quickstart 於本機跑
+- [X] T029 執行 [quickstart.md](./quickstart.md) live 驗收 AC1–AC12（含 AC12 遙測背壓不受干擾＝FR-017/SC-007），回寫結果 — **PASS（live，完整 stack：docker Redis/Mongo + API + worker + 真實 Gemini + Playwright/Edge）**：AC1–AC12 全數通過，結果已回寫 quickstart.md「回寫」節；AC9 以壞金鑰注入真實 worker 失敗、AC10 以殺重啟 API 觸發新 clientId 重連中斷
 - [X] T030 [P] 勾選 tasks.md／checklists；CHK038（Retry 可命中快取、不繞過）與 CHK039（不設前端並發上限）已於 spec Clarifications 拍板並落入 FR-007/FR-010，於此確認實作與決策一致
 
 ---
