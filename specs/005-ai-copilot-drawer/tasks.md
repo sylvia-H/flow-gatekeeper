@@ -28,8 +28,8 @@ description: "Task list for Feature 005 — AI Copilot Drawer"
 
 **Purpose**: 專案初始化與骨架
 
-- [ ] T001 [P] 於 apps/web/vite.config.ts 的 dev `server.proxy` 新增 `"/diagnoses"` → `http://localhost:3000`（changeOrigin），與既有 `/ws` proxy 同理（contracts/diagnose-rest、research R2）
-- [ ] T002 [P] 建立 ai-copilot domain 目錄骨架 apps/web/src/domains/ai-copilot/{components,stores,lib}/（design-spec §9 File Mapping）
+- [X] T001 [P] 於 apps/web/vite.config.ts 的 dev `server.proxy` 新增 `"/diagnoses"` → `http://localhost:3000`（changeOrigin），與既有 `/ws` proxy 同理（contracts/diagnose-rest、research R2）
+- [X] T002 [P] 建立 ai-copilot domain 目錄骨架 apps/web/src/domains/ai-copilot/{components,stores,lib}/（design-spec §9 File Mapping）
 
 ---
 

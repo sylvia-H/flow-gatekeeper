@@ -12,6 +12,11 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
       },
+      // 診斷觸發 `POST /diagnoses` 同理走同源 proxy（005 research R2、contracts/diagnose-rest）。
+      "/diagnoses": {
+        target: "http://localhost:3000",
+        changeOrigin: true,
+      },
     },
   },
 });
