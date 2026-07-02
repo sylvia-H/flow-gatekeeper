@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Stethoscope, X, ChevronDown } from "lucide-vue-next";
+import { Stethoscope, X, ChevronDown, RotateCcw } from "lucide-vue-next";
 import type { MachineLive } from "../../monitoring/stores/monitoring.store.js";
 import { progressLabel, type CopilotJobState } from "../lib/copilot-reducer.js";
 import ProgressBar from "../../../shared/components/ProgressBar.vue";
@@ -44,10 +44,10 @@ const progressText = computed(() =>
   props.state.status === "active" ? progressLabel(props.state.progress) : "",
 );
 
-/** completed 後串流文字預設收合（Q2）；每次進 completed 重置為收合。 */
+/** completed/failed 後串流文字預設收合（Q2）；每次任務切換重置為收合。 */
 const showStream = ref(false);
 watch(
-  () => (props.state.status === "completed" ? props.state.jobId : null),
+  () => ("jobId" in props.state ? `${props.state.status}:${props.state.jobId}` : props.state.status),
   () => {
     showStream.value = false;
   },
@@ -153,6 +153,43 @@ watch(
           @click="showStream = !showStream"
         >
           <span>推理過程</span>
+          <ChevronDown
+            class="h-4 w-4 transition-transform"
+            :class="showStream ? 'rotate-180' : ''"
+            aria-hidden="true"
+          />
+        </button>
+        <StreamingPanel v-if="showStream" class="mt-2" :text="state.streamText" :streaming="false" />
+      </div>
+    </div>
+
+    <!-- failed：可讀錯誤 + Retry（FR-007）；串流殘文可展開回看 -->
+    <div v-else-if="state.status === 'failed'" class="space-y-4">
+      <ProgressBar status="failed" />
+      <div
+        class="rounded-control border border-crit-border bg-crit-bg px-3 py-2.5 text-sm text-crit-fg"
+        role="alert"
+      >
+        {{ state.error }}
+      </div>
+      <button
+        type="button"
+        class="flex w-full items-center justify-center gap-2 rounded-control bg-accent px-3 py-2 text-sm font-medium text-base hover:bg-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
+        :disabled="!hasClient"
+        :title="hasClient ? undefined : '尚未連線，請待連線後再重試'"
+        @click="emit('retry')"
+      >
+        <RotateCcw class="h-4 w-4" aria-hidden="true" />
+        Retry
+      </button>
+      <div v-if="state.streamText" class="border-t border-subtle pt-3">
+        <button
+          type="button"
+          class="flex w-full items-center justify-between text-xs font-medium text-fg-subtle hover:text-fg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          :aria-expanded="showStream"
+          @click="showStream = !showStream"
+        >
+          <span>中斷前的推理過程</span>
           <ChevronDown
             class="h-4 w-4 transition-transform"
             :class="showStream ? 'rotate-180' : ''"
