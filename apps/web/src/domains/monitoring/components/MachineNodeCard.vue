@@ -57,7 +57,7 @@ const lastUpdated = computed(() =>
 <template>
   <button
     type="button"
-    class="group relative flex min-h-[148px] w-full min-w-[220px] flex-col gap-3 rounded-card border p-3 text-left shadow-card transition duration-150 hover:-translate-y-px hover:border-strong hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+    class="group relative flex min-h-[148px] w-full min-w-0 flex-col gap-3 rounded-card border p-3 text-left shadow-card transition duration-150 hover:-translate-y-px hover:border-strong hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
     :class="[
       stateClass,
       selected ? 'border-accent bg-accent-wash ring-1 ring-inset ring-accent' : '',

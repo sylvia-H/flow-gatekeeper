@@ -103,10 +103,13 @@ description: "Task list for 004 前端高頻 WebSocket Gatekeeper 監控台"
 
 **Purpose**: 響應式、無障礙、品質門檻與可重播 live 驗收
 
-- [ ] T024 [P] 響應式：`TopologyCanvas.vue` 與 `MachineNodeCard.vue` 在手機（390×844）退化為單欄清單、四個 viewport（1366×768/1440×900/390×844/768×1024）文字不溢出、卡片不重疊、hover/selected/critical pulse 不造 layout shift（FR-020/026、SC-004、design-spec §6.2/§11）
-- [ ] T025 [P] 無障礙複查：icon-only 控制項具 `aria-label`/tooltip、狀態非僅靠顏色（狀態燈/badge/連線 chip 皆附文字或 aria）、keyboard focus ring 用 accent 且不移除、critical pulse 不過快（FR-008/021、design-spec §10）
-- [ ] T026 [P] 品質門檻：`pnpm --filter @flow-gatekeeper/web typecheck`（vue-tsc）、`lint`（含 eslint-plugin-vue）、`test`（store/backoff/stale/label 純函式綠、entry smoke 綠）、`build`（vite build 成功）全通過、無 `any` 洩漏
+- [X] T024 [P] 響應式：`TopologyCanvas.vue` 與 `MachineNodeCard.vue` 在手機（390×844）退化為單欄清單、四個 viewport（1366×768/1440×900/390×844/768×1024）文字不溢出、卡片不重疊、hover/selected/critical pulse 不造 layout shift（FR-020/026、SC-004、design-spec §6.2/§11）
+- [X] T025 [P] 無障礙複查：icon-only 控制項具 `aria-label`/tooltip、狀態非僅靠顏色（狀態燈/badge/連線 chip 皆附文字或 aria）、keyboard focus ring 用 accent 且不移除、critical pulse 不過快（FR-008/021、design-spec §10）
+- [X] T026 [P] 品質門檻：`pnpm --filter @flow-gatekeeper/web typecheck`（vue-tsc）、`lint`（含 eslint-plugin-vue）、`test`（store/backoff/stale/label 純函式綠、entry smoke 綠）、`build`（vite build 成功）全通過、無 `any` 洩漏
+  - **結果（2026-07-02）**：typecheck ✅ 0；lint ✅ 0（`no-explicit-any: error` 綠即無 any 洩漏）；test ✅ 18 passed（5 檔：store 批次關係、backoff 上界/cap/單調/抖動、stale 門檻、label fallback、entry smoke）；build ✅ vite 成功（1585 modules，js 84.53 kB / css 13.27 kB gzip 32.85/3.38 kB）。
 - [ ] T027 本機 live 驗收（依 quickstart.md AC1–AC6，`docker compose up -d` + `api start:dev` + `web dev`）：記錄①第一屏 placeholder→live、②背壓比值 ≥10:1 且頻率調高上升、③高頻 30s 無明顯 long task、④殺 api→disconnected/stale→重開→reconnecting→connected+重新訂閱、⑤selected 與 stale 保值、⑥四 viewport 無溢出——結果回寫本任務
+  - **狀態（2026-07-02）：待使用者本機執行（未完成）**。本 session 無法執行：Docker daemon 未啟動（Docker Desktop 未開），無法起 Redis/Mongo → api Gateway 無法啟動；且 AC1–AC6 為瀏覽器/DevTools 目視互動驗收，需人工觀察。
+  - **執行步驟（PowerShell）**：`docker compose up -d`（Redis 7 + MongoDB 7）→ 終端1 `pnpm --filter @flow-gatekeeper/api start:dev` → 終端2 `pnpm --filter @flow-gatekeeper/web dev` → 開 `http://localhost:5173`，依 quickstart AC1–AC6 逐項核對並回寫本任務與 `checklists/release-gate.md`。
 
 ---
 

@@ -52,6 +52,7 @@ const chipPulse = computed(() => store.connectionStatus === "disconnected");
         type="button"
         disabled
         title="Mock telemetry frequency（後續啟用）"
+        aria-label="Mock telemetry frequency"
         class="flex h-9 cursor-not-allowed items-center gap-1.5 rounded-control border border-subtle bg-surface px-2.5 text-xs text-fg-subtle opacity-60"
       >
         <Gauge class="h-4 w-4" aria-hidden="true" />
@@ -83,6 +84,7 @@ const chipPulse = computed(() => store.connectionStatus === "disconnected");
         type="button"
         disabled
         title="Run AI diagnosis（005 啟用）"
+        aria-label="Run AI diagnosis"
         class="flex h-9 cursor-not-allowed items-center gap-1.5 rounded-control bg-accent px-3 text-sm font-medium text-base opacity-50"
       >
         <Stethoscope class="h-4 w-4" aria-hidden="true" />

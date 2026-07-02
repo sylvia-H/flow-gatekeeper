@@ -32,9 +32,10 @@ function onSelect(machineId: string): void {
 
 <template>
   <div class="topology-bg h-full overflow-auto bg-inset p-4 md:p-6">
+    <!-- 桌面自適應多欄；窄螢幕（mobile）以 min(100%,…) 自然退化為單欄，不溢出（FR-020/026、SC-004） -->
     <div
       class="grid gap-4"
-      style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))"
+      style="grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr))"
     >
       <MachineNodeCard
         v-for="node in nodes"
