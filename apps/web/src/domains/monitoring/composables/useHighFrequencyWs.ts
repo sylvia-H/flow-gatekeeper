@@ -1,14 +1,17 @@
 import { onUnmounted, ref, type Ref } from "vue";
 import type { ClientControlMessage, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import type { ConnectionStatus } from "../stores/monitoring.store.js";
+import { nextBackoffDelay } from "../lib/backoff.js";
 
 /**
- * 高頻 WebSocket composable（US1 版：connect + buffer + rAF pump + onmessage 分流 + 清理）。
- * 心跳／指數退避重連於 US3（T022）擴充於同檔。
+ * 高頻 WebSocket composable：connect + buffer + rAF pump + 分流 + 心跳 + 指數退避重連 + 清理。
  *
  * 憲章 IV 核心：`onmessage` 只把遙測 push 進**非 reactive** buffer；一支 rAF 迴圈每幀
  * `buffer.splice(0)` 後透過 `onBatch` 一次交給 store，使 reactive 提交次數遠少於訊息數。
  * 控制訊息 MUST NOT 混入 telemetry buffer（分流處理）。
+ *
+ * 韌性（US3）：ping/pong 心跳（pong 逾時→close），onclose 非 manualClose→指數退避重連，
+ * onerror→close；每次（重）連線的 `system/connected` 皆觸發 `onConnected`，使 App 重訂閱。
  */
 export interface UseHighFrequencyWsOptions {
   /** 同源 `/ws`（dev 由 Vite proxy 轉發到 :3000）。 */
@@ -17,10 +20,14 @@ export interface UseHighFrequencyWsOptions {
   onBatch: (batch: TelemetryPoint[]) => void;
   /** 連線三態回報——交給 store.setConnectionStatus。 */
   onStatus: (status: ConnectionStatus) => void;
-  /** 收到 system/connected 時回呼（保存 clientId、隨即訂閱）。 */
+  /** 收到 system/connected 時回呼（保存 clientId、隨即訂閱）；每次（重）連線都會觸發。 */
   onConnected: (clientId: string) => void;
   /** buffer 上限，超過丟最舊保最新（背景分頁 rAF 暫停時護記憶體）。 */
   maxBufferSize?: number;
+  /** 心跳週期（ms），預設 15000。 */
+  heartbeatMs?: number;
+  /** pong 逾時（ms），逾時未回即 close 觸發重連，預設 5000。 */
+  pongTimeoutMs?: number;
 }
 
 export interface HighFrequencyWsHandle {
@@ -38,6 +45,8 @@ export function useHighFrequencyWs(
 ): HighFrequencyWsHandle {
   const { url, onBatch, onStatus, onConnected } = options;
   const maxBufferSize = options.maxBufferSize ?? 2000;
+  const heartbeatMs = options.heartbeatMs ?? 15_000;
+  const pongTimeoutMs = options.pongTimeoutMs ?? 5_000;
 
   const clientId = ref<string | null>(null);
 
@@ -46,13 +55,62 @@ export function useHighFrequencyWs(
   let rafId: number | null = null;
   let ws: WebSocket | null = null;
 
-  /** rAF pump：每幀把整批 buffer 一次交給 onBatch（=一次批次）。 */
+  let manualClose = false;
+  let attempt = 0;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let pongTimer: ReturnType<typeof setTimeout> | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** rAF pump：每幀把整批 buffer 一次交給 onBatch（=一次批次）。跨重連持續運作。 */
   function pump(): void {
     if (buffer.length > 0) {
       const batch = buffer.splice(0);
       onBatch(batch);
     }
     rafId = requestAnimationFrame(pump);
+  }
+
+  function clearPongTimer(): void {
+    if (pongTimer !== null) {
+      clearTimeout(pongTimer);
+      pongTimer = null;
+    }
+  }
+
+  function clearHeartbeat(): void {
+    if (heartbeatTimer !== null) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+    clearPongTimer();
+  }
+
+  function clearReconnect(): void {
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
+  /** 週期送 ping；每次 ping 起 pongTimer，逾時未收 pong 即 close 觸發重連。 */
+  function startHeartbeat(): void {
+    clearHeartbeat();
+    heartbeatTimer = setInterval(() => {
+      send({ type: "ping" });
+      clearPongTimer();
+      pongTimer = setTimeout(() => {
+        ws?.close(); // 逾時未回 pong → close → onclose → 重連
+      }, pongTimeoutMs);
+    }, heartbeatMs);
+  }
+
+  function scheduleReconnect(): void {
+    if (manualClose) return;
+    onStatus("reconnecting");
+    const delay = nextBackoffDelay(attempt);
+    attempt += 1;
+    clearReconnect();
+    reconnectTimer = setTimeout(connect, delay);
   }
 
   function handleMessage(event: MessageEvent): void {
@@ -79,13 +137,16 @@ export function useHighFrequencyWs(
     // 控制訊息分流（憲章 IV：MUST NOT 混入 telemetry buffer）。
     switch (parsed.type) {
       case "system/connected":
+        // 每次（重）連線都觸發，讓 App 重新訂閱（FR-025）。
         if (typeof parsed.clientId === "string") {
           clientId.value = parsed.clientId;
           onConnected(parsed.clientId);
         }
         break;
-      // pong（US3 心跳用）／訂閱回執／未授權：US1 先忽略。
       case "pong":
+        clearPongTimer(); // 心跳確認
+        break;
+      // 訂閱回執／未授權：忽略。
       case "machine/subscribed":
       case "system/unauthorized":
         break;
@@ -98,15 +159,21 @@ export function useHighFrequencyWs(
   function connect(): void {
     ws = new WebSocket(url);
     ws.addEventListener("open", () => {
+      attempt = 0; // 連上重置退避
       onStatus("connected");
+      startHeartbeat();
     });
     ws.addEventListener("message", handleMessage);
     ws.addEventListener("close", () => {
-      // US1 尚無重連：僅回報 disconnected（重連於 US3 T022 接入）。
-      onStatus("disconnected");
+      clearHeartbeat();
+      if (manualClose) {
+        onStatus("disconnected");
+      } else {
+        scheduleReconnect(); // 非手動關閉 → 退避重連
+      }
     });
     ws.addEventListener("error", () => {
-      ws?.close();
+      ws?.close(); // 交給 onclose 統一處理
     });
   }
 
@@ -117,6 +184,9 @@ export function useHighFrequencyWs(
   }
 
   function close(): void {
+    manualClose = true;
+    clearHeartbeat();
+    clearReconnect();
     if (rafId !== null) {
       cancelAnimationFrame(rafId);
       rafId = null;

@@ -8,7 +8,7 @@ const props = defineProps<{
   machine: MachineLive | null; // null = placeholder（冷啟動／首批未到）
   machineId: string;
   selected: boolean;
-  stale: boolean; // stale 視覺於 US3（T023）補上
+  stale: boolean; // >10s 未更新：降透明＋Stale badge，數值不清空（FR-017）
 }>();
 
 const emit = defineEmits<{
@@ -61,6 +61,7 @@ const lastUpdated = computed(() =>
     :class="[
       stateClass,
       selected ? 'border-accent bg-accent-wash ring-1 ring-inset ring-accent' : '',
+      stale ? 'opacity-[0.55]' : '',
     ]"
     :aria-pressed="selected"
     @click="emit('select', machineId)"
@@ -68,7 +69,13 @@ const lastUpdated = computed(() =>
     <!-- Header：顯示名稱 + machine id（mono）+ 狀態燈 -->
     <div class="flex items-start justify-between gap-2">
       <div class="min-w-0">
-        <div class="truncate text-sm font-medium text-fg">{{ label }}</div>
+        <div class="flex items-center gap-1.5">
+          <span class="truncate text-sm font-medium text-fg">{{ label }}</span>
+          <span
+            v-if="stale"
+            class="shrink-0 rounded-pill border border-warn-border bg-warn-bg px-1.5 py-0.5 text-[10px] font-medium uppercase leading-none text-warn-fg"
+          >Stale</span>
+        </div>
         <div class="truncate font-mono text-xs text-fg-muted">{{ machineId }}</div>
       </div>
       <StatusLight

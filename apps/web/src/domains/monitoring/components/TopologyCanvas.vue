@@ -1,15 +1,29 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { useMonitoringStore } from "../stores/monitoring.store.js";
 import { KNOWN_MACHINE_IDS } from "../lib/machine-labels.js";
+import { isStale } from "../lib/stale.js";
 import MachineNodeCard from "./MachineNodeCard.vue";
 
 /**
  * Topology node grid（design-spec §6.3）。
  * **渲染來源為固定名冊 KNOWN_MACHINE_IDS**（非 machineList getter）——逐台向 store 查快照，
  * 無則傳 machine=null，確保冷啟動即顯示 5 張 placeholder（FR-024）。
- * stale 視覺於 US3（T023）接入。
+ * stale 依 store.now（每秒 tick）重算（FR-017）。
  */
 const store = useMonitoringStore();
+
+const nodes = computed(() =>
+  KNOWN_MACHINE_IDS.map((id) => {
+    const machine = store.machines.get(id) ?? null;
+    return {
+      id,
+      machine,
+      selected: store.selectedMachineId === id,
+      stale: machine ? isStale(machine.lastUpdated, store.now) : false,
+    };
+  }),
+);
 
 function onSelect(machineId: string): void {
   store.selectMachine(machineId);
@@ -23,12 +37,12 @@ function onSelect(machineId: string): void {
       style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))"
     >
       <MachineNodeCard
-        v-for="id in KNOWN_MACHINE_IDS"
-        :key="id"
-        :machine-id="id"
-        :machine="store.machines.get(id) ?? null"
-        :selected="store.selectedMachineId === id"
-        :stale="false"
+        v-for="node in nodes"
+        :key="node.id"
+        :machine-id="node.id"
+        :machine="node.machine"
+        :selected="node.selected"
+        :stale="node.stale"
         @select="onSelect"
       />
     </div>

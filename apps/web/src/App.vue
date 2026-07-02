@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, onMounted, onUnmounted } from "vue";
 import { Activity, Boxes } from "lucide-vue-next";
 import AppLayout from "./shared/components/AppLayout.vue";
 import TopBar from "./shared/components/TopBar.vue";
@@ -9,9 +10,38 @@ import { KNOWN_MACHINE_IDS, machineLabel } from "./domains/monitoring/lib/machin
 
 /**
  * App 根：組裝監控台外殼並接上即時通道。第一屏即監控台（design-spec §1/§6）。
- * TopBar 於 US2（T019）填入；連線韌性 UI 於 US3（T023）補上。
  */
 const store = useMonitoringStore();
+
+// 冷啟動/斷線橫幅（design-spec §8.2）：連上前顯示 Connecting，之後依三態提示；不清空資料。
+const banner = computed(() => {
+  switch (store.connectionStatus) {
+    case "connected":
+      return null;
+    case "reconnecting":
+      return {
+        text: "Reconnecting… 顯示最後已知資料",
+        cls: "border-warn-border bg-warn-bg text-warn-fg",
+      };
+    case "disconnected":
+      return store.clientId === null
+        ? { text: "Connecting…", cls: "border-subtle bg-elevated text-fg-muted" }
+        : {
+            text: "Disconnected — 顯示最後已知資料，資料可能過時",
+            cls: "border-crit-border bg-crit-bg text-crit-fg",
+          };
+  }
+  return null;
+});
+
+// 每秒 tick 驅動 stale 重算（低頻，不需高頻；research R7）。
+let tickTimer: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  tickTimer = setInterval(() => store.tickNow(), 1000);
+});
+onUnmounted(() => {
+  if (tickTimer !== null) clearInterval(tickTimer);
+});
 
 // 同源 /ws（dev 由 Vite proxy 轉發到 :3000）——不把後端位址塞進 bundle（research R2）。
 const wsProto = location.protocol === "https:" ? "wss" : "ws";
@@ -68,7 +98,19 @@ const handle = useHighFrequencyWs({
     </template>
 
     <template #main>
-      <TopologyCanvas />
+      <div class="flex h-full flex-col">
+        <div
+          v-if="banner"
+          class="shrink-0 border-b px-4 py-2 text-sm"
+          :class="banner.cls"
+          role="status"
+        >
+          {{ banner.text }}
+        </div>
+        <div class="min-h-0 flex-1">
+          <TopologyCanvas />
+        </div>
+      </div>
     </template>
   </AppLayout>
 </template>

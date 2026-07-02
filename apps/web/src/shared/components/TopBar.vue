@@ -19,7 +19,15 @@ const CONNECTION_LABEL: Record<ConnectionStatus, string> = {
   reconnecting: "Reconnecting",
   disconnected: "Disconnected",
 };
+/** chip 上色（design-spec §7.1/§8.2，connected→ok / reconnecting→warn / disconnected→crit）。 */
+const CONNECTION_CHIP: Record<ConnectionStatus, { dot: string; text: string }> = {
+  connected: { dot: "bg-ok", text: "text-ok-fg" },
+  reconnecting: { dot: "bg-warn", text: "text-warn-fg" },
+  disconnected: { dot: "bg-crit", text: "text-crit-fg" },
+};
 const connectionLabel = computed(() => CONNECTION_LABEL[store.connectionStatus]);
+const connectionChip = computed(() => CONNECTION_CHIP[store.connectionStatus]);
+const chipPulse = computed(() => store.connectionStatus === "disconnected");
 </script>
 
 <template>
@@ -56,13 +64,17 @@ const connectionLabel = computed(() => CONNECTION_LABEL[store.connectionStatus])
         :rendered-batches="store.renderedBatches"
       />
 
-      <!-- Connection status chip（讀 store 單一來源；上色於 US3） -->
+      <!-- Connection status chip（讀 store.connectionStatus 單一來源，依三態上色） -->
       <span
-        class="inline-flex items-center gap-1.5 rounded-pill bg-elevated px-2.5 py-1 text-xs text-fg-muted"
+        class="inline-flex items-center gap-1.5 rounded-pill bg-elevated px-2.5 py-1 text-xs"
+        :class="connectionChip.text"
         role="status"
         :aria-label="`Connection: ${connectionLabel}`"
       >
-        <span class="h-2 w-2 rounded-pill bg-fg-subtle" />
+        <span
+          class="h-2 w-2 rounded-pill"
+          :class="[connectionChip.dot, chipPulse ? 'animate-critical-pulse' : '']"
+        />
         {{ connectionLabel }}
       </span>
 

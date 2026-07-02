@@ -90,10 +90,10 @@ description: "Task list for 004 前端高頻 WebSocket Gatekeeper 監控台"
 
 **Independent Test**: 運行中殺 `api` → chip 轉 disconnected、資料標 stale 不清空 → 重開 `api` → 經 reconnecting 於 ~30s 回 connected 並**重新訂閱**、恢復更新。
 
-- [ ] T020 [P] [US3] `apps/web/src/domains/monitoring/lib/stale.ts` 與 `stale.test.ts`：`isStale(lastUpdated, now, thresholdMs=10000) = now-lastUpdated > thresholdMs`（FR-017、SC-005、design-spec §8.3）
-- [ ] T021 [P] [US3] `apps/web/src/domains/monitoring/lib/backoff.ts` 與 `backoff.test.ts`：`nextBackoffDelay(attempt, maxMs=30000)`＝`min(1000*2^attempt, maxMs)` 為 base、加 ≤30% 抖動（測試以注入 rng 驗上界與到 cap 前單調不減）（FR-013）
-- [ ] T022 [US3] 擴充 `apps/web/src/domains/monitoring/composables/useHighFrequencyWs.ts`（接 T014 同檔）：加 `startHeartbeat`（週期 `ping`，`pongTimer` 逾時 `ws.close()`）、`reconnect`（用 `nextBackoffDelay(attempt)`、`onStatus('reconnecting')`）、`onclose` 非 `manualClose`→`reconnect`、`onerror`→close、`manualClose` 於 `close()`/`onUnmounted` 設定並清 heartbeat/pong/reconnect timer；確保**每次** `system/connected`（初次與重連）皆觸發 `onConnected`，使 App 的訂閱邏輯（T017）在重連後自動重送 `machine/subscribe`（FR-012/013/014/015/025，依賴 T021）
-- [ ] T023 [US3] 連線韌性 UI：`MachineNodeCard.vue` 加 stale 視覺（`isStale(machine.lastUpdated, store.now)`→opacity 0.55＋`Stale` badge，數值不清空）；`TopBar.vue` connection chip 依 **`store.connectionStatus`**（單一來源）上色（connected→ok／reconnecting→warn／disconnected→crit）＋label；`AppLayout.vue`/`App.vue` 加冷啟動/斷線橫幅；`App.vue` 起每秒 `store.tickNow()` 驅動 stale 重算（FR-015/016/017/024、design-spec §8.2/§8.3）
+- [X] T020 [P] [US3] `apps/web/src/domains/monitoring/lib/stale.ts` 與 `stale.test.ts`：`isStale(lastUpdated, now, thresholdMs=10000) = now-lastUpdated > thresholdMs`（FR-017、SC-005、design-spec §8.3）
+- [X] T021 [P] [US3] `apps/web/src/domains/monitoring/lib/backoff.ts` 與 `backoff.test.ts`：`nextBackoffDelay(attempt, maxMs=30000)`＝`min(1000*2^attempt, maxMs)` 為 base、加 ≤30% 抖動（測試以注入 rng 驗上界與到 cap 前單調不減）（FR-013）
+- [X] T022 [US3] 擴充 `apps/web/src/domains/monitoring/composables/useHighFrequencyWs.ts`（接 T014 同檔）：加 `startHeartbeat`（週期 `ping`，`pongTimer` 逾時 `ws.close()`）、`reconnect`（用 `nextBackoffDelay(attempt)`、`onStatus('reconnecting')`）、`onclose` 非 `manualClose`→`reconnect`、`onerror`→close、`manualClose` 於 `close()`/`onUnmounted` 設定並清 heartbeat/pong/reconnect timer；確保**每次** `system/connected`（初次與重連）皆觸發 `onConnected`，使 App 的訂閱邏輯（T017）在重連後自動重送 `machine/subscribe`（FR-012/013/014/015/025，依賴 T021）
+- [X] T023 [US3] 連線韌性 UI：`MachineNodeCard.vue` 加 stale 視覺（`isStale(machine.lastUpdated, store.now)`→opacity 0.55＋`Stale` badge，數值不清空）；`TopBar.vue` connection chip 依 **`store.connectionStatus`**（單一來源）上色（connected→ok／reconnecting→warn／disconnected→crit）＋label；`AppLayout.vue`/`App.vue` 加冷啟動/斷線橫幅；`App.vue` 起每秒 `store.tickNow()` 驅動 stale 重算（FR-015/016/017/024、design-spec §8.2/§8.3）
 
 **Checkpoint**: 三個 user story 皆可獨立驗收
 
