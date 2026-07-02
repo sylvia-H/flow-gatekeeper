@@ -29,12 +29,12 @@ description: "Task list for 004 前端高頻 WebSocket Gatekeeper 監控台"
 
 **Purpose**: 讓 `.vue` 進入型別檢查與 lint、WS 走同源 proxy、相依就緒
 
-- [ ] T001 [P] `apps/web/package.json`：新增 dependency `lucide-vue-next`；devDependencies `vue-tsc`、`eslint-plugin-vue`、`vue-eslint-parser`；`scripts.typecheck` 改為 `vue-tsc --noEmit -p tsconfig.json`。**暫不加** `@vue/test-utils`/`jsdom`——本 feature 測試皆純函式/store（node 環境），待日後真的寫元件掛載測試時再加（research R5）
-- [ ] T002 [P] `apps/web/tsconfig.json`：`include` 加入 `"src/**/*.vue"`，使 SFC 納入 strict typecheck（憲章 III、research R4）
-- [ ] T003 [P] `apps/web/vite.config.ts`：`server.proxy` 新增 `'/ws': { target: 'http://localhost:3000', ws: true, changeOrigin: true }`，前端連同源 `/ws`（research R2）
-- [ ] T004 [P] 根 `eslint.config.js`：加入 `eslint-plugin-vue` 扁平設定與 `vue-eslint-parser`，對 `**/*.vue` 套用（保留既有 TS 規則與 `no-explicit-any: error`）（research R4）
-- [ ] T005 [P] `apps/web/index.html`：掛 Inter / JetBrains Mono 字型連結（Google Fonts 或 fontsource），未載到時退回系統字型（design-spec §4.2、research R6）
-- [ ] T006 於 repo 根執行 `pnpm install` 更新 `pnpm-lock.yaml`（依賴 T001 同檔，須先完成）
+- [X] T001 [P] `apps/web/package.json`：新增 dependency `lucide-vue-next`；devDependencies `vue-tsc`、`eslint-plugin-vue`、`vue-eslint-parser`；`scripts.typecheck` 改為 `vue-tsc --noEmit -p tsconfig.json`。**暫不加** `@vue/test-utils`/`jsdom`——本 feature 測試皆純函式/store（node 環境），待日後真的寫元件掛載測試時再加（research R5）
+- [X] T002 [P] `apps/web/tsconfig.json`：`include` 加入 `"src/**/*.vue"`，使 SFC 納入 strict typecheck（憲章 III、research R4）
+- [X] T003 [P] `apps/web/vite.config.ts`：`server.proxy` 新增 `'/ws': { target: 'http://localhost:3000', ws: true, changeOrigin: true }`，前端連同源 `/ws`（research R2）
+- [X] T004 [P] 根 `eslint.config.js`：加入 `eslint-plugin-vue` 扁平設定與 `vue-eslint-parser`，對 `**/*.vue` 套用（保留既有 TS 規則與 `no-explicit-any: error`）（research R4）
+- [X] T005 [P] `apps/web/index.html`：掛 Inter / JetBrains Mono 字型連結（Google Fonts 或 fontsource），未載到時退回系統字型（design-spec §4.2、research R6）
+- [X] T006 於 repo 根執行 `pnpm install` 更新 `pnpm-lock.yaml`（依賴 T001 同檔，須先完成）
 
 ---
 
