@@ -6,13 +6,27 @@ import {
   useMonitoringStore,
   type ConnectionStatus,
 } from "../../domains/monitoring/stores/monitoring.store.js";
+import { useCopilotStore } from "../../domains/ai-copilot/stores/copilot.store.js";
 
 /**
  * TopBar（design-spec §7.2）：search（外觀）、connection chip、BackpressureBadge、
- * diagnose 佔位（→005）、mock-frequency 佔位（FR-027）。
- * connection chip 讀 **store.connectionStatus 單一來源**；上色於 US3（T023）補上。
+ * diagnose（作用於 selectedMachineId）、mock-frequency 佔位（FR-027）。
+ * connection chip 讀 **store.connectionStatus 單一來源**。
  */
 const store = useMonitoringStore();
+const copilot = useCopilotStore();
+
+/** diagnose 可用性（FR-002/FR-008/FR-014）：有選台、有連線、該台非 active（去重）。 */
+const hasClient = computed(() => store.clientId !== null);
+const canDiagnose = computed(() =>
+  copilot.canDiagnose(store.selectedMachineId, hasClient.value),
+);
+
+/** 觸發診斷：帶 004 對外最新 clientId（=socketId）。 */
+function onDiagnose(): void {
+  if (store.selectedMachineId === null) return;
+  void copilot.diagnose(store.selectedMachineId, store.clientId);
+}
 
 const CONNECTION_LABEL: Record<ConnectionStatus, string> = {
   connected: "Connected",
@@ -79,13 +93,20 @@ const chipPulse = computed(() => store.connectionStatus === "disconnected");
         {{ connectionLabel }}
       </span>
 
-      <!-- Diagnose（disabled 佔位，實際觸發屬 005） -->
+      <!-- Diagnose：作用於 selectedMachineId；無選取／無連線／該台 active 時 disabled -->
       <button
         type="button"
-        disabled
-        title="Run AI diagnosis（005 啟用）"
+        :disabled="!canDiagnose"
+        :title="
+          store.selectedMachineId === null
+            ? '先選取機台'
+            : !hasClient
+              ? '尚未連線，請待連線後再診斷'
+              : 'Run AI diagnosis'
+        "
         aria-label="Run AI diagnosis"
-        class="flex h-9 cursor-not-allowed items-center gap-1.5 rounded-control bg-accent px-3 text-sm font-medium text-base opacity-50"
+        class="flex h-9 items-center gap-1.5 rounded-control bg-accent px-3 text-sm font-medium text-base hover:bg-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
+        @click="onDiagnose"
       >
         <Stethoscope class="h-4 w-4" aria-hidden="true" />
         <span class="hidden md:inline">Diagnose</span>

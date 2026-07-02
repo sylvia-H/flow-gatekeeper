@@ -1,17 +1,55 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { Activity, Boxes } from "lucide-vue-next";
 import AppLayout from "./shared/components/AppLayout.vue";
 import TopBar from "./shared/components/TopBar.vue";
 import TopologyCanvas from "./domains/monitoring/components/TopologyCanvas.vue";
+import CopilotDrawer from "./domains/ai-copilot/components/CopilotDrawer.vue";
 import { useMonitoringStore } from "./domains/monitoring/stores/monitoring.store.js";
+import { useCopilotStore } from "./domains/ai-copilot/stores/copilot.store.js";
 import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFrequencyWs.js";
 import { KNOWN_MACHINE_IDS, machineLabel } from "./domains/monitoring/lib/machine-labels.js";
+import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.js";
 
 /**
  * App 根：組裝監控台外殼並接上即時通道。第一屏即監控台（design-spec §1/§6）。
+ * 005：掛 copilot.store，診斷事件經 004 同一條 WebSocket 分流交 store（憲章 IV）。
  */
 const store = useMonitoringStore();
+const copilot = useCopilotStore();
+
+// 手機 bottom-sheet 開關；桌機（md+）drawer 常駐、無視此值（R8）。選台即開啟手機 sheet。
+const drawerOpen = ref(false);
+watch(
+  () => store.selectedMachineId,
+  (id) => {
+    if (id !== null) drawerOpen.value = true;
+  },
+);
+
+/** drawer 恆依 selectedMachineId 取對應那一份狀態（未選取→idle 空殼，由 machineId=null 走空狀態）。 */
+const selectedState = computed<CopilotJobState>(() =>
+  store.selectedMachineId !== null
+    ? copilot.stateFor(store.selectedMachineId)
+    : { status: "idle", machineId: "" },
+);
+const selectedLabel = computed(() =>
+  store.selectedMachineId !== null ? machineLabel(store.selectedMachineId) : "",
+);
+const canDiagnose = computed(() =>
+  copilot.canDiagnose(store.selectedMachineId, store.clientId !== null),
+);
+
+function onDiagnose(): void {
+  if (store.selectedMachineId !== null) {
+    void copilot.diagnose(store.selectedMachineId, store.clientId);
+  }
+}
+function onRetry(): void {
+  if (store.selectedMachineId !== null) {
+    void copilot.retry(store.selectedMachineId, store.clientId);
+  }
+}
 
 // 冷啟動/斷線橫幅（design-spec §8.2）：連上前顯示 Connecting，之後依三態提示；不清空資料。
 const banner = computed(() => {
@@ -51,6 +89,8 @@ const handle = useHighFrequencyWs({
   url: wsUrl,
   onBatch: store.applyTelemetryBatch,
   onStatus: store.setConnectionStatus,
+  // 診斷事件分流交 copilot.store（憲章 IV／FR-017：不進遙測 buffer）。
+  onDiagnosisEvent: copilot.applyEvent,
   // 每次（重）連線都會觸發：保存 clientId（供 005）並用單一名冊訂閱 5 台（dev 送空 token）。
   onConnected: (clientId: string) => {
     store.setClientId(clientId);
@@ -64,7 +104,11 @@ const handle = useHighFrequencyWs({
 </script>
 
 <template>
-  <AppLayout :connection-status="store.connectionStatus" :drawer-open="false">
+  <AppLayout
+    :connection-status="store.connectionStatus"
+    :drawer-open="drawerOpen"
+    @close-drawer="drawerOpen = false"
+  >
     <template #sidebar>
       <div class="flex items-center gap-2 border-b border-subtle px-4 py-3">
         <Activity class="h-5 w-5 text-accent" aria-hidden="true" />
@@ -111,6 +155,20 @@ const handle = useHighFrequencyWs({
           <TopologyCanvas />
         </div>
       </div>
+    </template>
+
+    <template #drawer>
+      <CopilotDrawer
+        :state="selectedState"
+        :machine-id="store.selectedMachineId"
+        :machine-label="selectedLabel"
+        :summary="store.selectedMachine"
+        :can-diagnose="canDiagnose"
+        :has-client="store.clientId !== null"
+        @diagnose="onDiagnose"
+        @retry="onRetry"
+        @close="drawerOpen = false"
+      />
     </template>
   </AppLayout>
 </template>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useMonitoringStore } from "../stores/monitoring.store.js";
+import { useCopilotStore } from "../../ai-copilot/stores/copilot.store.js";
 import { KNOWN_MACHINE_IDS } from "../lib/machine-labels.js";
 import { isStale } from "../lib/stale.js";
 import MachineNodeCard from "./MachineNodeCard.vue";
@@ -12,6 +13,7 @@ import MachineNodeCard from "./MachineNodeCard.vue";
  * stale 依 store.now（每秒 tick）重算（FR-017）。
  */
 const store = useMonitoringStore();
+const copilot = useCopilotStore();
 
 const nodes = computed(() =>
   KNOWN_MACHINE_IDS.map((id) => {
@@ -27,6 +29,12 @@ const nodes = computed(() =>
 
 function onSelect(machineId: string): void {
   store.selectMachine(machineId);
+}
+
+/** 卡片 diagnose icon：選取該台並觸發診斷（store 內部去重／連線把關）。 */
+function onDiagnose(machineId: string): void {
+  store.selectMachine(machineId);
+  void copilot.diagnose(machineId, store.clientId);
 }
 </script>
 
@@ -45,6 +53,7 @@ function onSelect(machineId: string): void {
         :selected="node.selected"
         :stale="node.stale"
         @select="onSelect"
+        @diagnose="onDiagnose"
       />
     </div>
   </div>
