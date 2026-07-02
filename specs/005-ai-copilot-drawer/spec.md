@@ -50,7 +50,7 @@
 
 **Why this priority**: 去重與快取標示是 003「Cache before API／dedupe lock」設計在前端的可視化證據，能在 demo 中直接展示「第二次同樣診斷秒回且標為 cached」的賣點；但它依賴 US1 的診斷流程先跑通，故列 P2。
 
-**Independent Test**: 對某機台完成一次診斷後，於同機台仍有 active job 時確認 Diagnose 被禁用；待完成後再次對同機台觸發同類診斷，確認結果標示 Cached 且明顯快於首次——即可獨立驗收。
+**Independent Test**: 對某機台完成一次診斷後，於同機台仍有 active job 時確認 Diagnose 被禁用；待完成後再次對同機台觸發同類診斷，確認結果標示 Cached（客觀判準＝`ai/done.cached===true`、快取路徑進度直接 100 不重跑 LLM；「明顯快」為其可觀察結果，非獨立門檻）——即可獨立驗收。
 
 **Acceptance Scenarios**:
 
@@ -106,7 +106,7 @@
 - **FR-013**: 串流面板 MUST 在超過高度上限時內部捲動；未手動捲動時保持貼底跟隨，使用者手動往上捲後 MUST NOT 強制跳回底部。
 - **FR-014**: drawer 於 idle（尚無診斷）MUST 顯示目前 selected machine 摘要與可觸發診斷的提示；桌機常駐面板下，選取機台即在 drawer 內顯示該台 idle 摘要與 Run diagnosis；若尚未選取任何機台，Diagnose 入口 MUST 為 disabled 並提示需先選取機台（桌機面板顯示空狀態提示，不隱藏面板）。
 - **FR-015**: 手機 bottom-sheet MUST 可關閉（含鍵盤 Escape），且 MUST NOT 遮住頂部狀態列；桌機常駐面板不需關閉但同樣 MUST NOT 遮住頂部狀態列。關閉後重新開啟或切換機台再回來時，呈現 MUST 與目前選取或進行中任務一致，不殘留誤導性殘影。
-- **FR-016**: drawer 及其內部元件 MUST 通過無障礙基本要求：icon-only 按鈕具 `aria-label`，狀態不只靠顏色（有文字或 aria 標籤），critical 相關動畫克制不過快，keyboard focus ring 保留且用 `accent`。
+- **FR-016**: drawer 及其內部元件 MUST 通過無障礙基本要求：icon-only 按鈕具 `aria-label`，狀態不只靠顏色（有文字或 aria 標籤），critical 相關動畫克制不過快（脈動週期 MUST ≥ 1.2s，見 design-spec §10 與 tailwind `criticalPulse` keyframe），keyboard focus ring 保留且用 `accent`。
 - **FR-017**: 系統 MUST NOT 讓高頻遙測（004 的 telemetry 串流）與診斷串流互相干擾——診斷 token 串流的處理 MUST NOT 破壞既有遙測的批次渲染背壓策略（憲章：高頻事件先進 buffer、以每幀批次提交）。診斷 `ai/token` 為相對低頻（人可讀速率），MAY 直接 append 而不套用遙測的 rAF 批次；但 MUST NOT 混入遙測 buffer、MUST NOT 與遙測共用同一批次管線（分流即達成互不干擾，見 research R6）。token 節流非本 feature 目標。
 
 ### Key Entities *(include if feature involves data)*

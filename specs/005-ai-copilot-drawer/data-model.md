@@ -37,7 +37,7 @@ export type CopilotJobState =
 |-------------|------|------|------------------|
 | idle | `diagnose()`（本地動作，非事件） | 有 clientId 且非 active | active（`jobId`=POST 回傳 jobId，`progress`=null，`streamText`=""） |
 | active | `job/status waiting/active` | `jobId` 相符 | active，更新 `progress`（未帶則維持 null=indeterminate） |
-| active | `ai/token` | `jobId` 相符 | active，`streamText += text`（依 `seq` 保序） |
+| active | `ai/token` | `jobId` 相符 | active，`streamText += text`（依**到達序** append；單一有序 ws 保證 `seq` 順序，見 research R6） |
 | active | `ai/done` | `jobId` 相符 | completed（`result`、`cached`，保留 `streamText`） |
 | active | `ai/error` 或 `job/status failed` | `jobId` 相符 | failed（`error`=可讀訊息，保留 `streamText`） |
 | active | 重連（新 clientId，本地訊號） | 該台 active | failed（`error`="連線中斷，請重試"） |

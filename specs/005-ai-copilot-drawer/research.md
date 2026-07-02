@@ -22,7 +22,7 @@
 
 ## R4 — 過期／亂序事件過濾：以「該台目前 activeJobId」為準
 
-- **Decision**: 每台狀態保存 `activeJobId`。收到某 `job/status`／`ai/*` 時，若其 `jobId` 不等於該台目前 `activeJobId`（例如 Retry 後舊 job 的遲到片段），純函式 `isStaleJobEvent` 判定為過期並忽略（FR-011）。`ai/token` 另以 `seq` 保序 append。
+- **Decision**: 每台狀態保存 `activeJobId`。收到某 `job/status`／`ai/*` 時，若其 `jobId` 不等於該台目前 `activeJobId`（例如 Retry 後舊 job 的遲到片段），純函式 `isStaleJobEvent` 判定為過期並忽略（FR-011）。`ai/token` 依**到達序** append（單一有序 ws 保證 `seq` 順序，見 R6；不另做 seq 重排緩衝）。
 - **Rationale**: Retry 會產生新 jobId；舊 job 的殘餘 token 不得覆蓋新任務內容。以 activeJobId 比對是決定性、可單元測試的判準。
 - **Alternatives considered**：以時間戳判定 —— 事件無穩定單調時間欄位且較脆弱，被否決。
 

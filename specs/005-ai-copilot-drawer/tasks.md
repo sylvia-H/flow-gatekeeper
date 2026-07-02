@@ -40,11 +40,11 @@ description: "Task list for Feature 005 — AI Copilot Drawer"
 **⚠️ CRITICAL**: 本階段未完成前，任一 user story 不得開工
 
 - [X] T003 [P] 建立 copilot 呈現型別與 reducer 純函式於 apps/web/src/domains/ai-copilot/lib/copilot-reducer.ts：`CopilotJobState` discriminated union、`copilotReducer(state,event)`、`isStaleJobEvent(state,event)`、`progressLabel(progress)`（依 data-model 轉移表；型別 `import` 自 `@flow-gatekeeper/contracts`）
-- [X] T004 [P] reducer 單元測試於 apps/web/src/domains/ai-copilot/lib/copilot-reducer.test.ts（憲章測試門檻）：涵蓋 waiting→active→completed（含 `cached:true`）、`ai/token` 依 `seq` 保序 append、`ai/error`→failed、`job/status:failed`→failed、過期 `jobId` 片段被忽略、`progressLabel(null)`→indeterminate（FR-004/006/007/009/011）
+- [X] T004 [P] reducer 單元測試於 apps/web/src/domains/ai-copilot/lib/copilot-reducer.test.ts（憲章測試門檻）：涵蓋 waiting→active→completed（含 `cached:true`）、`ai/token` 依**到達序** append（單一有序 ws 保證 `seq` 順序，見 research R6）、`ai/error`→failed、`job/status:failed`→failed、過期 `jobId` 片段被忽略、`progressLabel(null)`→indeterminate、`humanizeError` 錯誤對應（FR-004/006/007/009/011）
 - [X] T005 [P] diagnose REST helper 於 apps/web/src/domains/ai-copilot/lib/diagnose-api.ts：`fetch` `POST /diagnoses` 帶 `{ machineId, socketId, requestedBy? }`（`socketId`=clientId），回傳 `jobId`；無 clientId 時不送出（contracts/diagnose-rest、FR-003）
 - [X] T006 建立 copilot.store 於 apps/web/src/domains/ai-copilot/stores/copilot.store.ts：`Map<machineId,CopilotJobState>`；getters `stateFor`/`canDiagnose`；actions `diagnose`/`retry`/`applyEvent`/`onReconnect`（委派 T003 reducer 與 T005 api）（依賴 T003、T005；contracts/copilot-store）
 - [X] T007 [P] copilot.store 單元測試於 apps/web/src/domains/ai-copilot/stores/copilot.store.test.ts：`canDiagnose` 去重（active 期間 false）、`diagnose` 建 active、`applyEvent` 委派 reducer、`onReconnect` 使 active 台轉 failed（FR-008/010/012）
-- [X] T008 擴充 004 WS 事件入口 apps/web/src/domains/monitoring/composables/useHighFrequencyWs.ts：新增選用 `onDiagnosisEvent` 回呼，於 `handleMessage` default 分支對 `job/status`／`ai/token`／`ai/done`／`ai/error` 分流呼叫（MUST NOT 進遙測 buffer；research R1、憲章 IV、FR-017）
+- [X] T008 擴充 004 WS 事件入口 apps/web/src/domains/monitoring/composables/useHighFrequencyWs.ts：新增選用 `onDiagnosisEvent` 回呼，對 `job/status`／`ai/token`／`ai/done`／`ai/error` 分流呼叫（MUST NOT 進遙測 buffer；research R1、憲章 IV、FR-017）。分流判定抽為純函式 `classifyWsMessage`（monitoring/lib/ws-message.ts）並附單元測試，斷言診斷事件**永不**歸為 telemetry（＝不進 buffer），使 FR-017 分流不變量可自動化驗證（非僅 live AC12）
 - [X] T009 [P] 建立共用 SeverityBadge 於 apps/web/src/shared/components/SeverityBadge.vue（`ok`/`warning`/`critical` 具名 token，design-spec §7.6）
 - [X] T010 [P] 建立共用 ProgressBar 於 apps/web/src/shared/components/ProgressBar.vue：支援數值與 indeterminate，含 `aria-valuenow`／indeterminate 描述（FR-004、design-spec §10）
 - [X] T011 AppLayout 響應式 drawer 於 apps/web/src/shared/components/AppLayout.vue：`md+` 常駐右欄、mobile 改 bottom-sheet（可 Escape 關閉、不遮頂欄）（FR-002/015、research R8）
@@ -98,7 +98,7 @@ description: "Task list for Feature 005 — AI Copilot Drawer"
 
 ### Implementation for User Story 3
 
-- [X] T023 [US3] Failed 呈現於 apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue：failed 狀態顯示可讀錯誤訊息（非原始堆疊）＋Retry 按鈕（依賴 T015；FR-007）
+- [X] T023 [US3] Failed 呈現於 apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue：failed 狀態顯示可讀錯誤訊息（非原始堆疊）＋Retry 按鈕（依賴 T015；FR-007）。錯誤訊息經純函式 `humanizeError`（copilot-reducer.ts）把 provider/worker 原文（如 Gemini 金鑰無效／429／逾時／連線／schema）對應為簡潔句、過長堆疊改通用句（含單元測試）
 - [X] T024 [US3] Retry 接線：Retry 呼叫 `copilot.retry(machineId, clientId)`（新 jobId、重置 progress/streamText）於 CopilotDrawer.vue／App.vue；Retry 若命中後端快取 MUST 照常顯示 Cached 結果、不繞過快取（依賴 T006、T023；FR-007/FR-009、Clarifications CHK038）
 - [X] T025 [US3] 重連中斷收尾接線於 apps/web/src/App.vue：`onConnected` 內呼叫 `copilot.onReconnect(clientId)`，使 active 台在新 clientId 時轉 failed（中斷）（依賴 T006、T018；FR-012、research R7）
 
