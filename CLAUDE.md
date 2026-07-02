@@ -1,13 +1,18 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/003-bullmq-ai-streaming/plan.md`
+`specs/004-frontend-ws-gatekeeper/plan.md`
 <!-- SPECKIT END -->
 
 # flow-gatekeeper — Agent 操作指引
 
 flow-gatekeeper 是一個致敬 Argo CD 的即時流程監控與 AI 診斷 side project，用 GitHub Spec Kit（SDD）開發。
 **工程原則以 `memory/constitution.md` 為準**；本檔只放 constitution 不會逐 feature 重述的操作層約束。
+
+## 溝通語言
+
+- 與使用者的**對話輸出一律用繁體中文**：回報成果、說明、詢問問題、摘要都用繁體中文。
+- 技術識別項照原文：程式碼、指令、檔名/路徑、Conventional Commits 前綴、API/token 名稱、既有英文術語不翻譯。
 
 ## 真實來源（Source of Truth，不得憑空發明）
 

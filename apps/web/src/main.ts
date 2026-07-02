@@ -1,18 +1,14 @@
-import { createApp, h } from "vue";
+import { createApp } from "vue";
+import { createPinia } from "pinia";
+import App from "./App.vue";
+import "./styles/tailwind.css";
 
 /**
- * apps/web entry — Feature 001 僅為可編譯的最小骨架（FR-013）。
+ * apps/web entry —— 監控台正式掛載點（research R8，取代 001 的 createGatekeeperApp 骨架）。
  *
- * MUST NOT 在本 feature 實作監控台 UI、WebSocket 連線或 telemetry 的
- * requestAnimationFrame 批次提交；視覺與即時行為依 design-spec 留待後續 feature。
- * 匯出 factory 並只在瀏覽器環境掛載，使 entry smoke 測試可乾淨 import（FR-014）。
+ * 僅在瀏覽器環境掛載（有 document 與 #app 時），使 entry smoke 測試可於 node
+ * 乾淨 import 而不觸發掛載。
  */
-export function createGatekeeperApp() {
-  return createApp({
-    render: () => h("div", "flow-gatekeeper web skeleton (001)"),
-  });
-}
-
 if (typeof document !== "undefined" && document.getElementById("app")) {
-  createGatekeeperApp().mount("#app");
+  createApp(App).use(createPinia()).mount("#app");
 }

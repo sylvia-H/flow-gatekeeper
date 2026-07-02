@@ -2016,34 +2016,64 @@ git merge 003-bullmq-ai-streaming
 
 > 這個階段在 Feature 004/005 前做，因為前端元件要共用同一套視覺 token。
 
-### 9.1 建立設計資料夾
+**本階段不是 Spec Kit feature，而是一次性的「設計固化 + 前端視覺地基」交接。** 產出雖然不多，
+但都是 Feature 004/005 元件的共同前提：`apps/web/design/`（design-spec + refs 截圖）與可用的
+Tailwind token 設定。做完這一階段，後續 feature 才有「唯一視覺真實來源」可依。
 
-```bash
-mkdir -p apps/web/design/refs
-```
+**與 constitution / CLAUDE.md 的關係**：CLAUDE.md 明訂視覺真實來源是
+`apps/web/design/design-spec.md` 與 `apps/web/design/refs/*.png`——不是 `docs/design-spec.md`。
+本專案的完整規格目前放在 `docs/design-spec.md`（v0.3），本階段的第一件事就是把它落地到
+`apps/web/design/`，之後 **以 `apps/web/design/design-spec.md` 為單一 canonical 檔**，避免兩處
+內容分岔。（見下方 9.1 的「single source」註記。）
 
-Windows PowerShell：
+> ⚠️ **不要重寫這一段的規格細節。** `docs/design-spec.md` 已經有完整的 token、Tailwind
+> `theme.extend`（§5）、component states（§7）、interaction states（§8）、file mapping（§9）、
+> screenshot 驗收（§11）與驗收清單（§12）。本章只負責「交接流程與落地步驟」，token/尺寸/狀態
+> 的細節一律回去讀 design-spec，衝突時以 design-spec 為準。
+
+### 9.1 建立設計資料夾並落地 design-spec
+
+環境為 Windows / PowerShell，**以 PowerShell 為主**：
 
 ```powershell
 New-Item -ItemType Directory -Force apps/web/design/refs
+
+# 把完整規格落地為前端 canonical 檔（首次交接時執行一次）
+Copy-Item docs/design-spec.md apps/web/design/design-spec.md
 ```
 
-建立 `apps/web/design/design-spec.md`，內容使用本 `docs/` 資料夾中的 `design-spec.md`（Claude Design 規格 003）。
+POSIX（Bash 工具）等價：
+
+```bash
+mkdir -p apps/web/design/refs
+cp docs/design-spec.md apps/web/design/design-spec.md
+```
+
+**Single source 註記**：落地後，前端一切以 `apps/web/design/design-spec.md` 為準。若日後
+Claude Design 更新規格，建議只維護這一份（可把 `docs/design-spec.md` 留成歷史起點，或在其
+開頭加一行「已移轉至 `apps/web/design/design-spec.md`，本檔不再更新」指標），避免兩份分岔造成
+coding agent 讀到過期 token。
 
 ### 9.2 為什麼要截圖 + token
 
-Claude Code 讀的是 repo 檔案，不會自動看到你另一個視窗的 Claude Design 畫布。  
-所以必須把設計固化成：
+Claude Code 讀的是 repo 檔案，不會自動看到你另一個視窗的 Claude Design 畫布，也讀不到雲端
+畫布連結。**視覺若不固化進 repo，coding agent 只能憑空猜**——這正是硬規則要禁止的。  
+所以必須把設計固化成下列五項 artifact，全部進 repo：
 
-1. `refs/layout.png`
-2. `refs/node-states.png`
-3. `refs/copilot-drawer.png`
-4. `design-spec.md`
-5. Tailwind `theme.extend`
+1. `apps/web/design/refs/layout.png`
+2. `apps/web/design/refs/node-states.png`
+3. `apps/web/design/refs/copilot-drawer.png`
+4. `apps/web/design/design-spec.md`（token 與 component state 的文字真實來源）
+5. Tailwind `theme.extend`（把 design-spec §5 的 token 變成程式可用的具名 class）
+
+前 4 項是「設計」，第 5 項是「讓設計可被元件引用」。少了第 5 項，元件就會開始散落 hex，違反
+硬規則。落地步驟見 9.4、9.5。
 
 ### 9.3 Claude Design 三個 prompt
 
-請依序做，不要一次要求整個產品。
+請依序做，不要一次要求整個產品。這三個 prompt 與 design-spec §2.2–2.4 的三段 prompt 對齊
+（layout → node states → copilot drawer）；若 design-spec 有更新，以 design-spec 版本為準。
+每做完一層就輸出對應截圖並更新 design-spec 對應段落，再做下一層。
 
 **Prompt 1：Layout**
 
@@ -2092,13 +2122,114 @@ It must support:
 The drawer should feel like an engineering tool: compact, readable, and suitable for repeated use. Provide exact spacing, typography, colors, component states, and mobile bottom-sheet behavior.
 ```
 
-### 9.4 設計階段驗收
+### 9.4 把截圖放進 repo
 
-- `apps/web/design/refs/layout.png` 存在。
-- `apps/web/design/refs/node-states.png` 存在。
-- `apps/web/design/refs/copilot-drawer.png` 存在。
-- `apps/web/design/design-spec.md` 有 token 與 component state。
-- Tailwind config 使用具名 token，不散落 hex。
+Claude Design 的畫布在雲端，coding agent 看不到，所以要手動把每一層匯出成 PNG 放進
+`apps/web/design/refs/`：
+
+1. 在 Claude Design 對每個畫布 **Export / Download** 成 PNG（desktop 尺寸，建議 ≥1440 寬）。
+2. 存檔時 **檔名必須完全對上** design-spec 的引用（大小寫、連字號都要一致）：
+   - `layout.png`
+   - `node-states.png`
+   - `copilot-drawer.png`
+3. 放到 `apps/web/design/refs/`，本機開圖確認不是空檔 / 破圖。
+4. 這些是二進位資產，直接 commit 進 repo（見 9.7）；不要放進 `.gitignore`，也不要塞進
+   `apps/web/public/`（refs 是設計交接資產，不是 runtime 靜態檔）。
+
+> 檔名對不上就等於沒交接：design-spec §6/§7 用 `refs/layout.png` 之類的相對路徑引用，
+> coding agent 依這些路徑找圖，命名不一致會讓引用失效。
+
+### 9.5 Tailwind token 落地（前端視覺地基）
+
+這一步把 design-spec §5 的 token 變成元件可引用的具名 class，是 Feature 004 元件能「只用
+token、不散落 hex」的前提。`tailwindcss` / `postcss` / `autoprefixer` 相依已在
+`apps/web/package.json`，只差設定檔與 CSS 進入點（目前 `apps/web` 尚無 `tailwind.config.ts`、
+`postcss.config.js` 或 CSS 進入點）。
+
+**1) `apps/web/tailwind.config.ts`** — `content` 掃描 Vue/TS 來源，`theme.extend` **直接貼上
+design-spec §5 的區塊**（colors / borderRadius / boxShadow / fontFamily / keyframes / animation）。
+不要在這裡自行改色票；要改色去改 design-spec，再同步過來。
+
+```ts
+import type { Config } from 'tailwindcss';
+
+export default {
+  content: ['./index.html', './src/**/*.{vue,ts}'],
+  theme: {
+    extend: {
+      // ⬇⬇ 原封不動貼上 apps/web/design/design-spec.md §5 的 theme.extend 內容
+      // colors / borderRadius / boxShadow / fontFamily / keyframes / animation
+    },
+  },
+  plugins: [],
+} satisfies Config;
+```
+
+**2) `apps/web/postcss.config.js`**：
+
+```js
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+};
+```
+
+**3) CSS 進入點** `apps/web/src/styles/tailwind.css`：
+
+```css
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+```
+
+**4) 在 entry 匯入** `apps/web/src/main.ts` 頂部加：
+
+```ts
+import './styles/tailwind.css';
+```
+
+**5) 驗證**：`pnpm --filter web dev` 起得來、`pnpm --filter web build` 過，且用一個 token class
+（如 `class="bg-base text-fg"`）試出正確色。**token 名稱必須與 design-spec §5 一字不差**
+（`base`、`surface`、`fg-muted`、`accent`、`ok`/`warn`/`crit`、`rounded-card`、`shadow-drawer`、
+`animate-critical-pulse` 等），元件才能照 design-spec 直接引用。
+
+> 這個 Tailwind 設定要不要算進本階段、還是併入 Feature 004 的第一個 commit，取捨見 9.7。
+> 無論放哪，token 名稱都以 design-spec §5 為單一來源。
+
+### 9.6 沒有 Claude Design 存取時的 fallback
+
+若當下拿不到 Claude Design（沒帳號 / 時間不夠），仍可讓 Feature 004 先動起來：
+
+- design-spec §4 的 token 全都附了「**建議預設**」值，§5 也已給出可直接用的 `theme.extend`，
+  足以 bootstrap 第一版視覺——先照 9.5 把 Tailwind 設定接起來即可開工。
+- 但 `refs/*.png` 仍是 **驗收硬需求**（design-spec §12、下方 9.7）。fallback 只是「延後截圖」，
+  不是「免截圖」：等有 Claude Design 後補齊三張圖，並回頭核對實作與截圖一致。
+- 用 fallback 開工時，MUST 在該 feature 的實作摘要 / PR 描述標註「refs 待補」，避免驗收時
+  才發現缺圖。
+
+### 9.7 設計階段驗收與收尾
+
+驗收清單以 **design-spec §12** 為 canonical（`refs` 三張圖存在、token 與 Tailwind 一致、
+component states 齊全、第一屏是監控台、未用 Argo CD 官方素材等）。本階段另外補查 Tailwind 落地：
+
+- `apps/web/design/design-spec.md` 已落地，且與 `docs/design-spec.md` 未分岔（見 9.1）。
+- `apps/web/design/refs/{layout,node-states,copilot-drawer}.png` 三張都存在且可開啟。
+- `apps/web/tailwind.config.ts` 的 `theme.extend` 與 design-spec §5 逐項一致（無自行新增/改動色票）。
+- `apps/web/postcss.config.js` 與 CSS 進入點就緒，`pnpm --filter web build` 通過。
+- 前端 component 引用 token class，不散落 hex（此點在 Feature 004 元件落地時持續把關）。
+
+**分支與 commit（本階段不是 `/speckit.implement`，回到「只在使用者要求時才 commit」的預設）**：
+
+- 不在 `develop` 直接 commit。二選一：
+  1. 開一條短命分支（如 `design/003-handoff`）承接本階段產出，完成後 `--no-ff` 併回 `develop`；或
+  2. 直接把本階段產出併進 Feature 004 分支的最前面（design-spec 落地 + refs + Tailwind 設定當
+     004 的第一批 commit）。**推薦此法**，因為 9.5 的 Tailwind 設定本就是 004 元件的直接前提。
+- commit type 建議：design-spec 落地與 refs → `docs`；Tailwind/PostCSS 設定 → `build`。
+  例如 `docs(design): 落地 design-spec 與 refs 截圖至 apps/web/design` 、
+  `build(web): 接上 Tailwind theme.extend 與 PostCSS`。
+- refs 是二進位資產，直接 commit；祕密防護（硬規則 7）不受影響——refs/token 不含祕密。
 
 ---
 

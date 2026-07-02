@@ -1,9 +1,5 @@
 ﻿# flow-gatekeeper Claude Design 規格 003
 
-> ⚠️ **已移轉，本檔為歷史起點，不再更新。** canonical 規格在
-> [`apps/web/design/design-spec.md`](../apps/web/design/design-spec.md)（含 v0.4 起的 token 回寫與 `refs/`）。
-> 前端一切以該檔為準；本檔僅保留 v0.3 交接原貌供追溯。
-
 > 這份文件是 Claude Design 與 Spec Kit / Claude Code 之間的交接契約。  
 > 使用方式：Claude Design 負責產生視覺參考圖與 token；coding agent 只依本檔與 `refs/` 實作，不憑空發明色票、間距或元件狀態。
 
@@ -24,8 +20,8 @@ apps/web/design/
 
 | 項目 | 內容 |
 | --- | --- |
-| Spec 版本 | `v0.3` |
-| 最後更新 | `2026-06-29` |
+| Spec 版本 | `v0.4` |
+| 最後更新 | `2026-07-02` |
 | 產品 | flow-gatekeeper |
 | 風格 | 致敬 Argo CD 的暗色 operational dashboard |
 | 主要使用者 | 想監控高頻流程狀態、查看 AI 診斷的工程/維運使用者 |
@@ -45,6 +41,7 @@ apps/web/design/
 - 本檔與 `refs/` 截圖是前端視覺唯一真實來源。
 - 顏色、圓角、陰影、狀態樣式一律使用具名 token，不在元件內散落 hex。
 - 若截圖與本檔文字衝突，以本檔的 token 與尺寸為準，並在實作摘要中提醒使用者。
+- 截圖僅為**視覺**真實來源（token／版面／元件狀態）；截圖中的**機台名稱、數量與數值為示意**，實際 roster 與顯示名稱以 spec／data-model 為準（002 的 5 台固定示範機台 `mixer-01`／`press-02`／`pack-03`／`oven-04`／`sorter-05`）。截圖驗收時不得因「機台清單與參考圖不同」判為不符。
 - 第一屏必須是可操作的監控台，不做 landing page。
 - 卡片圓角不超過 8px，除 badge/pill 外不使用過度圓潤造型。
 - 按鈕優先使用 lucide icon 搭配 tooltip；清楚命令才使用文字按鈕。
@@ -156,21 +153,30 @@ flow-gatekeeper 應該像一個可長時間盯著看的維運工具，而不是�
 | --- | --- | --- | --- |
 | `bg-base` | app 最底層背景 | `#0B1014` | `#0B1014` |
 | `bg-surface` | panel、主內容背景 | `#111820` | `#111820` |
+| `bg-surface-hover` | card hover 抬起背景（§7.3 hover） | — | `#141D27` |
 | `bg-elevated` | drawer、popover、浮層 | `#17212B` | `#17212B` |
 | `bg-inset` | topology grid、log 區內凹背景 | `#0E151B` | `#0E151B` |
 | `border-subtle` | 分隔線、卡片邊框 | `#26323D` | `#26323D` |
-| `border-strong` | selected、active 邊框 | `#3E5266` | `#3E5266` |
+| `border-strong` | selected、active、hover 邊框 | `#3E5266` | `#3E5266` |
 | `text-primary` | 主要文字 | `#E7EDF2` | `#E7EDF2` |
 | `text-secondary` | 次要文字 | `#9AA8B5` | `#9AA8B5` |
 | `text-muted` | metadata、placeholder | `#687684` | `#687684` |
 | `accent` | selected、primary action | `#4FA3FF` | `#4FA3FF` |
 | `accent-hover` | primary action hover | `#76B8FF` | `#76B8FF` |
 | `accent-bg` | subtle selected background | `#102A42` | `#102A42` |
+| `accent-bg-strong` | 強調 accent 面（active 控制項、highlighted action） | — | `#143A5C` |
+| `accent-wash` | selected 卡片背景 wash（§7.3 selected） | — | `#0F1B28` |
 | `ok` | healthy / success | `#37C978` | `#37C978` |
+| `ok-fg` | ok-bg 上的高對比文字 | — | `#9DF0BF` |
+| `ok-border` | ok chip / bar 邊框 | — | `#1E5C38` |
 | `ok-bg` | healthy subtle background | `#123522` | `#123522` |
 | `warn` | warning | `#F2B84B` | `#F2B84B` |
+| `warn-fg` | warn-bg 上的高對比文字 | — | `#F2CF85` |
+| `warn-border` | warn chip / bar / paused 邊框 | — | `#6B5220` |
 | `warn-bg` | warning subtle background | `#3A2B12` | `#3A2B12` |
 | `crit` | critical / failed | `#FF5C66` | `#FF5C66` |
+| `crit-fg` | crit-bg 上的高對比文字 | — | `#FF9AA0` |
+| `crit-border` | critical card / chip 邊框（§7.3 critical） | — | `#7A2A30` |
 | `crit-bg` | critical subtle background | `#3B151A` | `#3B151A` |
 
 ### 4.2 Typography
@@ -219,7 +225,10 @@ export default {
     extend: {
       colors: {
         base: '#0B1014',
-        surface: '#111820',
+        surface: {
+          DEFAULT: '#111820',
+          hover: '#141D27',
+        },
         elevated: '#17212B',
         inset: '#0E151B',
         subtle: '#26323D',
@@ -231,17 +240,25 @@ export default {
           DEFAULT: '#4FA3FF',
           hover: '#76B8FF',
           bg: '#102A42',
+          'bg-strong': '#143A5C',
+          wash: '#0F1B28',
         },
         ok: {
           DEFAULT: '#37C978',
+          fg: '#9DF0BF',
+          border: '#1E5C38',
           bg: '#123522',
         },
         warn: {
           DEFAULT: '#F2B84B',
+          fg: '#F2CF85',
+          border: '#6B5220',
           bg: '#3A2B12',
         },
         crit: {
           DEFAULT: '#FF5C66',
+          fg: '#FF9AA0',
+          border: '#7A2A30',
           bg: '#3B151A',
         },
       },
@@ -697,5 +714,6 @@ apps/web/src/domains/ai-copilot/stores/copilot.store.ts
 - `v0.1`：原始 Claude Design bridge，使用可填 placeholder。
 - `v0.2`：加入具體預設 token、desktop/mobile、component states。
 - `v0.3`：整合為 Spec Kit 可用交接規格，補齊 file mapping、interaction states、accessibility、screenshot 驗收。
+- `v0.4`：Claude Design 交接落地（refs 三張定稿 + `_sources/` 匯出）。依實際產出回寫衍生 token：`bg-surface-hover`、`accent-bg-strong`、`accent-wash` 與各狀態 `*-fg`/`*-border`（ok/warn/crit），並同步 §5 Tailwind `theme.extend`。此版起 `apps/web/design/design-spec.md` 為 canonical（`docs/design-spec.md` 為歷史起點）。
 
 

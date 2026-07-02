@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #0B1014; }
+  body { font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; color: #E7EDF2; }
+  @keyframes fg-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(255,92,102,0.5); } 50% { box-shadow: 0 0 0 5px rgba(255,92,102,0); } }
+</style>
+</helmet>
+
+<div style="min-height:100vh; padding:36px 40px 60px; background:#0B1014; background-image:linear-gradient(#0E151B 1px, transparent 1px), linear-gradient(90deg, #0E151B 1px, transparent 1px); background-size:24px 24px;">
+
+  <!-- header -->
+  <div style="display:flex; align-items:flex-end; gap:14px; margin-bottom:6px;">
+    <div style="width:28px; height:28px; border-radius:6px; background:#102A42; border:1px solid #3E5266; display:flex; align-items:center; justify-content:center;">
+      <div style="width:12px; height:12px; border:2px solid #4FA3FF; border-radius:2px; transform:rotate(45deg);"></div>
+    </div>
+    <h1 style="margin:0; font-size:22px; font-weight:700; letter-spacing:0.2px;">MachineNodeCard — states</h1>
+    <span style="font-family:'JetBrains Mono',monospace; font-size:13px; color:#687684; padding-bottom:2px;">flow-gatekeeper / components</span>
+  </div>
+  <p style="margin:0 0 28px; font-size:14px; line-height:20px; color:#9AA8B5; max-width:720px;">Fixed 258×fixed footprint. Every state keeps the same layout box — only border, background tint, status light, and telemetry color change, so nothing shifts on hover or pulse.</p>
+
+  <!-- CARD GRID -->
+  <div style="display:grid; grid-template-columns:repeat(3, 258px); gap:20px 24px; margin-bottom:44px;">
+    <sc-for list="{{ cards }}" as="c" hint-placeholder-count="6">
+      <div>
+        <!-- state label row -->
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px; height:20px;">
+          <span style="font-family:'JetBrains Mono',monospace; font-size:12px; font-weight:600; color:#687684;">{{ c.tag }}</span>
+          <span style="flex:1; font-size:14px; font-weight:600; color:#E7EDF2;">{{ c.stateName }}</span>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#687684;">{{ c.note }}</span>
+        </div>
+
+        <!-- the card -->
+        <div style="{{ c.cardStyle }}">
+          <div style="display:flex; align-items:flex-start; gap:9px;">
+            <span style="{{ c.dotStyle }}"></span>
+            <div style="min-width:0; flex:1;">
+              <div style="font-size:15px; line-height:20px; font-weight:600; color:#E7EDF2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ c.name }}</div>
+              <div style="font-family:'JetBrains Mono',monospace; font-size:12px; line-height:15px; color:#687684;">{{ c.id }}</div>
+            </div>
+            <span style="{{ c.badgeStyle }}">{{ c.stateLabel }}</span>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:1px; margin-top:12px; background:#26323D; border:1px solid #26323D; border-radius:6px; overflow:hidden;">
+            <div style="background:#0E151B; padding:8px 10px;">
+              <div style="font-size:11px; color:#687684; text-transform:uppercase; letter-spacing:0.5px;">Temp</div>
+              <div style="font-family:'JetBrains Mono',monospace; font-size:22px; line-height:28px; font-weight:600; white-space:nowrap; color:{{ c.tempColor }};">{{ c.temp }}<span style="font-size:12px; color:#687684; font-weight:500;"> °C</span></div>
+            </div>
+            <div style="background:#0E151B; padding:8px 10px;">
+              <div style="font-size:11px; color:#687684; text-transform:uppercase; letter-spacing:0.5px;">Vibration</div>
+              <div style="font-family:'JetBrains Mono',monospace; font-size:22px; line-height:28px; font-weight:600; white-space:nowrap; color:{{ c.vibColor }};">{{ c.vib }}<span style="font-size:12px; color:#687684; font-weight:500;"> mm/s</span></div>
+            </div>
+            <div style="background:#0E151B; padding:8px 10px;">
+              <div style="font-size:11px; color:#687684; text-transform:uppercase; letter-spacing:0.5px;">Throughput</div>
+              <div style="font-family:'JetBrains Mono',monospace; font-size:22px; line-height:28px; font-weight:600; white-space:nowrap; color:#E7EDF2;">{{ c.thru }}<span style="font-size:12px; color:#687684; font-weight:500;"> u/min</span></div>
+            </div>
+            <div style="background:#0E151B; padding:8px 10px;">
+              <div style="font-size:11px; color:#687684; text-transform:uppercase; letter-spacing:0.5px;">Error rate</div>
+              <div style="font-family:'JetBrains Mono',monospace; font-size:22px; line-height:28px; font-weight:600; white-space:nowrap; color:{{ c.errColor }};">{{ c.err }}<span style="font-size:12px; color:#687684; font-weight:500;"> %</span></div>
+            </div>
+          </div>
+
+          <div style="display:flex; align-items:center; gap:8px; margin-top:10px;">
+            <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:{{ c.updColor }};">{{ c.updated }}</span>
+            <div style="flex:1;"></div>
+            <button title="Diagnose machine" style="{{ c.diagBtnStyle }}">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="{{ c.diagIconColor }}" stroke-width="2" stroke-linecap="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="4"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+
+  <!-- SPEC PANEL -->
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:20px; max-width:1040px;">
+
+    <!-- state token table -->
+    <div style="background:#111820; border:1px solid #26323D; border-radius:8px; overflow:hidden;">
+      <div style="padding:12px 16px; border-bottom:1px solid #26323D; font-size:13px; font-weight:600; color:#E7EDF2;">State tokens</div>
+      <sc-for list="{{ specRows }}" as="r" hint-placeholder-count="6">
+        <div style="display:flex; align-items:center; gap:12px; padding:11px 16px; border-bottom:1px solid rgba(38,50,61,0.5);">
+          <span style="width:12px; height:12px; border-radius:999px; flex:0 0 auto; background:{{ r.dot }};"></span>
+          <span style="width:78px; flex:0 0 auto; font-size:13px; font-weight:600; color:#E7EDF2;">{{ r.name }}</span>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#9AA8B5; flex:1;">border {{ r.border }}</span>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:12px; color:#687684;">bg {{ r.bg }}</span>
+        </div>
+      </sc-for>
+    </div>
+
+    <!-- behavior notes -->
+    <div style="background:#111820; border:1px solid #26323D; border-radius:8px; overflow:hidden;">
+      <div style="padding:12px 16px; border-bottom:1px solid #26323D; font-size:13px; font-weight:600; color:#E7EDF2;">Status light &amp; motion</div>
+      <div style="padding:14px 16px; display:flex; flex-direction:column; gap:13px;">
+        <sc-for list="{{ behaviors }}" as="b" hint-placeholder-count="5">
+          <div style="display:flex; align-items:flex-start; gap:11px;">
+            <span style="{{ b.dotStyle }}"></span>
+            <div style="min-width:0;">
+              <div style="font-size:13px; font-weight:600; color:#E7EDF2;">{{ b.title }}</div>
+              <div style="font-size:13px; line-height:18px; color:#9AA8B5;">{{ b.text }}</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  stateVis(s) {
+    if (s === 'healthy')  return { dot:'#37C978', label:'HEALTHY',  bg:'#123522', fg:'#9df0bf', bd:'#1e5c38' };
+    if (s === 'warning')  return { dot:'#F2B84B', label:'WARNING',  bg:'#3A2B12', fg:'#f2cf85', bd:'#6b5220' };
+    if (s === 'critical') return { dot:'#FF5C66', label:'CRITICAL', bg:'#3B151A', fg:'#ff9aa0', bd:'#7a2a30' };
+    return { dot:'#687684', label:'STALE', bg:'#17212B', fg:'#9AA8B5', bd:'#3E5266' };
+  }
+
+  telColor(state, kind) {
+    if (state === 'stale') return '#687684';
+    if (state === 'critical' && (kind==='temp'||kind==='vib'||kind==='err')) return '#FF8A91';
+    if (state === 'warning' && (kind==='temp'||kind==='vib'||kind==='err')) return '#f2cf85';
+    return '#E7EDF2';
+  }
+
+  card(cfg) {
+    // cfg: {tag, stateName, note, variant('healthy'|'warning'|'critical'|'selected'|'stale'|'hover'), machineState, data}
+    const st = cfg.machineState;
+    const v = this.stateVis(st);
+    const isSel = cfg.variant === 'selected';
+    const isHover = cfg.variant === 'hover';
+    const isStale = st === 'stale';
+
+    let bg = '#111820', bd = '#26323D', shadow = '0 1px 0 rgba(255,255,255,0.04), 0 12px 28px rgba(0,0,0,0.22)';
+    if (st === 'critical') bd = '#7a2a30';
+    if (isSel) { bd = '#4FA3FF'; bg = '#0f1b28'; }
+    if (isHover) { bg = '#141d27'; bd = '#3E5266'; shadow = '0 1px 0 rgba(255,255,255,0.04), 0 16px 34px rgba(0,0,0,0.32)'; }
+
+    const cardStyle = 'position:relative; width:258px; padding:13px; border-radius:8px; background:'+bg+'; border:1px solid '+bd+'; box-shadow:'+shadow+';'+(isStale?' opacity:0.6;':'')+(isHover?' outline:none;':'');
+
+    const dotBase = 'width:9px; height:9px; border-radius:999px; margin-top:5px; flex:0 0 auto; background:'+v.dot+';';
+    const dotStyle = st==='critical' ? dotBase+' animation:fg-pulse 1.2s ease-in-out infinite;' : dotBase;
+
+    const badgeStyle = 'display:inline-flex; align-items:center; height:20px; padding:0 8px; border-radius:999px; font-family:\'JetBrains Mono\',monospace; font-size:11px; font-weight:600; letter-spacing:0.4px; flex:0 0 auto; background:'+v.bg+'; color:'+v.fg+'; border:1px solid '+v.bd+';';
+
+    const diagHover = isHover;
+    const diagBtnStyle = 'width:28px; height:28px; display:flex; align-items:center; justify-content:center; border-radius:6px; cursor:pointer; flex:0 0 auto; background:'+(diagHover?'#102A42':'#111820')+'; border:1px solid '+(diagHover?'#4FA3FF':'#26323D')+';';
+
+    const d = cfg.data;
+    return {
+      tag:cfg.tag, stateName:cfg.stateName, note:cfg.note,
+      cardStyle, dotStyle, badgeStyle,
+      stateLabel:v.label,
+      name:d.name, id:d.id, temp:d.temp, vib:d.vib, thru:d.thru, err:d.err,
+      tempColor:this.telColor(st,'temp'), vibColor:this.telColor(st,'vib'), errColor:this.telColor(st,'err'),
+      updColor:isStale?'#F2B84B':'#687684',
+      updated:isStale?('stale · '+d.updated):d.updated,
+      diagBtnStyle, diagIconColor:diagHover?'#76B8FF':'#9AA8B5',
+    };
+  }
+
+  renderVals() {
+    const D = {
+      healthy:  { id:'press-02', name:'Stamping Press 02', temp:'58.2', vib:'0.9', thru:'1,180', err:'0.2', updated:'2s ago' },
+      warning:  { id:'pump-07',  name:'Coolant Pump 07',   temp:'79.1', vib:'2.8', thru:'965',   err:'1.1', updated:'2s ago' },
+      critical: { id:'press-05', name:'Stamping Press 05', temp:'92.4', vib:'4.6', thru:'420',   err:'4.2', updated:'1s ago' },
+      selected: { id:'cnc-14',   name:'CNC Lathe 14',      temp:'76.8', vib:'3.1', thru:'1,010', err:'0.9', updated:'2s ago' },
+      stale:    { id:'pump-12',  name:'Hydraulic Pump 12', temp:'—',    vib:'—',   thru:'—',     err:'—',   updated:'48s ago' },
+      hover:    { id:'cnc-11',   name:'CNC Mill 11',       temp:'52.0', vib:'0.8', thru:'1,196', err:'0.2', updated:'1s ago' },
+    };
+
+    const cards = [
+      this.card({ tag:'01', stateName:'Healthy',  note:'default',       variant:'healthy',  machineState:'healthy',  data:D.healthy }),
+      this.card({ tag:'02', stateName:'Warning',  note:'soft threshold',variant:'warning',  machineState:'warning',  data:D.warning }),
+      this.card({ tag:'03', stateName:'Critical', note:'pulse light',   variant:'critical', machineState:'critical', data:D.critical }),
+      this.card({ tag:'04', stateName:'Selected', note:'accent ring',   variant:'selected', machineState:'warning',  data:D.selected }),
+      this.card({ tag:'05', stateName:'Stale',    note:'no fresh data', variant:'stale',    machineState:'stale',    data:D.stale }),
+      this.card({ tag:'06', stateName:'Hover',    note:'lifted',        variant:'hover',    machineState:'healthy',  data:D.hover }),
+    ];
+
+    const specRows = [
+      { name:'Healthy',  dot:'#37C978', border:'#26323D', bg:'#111820' },
+      { name:'Warning',  dot:'#F2B84B', border:'#26323D', bg:'#111820' },
+      { name:'Critical', dot:'#FF5C66', border:'#7a2a30', bg:'#111820' },
+      { name:'Selected', dot:'#4FA3FF', border:'#4FA3FF', bg:'#0f1b28' },
+      { name:'Stale',    dot:'#687684', border:'#26323D', bg:'#111820' },
+      { name:'Hover',    dot:'—',       border:'#3E5266', bg:'#141d27' },
+    ];
+
+    const behaviors = [
+      { dotStyle:'width:9px; height:9px; border-radius:999px; margin-top:4px; flex:0 0 auto; background:#37C978;',
+        title:'Healthy / Warning light', text:'Static 9px dot in the state color. No motion. Telemetry numbers stay primary text; warning tints temp/vibration/error amber.' },
+      { dotStyle:'width:9px; height:9px; border-radius:999px; margin-top:4px; flex:0 0 auto; background:#FF5C66; animation:fg-pulse 1.2s ease-in-out infinite;',
+        title:'Critical light', text:'Slow 1.2s ease-in-out ring pulse — urgent but calm. Only the box-shadow animates, so the card never resizes. Border deepens to #7a2a30, not a loud red fill.' },
+      { dotStyle:'width:9px; height:9px; border-radius:999px; margin-top:4px; flex:0 0 auto; background:#4FA3FF;',
+        title:'Selected', text:'1px #4FA3FF border + faint #0f1b28 accent wash. No glow — it reads as focus, not alarm, so a selected critical card still pulses.' },
+      { dotStyle:'width:9px; height:9px; border-radius:999px; margin-top:4px; flex:0 0 auto; background:#687684;',
+        title:'Stale', text:'Whole card drops to 0.6 opacity, telemetry shows em-dashes, last-updated turns amber with a “stale ·” prefix. State badge keeps last-known label; light greys out.' },
+      { dotStyle:'width:9px; height:9px; border-radius:999px; margin-top:4px; flex:0 0 auto; background:#3E5266;',
+        title:'Hover', text:'Background lifts to #141d27, border to #3E5266, shadow deepens to 34px. 120ms ease. Diagnose button fills #102A42 with accent border + icon.' },
+    ];
+
+    return { cards, specRows, behaviors };
+  }
+}
+</script>
+</body>
+</html>
