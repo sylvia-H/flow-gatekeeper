@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Activity, Boxes } from "lucide-vue-next";
 import AppLayout from "./shared/components/AppLayout.vue";
+import TopBar from "./shared/components/TopBar.vue";
 import TopologyCanvas from "./domains/monitoring/components/TopologyCanvas.vue";
 import { useMonitoringStore } from "./domains/monitoring/stores/monitoring.store.js";
 import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFrequencyWs.js";
@@ -63,8 +64,7 @@ const handle = useHighFrequencyWs({
     </template>
 
     <template #topbar>
-      <!-- TopBar 於 US2（T019）填入 -->
-      <div class="text-sm text-fg-muted">flow-gatekeeper 監控台</div>
+      <TopBar />
     </template>
 
     <template #main>

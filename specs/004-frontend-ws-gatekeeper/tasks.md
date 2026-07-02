@@ -77,8 +77,8 @@ description: "Task list for 004 前端高頻 WebSocket Gatekeeper 監控台"
 
 **Independent Test**: 高頻遙測下觀察 TopBar 的比值明顯 ≥ 10:1 且即時；把 `MOCK_TELEMETRY_INTERVAL_MS` 調小，比值上升。
 
-- [ ] T018 [P] [US2] `apps/web/src/shared/components/BackpressureBadge.vue`：props `{ receivedMessages; renderedBatches }`；顯示 `12,840 msgs · 312 frames · 41:1`（`font-mono`、千分位、中性色）；ratio = `renderedBatches>0 ? round(received/rendered) : 0`；比值以 `text-primary`/`accent` 強調；tooltip 說明背壓意義（FR-009/010/011、design-spec §7.2.1）
-- [ ] T019 [US2] `apps/web/src/shared/components/TopBar.vue`：放 search input（外觀）、connection status chip（**讀 `store.connectionStatus`**，先中性、US3 上色）、`BackpressureBadge`（綁 `store.receivedMessages`/`store.renderedBatches`）、diagnose 按鈕（disabled 佔位→005）、mock-frequency 控制（**disabled placeholder**，FR-027）；掛進 `AppLayout` top bar slot（FR-009、design-spec §7.2）
+- [X] T018 [P] [US2] `apps/web/src/shared/components/BackpressureBadge.vue`：props `{ receivedMessages; renderedBatches }`；顯示 `12,840 msgs · 312 frames · 41:1`（`font-mono`、千分位、中性色）；ratio = `renderedBatches>0 ? round(received/rendered) : 0`；比值以 `text-primary`/`accent` 強調；tooltip 說明背壓意義（FR-009/010/011、design-spec §7.2.1）
+- [X] T019 [US2] `apps/web/src/shared/components/TopBar.vue`：放 search input（外觀）、connection status chip（**讀 `store.connectionStatus`**，先中性、US3 上色）、`BackpressureBadge`（綁 `store.receivedMessages`/`store.renderedBatches`）、diagnose 按鈕（disabled 佔位→005）、mock-frequency 控制（**disabled placeholder**，FR-027）；掛進 `AppLayout` top bar slot（FR-009、design-spec §7.2）
 
 **Checkpoint**: US2 可獨立驗收——背壓比值即時可見
 
