@@ -121,13 +121,13 @@
 - **FR-017**: 超過新鮮度門檻（預設 10 秒）未更新的機台 MUST 標示為 stale（降低視覺權重、顯示 stale 標記），且 MUST NOT 清空其既有數值。
 - **FR-018**: buffer MUST 設有上限，超過上限時 MUST 丟棄最舊者、保留最新者，避免分頁背景時記憶體無限成長。
 - **FR-019**: 控制訊息（如心跳回應、連線識別、訂閱確認、未授權通知）MUST 與遙測分流處理，MUST NOT 被當成機台遙測呈現。
-- **FR-020**: 監控台 MUST 在 design-spec §11 指定的各 viewport（含 mobile bottom sheet 尺寸）下不發生文字溢出、卡片重疊；hover／selected／critical pulse MUST NOT 造成 layout shift。
+- **FR-020**: 監控台 MUST 在 design-spec §11 指定的各 viewport（1366×768／1440×900／390×844／768×1024；其中 390×844 為手機尺寸，此處僅指該 viewport 尺寸，mobile bottom-sheet 本身屬 005）下不發生文字溢出、卡片重疊；hover／selected／critical pulse MUST NOT 造成 layout shift。手機尺寸的單欄退化細節見 FR-026。
 - **FR-021**: icon-only 控制項 MUST 具備無障礙標籤或提示；鍵盤焦點環 MUST 保留（使用 accent，不可移除）。
 - **FR-022**: 前端 MUST 恆保存**最新**的連線識別（clientId）並對外提供，供後續 AI 診斷觸發（005）作為對應連線的依據；重連會派發新的 clientId，004 只保存最新值，MUST NOT 負責跨重連保留舊綁定（見 Assumptions 已知限制）。
 - **FR-023**: 前端 MUST 支援點選機台卡片以設定選取（`selectedMachineId`，同時至多一台），並以 design-spec 的 selected 視覺呈現；消費該選取的 diagnose 動作與 CopilotDrawer 不在本 feature 範圍（屬 005）。
 - **FR-024**: 首次遙測抵達前或連線尚未建立時，前端 MUST 直接渲染全部已知機台的 placeholder 卡片（數值以佔位符呈現）並顯示連線狀態橫幅；實際資料抵達時 MUST 原地填入，MUST NOT 造成版面跳動或整屏空白。
 - **FR-025**: 前端 MUST 在**每次**建立連線（初次連線與每次重連皆然，即每次收到 `system/connected`）時重送 `machine/subscribe` 重新訂閱其 machineIds；MUST NOT 假設訂閱在重連後仍存在（Gateway 於斷線時清除該連線訂閱）。
-- **FR-026**: 監控台 MUST 於手機 viewport（含 390×844）將機台卡片退化為**單欄清單**並維持不溢出、不重疊；此為驗收阻斷需求。004 不含 mobile bottom-sheet（屬 005 的 CopilotDrawer）。
+- **FR-026**: 監控台 MUST 於手機 viewport（含 390×844）將機台卡片退化為**單欄清單**並維持不溢出、不重疊；此為驗收阻斷需求（與 FR-020 的四 viewport 無溢出／無 layout shift 一致，本條為其手機單欄的具體化）。004 不含 mobile bottom-sheet（屬 005 的 CopilotDrawer）。
 - **FR-027**: TopBar 的 mock-frequency 控制項 MUST 以 **disabled placeholder** 呈現（保留 design-spec 視覺）但不作用；實際頻率串接不在本 feature 範圍。
 
 ### Key Entities *(include if feature involves data)*
