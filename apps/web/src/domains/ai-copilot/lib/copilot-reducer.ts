@@ -63,9 +63,28 @@ export function progressLabel(progress: number | null): string {
   return progress === null ? "處理中…" : `${progress}%`;
 }
 
-/** 由 `job/status.error` 取可讀訊息（非原始堆疊；FR-007）。 */
-function readableError(raw: string | undefined): string {
-  return raw && raw.trim().length > 0 ? raw : "診斷失敗，請重試";
+/**
+ * 把 provider／worker 原始錯誤對應成簡潔的使用者訊息（FR-007「非原始堆疊之可讀訊息」）。
+ * 命中已知簽章 → 對應友善句；否則短原文（<120 字、非多行堆疊）沿用，過長／堆疊 → 通用句。
+ * 純函式，決定性、便於單元測試。
+ */
+export function humanizeError(raw: string | undefined, code?: string): string {
+  const msg = (raw ?? "").trim();
+  const hay = `${code ?? ""} ${msg}`.toLowerCase();
+
+  if (code === "schema_invalid" || hay.includes("schema")) return "AI 回傳格式不符，請重試。";
+  if (hay.includes("api_key_invalid") || hay.includes("api key not valid") || hay.includes("unauthorized") || hay.includes("permission"))
+    return "AI 服務金鑰無效或未授權，請聯繫管理員。";
+  if (hay.includes("429") || hay.includes("quota") || hay.includes("rate limit") || hay.includes("resource_exhausted"))
+    return "AI 服務暫時繁忙（速率限制），請稍後重試。";
+  if (hay.includes("timeout") || hay.includes("timed out") || hay.includes("etimedout"))
+    return "AI 診斷逾時，請重試。";
+  if (hay.includes("econn") || hay.includes("network") || hay.includes("fetch") || hay.includes("socket") || hay.includes("enotfound"))
+    return "無法連線 AI 服務，請稍後重試。";
+
+  // 未知錯誤：短且非多行堆疊 → 沿用原文；否則通用句（避免把長堆疊/JSON 丟給使用者）。
+  if (msg.length > 0 && msg.length < 120 && !msg.includes("\n")) return msg;
+  return "診斷失敗，請重試。";
 }
 
 /**
@@ -95,7 +114,7 @@ export function copilotReducer(
           machineId: state.machineId,
           jobId: state.jobId,
           streamText: state.streamText,
-          error: readableError(event.error),
+          error: humanizeError(event.error),
         };
       }
       // waiting/active/completed：維持 active，僅更新進度（未帶則維持既值＝indeterminate）。
@@ -121,7 +140,7 @@ export function copilotReducer(
         machineId: state.machineId,
         jobId: state.jobId,
         streamText: state.streamText,
-        error: readableError(event.message),
+        error: humanizeError(event.message, event.code),
       };
   }
 }

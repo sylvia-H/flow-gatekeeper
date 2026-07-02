@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DiagnosisResult } from "@flow-gatekeeper/contracts";
 import {
   copilotReducer,
+  humanizeError,
   isStaleJobEvent,
   progressLabel,
   startActiveState,
@@ -77,19 +78,19 @@ describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
     });
   });
 
-  it("ai/error → failed（保留 streamText、可讀訊息）（FR-007）", () => {
+  it("ai/error → failed（保留 streamText、可讀訊息經 humanize）（FR-007）", () => {
     const s = copilotReducer(active("job-1", { streamText: "分析…" }), {
       type: "ai/error",
       jobId: "job-1",
       code: "schema_invalid",
-      message: "AI 回傳格式不符",
+      message: "ZodError: invalid_type ...很長的原始堆疊",
     });
     expect(s).toEqual({
       status: "failed",
       machineId: "mixer-01",
       jobId: "job-1",
       streamText: "分析…",
-      error: "AI 回傳格式不符",
+      error: "AI 回傳格式不符，請重試。",
     });
   });
 
@@ -100,7 +101,7 @@ describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
       machineId: "mixer-01",
       status: "failed",
     });
-    expect(s).toMatchObject({ status: "failed", error: "診斷失敗，請重試" });
+    expect(s).toMatchObject({ status: "failed", error: "診斷失敗，請重試。" });
   });
 
   it("過期 jobId 片段被忽略、不覆蓋當前呈現（FR-011）", () => {
@@ -136,6 +137,32 @@ describe("isStaleJobEvent（FR-011）", () => {
   it("idle（無 jobId）→ 任何事件皆過期", () => {
     const idle: CopilotJobState = { status: "idle", machineId: "mixer-01" };
     expect(isStaleJobEvent(idle, { type: "ai/token", jobId: "job-1", seq: 0, text: "x" })).toBe(true);
+  });
+});
+
+describe("humanizeError（FR-007 可讀訊息，非原始堆疊）", () => {
+  it("Gemini 金鑰無效原文 → 友善句", () => {
+    const raw = '[GoogleGenerativeAI Error]: [400 Bad Request] API key not valid. Please pass a valid API key. reason:"API_KEY_INVALID"';
+    expect(humanizeError(raw, "worker_failed")).toBe("AI 服務金鑰無效或未授權，請聯繫管理員。");
+  });
+  it("速率限制（429/quota）→ 友善句", () => {
+    expect(humanizeError("Error: [429] RESOURCE_EXHAUSTED quota exceeded")).toBe("AI 服務暫時繁忙（速率限制），請稍後重試。");
+  });
+  it("逾時 → 友善句", () => {
+    expect(humanizeError("request timed out after 30000ms")).toBe("AI 診斷逾時，請重試。");
+  });
+  it("連線錯誤 → 友善句", () => {
+    expect(humanizeError("ECONNREFUSED fetch failed")).toBe("無法連線 AI 服務，請稍後重試。");
+  });
+  it("schema code → 友善句（不論原文多長）", () => {
+    expect(humanizeError("ZodError: ...\n at parse", "schema_invalid")).toBe("AI 回傳格式不符，請重試。");
+  });
+  it("未知短訊息 → 沿用原文", () => {
+    expect(humanizeError("Worker crashed unexpectedly")).toBe("Worker crashed unexpectedly");
+  });
+  it("未知長／多行堆疊 → 通用句", () => {
+    expect(humanizeError("Error x\n".repeat(30))).toBe("診斷失敗，請重試。");
+    expect(humanizeError(undefined)).toBe("診斷失敗，請重試。");
   });
 });
 
