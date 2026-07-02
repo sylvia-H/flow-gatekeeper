@@ -18,6 +18,16 @@ export default tseslint.config(
         parser: tseslint.parser,
       },
     },
+    rules: {
+      // 純排版規則交由編輯器/格式化處理，關閉以免手寫模板反覆衝突
+      // （eslint-plugin-vue 官方建議：使用格式化工具時關閉 formatting rules）。
+      // 保留 essential/correctness 規則（如 vue/return-in-computed-property）。
+      "vue/max-attributes-per-line": "off",
+      "vue/singleline-html-element-content-newline": "off",
+      "vue/html-self-closing": "off",
+      "vue/first-attribute-linebreak": "off",
+      "vue/html-closing-bracket-newline": "off",
+    },
   },
   {
     // TS 與 Vue 共用規則；.vue 的 no-explicit-any 需在此顯式登記 plugin 才生效。
