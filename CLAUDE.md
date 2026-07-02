@@ -9,6 +9,11 @@ shell commands, and other important information, read the current plan:
 flow-gatekeeper 是一個致敬 Argo CD 的即時流程監控與 AI 診斷 side project，用 GitHub Spec Kit（SDD）開發。
 **工程原則以 `memory/constitution.md` 為準**；本檔只放 constitution 不會逐 feature 重述的操作層約束。
 
+## 溝通語言
+
+- 與使用者的**對話輸出一律用繁體中文**：回報成果、說明、詢問問題、摘要都用繁體中文。
+- 技術識別項照原文：程式碼、指令、檔名/路徑、Conventional Commits 前綴、API/token 名稱、既有英文術語不翻譯。
+
 ## 真實來源（Source of Truth，不得憑空發明）
 
 - **視覺**：一律依 `apps/web/design/design-spec.md` 與 `apps/web/design/refs/*.png`。顏色、圓角、陰影、間距一律用具名 token，**不在元件內散落 hex**。
