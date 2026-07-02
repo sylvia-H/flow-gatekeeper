@@ -1,14 +1,35 @@
 <script setup lang="ts">
 import { Activity, Boxes } from "lucide-vue-next";
 import AppLayout from "./shared/components/AppLayout.vue";
+import TopologyCanvas from "./domains/monitoring/components/TopologyCanvas.vue";
 import { useMonitoringStore } from "./domains/monitoring/stores/monitoring.store.js";
+import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFrequencyWs.js";
 import { KNOWN_MACHINE_IDS, machineLabel } from "./domains/monitoring/lib/machine-labels.js";
 
 /**
- * App 根：組裝監控台外殼——第一屏即監控台（非 landing page，design-spec §1/§6）。
- * 即時連線／訂閱與 topology 於 US1（T017）接入；TopBar 於 US2（T019）填入。
+ * App 根：組裝監控台外殼並接上即時通道。第一屏即監控台（design-spec §1/§6）。
+ * TopBar 於 US2（T019）填入；連線韌性 UI 於 US3（T023）補上。
  */
 const store = useMonitoringStore();
+
+// 同源 /ws（dev 由 Vite proxy 轉發到 :3000）——不把後端位址塞進 bundle（research R2）。
+const wsProto = location.protocol === "https:" ? "wss" : "ws";
+const wsUrl = `${wsProto}://${location.host}/ws`;
+
+const handle = useHighFrequencyWs({
+  url: wsUrl,
+  onBatch: store.applyTelemetryBatch,
+  onStatus: store.setConnectionStatus,
+  // 每次（重）連線都會觸發：保存 clientId（供 005）並用單一名冊訂閱 5 台（dev 送空 token）。
+  onConnected: (clientId: string) => {
+    store.setClientId(clientId);
+    handle.send({
+      type: "machine/subscribe",
+      token: "",
+      machineIds: [...KNOWN_MACHINE_IDS],
+    });
+  },
+});
 </script>
 
 <template>
@@ -27,12 +48,15 @@ const store = useMonitoringStore();
         </div>
         <ul class="space-y-0.5">
           <li v-for="id in KNOWN_MACHINE_IDS" :key="id">
-            <span
-              class="flex items-center gap-2 rounded-control px-2 py-1.5 text-sm text-fg-muted"
+            <button
+              type="button"
+              class="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-sm text-fg-muted hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              :class="store.selectedMachineId === id ? 'bg-accent-bg text-fg' : ''"
+              @click="store.selectMachine(id)"
             >
               <Boxes class="h-4 w-4 shrink-0 text-fg-subtle" aria-hidden="true" />
               <span class="truncate">{{ machineLabel(id) }}</span>
-            </span>
+            </button>
           </li>
         </ul>
       </nav>
@@ -44,10 +68,7 @@ const store = useMonitoringStore();
     </template>
 
     <template #main>
-      <!-- Topology / node grid 於 US1（T016/T017）填入 -->
-      <div class="flex h-full items-center justify-center p-6 text-sm text-fg-subtle">
-        監控台外殼就緒；即時 topology 於 US1 接入。
-      </div>
+      <TopologyCanvas />
     </template>
   </AppLayout>
 </template>
