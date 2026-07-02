@@ -39,15 +39,15 @@ description: "Task list for Feature 005 — AI Copilot Drawer"
 
 **⚠️ CRITICAL**: 本階段未完成前，任一 user story 不得開工
 
-- [ ] T003 [P] 建立 copilot 呈現型別與 reducer 純函式於 apps/web/src/domains/ai-copilot/lib/copilot-reducer.ts：`CopilotJobState` discriminated union、`copilotReducer(state,event)`、`isStaleJobEvent(state,event)`、`progressLabel(progress)`（依 data-model 轉移表；型別 `import` 自 `@flow-gatekeeper/contracts`）
-- [ ] T004 [P] reducer 單元測試於 apps/web/src/domains/ai-copilot/lib/copilot-reducer.test.ts（憲章測試門檻）：涵蓋 waiting→active→completed（含 `cached:true`）、`ai/token` 依 `seq` 保序 append、`ai/error`→failed、`job/status:failed`→failed、過期 `jobId` 片段被忽略、`progressLabel(null)`→indeterminate（FR-004/006/007/009/011）
-- [ ] T005 [P] diagnose REST helper 於 apps/web/src/domains/ai-copilot/lib/diagnose-api.ts：`fetch` `POST /diagnoses` 帶 `{ machineId, socketId, requestedBy? }`（`socketId`=clientId），回傳 `jobId`；無 clientId 時不送出（contracts/diagnose-rest、FR-003）
-- [ ] T006 建立 copilot.store 於 apps/web/src/domains/ai-copilot/stores/copilot.store.ts：`Map<machineId,CopilotJobState>`；getters `stateFor`/`canDiagnose`；actions `diagnose`/`retry`/`applyEvent`/`onReconnect`（委派 T003 reducer 與 T005 api）（依賴 T003、T005；contracts/copilot-store）
-- [ ] T007 [P] copilot.store 單元測試於 apps/web/src/domains/ai-copilot/stores/copilot.store.test.ts：`canDiagnose` 去重（active 期間 false）、`diagnose` 建 active、`applyEvent` 委派 reducer、`onReconnect` 使 active 台轉 failed（FR-008/010/012）
-- [ ] T008 擴充 004 WS 事件入口 apps/web/src/domains/monitoring/composables/useHighFrequencyWs.ts：新增選用 `onDiagnosisEvent` 回呼，於 `handleMessage` default 分支對 `job/status`／`ai/token`／`ai/done`／`ai/error` 分流呼叫（MUST NOT 進遙測 buffer；research R1、憲章 IV、FR-017）
-- [ ] T009 [P] 建立共用 SeverityBadge 於 apps/web/src/shared/components/SeverityBadge.vue（`ok`/`warning`/`critical` 具名 token，design-spec §7.6）
-- [ ] T010 [P] 建立共用 ProgressBar 於 apps/web/src/shared/components/ProgressBar.vue：支援數值與 indeterminate，含 `aria-valuenow`／indeterminate 描述（FR-004、design-spec §10）
-- [ ] T011 AppLayout 響應式 drawer 於 apps/web/src/shared/components/AppLayout.vue：`md+` 常駐右欄、mobile 改 bottom-sheet（可 Escape 關閉、不遮頂欄）（FR-002/015、research R8）
+- [X] T003 [P] 建立 copilot 呈現型別與 reducer 純函式於 apps/web/src/domains/ai-copilot/lib/copilot-reducer.ts：`CopilotJobState` discriminated union、`copilotReducer(state,event)`、`isStaleJobEvent(state,event)`、`progressLabel(progress)`（依 data-model 轉移表；型別 `import` 自 `@flow-gatekeeper/contracts`）
+- [X] T004 [P] reducer 單元測試於 apps/web/src/domains/ai-copilot/lib/copilot-reducer.test.ts（憲章測試門檻）：涵蓋 waiting→active→completed（含 `cached:true`）、`ai/token` 依 `seq` 保序 append、`ai/error`→failed、`job/status:failed`→failed、過期 `jobId` 片段被忽略、`progressLabel(null)`→indeterminate（FR-004/006/007/009/011）
+- [X] T005 [P] diagnose REST helper 於 apps/web/src/domains/ai-copilot/lib/diagnose-api.ts：`fetch` `POST /diagnoses` 帶 `{ machineId, socketId, requestedBy? }`（`socketId`=clientId），回傳 `jobId`；無 clientId 時不送出（contracts/diagnose-rest、FR-003）
+- [X] T006 建立 copilot.store 於 apps/web/src/domains/ai-copilot/stores/copilot.store.ts：`Map<machineId,CopilotJobState>`；getters `stateFor`/`canDiagnose`；actions `diagnose`/`retry`/`applyEvent`/`onReconnect`（委派 T003 reducer 與 T005 api）（依賴 T003、T005；contracts/copilot-store）
+- [X] T007 [P] copilot.store 單元測試於 apps/web/src/domains/ai-copilot/stores/copilot.store.test.ts：`canDiagnose` 去重（active 期間 false）、`diagnose` 建 active、`applyEvent` 委派 reducer、`onReconnect` 使 active 台轉 failed（FR-008/010/012）
+- [X] T008 擴充 004 WS 事件入口 apps/web/src/domains/monitoring/composables/useHighFrequencyWs.ts：新增選用 `onDiagnosisEvent` 回呼，於 `handleMessage` default 分支對 `job/status`／`ai/token`／`ai/done`／`ai/error` 分流呼叫（MUST NOT 進遙測 buffer；research R1、憲章 IV、FR-017）
+- [X] T009 [P] 建立共用 SeverityBadge 於 apps/web/src/shared/components/SeverityBadge.vue（`ok`/`warning`/`critical` 具名 token，design-spec §7.6）
+- [X] T010 [P] 建立共用 ProgressBar 於 apps/web/src/shared/components/ProgressBar.vue：支援數值與 indeterminate，含 `aria-valuenow`／indeterminate 描述（FR-004、design-spec §10）
+- [X] T011 AppLayout 響應式 drawer 於 apps/web/src/shared/components/AppLayout.vue：`md+` 常駐右欄、mobile 改 bottom-sheet（可 Escape 關閉、不遮頂欄）（FR-002/015、research R8）
 
 **Checkpoint**: 狀態機／store／事件入口／共用視覺／版面就緒——可開始 US 實作
 
