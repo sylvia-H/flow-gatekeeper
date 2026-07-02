@@ -61,14 +61,14 @@ description: "Task list for Feature 005 — AI Copilot Drawer"
 
 ### Implementation for User Story 1
 
-- [ ] T012 [P] [US1] 建立 StreamingPanel.vue 於 apps/web/src/domains/ai-copilot/components/StreamingPanel.vue：token 文字＋`animate-stream-caret`；未手動捲動貼底跟隨、手動上捲不強拉（FR-005/013、design-spec §7.7）
-- [ ] T013 [P] [US1] 建立 SuggestedActionList.vue 於 apps/web/src/domains/ai-copilot/components/SuggestedActionList.vue：每項 `label`＋`priority`（high 用 warn/crit 但不整排紅底），可多行（FR-006、design-spec §7.7）
-- [ ] T014 [P] [US1] 建立 DiagnosisResultView.vue 於 apps/web/src/domains/ai-copilot/components/DiagnosisResultView.vue：`summary`／`severity`(SeverityBadge)／`likelyCauses`／`evidence`(telemetry/errorlog/maintenance)／`suggestedActions`(SuggestedActionList) 五區塊；**空陣列（如無 evidence／suggestedActions）以空狀態呈現，不崩潰、不殘留佔位**（依賴 T009、T013；FR-006、spec Edge Cases、CHK022）
-- [ ] T015 [US1] 建立 CopilotDrawer.vue 於 apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue：header（machineId／jobId short）／status（ProgressBar）／StreamingPanel／DiagnosisResultView；idle 顯示 selected machine 摘要與 Run diagnosis；completed 保留串流文字但預設收合（依賴 T010、T012、T014；FR-002/006/014、Clarifications Q2）
-- [ ] T016 [US1] TopBar diagnose action 於 apps/web/src/shared/components/TopBar.vue：作用於 `selectedMachineId`，無選取時 disabled（FR-002/014、design-spec §7.2）
-- [ ] T017 [P] [US1] MachineNodeCard diagnose icon 於 apps/web/src/domains/monitoring/components/MachineNodeCard.vue：卡片 diagnose icon 觸發診斷（作用於該台，含 `aria-label`）（FR-002、design-spec §7.4）
-- [ ] T018 [US1] App.vue 接線於 apps/web/src/App.vue：掛 copilot.store、`onDiagnosisEvent: copilot.applyEvent`、drawer slot 呈現 `stateFor(selectedMachineId)`、diagnose 觸發帶 `monitoring.clientId`；桌機 `drawerOpen` 常駐（依賴 T006、T008、T011、T015、T016）
-- [ ] T019 [US1] worker 進度里程碑（FR-018）於 apps/worker/src/main.ts：`updateProgress` 改綁真實階段 `0/20/40/60/80/100`（`20`=context 返回、`40`=取鎖前、`60`=首個 token(seq===0)、`80`=parseResult 成功後、`100`=寫庫/快取；cached 直接 100）（research R5、SC-008）
+- [X] T012 [P] [US1] 建立 StreamingPanel.vue 於 apps/web/src/domains/ai-copilot/components/StreamingPanel.vue：token 文字＋`animate-stream-caret`；未手動捲動貼底跟隨、手動上捲不強拉（FR-005/013、design-spec §7.7）
+- [X] T013 [P] [US1] 建立 SuggestedActionList.vue 於 apps/web/src/domains/ai-copilot/components/SuggestedActionList.vue：每項 `label`＋`priority`（high 用 warn/crit 但不整排紅底），可多行（FR-006、design-spec §7.7）
+- [X] T014 [P] [US1] 建立 DiagnosisResultView.vue 於 apps/web/src/domains/ai-copilot/components/DiagnosisResultView.vue：`summary`／`severity`(SeverityBadge)／`likelyCauses`／`evidence`(telemetry/errorlog/maintenance)／`suggestedActions`(SuggestedActionList) 五區塊；**空陣列（如無 evidence／suggestedActions）以空狀態呈現，不崩潰、不殘留佔位**（依賴 T009、T013；FR-006、spec Edge Cases、CHK022）
+- [X] T015 [US1] 建立 CopilotDrawer.vue 於 apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue：header（machineId／jobId short）／status（ProgressBar）／StreamingPanel／DiagnosisResultView；idle 顯示 selected machine 摘要與 Run diagnosis；completed 保留串流文字但預設收合（依賴 T010、T012、T014；FR-002/006/014、Clarifications Q2）
+- [X] T016 [US1] TopBar diagnose action 於 apps/web/src/shared/components/TopBar.vue：作用於 `selectedMachineId`，無選取時 disabled（FR-002/014、design-spec §7.2）
+- [X] T017 [P] [US1] MachineNodeCard diagnose icon 於 apps/web/src/domains/monitoring/components/MachineNodeCard.vue：卡片 diagnose icon 觸發診斷（作用於該台，含 `aria-label`）（FR-002、design-spec §7.4）
+- [X] T018 [US1] App.vue 接線於 apps/web/src/App.vue：掛 copilot.store、`onDiagnosisEvent: copilot.applyEvent`、drawer slot 呈現 `stateFor(selectedMachineId)`、diagnose 觸發帶 `monitoring.clientId`；桌機 `drawerOpen` 常駐（依賴 T006、T008、T011、T015、T016）
+- [X] T019 [US1] worker 進度里程碑（FR-018）於 apps/worker/src/main.ts：`updateProgress` 改綁真實階段 `0/20/40/60/80/100`（`20`=context 返回、`40`=取鎖前、`60`=首個 token(seq===0)、`80`=parseResult 成功後、`100`=寫庫/快取；cached 直接 100）（research R5、SC-008）
 
 **Checkpoint**: MVP 可獨立展示——選台→Diagnose→active→串流→結構化結果，進度真實推進
 
