@@ -28,16 +28,16 @@ pnpm --filter @flow-gatekeeper/web dev
 - 只呈現訂閱的 5 台，無其他機台串流。
 
 ### AC2 — 背壓比值可見（US2 / SC-002）
-- **預期**：TopBar 的 `BackpressureBadge` 顯示類似 `... msgs · ... frames · N:1`，且 `msgs` 明顯 > `frames`，比值 **≥ 10:1**（不需開 DevTools 即可看到）。
-- 把 `MOCK_TELEMETRY_INTERVAL_MS` 由 50 調到 10（改 `.env` 重啟 api），比值應**上升**。
+- **預期**：TopBar 的 `BackpressureBadge` 顯示類似 `... msgs · ... frames · N:1`，且 `msgs` 明顯 > `frames`（不需開 DevTools 即可看到）。比值隨頻率變化：因每則訊息含 5 台各一筆，下限約 5:1——`MOCK_TELEMETRY_INTERVAL_MS=50` 時約 5:1、`=10` 時約 8:1、**`≤8`（如 5）時 ≥ 10:1**。
+- 驗收 **≥ 10:1** 時把 `MOCK_TELEMETRY_INTERVAL_MS` 設為 **5**（改 `apps/api/.env` 重啟 api）；把值調小可見比值**上升**。
 
 ### AC3 — 高頻不卡頓（SC-001）
 - 於 `MOCK_TELEMETRY_INTERVAL_MS=10` 下開 DevTools Performance 錄 30 秒：**無明顯 long task**；捲動與點選卡片即時回應（<100ms 體感）。
 - 佐證背壓：reactive 提交次數（`renderedBatches`）遠少於訊息數（`receivedMessages`）。
 
 ### AC4 — 斷線自動重連（US3 / SC-003）
-- 關掉 API（終端 1 Ctrl+C）。**預期**：connection chip 轉 `Disconnected`（紅）、資料標 stale、畫面**不清空**。
-- 重開 API。**預期**：chip 經 `Reconnecting`（黃）於 ~30s 內回到 `Connected`（綠），卡片恢復更新。
+- 關掉 API（終端 1 Ctrl+C）。**預期**：非使用者主動的斷線會立即進入重連，故 connection chip 轉 **`Reconnecting`（黃）**＋橫幅「顯示最後已知資料」；資料保留、逾 10s 標 stale，畫面**不清空**。（`Disconnected`（紅）保留給冷啟動尚未連上與主動關閉／卸載；非預期斷線直接走 reconnecting，見 data-model §3、FR-015。）
+- 重開 API。**預期**：chip 於 ~30s 內回到 `Connected`（綠），前端**自動重新訂閱**、卡片恢復更新。
 
 ### AC5 — 選取與 stale（US1 / US3 / SC-005）
 - 點某張卡片：該卡呈現 selected（accent 邊框），`selectedMachineId` 設定（供 005）。
