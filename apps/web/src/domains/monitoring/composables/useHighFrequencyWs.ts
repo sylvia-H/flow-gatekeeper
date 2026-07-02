@@ -1,7 +1,17 @@
 import { onUnmounted, ref, type Ref } from "vue";
-import type { ClientControlMessage, TelemetryPoint } from "@flow-gatekeeper/contracts";
+import type {
+  AiDone,
+  AiError,
+  AiToken,
+  ClientControlMessage,
+  JobStatus,
+  TelemetryPoint,
+} from "@flow-gatekeeper/contracts";
 import type { ConnectionStatus } from "../stores/monitoring.store.js";
 import { nextBackoffDelay } from "../lib/backoff.js";
+
+/** 005 診斷事件聯集——經**同一條** WebSocket 回送，由 onDiagnosisEvent 分流交 copilot.store。 */
+export type DiagnosisEvent = JobStatus | AiToken | AiDone | AiError;
 
 /**
  * 高頻 WebSocket composable：connect + buffer + rAF pump + 分流 + 心跳 + 指數退避重連 + 清理。
@@ -22,6 +32,11 @@ export interface UseHighFrequencyWsOptions {
   onStatus: (status: ConnectionStatus) => void;
   /** 收到 system/connected 時回呼（保存 clientId、隨即訂閱）；每次（重）連線都會觸發。 */
   onConnected: (clientId: string) => void;
+  /**
+   * 選用：收到診斷事件（job/status／ai/token／ai/done／ai/error）時分流回呼（交 copilot.store）。
+   * 憲章 IV／FR-017：診斷事件 MUST NOT 進遙測 buffer，直接分流不破壞遙測 rAF 批次。
+   */
+  onDiagnosisEvent?: (event: DiagnosisEvent) => void;
   /** buffer 上限，超過丟最舊保最新（背景分頁 rAF 暫停時護記憶體）。 */
   maxBufferSize?: number;
   /** 心跳週期（ms），預設 15000。 */
@@ -43,7 +58,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function useHighFrequencyWs(
   options: UseHighFrequencyWsOptions,
 ): HighFrequencyWsHandle {
-  const { url, onBatch, onStatus, onConnected } = options;
+  const { url, onBatch, onStatus, onConnected, onDiagnosisEvent } = options;
   const maxBufferSize = options.maxBufferSize ?? 2000;
   const heartbeatMs = options.heartbeatMs ?? 15_000;
   const pongTimeoutMs = options.pongTimeoutMs ?? 5_000;
@@ -150,7 +165,13 @@ export function useHighFrequencyWs(
       case "machine/subscribed":
       case "system/unauthorized":
         break;
-      // ai/*、job/status 屬 005，本 feature 不消費。
+      // 診斷事件（005）：分流交 copilot.store，MUST NOT 進遙測 buffer（憲章 IV／FR-017）。
+      case "job/status":
+      case "ai/token":
+      case "ai/done":
+      case "ai/error":
+        onDiagnosisEvent?.(parsed as unknown as DiagnosisEvent);
+        break;
       default:
         break;
     }
