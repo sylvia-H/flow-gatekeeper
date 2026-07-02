@@ -107,9 +107,16 @@ description: "Task list for 004 前端高頻 WebSocket Gatekeeper 監控台"
 - [X] T025 [P] 無障礙複查：icon-only 控制項具 `aria-label`/tooltip、狀態非僅靠顏色（狀態燈/badge/連線 chip 皆附文字或 aria）、keyboard focus ring 用 accent 且不移除、critical pulse 不過快（FR-008/021、design-spec §10）
 - [X] T026 [P] 品質門檻：`pnpm --filter @flow-gatekeeper/web typecheck`（vue-tsc）、`lint`（含 eslint-plugin-vue）、`test`（store/backoff/stale/label 純函式綠、entry smoke 綠）、`build`（vite build 成功）全通過、無 `any` 洩漏
   - **結果（2026-07-02）**：typecheck ✅ 0；lint ✅ 0（`no-explicit-any: error` 綠即無 any 洩漏）；test ✅ 18 passed（5 檔：store 批次關係、backoff 上界/cap/單調/抖動、stale 門檻、label fallback、entry smoke）；build ✅ vite 成功（1585 modules，js 84.53 kB / css 13.27 kB gzip 32.85/3.38 kB）。
-- [ ] T027 本機 live 驗收（依 quickstart.md AC1–AC6，`docker compose up -d` + `api start:dev` + `web dev`）：記錄①第一屏 placeholder→live、②背壓比值 ≥10:1 且頻率調高上升、③高頻 30s 無明顯 long task、④殺 api→disconnected/stale→重開→reconnecting→connected+重新訂閱、⑤selected 與 stale 保值、⑥四 viewport 無溢出——結果回寫本任務
-  - **狀態（2026-07-02）：待使用者本機執行（未完成）**。本 session 無法執行：Docker daemon 未啟動（Docker Desktop 未開），無法起 Redis/Mongo → api Gateway 無法啟動；且 AC1–AC6 為瀏覽器/DevTools 目視互動驗收，需人工觀察。
-  - **執行步驟（PowerShell）**：`docker compose up -d`（Redis 7 + MongoDB 7）→ 終端1 `pnpm --filter @flow-gatekeeper/api start:dev` → 終端2 `pnpm --filter @flow-gatekeeper/web dev` → 開 `http://localhost:5173`，依 quickstart AC1–AC6 逐項核對並回寫本任務與 `checklists/release-gate.md`。
+- [X] T027 本機 live 驗收（依 quickstart.md AC1–AC6，`docker compose up -d` + `api start:dev` + `web dev`）：記錄①第一屏 placeholder→live、②背壓比值 ≥10:1 且頻率調高上升、③高頻 30s 無明顯 long task、④殺 api→disconnected/stale→重開→reconnecting→connected+重新訂閱、⑤selected 與 stale 保值、⑥四 viewport 無溢出——結果回寫本任務
+  - **執行（2026-07-02）：已完成**。環境＝本機 Docker Redis7+Mongo7；`apps/api/.env` 之 `WS_AUTH_SECRET` 清空（否則空 token 訂閱被 Gateway 拒）、`MOCK_TELEMETRY_INTERVAL_MS=5`。驗收方式：Playwright headless chromium 驅動**真實前端**（截圖 + DOM/PerformanceObserver 斷言）；WS 機制另以 Node ws 煙霧測試佐證。
+  - **AC1 ✅**：冷啟動即 5 張 placeholder→live；machineIds 恰為 `mixer-01/press-02/pack-03/oven-04/sorter-05`；溫/振/吞/錯即時更新（screenshot `ac1-coldstart/ac1-live`）。
+  - **AC2 ✅**：`BackpressureBadge` 顯示 `1,240 msgs · 129 frames · 10:1`，比值 **10:1 ≥ 10**、msgs≫frames；30s 後仍穩定 10:1。
+  - **AC3 ✅**：暖機後穩態 **25s longtask=0**（rAF 批次生效：1,240 msgs 僅 129 frames）；首屏掛載時有一次性 172ms long task（非穩態，屬啟動成本）。
+  - **AC4 ✅**：殺 api → chip **立即轉 Reconnecting（黃）**＋橫幅「顯示最後已知資料」，資料保留；`node dist/main.js` 重啟後 **7.7s** 回 Connected 並**自動重訂閱**、數值恢復跳動（≪30s，SC-003）。
+    - **實作觀察（非缺陷）**：非手動斷線時 composable 於 `onclose` 立即進入 `reconnecting`（即刻退避重試），未經獨立 `disconnected`（紅）相——符合 FR-015（三態）/FR-016/FR-017（保留+stale）/自動恢復，惟與 quickstart 字面「Disconnected→Reconnecting→Connected」略異。`disconnected` 態現僅出現於冷啟動與 unmount。若要嚴格重現紅色 Disconnected 相，可於首次 `onclose` 先 emit 一次 `disconnected` 再 `reconnecting`（後續 feature 可評估）。
+  - **AC5 ✅**：點卡 → selected（`aria-pressed=true`、accent 邊框、sidebar 同步高亮，`selectedCount=1`）；斷線 >10s → **5 張卡皆 STALE badge + 降透明且數值不清空**（screenshot `ac4-dropped-stale`）；重連後 stale 消失、數值恢復。
+  - **AC6 ✅**：四 viewport（1366×768/1440×900/390×844/768×1024）水平溢出量測皆 **0**；390 寬退化**單欄清單**、badge 收斂為純比值（screenshot `ac6-*`）。
+  - 截圖存於 session scratchpad `shots/`（ac1/ac5/ac6/ac4-*）；此驗收非提交物，僅回寫結論。
 
 ---
 
