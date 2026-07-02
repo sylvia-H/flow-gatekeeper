@@ -1,0 +1,54 @@
+<script setup lang="ts">
+import { nextTick, ref, watch } from "vue";
+
+/**
+ * 串流面板（design-spec §7.7、FR-005/FR-013）：逐段 append 的 AI 推理文字 + caret。
+ * 自動貼底跟隨——**僅在使用者未手動上捲時**跟隨到底；手動上捲則不強拉（FR-013）。
+ * 背景 `bg-inset`、max-height 220–320px、overflow auto。
+ */
+const props = defineProps<{
+  /** 累積串流文字。 */
+  text: string;
+  /** 是否仍在串流（active）——決定是否顯示閃爍 caret。 */
+  streaming: boolean;
+}>();
+
+const scroller = ref<HTMLElement | null>(null);
+/** 使用者是否貼在底部（未手動上捲）；初始為真。 */
+let stickToBottom = true;
+
+/** 判定是否已接近底部（容忍 24px 抖動）。 */
+function updateStick(): void {
+  const el = scroller.value;
+  if (!el) return;
+  stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+}
+
+watch(
+  () => props.text,
+  async () => {
+    if (!stickToBottom) return; // 手動上捲時不強拉
+    await nextTick();
+    const el = scroller.value;
+    if (el) el.scrollTop = el.scrollHeight;
+  },
+);
+</script>
+
+<template>
+  <div
+    ref="scroller"
+    class="max-h-[320px] min-h-[64px] overflow-auto rounded-control bg-inset p-3 font-mono text-xs leading-relaxed text-fg-muted"
+    role="log"
+    aria-live="polite"
+    aria-label="AI 推理串流"
+    @scroll="updateStick"
+  >
+    <span class="whitespace-pre-wrap break-words">{{ text }}</span>
+    <span
+      v-if="streaming"
+      class="ml-0.5 inline-block h-3.5 w-1.5 translate-y-0.5 bg-accent align-middle animate-stream-caret"
+      aria-hidden="true"
+    />
+  </div>
+</template>
