@@ -82,9 +82,9 @@ description: "Task list for Feature 005 — AI Copilot Drawer"
 
 ### Implementation for User Story 2
 
-- [ ] T020 [US2] 送出去重 UI：在 apps/web/src/shared/components/TopBar.vue 與 apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue 依 `copilot.canDiagnose(machineId, hasClient)` 於該台 active 期間禁用 Diagnose（依賴 T016、T015；FR-008）
-- [ ] T021 [US2] Cached badge：於 apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue（或 DiagnosisResultView.vue）在 `completed && cached` 顯示 Cached 標記（依賴 T015；FR-009）
-- [ ] T022 [US2] 多台切換還原接線於 apps/web/src/App.vue：drawer 恆依 `selectedMachineId` 取 `stateFor` 呈現，確認切換還原各台既有 active/completed/failed（依賴 T018；FR-010、US2-3）
+- [X] T020 [US2] 送出去重 UI：在 apps/web/src/shared/components/TopBar.vue 與 apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue 依 `copilot.canDiagnose(machineId, hasClient)` 於該台 active 期間禁用 Diagnose（依賴 T016、T015；FR-008）
+- [X] T021 [US2] Cached badge：於 apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue（或 DiagnosisResultView.vue）在 `completed && cached` 顯示 Cached 標記（依賴 T015；FR-009）
+- [X] T022 [US2] 多台切換還原接線於 apps/web/src/App.vue：drawer 恆依 `selectedMachineId` 取 `stateFor` 呈現，確認切換還原各台既有 active/completed/failed（依賴 T018；FR-010、US2-3）
 
 **Checkpoint**: US1＋US2 皆獨立可用——去重、Cached、多台互不干擾
 

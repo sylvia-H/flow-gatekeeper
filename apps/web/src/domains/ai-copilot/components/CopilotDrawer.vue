@@ -135,7 +135,15 @@ watch(
 
     <!-- completed：結構化結果 + 收合的串流文字 -->
     <div v-else-if="state.status === 'completed'" class="space-y-4">
-      <ProgressBar status="completed" />
+      <div class="flex items-center gap-2">
+        <ProgressBar status="completed" />
+        <!-- Cached badge：快取命中時顯示（FR-009；快取／去重屬後端 003，前端僅呈現） -->
+        <span
+          v-if="state.cached"
+          class="shrink-0 rounded-pill border border-accent-bg-strong bg-accent-bg px-2 py-0.5 text-[11px] font-medium text-accent"
+          aria-label="結果來自快取"
+        >Cached</span>
+      </div>
       <DiagnosisResultView :result="state.result" />
       <div v-if="state.streamText" class="border-t border-subtle pt-3">
         <button
