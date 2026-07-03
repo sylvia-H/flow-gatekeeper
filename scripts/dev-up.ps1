@@ -67,16 +67,17 @@ if (-not $SkipSeed) {
 }
 
 # 3) 起三個長駐服務，各開新視窗（標題便於辨識；關閉即停該服務）
-function Start-Service {
+# 注意：函式名不可用 Start-Service —— 會覆蓋 PowerShell 內建的服務管理 cmdlet。
+function Start-DevService {
   param([string]$Title, [string]$Filter, [string]$Script)
   $inner = "`$host.UI.RawUI.WindowTitle='$Title'; Set-Location '$root'; pnpm --filter $Filter $Script"
   Start-Process -FilePath "powershell" -ArgumentList "-NoExit", "-NoProfile", "-Command", $inner | Out-Null
   Write-Host ("started {0}  (pnpm --filter {1} {2})" -f $Title, $Filter, $Script) -ForegroundColor Green
 }
 
-Start-Service -Title "fg-api"    -Filter "api"    -Script "start:dev"
-Start-Service -Title "fg-worker" -Filter "worker" -Script "start:dev"
-Start-Service -Title "fg-web"    -Filter "web"    -Script "dev"
+Start-DevService -Title "fg-api"    -Filter "api"    -Script "start:dev"
+Start-DevService -Title "fg-worker" -Filter "worker" -Script "start:dev"
+Start-DevService -Title "fg-web"    -Filter "web"    -Script "dev"
 
 Write-Host ""
 Write-Host "全部啟動中：api -> http://localhost:3000（ws /ws）、web -> http://localhost:5173" -ForegroundColor Cyan
