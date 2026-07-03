@@ -15,7 +15,9 @@ const props = defineProps<{
 const numeric = computed<number | null>(() =>
   typeof props.value === "number" ? props.value : null,
 );
-const indeterminate = computed(() => numeric.value === null && props.status !== "completed");
+const indeterminate = computed(
+  () => numeric.value === null && props.status !== "completed" && props.status !== "failed",
+);
 
 /** 填色 token 依狀態（design-spec §7.5）。 */
 const barClass = computed(() => {
