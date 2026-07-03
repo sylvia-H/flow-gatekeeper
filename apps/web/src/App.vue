@@ -91,6 +91,9 @@ const handle = useHighFrequencyWs({
   url: wsUrl,
   onBatch: store.applyTelemetryBatch,
   onStatus: store.setConnectionStatus,
+  // US4：pause 時 pump 跳過 flush（續存 buffer）；pong RTT 回報 store.latencyMs。
+  isPaused: () => store.paused,
+  onLatency: store.setLatency,
   // 診斷事件分流交 copilot.store（憲章 IV／FR-017：不進遙測 buffer）。
   onDiagnosisEvent: copilot.applyEvent,
   // 每次（重）連線都會觸發：保存 clientId（供 005）並用單一名冊訂閱 5 台（dev 送空 token）。
@@ -126,7 +129,7 @@ const handle = useHighFrequencyWs({
           Machines
         </div>
         <ul class="space-y-0.5">
-          <li v-for="id in KNOWN_MACHINE_IDS" :key="id">
+          <li v-for="id in store.visibleMachineIds" :key="id">
             <button
               type="button"
               class="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-sm text-fg-muted hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"

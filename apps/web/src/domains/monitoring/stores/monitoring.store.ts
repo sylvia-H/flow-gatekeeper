@@ -4,6 +4,7 @@ import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { fleetHealthOf, type FleetHealthSummary } from "../lib/fleet-health.js";
 import { KNOWN_MACHINE_IDS } from "../lib/machine-labels.js";
 import { deriveTransitionEvent, pushCapped, type DerivedEvent } from "../lib/events.js";
+import { filterMachineIds } from "../lib/machine-search.js";
 
 /** US3 事件保留上限（FR-011）。 */
 const EVENT_CAP = 50;
@@ -52,6 +53,12 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   const now = ref(Date.now());
   /** US3 前端衍生事件（最近 50 筆，最新在頂端）；於 applyTelemetryBatch 批次點衍生。 */
   const events = ref<DerivedEvent[]>([]);
+  /** US4 即時通道 ping→pong RTT（ms）；null＝尚無量測（首個 pong 前）。 */
+  const latencyMs = ref<number | null>(null);
+  /** US4 pause 開關；true 時 composable pump 跳過 flush、續存 buffer（畫面凍結）。 */
+  const paused = ref(false);
+  /** US4 search 查詢字串；空＝全部。sidebar 清單與主區卡片共用 `visibleMachineIds`。 */
+  const searchQuery = ref("");
 
   // ── Getters ────────────────────────────────────────────────────────
   /** 背壓比值：renderedBatches>0 ? round(received/rendered) : 0（design-spec §7.2.1）。 */
@@ -88,6 +95,14 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     fleetHealthOf(machines.value, now.value, KNOWN_MACHINE_IDS),
   );
 
+  /**
+   * US4 search 結果——sidebar 清單與主區卡片**共用**此單一 computed（FR-015、SC-006），
+   * 確保兩處過濾一致。空查詢回全部名冊。
+   */
+  const visibleMachineIds = computed<string[]>(() =>
+    filterMachineIds(KNOWN_MACHINE_IDS, searchQuery.value),
+  );
+
   // ── Actions ────────────────────────────────────────────────────────
   /**
    * 每次呼叫 = 一個 rAF 幀 = 一次批次（不論 batch 幾筆）：
@@ -122,6 +137,21 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     now.value = Date.now();
   }
 
+  /** US4：切換 pause（畫面凍結／恢復）。 */
+  function togglePause(): void {
+    paused.value = !paused.value;
+  }
+
+  /** US4：由 composable `onLatency` 餵入 ping/pong RTT。 */
+  function setLatency(ms: number): void {
+    latencyMs.value = ms;
+  }
+
+  /** US4：更新 search 查詢字串（TopBar 綁定）。 */
+  function setSearchQuery(query: string): void {
+    searchQuery.value = query;
+  }
+
   return {
     machines,
     selectedMachineId,
@@ -131,14 +161,21 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     renderedBatches,
     now,
     events,
+    latencyMs,
+    paused,
+    searchQuery,
     batchRatio,
     machineList,
     selectedMachine,
     fleetHealth,
+    visibleMachineIds,
     applyTelemetryBatch,
     selectMachine,
     setConnectionStatus,
     setClientId,
     tickNow,
+    togglePause,
+    setLatency,
+    setSearchQuery,
   };
 });

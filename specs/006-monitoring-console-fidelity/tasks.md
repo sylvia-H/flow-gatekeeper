@@ -105,10 +105,10 @@ description: "Task list for Feature 006 — Monitoring Console Fidelity"
 
 ### Implementation for User Story 4
 
-- [ ] T016 [US4] 於 apps/web/src/domains/monitoring/stores/monitoring.store.ts 新增 `paused`、`latencyMs` state 與 `togglePause`、`setLatency` actions（contracts/ui-surface A；FR-013/014）
-- [ ] T017 [US4] 於 apps/web/src/domains/monitoring/composables/useHighFrequencyWs.ts：`pump()` 在 `options.isPaused?.()` 為真時**跳過 flush、續存 buffer**（保留 rAF 迴圈與 maxBufferSize 保護）；送 ping 記 `lastPingAt`，`pong` 分支算 `Date.now()-lastPingAt` 呼叫 `onLatency?.(ms)`；不改通道/心跳/重連語意（憲章 IV；research R6/R7；FR-013/014）
-- [ ] T018 [US4] 於 apps/web/src/shared/components/TopBar.vue：加 pause/resume icon button（`store.togglePause()`，圖示依 `store.paused` 切換）；connection chip 於 connected 且 `latencyMs!=null` 時附 `{latencyMs}ms`（首個 pong 前顯 `—`）；search input 綁 `v-model` 上拋/共享 query（design-spec §7.2；FR-013/014/015）
-- [ ] T019 [US4] 於 apps/web/src/App.vue：`useHighFrequencyWs({ ..., isPaused: () => store.paused, onLatency: store.setLatency })`；持有 search `query`，以 `filterMachineIds(KNOWN_MACHINE_IDS, query)` 得 `visibleIds`，sidebar 清單與 main 卡片渲染皆改用 `visibleIds`（同時過濾）；查無相符時主區顯示空狀態（依賴 T006、T016、T017、T018；FR-015、SC-006、Edge Cases）
+- [X] T016 [US4] 於 apps/web/src/domains/monitoring/stores/monitoring.store.ts 新增 `paused`、`latencyMs` state 與 `togglePause`、`setLatency` actions（contracts/ui-surface A；FR-013/014）
+- [X] T017 [US4] 於 apps/web/src/domains/monitoring/composables/useHighFrequencyWs.ts：`pump()` 在 `options.isPaused?.()` 為真時**跳過 flush、續存 buffer**（保留 rAF 迴圈與 maxBufferSize 保護）；送 ping 記 `lastPingAt`，`pong` 分支算 `Date.now()-lastPingAt` 呼叫 `onLatency?.(ms)`；不改通道/心跳/重連語意（憲章 IV；research R6/R7；FR-013/014）
+- [X] T018 [US4] 於 apps/web/src/shared/components/TopBar.vue：加 pause/resume icon button（`store.togglePause()`，圖示依 `store.paused` 切換）；connection chip 於 connected 且 `latencyMs!=null` 時附 `{latencyMs}ms`（首個 pong 前顯 `—`）；search input 綁 `v-model` 上拋/共享 query（design-spec §7.2；FR-013/014/015）
+- [X] T019 [US4] 於 apps/web/src/App.vue：`useHighFrequencyWs({ ..., isPaused: () => store.paused, onLatency: store.setLatency })`；持有 search `query`，以 `filterMachineIds(KNOWN_MACHINE_IDS, query)` 得 `visibleIds`，sidebar 清單與 main 卡片渲染皆改用 `visibleIds`（同時過濾）；查無相符時主區顯示空狀態（依賴 T006、T016、T017、T018；FR-015、SC-006、Edge Cases）
 
 **Checkpoint**: US1–US4 可獨立驗收。
 
