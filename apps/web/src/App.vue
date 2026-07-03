@@ -11,6 +11,11 @@ import { useMonitoringStore } from "./domains/monitoring/stores/monitoring.store
 import { useCopilotStore } from "./domains/ai-copilot/stores/copilot.store.js";
 import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFrequencyWs.js";
 import { KNOWN_MACHINE_IDS, machineLabel } from "./domains/monitoring/lib/machine-labels.js";
+import {
+  MACHINE_GROUPS,
+  machineGroup,
+  type MachineGroupName,
+} from "./domains/monitoring/lib/machine-groups.js";
 import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.js";
 
 /**
@@ -55,6 +60,18 @@ function onRetry(): void {
 
 // US5 主區標題列機台數（N＝固定名冊長度；不含 Graph/拓樸切換，僅標題）。
 const machineCount = computed(() => KNOWN_MACHINE_IDS.length);
+
+// US6 sidebar 分組：以 MACHINE_GROUPS 順序（＋Ungrouped fallback）分區，成員經 search 過濾；
+// 過濾後為空的群組略去標題（FR-017、Edge Cases）。
+const sidebarGroups = computed(() => {
+  const order: MachineGroupName[] = [...MACHINE_GROUPS.map((g) => g.name), "Ungrouped"];
+  return order
+    .map((name) => ({
+      name,
+      ids: store.visibleMachineIds.filter((id) => machineGroup(id) === name),
+    }))
+    .filter((group) => group.ids.length > 0);
+});
 
 // 冷啟動/斷線橫幅（design-spec §8.2）：連上前顯示 Connecting，之後依三態提示；不清空資料。
 const banner = computed(() => {
@@ -127,23 +144,25 @@ const handle = useHighFrequencyWs({
           <div class="text-xs text-fg-subtle">development</div>
         </div>
       </div>
-      <nav class="px-3 py-4">
-        <div class="px-1 pb-2 text-xs font-medium uppercase tracking-wide text-fg-subtle">
-          Machines
+      <nav class="space-y-4 px-3 py-4">
+        <div v-for="group in sidebarGroups" :key="group.name">
+          <div class="px-1 pb-2 text-xs font-medium uppercase tracking-wide text-fg-subtle">
+            {{ group.name }}
+          </div>
+          <ul class="space-y-0.5">
+            <li v-for="id in group.ids" :key="id">
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-sm text-fg-muted hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                :class="store.selectedMachineId === id ? 'bg-accent-bg text-fg' : ''"
+                @click="store.selectMachine(id)"
+              >
+                <Boxes class="h-4 w-4 shrink-0 text-fg-subtle" aria-hidden="true" />
+                <span class="truncate">{{ machineLabel(id) }}</span>
+              </button>
+            </li>
+          </ul>
         </div>
-        <ul class="space-y-0.5">
-          <li v-for="id in store.visibleMachineIds" :key="id">
-            <button
-              type="button"
-              class="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-sm text-fg-muted hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              :class="store.selectedMachineId === id ? 'bg-accent-bg text-fg' : ''"
-              @click="store.selectMachine(id)"
-            >
-              <Boxes class="h-4 w-4 shrink-0 text-fg-subtle" aria-hidden="true" />
-              <span class="truncate">{{ machineLabel(id) }}</span>
-            </button>
-          </li>
-        </ul>
       </nav>
 
       <!-- Fleet Health（design-spec §6 左欄下方）：四類聚合，隨遙測即時更新 -->

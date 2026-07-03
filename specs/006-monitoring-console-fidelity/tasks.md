@@ -136,7 +136,7 @@ description: "Task list for Feature 006 — Monitoring Console Fidelity"
 
 ### Implementation for User Story 6
 
-- [ ] T021 [US6] 於 apps/web/src/App.vue 改 sidebar 機台清單：外層以 `MACHINE_GROUPS` 迭代群組標題、內層列出該群組機台（經 US4 `visibleIds` 過濾後為空的群組可略標題）；沿用既有選取/樣式（依賴 T005；FR-017）
+- [X] T021 [US6] 於 apps/web/src/App.vue 改 sidebar 機台清單：外層以 `MACHINE_GROUPS` 迭代群組標題、內層列出該群組機台（經 US4 `visibleIds` 過濾後為空的群組可略標題）；沿用既有選取/樣式（依賴 T005；FR-017）
 
 **Checkpoint**: sidebar 分組完成。
 
