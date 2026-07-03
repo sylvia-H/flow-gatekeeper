@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { Stethoscope, X, ChevronDown, RotateCcw } from "lucide-vue-next";
+import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
 import type { MachineLive } from "../../monitoring/stores/monitoring.store.js";
 import { progressLabel, type CopilotJobState } from "../lib/copilot-reducer.js";
+import { jobSteps, type StepStatus } from "../lib/job-steps.js";
 import ProgressBar from "../../../shared/components/ProgressBar.vue";
 import StreamingPanel from "./StreamingPanel.vue";
 import DiagnosisResultView from "./DiagnosisResultView.vue";
@@ -43,6 +45,28 @@ const STATUS_CHIP: Record<CopilotJobState["status"], { cls: string; label: strin
 const progressText = computed(() =>
   props.state.status === "active" ? progressLabel(props.state.progress) : "",
 );
+
+/** US7 active 步驟清單（衍生自既有 progress，不新增事件/契約；research R11）。 */
+const steps = computed(() =>
+  props.state.status === "active" ? jobSteps(props.state.progress) : [],
+);
+
+/**
+ * US7 job meta——**全靜態、忠實對映 003 設定**（不呈現動態 attempt 計數：契約
+ * `JobStatus`／`CopilotJobState` 不帶 attempt/queue/concurrency，見 research R11）。
+ * queue 自契約 import 常數值（消費、非改契約）。
+ */
+const JOB_META: readonly { label: string; value: string }[] = [
+  { label: "Queue", value: DIAGNOSIS_QUEUE },
+  { label: "Concurrency", value: "2" },
+  { label: "Attempts", value: "3" },
+];
+
+const STEP_STYLE: Record<StepStatus, { dot: string; text: string }> = {
+  done: { dot: "bg-ok", text: "text-fg-muted" },
+  active: { dot: "bg-accent animate-critical-pulse", text: "text-fg" },
+  todo: { dot: "bg-strong", text: "text-fg-subtle" },
+};
 
 /** completed/failed 後串流文字預設收合（Q2）；每次任務切換重置為收合。 */
 const showStream = ref(false);
@@ -130,6 +154,37 @@ watch(
         </div>
         <ProgressBar status="active" :value="state.progress" />
       </div>
+
+      <!-- US7 job meta（全靜態，忠實對映 003；不呈現動態 attempt 計數） -->
+      <dl class="grid grid-cols-3 gap-2">
+        <div
+          v-for="meta in JOB_META"
+          :key="meta.label"
+          class="rounded-control border border-subtle bg-surface px-2 py-1.5"
+        >
+          <dt class="text-[10px] uppercase tracking-wide text-fg-subtle">{{ meta.label }}</dt>
+          <dd class="truncate font-mono text-xs text-fg">{{ meta.value }}</dd>
+        </div>
+      </dl>
+
+      <!-- US7 處理步驟清單（衍生自進度里程碑 0/20/40/60/80/100） -->
+      <ol class="space-y-1.5" aria-label="診斷處理步驟">
+        <li
+          v-for="step in steps"
+          :key="step.milestone"
+          class="flex items-center gap-2 text-xs"
+          :class="STEP_STYLE[step.status].text"
+        >
+          <span
+            class="h-1.5 w-1.5 shrink-0 rounded-pill"
+            :class="STEP_STYLE[step.status].dot"
+            aria-hidden="true"
+          />
+          <span class="flex-1">{{ step.label }}</span>
+          <span class="font-mono text-[10px] text-fg-subtle">{{ step.milestone }}%</span>
+        </li>
+      </ol>
+
       <StreamingPanel :text="state.streamText" :streaming="true" />
     </div>
 

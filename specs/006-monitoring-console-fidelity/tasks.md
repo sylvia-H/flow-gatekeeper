@@ -150,8 +150,8 @@ description: "Task list for Feature 006 — Monitoring Console Fidelity"
 
 ### Implementation for User Story 7
 
-- [ ] T022 [P] [US7] 建立步驟純函式於 apps/web/src/domains/ai-copilot/lib/job-steps.ts 與 job-steps.test.ts：`JobStep`/`StepStatus` 型別、`jobSteps(progress)`——里程碑標籤沿用 005 FR-018（0/20/40/60/80/100），依 `progress` 標 done/active/todo，`undefined`→首步 active 其餘 todo（data-model §5、research R11）
-- [ ] T023 [US7] 就地擴充 apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue 的 **active** 呈現：加 job meta 區（**全靜態標示、忠實對映 003 設定**：queue=`DIAGNOSIS_QUEUE`（自 `@flow-gatekeeper/contracts` import 常數值 `"diagnosis"`）、concurrency=`2`、attempts=`3`；**不呈現動態 attempt 計數**——契約/`CopilotJobState` 不帶這些欄位，動態化須改契約違反 FR-023，見 research R11）與步驟清單（`jobSteps(state.progress)`）；idle/completed/failed 維持 005 既有行為（依賴 T022；FR-018/019、Clarifications Q6、Edge Cases）
+- [X] T022 [P] [US7] 建立步驟純函式於 apps/web/src/domains/ai-copilot/lib/job-steps.ts 與 job-steps.test.ts：`JobStep`/`StepStatus` 型別、`jobSteps(progress)`——里程碑標籤沿用 005 FR-018（0/20/40/60/80/100），依 `progress` 標 done/active/todo，`undefined`→首步 active 其餘 todo（data-model §5、research R11）
+- [X] T023 [US7] 就地擴充 apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue 的 **active** 呈現：加 job meta 區（**全靜態標示、忠實對映 003 設定**：queue=`DIAGNOSIS_QUEUE`（自 `@flow-gatekeeper/contracts` import 常數值 `"diagnosis"`）、concurrency=`2`、attempts=`3`；**不呈現動態 attempt 計數**——契約/`CopilotJobState` 不帶這些欄位，動態化須改契約違反 FR-023，見 research R11）與步驟清單（`jobSteps(state.progress)`）；idle/completed/failed 維持 005 既有行為（依賴 T022；FR-018/019、Clarifications Q6、Edge Cases）
 
 **Checkpoint**: 全部 US（US1–US7）可獨立驗收。
 
