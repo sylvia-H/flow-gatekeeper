@@ -122,7 +122,7 @@ description: "Task list for Feature 006 — Monitoring Console Fidelity"
 
 ### Implementation for User Story 5
 
-- [ ] T020 [US5] 於 apps/web/src/App.vue main 頂部（banner 之下、TopologyCanvas 之上）加標題列「Fleet monitor · {N} machines」，N=`KNOWN_MACHINE_IDS.length`；純呈現、不加 Grid/Graph 切換（FR-016）
+- [X] T020 [US5] 於 apps/web/src/App.vue main 頂部（banner 之下、TopologyCanvas 之上）加標題列「Fleet monitor · {N} machines」，N=`KNOWN_MACHINE_IDS.length`；純呈現、不加 Grid/Graph 切換（FR-016）
 
 **Checkpoint**: 標題列到位。
 

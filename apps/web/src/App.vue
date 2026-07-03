@@ -53,6 +53,9 @@ function onRetry(): void {
   }
 }
 
+// US5 主區標題列機台數（N＝固定名冊長度；不含 Graph/拓樸切換，僅標題）。
+const machineCount = computed(() => KNOWN_MACHINE_IDS.length);
+
 // 冷啟動/斷線橫幅（design-spec §8.2）：連上前顯示 Connecting，之後依三態提示；不清空資料。
 const banner = computed(() => {
   switch (store.connectionStatus) {
@@ -162,6 +165,13 @@ const handle = useHighFrequencyWs({
           role="status"
         >
           {{ banner.text }}
+        </div>
+        <!-- US5 主區標題列：「Fleet monitor · N machines」（僅標題，不含 Graph 視圖） -->
+        <div class="flex shrink-0 items-center gap-2 border-b border-subtle px-4 py-2.5">
+          <Boxes class="h-4 w-4 text-accent" aria-hidden="true" />
+          <h1 class="text-sm font-semibold text-fg">Fleet monitor</h1>
+          <span class="text-fg-subtle" aria-hidden="true">·</span>
+          <span class="text-sm text-fg-muted">{{ machineCount }} machines</span>
         </div>
         <div class="min-h-0 flex-1">
           <TopologyCanvas />
