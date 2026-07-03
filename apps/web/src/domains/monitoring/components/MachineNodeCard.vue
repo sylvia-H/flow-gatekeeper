@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { Stethoscope } from "lucide-vue-next";
 import type { MachineLive } from "../stores/monitoring.store.js";
 import { machineLabel } from "../lib/machine-labels.js";
 import StatusLight from "../../../shared/components/StatusLight.vue";
@@ -13,6 +14,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: "select", machineId: string): void;
+  (e: "diagnose", machineId: string): void;
 }>();
 
 const label = computed(() => machineLabel(props.machineId));
@@ -55,61 +57,73 @@ const lastUpdated = computed(() =>
 </script>
 
 <template>
-  <button
-    type="button"
-    class="group relative flex min-h-[148px] w-full min-w-0 flex-col gap-3 rounded-card border p-3 text-left shadow-card transition duration-150 hover:-translate-y-px hover:border-strong hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-    :class="[
-      stateClass,
-      selected ? 'border-accent bg-accent-wash ring-1 ring-inset ring-accent' : '',
-      stale ? 'opacity-[0.55]' : '',
-    ]"
-    :aria-pressed="selected"
-    @click="emit('select', machineId)"
-  >
-    <!-- Header：顯示名稱 + machine id（mono）+ 狀態燈 -->
-    <div class="flex items-start justify-between gap-2">
-      <div class="min-w-0">
-        <div class="flex items-center gap-1.5">
-          <span class="truncate text-sm font-medium text-fg">{{ label }}</span>
-          <span
-            v-if="stale"
-            class="shrink-0 rounded-pill border border-warn-border bg-warn-bg px-1.5 py-0.5 text-[10px] font-medium uppercase leading-none text-warn-fg"
-          >Stale</span>
+  <div class="group relative min-w-0">
+    <button
+      type="button"
+      class="flex min-h-[148px] w-full min-w-0 flex-col gap-3 rounded-card border p-3 text-left shadow-card transition duration-150 hover:-translate-y-px hover:border-strong hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      :class="[
+        stateClass,
+        selected ? 'border-accent bg-accent-wash ring-1 ring-inset ring-accent' : '',
+        stale ? 'opacity-[0.55]' : '',
+      ]"
+      :aria-pressed="selected"
+      @click="emit('select', machineId)"
+    >
+      <!-- Header：顯示名稱 + machine id（mono）+ 狀態燈 -->
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0">
+          <div class="flex items-center gap-1.5">
+            <span class="truncate text-sm font-medium text-fg">{{ label }}</span>
+            <span
+              v-if="stale"
+              class="shrink-0 rounded-pill border border-warn-border bg-warn-bg px-1.5 py-0.5 text-[10px] font-medium uppercase leading-none text-warn-fg"
+            >Stale</span>
+          </div>
+          <div class="truncate font-mono text-xs text-fg-muted">{{ machineId }}</div>
         </div>
-        <div class="truncate font-mono text-xs text-fg-muted">{{ machineId }}</div>
+        <StatusLight
+          v-if="machine"
+          :state="machine.state"
+          :pulse="machine.state === 'critical'"
+        />
+        <span v-else class="inline-flex h-3 w-3 shrink-0 items-center justify-center">
+          <span class="block h-[9px] w-[9px] rounded-pill bg-strong" />
+        </span>
       </div>
-      <StatusLight
-        v-if="machine"
-        :state="machine.state"
-        :pulse="machine.state === 'critical'"
-      />
-      <span v-else class="inline-flex h-3 w-3 shrink-0 items-center justify-center">
-        <span class="block h-[9px] w-[9px] rounded-pill bg-strong" />
-      </span>
-    </div>
 
-    <!-- Telemetry：固定 2×2 grid，數值 mono，避免寬度跳動造成 layout shift -->
-    <div class="grid grid-cols-2 gap-x-3 gap-y-2">
-      <div>
-        <div class="text-xs text-fg-subtle">Temp</div>
-        <div class="font-mono text-number leading-none text-fg">{{ temperature }}</div>
+      <!-- Telemetry：固定 2×2 grid，數值 mono，避免寬度跳動造成 layout shift -->
+      <div class="grid grid-cols-2 gap-x-3 gap-y-2">
+        <div>
+          <div class="text-xs text-fg-subtle">Temp</div>
+          <div class="font-mono text-number leading-none text-fg">{{ temperature }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-fg-subtle">Vibration</div>
+          <div class="font-mono text-number leading-none text-fg">{{ vibration }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-fg-subtle">Throughput</div>
+          <div class="font-mono text-number leading-none text-fg">{{ throughput }}</div>
+        </div>
+        <div>
+          <div class="text-xs text-fg-subtle">Errors</div>
+          <div class="font-mono text-number leading-none text-fg">{{ errorRate }}</div>
+        </div>
       </div>
-      <div>
-        <div class="text-xs text-fg-subtle">Vibration</div>
-        <div class="font-mono text-number leading-none text-fg">{{ vibration }}</div>
-      </div>
-      <div>
-        <div class="text-xs text-fg-subtle">Throughput</div>
-        <div class="font-mono text-number leading-none text-fg">{{ throughput }}</div>
-      </div>
-      <div>
-        <div class="text-xs text-fg-subtle">Errors</div>
-        <div class="font-mono text-number leading-none text-fg">{{ errorRate }}</div>
-      </div>
-    </div>
 
-    <div class="mt-auto font-mono text-xs text-fg-subtle">
-      updated {{ lastUpdated }}
-    </div>
-  </button>
+      <div class="mt-auto font-mono text-xs text-fg-subtle">
+        updated {{ lastUpdated }}
+      </div>
+    </button>
+
+    <!-- Diagnose icon（作用於該台；hover/focus 顯示，鍵盤可達）。store 內部去重／連線把關。 -->
+    <button
+      type="button"
+      class="absolute bottom-2 right-2 rounded-control border border-subtle bg-surface p-1.5 text-fg-subtle opacity-0 transition hover:bg-surface-hover hover:text-accent focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent group-hover:opacity-100"
+      :aria-label="`Diagnose ${label}`"
+      @click="emit('diagnose', machineId)"
+    >
+      <Stethoscope class="h-3.5 w-3.5" aria-hidden="true" />
+    </button>
+  </div>
 </template>

@@ -64,9 +64,12 @@ function createProcessor(db: Db, pub: Redis, cache: Redis, ai: AiProvider) {
   return async (job: Job<DiagnosisJobPayload>): Promise<void> => {
     const { jobId, machineId, requestedBy, windowMinutes, promptVersion } = job.data;
     log("log", `job active: ${jobId} machine=${machineId}`);
-    await job.updateProgress(5);
+    // FR-018 進度里程碑綁真實階段：0=job active、20=context 返回、40=取鎖將呼叫 LLM、
+    // 60=首個 token、80=parseResult 成功、100=寫庫/快取（cached 直接 100）。
+    await job.updateProgress(0);
 
     const context = await buildDiagnosisContext({ mongo: db, machineId, windowMinutes });
+    await job.updateProgress(20);
     const sig = buildDiagnosisSignature({
       machineId,
       state: context.latestState,
@@ -98,12 +101,19 @@ function createProcessor(db: Db, pub: Redis, cache: Redis, ai: AiProvider) {
       const gotLock = await cache.set(lockKey, "1", "EX", lockTtl, "NX");
       if (gotLock) {
         try {
-          await job.updateProgress(20);
+          await job.updateProgress(40);
           let seq = 0;
+          // 首個 token 的 60 里程碑非致命：以 .catch 吞掉更新失敗、並保留 promise 供後續 await，
+          // 確保 60 先於 80 落定（避免 fire-and-forget 與 await 80 交錯導致進度倒退）。
+          let firstTokenProgress: Promise<void> = Promise.resolve();
           log("log", `LLM call: ${jobId} sig=${sig}`);
           const fullText = await ai.streamDiagnosis(
             buildPrompt({ machineId, context }),
-            (text) => publish(pub, jobId, { type: "ai/token", jobId, seq: seq++, text }),
+            (text) => {
+              const s = seq++;
+              publish(pub, jobId, { type: "ai/token", jobId, seq: s, text });
+              if (s === 0) firstTokenProgress = job.updateProgress(60).catch(() => {}); // 首個 token：真實進入串流
+            },
           );
 
           let result: DiagnosisResult;
@@ -115,6 +125,8 @@ function createProcessor(db: Db, pub: Redis, cache: Redis, ai: AiProvider) {
             publish(pub, jobId, { type: "ai/error", jobId, code: "schema_invalid", message });
             throw err; // 用盡 attempts 後由 failed handler（T026）通知
           }
+          await firstTokenProgress; // 確保 60 里程碑先於 80 落定
+          await job.updateProgress(80); // schema 解析成功
 
           await cache.set(cacheKey, JSON.stringify(result), "EX", cacheTtl);
           await db

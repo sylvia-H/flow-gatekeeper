@@ -2,6 +2,9 @@ import { onUnmounted, ref, type Ref } from "vue";
 import type { ClientControlMessage, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import type { ConnectionStatus } from "../stores/monitoring.store.js";
 import { nextBackoffDelay } from "../lib/backoff.js";
+import { classifyWsMessage, type DiagnosisEvent } from "../lib/ws-message.js";
+
+export type { DiagnosisEvent };
 
 /**
  * 高頻 WebSocket composable：connect + buffer + rAF pump + 分流 + 心跳 + 指數退避重連 + 清理。
@@ -22,6 +25,11 @@ export interface UseHighFrequencyWsOptions {
   onStatus: (status: ConnectionStatus) => void;
   /** 收到 system/connected 時回呼（保存 clientId、隨即訂閱）；每次（重）連線都會觸發。 */
   onConnected: (clientId: string) => void;
+  /**
+   * 選用：收到診斷事件（job/status／ai/token／ai/done／ai/error）時分流回呼（交 copilot.store）。
+   * 憲章 IV／FR-017：診斷事件 MUST NOT 進遙測 buffer，直接分流不破壞遙測 rAF 批次。
+   */
+  onDiagnosisEvent?: (event: DiagnosisEvent) => void;
   /** buffer 上限，超過丟最舊保最新（背景分頁 rAF 暫停時護記憶體）。 */
   maxBufferSize?: number;
   /** 心跳週期（ms），預設 15000。 */
@@ -36,14 +44,10 @@ export interface HighFrequencyWsHandle {
   close: () => void;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 export function useHighFrequencyWs(
   options: UseHighFrequencyWsOptions,
 ): HighFrequencyWsHandle {
-  const { url, onBatch, onStatus, onConnected } = options;
+  const { url, onBatch, onStatus, onConnected, onDiagnosisEvent } = options;
   const maxBufferSize = options.maxBufferSize ?? 2000;
   const heartbeatMs = options.heartbeatMs ?? 15_000;
   const pongTimeoutMs = options.pongTimeoutMs ?? 5_000;
@@ -121,36 +125,44 @@ export function useHighFrequencyWs(
       return; // 非 JSON 忽略
     }
 
-    // 遙測批次：陣列 → 逐筆進 buffer（不逐筆寫 reactive state）。
-    if (Array.isArray(parsed)) {
-      for (const point of parsed as TelemetryPoint[]) {
-        buffer.push(point);
-      }
-      if (buffer.length > maxBufferSize) {
-        buffer.splice(0, buffer.length - maxBufferSize); // 丟最舊保最新
-      }
-      return;
+    // 分流由純函式 classifyWsMessage 決定（憲章 IV／FR-017 分流不變量可單元測試）。
+    const routed = classifyWsMessage(parsed);
+    switch (routed.kind) {
+      case "telemetry":
+        // 遙測批次：逐筆進**非 reactive** buffer（不逐筆寫 reactive state）。
+        for (const point of routed.points) {
+          buffer.push(point);
+        }
+        if (buffer.length > maxBufferSize) {
+          buffer.splice(0, buffer.length - maxBufferSize); // 丟最舊保最新
+        }
+        return;
+      case "diagnosis":
+        // 診斷事件（005）：分流交 copilot.store，MUST NOT 進遙測 buffer（憲章 IV／FR-017）。
+        onDiagnosisEvent?.(routed.event);
+        return;
+      case "control":
+        handleControlMessage(routed.message);
+        return;
+      case "ignore":
+        return;
     }
+  }
 
-    if (!isRecord(parsed)) return;
-
-    // 控制訊息分流（憲章 IV：MUST NOT 混入 telemetry buffer）。
-    switch (parsed.type) {
+  /** 控制訊息副作用（system/connected 保存 clientId 並重訂閱；pong 確認心跳）。 */
+  function handleControlMessage(message: Record<string, unknown>): void {
+    switch (message.type) {
       case "system/connected":
         // 每次（重）連線都觸發，讓 App 重新訂閱（FR-025）。
-        if (typeof parsed.clientId === "string") {
-          clientId.value = parsed.clientId;
-          onConnected(parsed.clientId);
+        if (typeof message.clientId === "string") {
+          clientId.value = message.clientId;
+          onConnected(message.clientId);
         }
         break;
       case "pong":
         clearPongTimer(); // 心跳確認
         break;
-      // 訂閱回執／未授權：忽略。
-      case "machine/subscribed":
-      case "system/unauthorized":
-        break;
-      // ai/*、job/status 屬 005，本 feature 不消費。
+      // machine/subscribed／system/unauthorized：忽略。
       default:
         break;
     }
