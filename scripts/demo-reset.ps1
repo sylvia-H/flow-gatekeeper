@@ -10,7 +10,7 @@
   透過 `docker compose exec -T redis`（非互動，避免 TTY 卡住）執行；
   不碰 BullMQ 佇列、不碰 Mongo 資料。
 
-  何時用：錄影 / 面試 demo 前，想確保能看到「串流 -> 完成 -> 再點同台顯示 Cached」的完整流程。
+  何時用：錄影 / demo 前，想確保能看到「串流 -> 完成 -> 再點同台顯示 Cached」的完整流程。
   平常開發不需執行——保留快取才能展示 Cached 與去重、也省 Gemini 額度。
 .EXAMPLE
   ./scripts/demo-reset.ps1
