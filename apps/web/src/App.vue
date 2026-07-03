@@ -4,6 +4,7 @@ import { Activity, Boxes } from "lucide-vue-next";
 import AppLayout from "./shared/components/AppLayout.vue";
 import TopBar from "./shared/components/TopBar.vue";
 import TopologyCanvas from "./domains/monitoring/components/TopologyCanvas.vue";
+import FleetHealth from "./domains/monitoring/components/FleetHealth.vue";
 import CopilotDrawer from "./domains/ai-copilot/components/CopilotDrawer.vue";
 import { useMonitoringStore } from "./domains/monitoring/stores/monitoring.store.js";
 import { useCopilotStore } from "./domains/ai-copilot/stores/copilot.store.js";
@@ -137,6 +138,11 @@ const handle = useHighFrequencyWs({
           </li>
         </ul>
       </nav>
+
+      <!-- Fleet Health（design-spec §6 左欄下方）：四類聚合，隨遙測即時更新 -->
+      <div class="mt-auto border-t border-subtle px-3 py-4">
+        <FleetHealth :summary="store.fleetHealth" />
+      </div>
     </template>
 
     <template #topbar>

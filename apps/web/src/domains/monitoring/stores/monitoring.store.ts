@@ -1,6 +1,8 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
+import { fleetHealthOf, type FleetHealthSummary } from "../lib/fleet-health.js";
+import { KNOWN_MACHINE_IDS } from "../lib/machine-labels.js";
 
 /**
  * 連線三態（design-spec §8.2）。單一資料來源為本 store 的 `connectionStatus`，
@@ -71,6 +73,15 @@ export const useMonitoringStore = defineStore("monitoring", () => {
       : null,
   );
 
+  /**
+   * US2 Fleet Health 四類聚合（FR-006/007/008）。委派純函式 `fleetHealthOf`，
+   * 走固定名冊 KNOWN_MACHINE_IDS（total 穩定＝5）。依賴 `machines` 與 `now`（每秒 tick
+   * 重算 stale），屬低頻 reactive，不逐筆 telemetry 觸發（憲章 IV）。
+   */
+  const fleetHealth = computed<FleetHealthSummary>(() =>
+    fleetHealthOf(machines.value, now.value, KNOWN_MACHINE_IDS),
+  );
+
   // ── Actions ────────────────────────────────────────────────────────
   /**
    * 每次呼叫 = 一個 rAF 幀 = 一次批次（不論 batch 幾筆）：
@@ -112,6 +123,7 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     batchRatio,
     machineList,
     selectedMachine,
+    fleetHealth,
     applyTelemetryBatch,
     selectMachine,
     setConnectionStatus,

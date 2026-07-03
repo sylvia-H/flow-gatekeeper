@@ -1,7 +1,17 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
-import type { TelemetryPoint } from "@flow-gatekeeper/contracts";
+import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { useMonitoringStore } from "./monitoring.store.js";
+
+function point(machineId: string, state: MachineState): TelemetryPoint {
+  return {
+    type: "machine/data",
+    machineId,
+    timestamp: new Date().toISOString(),
+    telemetry: { temperature: 60, vibration: 1.2, throughput: 100, errorRate: 0.01 },
+    state,
+  };
+}
 
 function makeBatch(n: number, machinePrefix = "m"): TelemetryPoint[] {
   return Array.from({ length: n }, (_, i) => ({
@@ -75,5 +85,42 @@ describe("monitoring store — 背壓批次關係（FR-010 / SC-002）", () => {
     store.selectMachine("sorter-0");
     expect(store.selectedMachineId).toBe("sorter-0");
     expect(store.selectedMachine?.machineId).toBe("sorter-0");
+  });
+});
+
+describe("monitoring store — fleetHealth getter（FR-006/007/008、SC-003）", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("冷啟動（無快照）→ 全數計入 stale，四類和 == 5", () => {
+    const store = useMonitoringStore();
+    const fh = store.fleetHealth;
+    expect(fh).toEqual({ healthy: 0, warning: 0, critical: 0, stale: 5, total: 5 });
+  });
+
+  it("依快照 state 計數，未回報者為 stale；四類和恆 == 5", () => {
+    const store = useMonitoringStore();
+    store.applyTelemetryBatch([
+      point("mixer-01", "healthy"),
+      point("press-02", "critical"),
+      point("pack-03", "warning"),
+    ]);
+    const fh = store.fleetHealth;
+    expect(fh.healthy).toBe(1);
+    expect(fh.warning).toBe(1);
+    expect(fh.critical).toBe(1);
+    expect(fh.stale).toBe(2); // oven-04 / sorter-05 未回報
+    expect(fh.healthy + fh.warning + fh.critical + fh.stale).toBe(5);
+  });
+
+  it("計數與 machines 快照狀態一致（轉態後即時反映）", () => {
+    const store = useMonitoringStore();
+    store.applyTelemetryBatch([point("mixer-01", "healthy")]);
+    expect(store.fleetHealth.healthy).toBe(1);
+    store.applyTelemetryBatch([point("mixer-01", "critical")]);
+    expect(store.fleetHealth.healthy).toBe(0);
+    expect(store.fleetHealth.critical).toBe(1);
+    expect(store.machines.get("mixer-01")?.state).toBe("critical");
   });
 });

@@ -71,10 +71,10 @@ description: "Task list for Feature 006 — Monitoring Console Fidelity"
 
 ### Implementation for User Story 2
 
-- [ ] T008 [US2] 於 apps/web/src/domains/monitoring/stores/monitoring.store.ts 新增 `fleetHealth` getter，委派 `fleetHealthOf(machines, now, KNOWN_MACHINE_IDS)`（依賴 T003；contracts/ui-surface A、FR-006/007/008）
-- [ ] T009 [P] [US2] 建立 apps/web/src/domains/monitoring/components/FleetHealth.vue：`defineProps<{ summary: FleetHealthSummary }>()`，呈現四類計數 + 比例條（design-spec 具名 token；sidebar 左下版位）（依賴 T003 型別；FR-006/007）
-- [ ] T010 [US2] 於 apps/web/src/domains/monitoring/stores/monitoring.store.test.ts 補 `fleetHealth` getter 測試：四類和 == 5、stale（含 never-reported）計入、與 machines 狀態一致（依賴 T008）
-- [ ] T011 [US2] 於 apps/web/src/App.vue sidebar 底部掛 `<FleetHealth :summary="store.fleetHealth" />`（design-spec §6 左欄下方）（依賴 T008、T009）
+- [X] T008 [US2] 於 apps/web/src/domains/monitoring/stores/monitoring.store.ts 新增 `fleetHealth` getter，委派 `fleetHealthOf(machines, now, KNOWN_MACHINE_IDS)`（依賴 T003；contracts/ui-surface A、FR-006/007/008）
+- [X] T009 [P] [US2] 建立 apps/web/src/domains/monitoring/components/FleetHealth.vue：`defineProps<{ summary: FleetHealthSummary }>()`，呈現四類計數 + 比例條（design-spec 具名 token；sidebar 左下版位）（依賴 T003 型別；FR-006/007）
+- [X] T010 [US2] 於 apps/web/src/domains/monitoring/stores/monitoring.store.test.ts 補 `fleetHealth` getter 測試：四類和 == 5、stale（含 never-reported）計入、與 machines 狀態一致（依賴 T008）
+- [X] T011 [US2] 於 apps/web/src/App.vue sidebar 底部掛 `<FleetHealth :summary="store.fleetHealth" />`（design-spec §6 左欄下方）（依賴 T008、T009）
 
 **Checkpoint**: US1 + US2（皆 P1）完成 = 首個可展示增量。
 
