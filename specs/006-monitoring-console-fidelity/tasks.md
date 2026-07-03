@@ -29,7 +29,7 @@ description: "Task list for Feature 006 — Monitoring Console Fidelity"
 
 **Purpose**: 確立護欄基線；本 feature 無新相依、無新目錄（沿用既有 `domains/monitoring/{lib,components,stores}`）。
 
-- [ ] T001 確認無需新增任何相依，並確立 FR-023 護欄基線：記下當前 `git diff --name-only` 起點，實作全程 MUST 僅動 `apps/web/**`（出現 `packages/contracts`／`apps/api`／`apps/worker` 即違規）；於 apps/web 內不新增第三方套件
+- [X] T001 確認無需新增任何相依，並確立 FR-023 護欄基線：記下當前 `git diff --name-only` 起點，實作全程 MUST 僅動 `apps/web/**`（出現 `packages/contracts`／`apps/api`／`apps/worker` 即違規）；於 apps/web 內不新增第三方套件
 
 ---
 
@@ -39,11 +39,11 @@ description: "Task list for Feature 006 — Monitoring Console Fidelity"
 
 **⚠️ CRITICAL**: 本階段未完成前，US 的元件/接線任務不得開工（各元件依賴對應純函式）。
 
-- [ ] T002 [P] 建立 telemetry 呈現純函式於 apps/web/src/domains/monitoring/lib/telemetry-format.ts 與 telemetry-format.test.ts：`metricUnit(key)`（°C/mm/s/u/min/%）、`offendingMetrics(telemetry)`（門檻鏡射 002 mock-telemetry.service：temp>78/95、vib>0.9/1.7、err>0.04/0.12，throughput 不參與，回傳每 metric `"warn"|"crit"|null`）、`relativeTimeLabel(lastUpdated, now)`（「Ns ago」邊界）（data-model §3、research R1/R2/R3）
-- [ ] T003 [P] 建立 Fleet Health 聚合純函式於 apps/web/src/domains/monitoring/lib/fleet-health.ts 與 fleet-health.test.ts：`fleetHealthOf(machines, now, roster)` 回 `{healthy,warning,critical,stale,total}`，走 roster（固定 5 台）逐台判定（無快照或 `isStale`→stale，否則依 state），測試斷言**四類和 == roster.length**、never-reported 併入 stale（data-model §2、research R4）
-- [ ] T004 [P] 建立衍生事件純函式於 apps/web/src/domains/monitoring/lib/events.ts 與 events.test.ts：`DerivedEvent` 型別、`deriveTransitionEvent(prevState,nextState,machineId,ts)`（僅轉入 warning/critical 且 `next!==prev` 回一筆、否則 null）、`pushCapped(list,event,50)`（unshift 最新、裁到 50），測試涵蓋同態抖動去重與上限（data-model §1、research R5、FR-010/011）
-- [ ] T005 [P] 建立機台分組純函式於 apps/web/src/domains/monitoring/lib/machine-groups.ts 與 machine-groups.test.ts：有序 `MACHINE_GROUPS`（Prep=[mixer-01]、Forming & Baking=[press-02,oven-04]、Fulfilment=[pack-03,sorter-05]）與 `machineGroup(id)`（缺項→"Ungrouped"），測試斷言每台恰屬一組、缺項落 fallback（data-model §4、research R10、FR-017）
-- [ ] T006 [P] 建立機台搜尋純函式於 apps/web/src/domains/monitoring/lib/machine-search.ts 與 machine-search.test.ts：`filterMachineIds(roster, query)`——query 去空白小寫，對每台比對 `machineId` 與 `machineLabel(id)`，任一 `includes` 命中；空 query 回全部（research R8、FR-015）
+- [X] T002 [P] 建立 telemetry 呈現純函式於 apps/web/src/domains/monitoring/lib/telemetry-format.ts 與 telemetry-format.test.ts：`metricUnit(key)`（°C/mm/s/u/min/%）、`offendingMetrics(telemetry)`（門檻鏡射 002 mock-telemetry.service：temp>78/95、vib>0.9/1.7、err>0.04/0.12，throughput 不參與，回傳每 metric `"warn"|"crit"|null`）、`relativeTimeLabel(lastUpdated, now)`（「Ns ago」邊界）（data-model §3、research R1/R2/R3）
+- [X] T003 [P] 建立 Fleet Health 聚合純函式於 apps/web/src/domains/monitoring/lib/fleet-health.ts 與 fleet-health.test.ts：`fleetHealthOf(machines, now, roster)` 回 `{healthy,warning,critical,stale,total}`，走 roster（固定 5 台）逐台判定（無快照或 `isStale`→stale，否則依 state），測試斷言**四類和 == roster.length**、never-reported 併入 stale（data-model §2、research R4）
+- [X] T004 [P] 建立衍生事件純函式於 apps/web/src/domains/monitoring/lib/events.ts 與 events.test.ts：`DerivedEvent` 型別、`deriveTransitionEvent(prevState,nextState,machineId,ts)`（僅轉入 warning/critical 且 `next!==prev` 回一筆、否則 null）、`pushCapped(list,event,50)`（unshift 最新、裁到 50），測試涵蓋同態抖動去重與上限（data-model §1、research R5、FR-010/011）
+- [X] T005 [P] 建立機台分組純函式於 apps/web/src/domains/monitoring/lib/machine-groups.ts 與 machine-groups.test.ts：有序 `MACHINE_GROUPS`（Prep=[mixer-01]、Forming & Baking=[press-02,oven-04]、Fulfilment=[pack-03,sorter-05]）與 `machineGroup(id)`（缺項→"Ungrouped"），測試斷言每台恰屬一組、缺項落 fallback（data-model §4、research R10、FR-017）
+- [X] T006 [P] 建立機台搜尋純函式於 apps/web/src/domains/monitoring/lib/machine-search.ts 與 machine-search.test.ts：`filterMachineIds(roster, query)`——query 去空白小寫，對每台比對 `machineId` 與 `machineLabel(id)`，任一 `includes` 命中；空 query 回全部（research R8、FR-015）
 
 **Checkpoint**: 分析層就緒且測試綠——各 US 可開始元件/接線
 
