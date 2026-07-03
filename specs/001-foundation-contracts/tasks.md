@@ -179,7 +179,7 @@ Task: 建立 .spectral.yaml（T021）
 2. 完成 Phase 2 Foundational（阻擋性，務必先過）。
 3. 完成 Phase 3 US1。
 4. **STOP & VALIDATE**：乾淨環境 install → typecheck 全過 → docker infra 可連線。
-5. 可獨立展示（面試 bootstrap demo）。
+5. 可獨立展示（bootstrap demo）。
 
 ### Incremental Delivery
 

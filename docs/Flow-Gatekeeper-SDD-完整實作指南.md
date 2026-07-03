@@ -22,7 +22,7 @@ flow-gatekeeper 是一個即時流程監控與 AI 診斷面板：
 
 ### 0.1 履歷亮點
 
-| 模組 | 展示技能 | 面試可以怎麼講 |
+| 模組 | 展示技能 | 可以怎麼講 |
 | --- | --- | --- |
 | `useHighFrequencyWs` | rAF batching、WebSocket reconnect、heartbeat、UI 背壓 | 我不是每筆 WebSocket 都寫 reactive state，而是每幀批次提交，所以高頻資料也能維持穩定渲染。 |
 | NestJS Gateway | 原生 ws、client subscription、QueueEvents relay | Gateway 只負責即時通訊與協調，不把耗時 AI 任務塞在 request/event path。 |
@@ -102,7 +102,7 @@ Spec Kit 的價值是把規格、計畫、任務、驗收與實作串成流程�
 - telemetry 推送是 **一個 `TelemetryPoint` 陣列**（前端 hook 直接展開進 buffer）。
 - 不要依賴 Socket.IO 的 named event 或 room；client 識別、訂閱表、jobId 對應都由 Gateway 自己用 `Map` 管理。
 
-> 這個取捨的完整理由（Socket.IO 幫你藏了什麼、為何刻意自管、何時該改回去、面試講稿）見 `docs/adr-001-native-websocket.md`。
+> 這個取捨的完整理由（Socket.IO 幫你藏了什麼、為何刻意自管、何時該改回去、講稿）見 `docs/adr-001-native-websocket.md`。
 
 ---
 
@@ -399,7 +399,7 @@ flow-gatekeeper 是一個致敬 Argo CD 的即時流程監控與 AI 診斷 side 
 6. MongoDB as history：telemetry、error logs、diagnoses、maintenance records 必須可追溯，不能只存在 Redis。
 7. Strict TypeScript：web、api、worker、contracts 都使用 strict TS，避免 any 擴散。
 8. Secrets hygiene：repo 只提交 .env.example；不得提交 .env、API key、token。
-9. Demo first：每個 feature 要保留可重播的 demo 或 seed/mock producer，方便面試展示。
+9. Demo first：每個 feature 要保留可重播的 demo 或 seed/mock producer，方便 demo 展示。
 10. Design handoff：Claude Design 的結果必須固化成 refs 截圖與 design-spec tokens，coding agent 不得憑空發明視覺。
 
 技術棧：
@@ -2565,7 +2565,7 @@ pnpm --filter web dev
 10. 再點同一台同類型錯誤，顯示 cached。
 11. 暫停 worker，再建立 job，說明 API/Gateway 不崩潰且 job 可追蹤。
 
-### 12.3 面試時 60 秒講法
+### 12.3 demo 時 60 秒講法
 
 ```text
 flow-gatekeeper 是我用 Spec Kit 做的一個即時監控與 AI 診斷 side project。

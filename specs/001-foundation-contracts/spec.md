@@ -23,7 +23,7 @@
 
 ## User Scenarios & Testing *(mandatory)*
 
-本 feature 的「使用者」是專案的開發者（含後續 feature 的實作者與面試展示時的操作者）。
+本 feature 的「使用者」是專案的開發者（含後續 feature 的實作者與 demo 展示時的操作者）。
 其價值是：讓任何人 clone 專案後，能用最少步驟把工作區與本機基礎設施跑起來，並讓三端
 （web / api / worker）共用同一份通訊契約，作為後續所有 feature 的地基。
 
