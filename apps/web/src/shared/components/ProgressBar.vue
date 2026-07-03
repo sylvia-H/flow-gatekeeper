@@ -1,45 +1,23 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { progressBarView, type ProgressStatus } from "../lib/progress-bar-view.js";
 
 /**
  * 診斷任務進度條（design-spec §7.5、§10）。支援數值與 indeterminate：
  * `value` 為 null／undefined 時走 indeterminate 動畫並以 aria 描述（FR-004）；
  * 數值時 `aria-valuenow`／填色寬度反映百分比。completed/failed 用 ok/crit 收尾色。
+ * 呈現不變量抽於純函式 `progressBarView`（見同名 .test）。
  */
 const props = defineProps<{
-  status: "waiting" | "active" | "completed" | "failed";
+  status: ProgressStatus;
   value?: number | null;
 }>();
 
-/** 事件驅動：僅在有數值時顯示百分比，否則 indeterminate（前端不合成假值）。 */
-const numeric = computed<number | null>(() =>
-  typeof props.value === "number" ? props.value : null,
-);
-const indeterminate = computed(
-  () => numeric.value === null && props.status !== "completed" && props.status !== "failed",
-);
-
-/** 填色 token 依狀態（design-spec §7.5）。 */
-const barClass = computed(() => {
-  switch (props.status) {
-    case "completed":
-      return "bg-ok";
-    case "failed":
-      return "bg-crit";
-    default:
-      return "bg-accent";
-  }
-});
-
-/** completed 視為 100%；failed 保留最後已知值（或 0）。 */
-const widthPct = computed(() => {
-  if (props.status === "completed") return 100;
-  return numeric.value ?? 0;
-});
-
-const ariaLabel = computed(() =>
-  indeterminate.value ? "診斷進度：處理中…" : `診斷進度：${widthPct.value}%`,
-);
+const view = computed(() => progressBarView(props.status, props.value));
+const indeterminate = computed(() => view.value.indeterminate);
+const barClass = computed(() => view.value.barClass);
+const widthPct = computed(() => view.value.widthPct);
+const ariaLabel = computed(() => view.value.ariaLabel);
 </script>
 
 <template>
