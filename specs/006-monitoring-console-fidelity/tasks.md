@@ -161,7 +161,7 @@ description: "Task list for Feature 006 — Monitoring Console Fidelity"
 
 **Purpose**: 跨 US 的護欄驗收與收尾（對照 spec 全域 SC 與憲章）。
 
-- [ ] T024 執行 [quickstart.md](./quickstart.md) 的 US1–US7 live AC 與全域護欄段（四 viewport、手機 §6.2 退化）並記錄結果
+- [X] T024 執行 [quickstart.md](./quickstart.md) 的 US1–US7 live AC 與全域護欄段（四 viewport、手機 §6.2 退化）並記錄結果
 - [X] T025 [P] 護欄：`git grep -nE "#[0-9a-fA-F]{3,6}" apps/web/src`（本 feature 新增/改動檔）不得出現散落 hex——一律 design-spec 具名 token（憲章 II、FR-020、§9）
 - [X] T026 護欄：`git diff --name-only` 僅列 `apps/web/**` 與本 specs 目錄；**不得**含 `packages/contracts`／`apps/api`／`apps/worker`（FR-023、SC-010）；DevTools Performance 高頻錄製無新 long task（FR-021、SC-009）
 - [X] T027 執行 `pnpm --filter web typecheck` 與 `pnpm --filter web test`（strict TS 無 `any` 擴散、全部單元測試綠——憲章 III/測試門檻）並修正
