@@ -1,3 +1,36 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  /*
+   * 細卷軸——取代突兀的 OS 預設卷軸，對齊 design-spec 深色 token。
+   * 顏色一律走具名 token（theme('colors.*')），不散落 hex（憲章 II）：
+   * thumb=subtle、hover=strong、track 透明。WebKit 與 Firefox 皆涵蓋。
+   */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: theme('colors.subtle') transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    /* 2px 透明邊 + padding-box 讓圓角 thumb 內縮，視覺上更細更克制 */
+    background-color: theme('colors.subtle');
+    background-clip: padding-box;
+    border: 2px solid transparent;
+    border-radius: theme('borderRadius.pill');
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: theme('colors.strong');
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
