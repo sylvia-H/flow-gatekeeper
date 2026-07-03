@@ -57,7 +57,7 @@ description: "Task list for Feature 006 — Monitoring Console Fidelity"
 
 ### Implementation for User Story 1
 
-- [ ] T007 [US1] 就地擴充 apps/web/src/domains/monitoring/components/MachineNodeCard.vue：(a) 加狀態文字徽章 HEALTHY/WARNING/CRITICAL（讀契約 `machine.state`，與 `StatusLight` 同源、固定寬度）；(b) `stateClass` 的 warning 由 `border-warn-border` 改為 **`border-subtle` + warn-bg subtle inset**（design-spec §7.3），越界數值以 `offendingMetrics` 回傳色 token 染 amber/crit；(c) 各遙測值串接 `metricUnit`（°C/mm/s/u/min/%）；(d) `lastUpdated` 由 `toLocaleTimeString()` 改 `relativeTimeLabel(machine.lastUpdated, store.now)`，並在該元素加 `title`/tooltip 顯示絕對時間；全程維持 min-h 148 與 2×2 grid、不改盒模型（依賴 T002；FR-001/002/003/004/005）
+- [X] T007 [US1] 就地擴充 apps/web/src/domains/monitoring/components/MachineNodeCard.vue：(a) 加狀態文字徽章 HEALTHY/WARNING/CRITICAL（讀契約 `machine.state`，與 `StatusLight` 同源、固定寬度）；(b) `stateClass` 的 warning 由 `border-warn-border` 改為 **`border-subtle` + warn-bg subtle inset**（design-spec §7.3），越界數值以 `offendingMetrics` 回傳色 token 染 amber/crit；(c) 各遙測值串接 `metricUnit`（°C/mm/s/u/min/%）；(d) `lastUpdated` 由 `toLocaleTimeString()` 改 `relativeTimeLabel(machine.lastUpdated, store.now)`，並在該元素加 `title`/tooltip 顯示絕對時間；全程維持 min-h 148 與 2×2 grid、不改盒模型（依賴 T002；FR-001/002/003/004/005）
 
 **Checkpoint**: 卡片保真完成，可對照 node-states.png 六態獨立驗收（不動 store/App）。
 

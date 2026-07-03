@@ -52,6 +52,7 @@ function onDiagnose(machineId: string): void {
         :machine="node.machine"
         :selected="node.selected"
         :stale="node.stale"
+        :now="store.now"
         @select="onSelect"
         @diagnose="onDiagnose"
       />
