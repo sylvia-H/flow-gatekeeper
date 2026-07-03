@@ -53,7 +53,9 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   const now = ref(Date.now());
   /** US3 前端衍生事件（最近 50 筆，最新在頂端）；於 applyTelemetryBatch 批次點衍生。 */
   const events = ref<DerivedEvent[]>([]);
-  /** US4 即時通道 ping→pong RTT（ms）；null＝尚無量測（首個 pong 前）。 */
+  /** US3 事件唯一鍵用單調序號（非 reactive）：保 v-for key 在同批次同機台多筆時仍唯一。 */
+  let eventSeq = 0;
+  /** US4 即時通道 ping→pong RTT（ms）；null＝尚無量測（首個 pong 前 / 斷線後重置）。 */
   const latencyMs = ref<number | null>(null);
   /** US4 pause 開關；true 時 composable pump 跳過 flush、續存 buffer（畫面凍結）。 */
   const paused = ref(false);
@@ -112,9 +114,13 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     const receivedAt = Date.now();
     for (const point of batch) {
       // US3：覆寫快照**前**讀 prevState，於狀態轉入 warning/critical 時衍生一筆事件（去重、上限 50）。
+      // 同一批次共用 receivedAt，同機台可能多次轉態（pause/resume 後尤然），故以單調 eventSeq 保 id 唯一。
       const prevState = machines.value.get(point.machineId)?.state;
-      const event = deriveTransitionEvent(prevState, point.state, point.machineId, receivedAt);
-      if (event) pushCapped(events.value, event, EVENT_CAP);
+      const event = deriveTransitionEvent(prevState, point.state, point.machineId, receivedAt, eventSeq);
+      if (event) {
+        eventSeq += 1;
+        pushCapped(events.value, event, EVENT_CAP);
+      }
       machines.value.set(point.machineId, project(point, receivedAt));
     }
     receivedMessages.value += batch.length;
@@ -126,6 +132,9 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   }
 
   function setConnectionStatus(status: ConnectionStatus): void {
+    // 離開 connected（斷線/重連）即清除延遲量測，避免重連後 chip 沿用上一段連線的過期 RTT；
+    // 重連後需等下一個 pong 才重新有值（首個 pong 前顯示 —）。
+    if (status !== "connected") latencyMs.value = null;
     connectionStatus.value = status;
   }
 

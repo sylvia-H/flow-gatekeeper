@@ -156,4 +156,33 @@ describe("monitoring store — events 衍生（FR-009/010/011）", () => {
     }
     expect(store.events.length).toBe(50);
   });
+
+  it("同一批次同機台多次轉態：事件 id 唯一（v-for key 不碰撞）", () => {
+    const store = useMonitoringStore();
+    // 單批 = 同一 receivedAt：press-02 warning→critical→warning 產生 3 筆，id 須各異。
+    store.applyTelemetryBatch([
+      point("press-02", "warning"),
+      point("press-02", "critical"),
+      point("press-02", "warning"),
+    ]);
+    expect(store.events.length).toBe(3);
+    expect(new Set(store.events.map((e) => e.id)).size).toBe(3);
+  });
+});
+
+describe("monitoring store — latency 重置（US4 重連）", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("離開 connected 即清除 latencyMs，避免重連沿用過期 RTT", () => {
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.setLatency(42);
+    expect(store.latencyMs).toBe(42);
+    store.setConnectionStatus("reconnecting"); // 斷線/重連
+    expect(store.latencyMs).toBeNull();
+    store.setConnectionStatus("connected"); // 重連上但尚無 pong
+    expect(store.latencyMs).toBeNull();
+  });
 });
