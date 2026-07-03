@@ -5,6 +5,7 @@ import AppLayout from "./shared/components/AppLayout.vue";
 import TopBar from "./shared/components/TopBar.vue";
 import TopologyCanvas from "./domains/monitoring/components/TopologyCanvas.vue";
 import FleetHealth from "./domains/monitoring/components/FleetHealth.vue";
+import EventStrip from "./domains/monitoring/components/EventStrip.vue";
 import CopilotDrawer from "./domains/ai-copilot/components/CopilotDrawer.vue";
 import { useMonitoringStore } from "./domains/monitoring/stores/monitoring.store.js";
 import { useCopilotStore } from "./domains/ai-copilot/stores/copilot.store.js";
@@ -161,6 +162,10 @@ const handle = useHighFrequencyWs({
         </div>
         <div class="min-h-0 flex-1">
           <TopologyCanvas />
+        </div>
+        <!-- Event Stream（design-spec §7.8，main 底部）：前端衍生最近事件 -->
+        <div class="shrink-0 border-t border-subtle">
+          <EventStrip :events="store.events" />
         </div>
       </div>
     </template>

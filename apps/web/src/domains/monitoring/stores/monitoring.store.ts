@@ -3,6 +3,10 @@ import { computed, ref } from "vue";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { fleetHealthOf, type FleetHealthSummary } from "../lib/fleet-health.js";
 import { KNOWN_MACHINE_IDS } from "../lib/machine-labels.js";
+import { deriveTransitionEvent, pushCapped, type DerivedEvent } from "../lib/events.js";
+
+/** US3 事件保留上限（FR-011）。 */
+const EVENT_CAP = 50;
 
 /**
  * 連線三態（design-spec §8.2）。單一資料來源為本 store 的 `connectionStatus`，
@@ -46,6 +50,8 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   const renderedBatches = ref(0);
   /** 低頻更新的當前時間戳，驅動 stale 重算（每秒一次）。 */
   const now = ref(Date.now());
+  /** US3 前端衍生事件（最近 50 筆，最新在頂端）；於 applyTelemetryBatch 批次點衍生。 */
+  const events = ref<DerivedEvent[]>([]);
 
   // ── Getters ────────────────────────────────────────────────────────
   /** 背壓比值：renderedBatches>0 ? round(received/rendered) : 0（design-spec §7.2.1）。 */
@@ -90,6 +96,10 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   function applyTelemetryBatch(batch: TelemetryPoint[]): void {
     const receivedAt = Date.now();
     for (const point of batch) {
+      // US3：覆寫快照**前**讀 prevState，於狀態轉入 warning/critical 時衍生一筆事件（去重、上限 50）。
+      const prevState = machines.value.get(point.machineId)?.state;
+      const event = deriveTransitionEvent(prevState, point.state, point.machineId, receivedAt);
+      if (event) pushCapped(events.value, event, EVENT_CAP);
       machines.value.set(point.machineId, project(point, receivedAt));
     }
     receivedMessages.value += batch.length;
@@ -120,6 +130,7 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     receivedMessages,
     renderedBatches,
     now,
+    events,
     batchRatio,
     machineList,
     selectedMachine,

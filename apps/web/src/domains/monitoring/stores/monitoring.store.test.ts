@@ -124,3 +124,36 @@ describe("monitoring store — fleetHealth getter（FR-006/007/008、SC-003）",
     expect(store.machines.get("mixer-01")?.state).toBe("critical");
   });
 });
+
+describe("monitoring store — events 衍生（FR-009/010/011）", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("轉入 warning 記一筆；同態抖動不重複；再轉 critical 記第二筆（最新在頂）", () => {
+    const store = useMonitoringStore();
+    store.applyTelemetryBatch([point("press-02", "warning")]); // undefined→warning
+    expect(store.events.length).toBe(1);
+    expect(store.events[0]?.severity).toBe("warning");
+    store.applyTelemetryBatch([point("press-02", "warning")]); // warning→warning：不記
+    expect(store.events.length).toBe(1);
+    store.applyTelemetryBatch([point("press-02", "critical")]); // warning→critical：記
+    expect(store.events.length).toBe(2);
+    expect(store.events[0]?.severity).toBe("critical");
+  });
+
+  it("轉回 healthy 不記恢復事件", () => {
+    const store = useMonitoringStore();
+    store.applyTelemetryBatch([point("press-02", "critical")]);
+    store.applyTelemetryBatch([point("press-02", "healthy")]);
+    expect(store.events.length).toBe(1);
+  });
+
+  it("超過 50 上限：淘汰最舊、長度恆 <= 50", () => {
+    const store = useMonitoringStore();
+    for (let i = 0; i < 60; i += 1) {
+      store.applyTelemetryBatch([point("press-02", i % 2 === 0 ? "warning" : "critical")]);
+    }
+    expect(store.events.length).toBe(50);
+  });
+});

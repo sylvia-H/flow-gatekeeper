@@ -88,10 +88,10 @@ description: "Task list for Feature 006 — Monitoring Console Fidelity"
 
 ### Implementation for User Story 3
 
-- [ ] T012 [US3] 於 apps/web/src/domains/monitoring/stores/monitoring.store.ts 新增 `events` state，並在 `applyTelemetryBatch` **覆寫每台快照前**讀 prevState，對每台呼叫 `deriveTransitionEvent`，命中則 `pushCapped(events, e, 50)`；**維持單一批次點、不逐筆 reactive**（依賴 T004；憲章 IV、FR-009/010/011/012）
-- [ ] T013 [P] [US3] 建立 apps/web/src/domains/monitoring/components/EventStrip.vue：`defineProps<{ events: DerivedEvent[] }>()`，列出 timestamp(mono)/machineId/severity/message（design-spec §7.8：高度 120–160px、row 32–40px）（依賴 T004 型別；FR-009）
-- [ ] T014 [US3] 於 apps/web/src/domains/monitoring/stores/monitoring.store.test.ts 補事件衍生測試：僅轉入 warning/critical 記一筆、同態抖動不重複、50 上限淘汰最舊（依賴 T012）
-- [ ] T015 [US3] 於 apps/web/src/App.vue main 底部掛 `<EventStrip :events="store.events" />`（手機依 §6.2 收合為 collapsible）（依賴 T012、T013）
+- [X] T012 [US3] 於 apps/web/src/domains/monitoring/stores/monitoring.store.ts 新增 `events` state，並在 `applyTelemetryBatch` **覆寫每台快照前**讀 prevState，對每台呼叫 `deriveTransitionEvent`，命中則 `pushCapped(events, e, 50)`；**維持單一批次點、不逐筆 reactive**（依賴 T004；憲章 IV、FR-009/010/011/012）
+- [X] T013 [P] [US3] 建立 apps/web/src/domains/monitoring/components/EventStrip.vue：`defineProps<{ events: DerivedEvent[] }>()`，列出 timestamp(mono)/machineId/severity/message（design-spec §7.8：高度 120–160px、row 32–40px）（依賴 T004 型別；FR-009）
+- [X] T014 [US3] 於 apps/web/src/domains/monitoring/stores/monitoring.store.test.ts 補事件衍生測試：僅轉入 warning/critical 記一筆、同態抖動不重複、50 上限淘汰最舊（依賴 T012）
+- [X] T015 [US3] 於 apps/web/src/App.vue main 底部掛 `<EventStrip :events="store.events" />`（手機依 §6.2 收合為 collapsible）（依賴 T012、T013）
 
 **Checkpoint**: US1–US3 可獨立驗收。
 
