@@ -2521,9 +2521,175 @@ git merge 005-copilot-ui-design
 
 ---
 
-## 12. 本機啟動與端到端 Demo
+## 12. Feature 006：監控台前端保真補完（Monitoring Console Fidelity）
 
-### 12.1 第一次啟動
+> **狀態：初步規劃**（尚未 `/speckit.specify`）。本節只記錄方向與待澄清問題，作為開 feature 前的
+> 起草；正式流程仍走 `specify -> clarify -> plan -> checklist -> tasks -> analyze -> implement -> 驗收 -> merge`。
+> 下面的 prompt 與 code 皆為草案，最終以 spec/tasks 為準。
+>
+> **範圍取捨（重要）**：本 feature 把三批原本可拆的工作**整合成一條**——(A) 機台卡片保真、
+> (B) 兩個未收斂的摘要面板（Fleet Health、Event Stream）、(C) TopBar／主區／drawer 的前端保真。
+> 整合的判準是它們**同屬一件事**：把 design-spec（`layout.png`／`node-states.png`／`copilot-drawer.png`）
+> 已定義、但 004／005 漏做或沒對齊的**前端項目補齊，且都不動後端與契約**。內聚、可用同一套驗收，
+> 不算「一條 branch 混多個大 feature」。真正需要後端／契約的項目一律排除（見 12.2「明確不做」）。
+
+### 12.1 為什麼要有這個 feature（背景）
+
+以 `apps/web/design/design-spec.md` 與 `refs/*.png` 為視覺唯一來源，逐張比對目前實作，發現三類落差：
+
+- **卡片保真（對齊 `node-states.png`／§7.3）**：實機 `MachineNodeCard` 缺狀態文字徽章（只有狀態
+  燈點）、warning 沒把數值染 amber 反而誤加 warn 邊框、遙測數值缺單位（°C／mm/s／u/min）、時間戳用
+  絕對時間而非「Ns ago」。屬「已交付元件的保真缺陷」——規格早在，只是實作沒對齊。
+- **兩個未收斂的摘要面板（`layout.png`）**：
+  - **FLEET HEALTH**（sidebar 左下）：依機台 state 聚合 healthy／warning／critical 計數與比例條。
+    §7 未定義成具名元件、§9 file mapping 未列 → 從未進任何 feature 的 FR。
+  - **EVENT STREAM**（main 底部，§7.8 `EventStrip`）：最近門檻跨越／錯誤事件列。004 的
+    `contracts/ui-surface.contract.md` 標成「屬 005」，但 [005 spec](../specs/005-ai-copilot-drawer/spec.md)
+    只做 Copilot drawer，從沒接手 → 掉進 004／005 之間的縫。
+- **TopBar／主區／drawer 的前端保真（`layout.png`／`copilot-drawer.png`）**：TopBar 缺 pause/resume
+  串流鍵、connection chip 缺延遲 ms、search 只有外觀不作用；主區缺「Fleet monitor · N machines」標題列；
+  sidebar 未做機台分組；drawer active 態缺 BullMQ 任務 meta 與處理步驟清單。皆為前端、只用現有資料。
+
+關鍵區分：**design-spec（視覺唯一來源）沒有變**——這些一直都在。缺的是「feature spec 沒把 design-spec
+完整收斂成 FR」（漏做），或「實作沒對齊既有規格」（保真缺陷）。因此開新 feature 補齊，而不是回頭改
+已 merge 的 004／005。整合後仍以 **User Story 優先級 + phase-by-phase commit** 做漸進、可獨立驗收的交付
+（見 12.6），所以「分階段」在本方案內是靠 US 切分達成，不必開三條分支。
+
+> **一個取捨要知道**：卡片保真本質是 `fix`，整合進本 feature 後會**跟著整條一起 merge** 才進 `develop`，
+> 而非馬上獨立落地。側專案不趕、可接受；若哪天需要卡片保真「立刻上」，再把該 US 抽成獨立 `fix` 分支即可。
+
+### 12.2 範圍：要做什麼 vs 明確不做
+
+**要做（前端-only、只消費現有 telemetry／診斷資料，不動契約與後端）**，建議 User Story 優先級：
+
+| US | 內容 | 依據 | 主要相依 |
+| --- | --- | --- | --- |
+| US1 · P1 | **卡片保真**：狀態文字徽章、warning 數值染 amber（邊框回 subtle）、遙測單位、相對時間戳 | `node-states.png`／§7.3 | 純前端，最快見效 |
+| US2 · P1 | **Fleet Health 面板**：機台 state 聚合計數＋比例條 | `layout.png` 左下 | store getter |
+| US3 · P2 | **Event Stream 面板**：最近門檻跨越／錯誤事件列（§7.8 `EventStrip`） | `layout.png` 底部／§7.8 | 前端衍生事件（見 12.4） |
+| US4 · P2 | **TopBar 保真**：pause/resume 串流鍵、connection chip 顯示延遲 ms、search 實際過濾機台 | `layout.png` 頂欄／§7.2 | ping/pong RTT、既有名冊 |
+| US5 · P3 | **主區標題列**：「Fleet monitor · N machines」標題與機台數（**只做標題列，不做 Graph 視圖**） | `layout.png` 主區 | 前端 |
+| US6 · P3 | **機台分組**：sidebar 依群組（Stamping／Fluids…）分區呈現 | `layout.png` sidebar／§6.1 | 需前端靜態「機台→群組」對照 |
+| US7 · P3 | **Drawer active 保真**：顯示 BullMQ 任務 meta（attempt N/3、queue、concurrency）與處理步驟清單（對應 005 里程碑 0/20/40/60/80/100） | `copilot-drawer.png` | 消費既有 `job/status`／進度 |
+
+**明確不做（需後端／契約，各自留作未來 feature，避免本 feature 膨脹）**：
+
+- **Graph 拓樸圖檢視**（node grid 以外的節點連線視圖）與 Grid/Graph 切換的實作 → 獨立 feature。
+- **Alerts 檢視、History 檢視**（sidebar 導覽點進去的整頁）→ 各自獨立 feature。
+- **Copilot「Ask a follow-up」對話輸入列** → 需後端對話能力，獨立 feature。
+- **Drawer idle 的「Recent jobs」清單** → 需任務歷史來源，獨立 feature。
+- **Likely causes 信心分數（0.72…）** → 契約 `likelyCauses: string[]` 無此欄位，需改
+  `DiagnosisResultSchema` 連動 worker/prompt，屬 contract-first 變更，另案處理。
+- **Mock frequency（Poll 1s/5s/30s）真正作用** → 需後端調產生器節拍（004 FR-027 已延後），維持
+  disabled 佔位。
+
+### 12.3 Branch
+
+```bash
+git checkout develop
+git checkout -b 006-monitoring-console-fidelity
+```
+
+### 12.4 `/speckit.specify` prompt（草案）
+
+```text
+在 apps/web 把 design-spec（layout.png / node-states.png / copilot-drawer.png）已定義、但 004/005 漏做或沒對齊的前端項目補齊。全部前端-only，只消費現有 telemetry 與診斷資料，不動 packages/contracts 與後端。
+
+範圍（依 User Story）：
+- US1 卡片保真：MachineNodeCard 補狀態文字徽章（HEALTHY/WARNING/CRITICAL）、warning 時把 temp/vibration/error 數值染 amber 而邊框維持 subtle、遙測數值補單位（°C/mm/s/u/min/%）、時間戳改相對「Ns ago」。對齊 node-states.png 與 §7.3，不改卡片尺寸、不造成 layout shift。
+- US2 Fleet Health：sidebar 左下，依 monitoring store 機台 state 聚合 healthy/warning/critical 計數與比例條，即時更新。
+- US3 Event Stream（§7.8 EventStrip）：main 底部，列出最近門檻跨越/錯誤事件（timestamp、machineId、severity、短訊息），保留最近固定筆數或時間窗，去重不灌爆。
+- US4 TopBar：加 pause/resume 遙測串流按鈕；connection chip 顯示 ping/pong 延遲 ms；search 實際過濾機台清單/卡片。
+- US5 主區標題列：顯示「Fleet monitor · N machines」標題與機台數（僅標題列，不含 Graph 視圖）。
+- US6 機台分組：sidebar 依前端靜態「機台→群組」對照分區呈現。
+- US7 Drawer active 保真：顯示 BullMQ 任務 meta（attempt、queue、concurrency）與處理步驟清單，步驟對應既有進度里程碑。
+
+不在範圍：Graph 拓樸圖視圖、Alerts/History 整頁、Copilot follow-up 對話、Recent jobs 清單、likely-cause 信心分數、mock frequency 真正作用（皆需後端/契約，另案）。
+
+共同成功條件：
+- 全部使用 design-spec 具名 token，不散落 hex。
+- 高頻 telemetry 下所有新元件都不逐筆重繪（沿用 004 的 rAF 批次，遵守 constitution 高頻事件規則）。
+- 四個 viewport（1366×768/1440×900/390×844/768×1024）不溢出、不重疊、不造成 layout shift；手機版依 §6.2 退化。
+- 不新增 packages/contracts 的 event/payload，不改後端。
+```
+
+### 12.5 待 `/speckit.clarify` 決定的關鍵問題
+
+1. **EVENT STREAM 的事件來源**（US3，最重要，決定會不會破壞「不動契約」的護欄）：
+   - （推薦）**前端衍生**：沿用 004 store 已收到的 telemetry，在 state 轉換為 warning／critical 時由
+     前端產生事件列。不動 `packages/contracts`、不加後端負擔，守住本 feature「前端-only」界線。限制：
+     重整頁面前的歷史事件不留存。
+   - **後端契約**：新增 event／payload 由 Gateway 推送（002 `errorlogs` 已在狀態轉換寫庫可作來源）。
+     可回放歷史，但要先改契約再改三端 → **會突破本 feature 護欄，應改為獨立 feature**。
+   - → 本 feature 採前端衍生 MVP；歷史回放另案。
+2. **Event Stream 保留策略**：顯示「最近 N 筆」還是「最近 M 分鐘」？上限多少（避免無限成長）？
+3. **Fleet Health 分類**：是否把 stale 機台獨立一類（還是仍計入其最後已知 state）？total 是否含
+   stale／未連線機台？（與 US1 卡片 stale 呈現一致。）
+4. **事件去重**：同一台機台在 warning 內連續抖動，只在「狀態轉換」記一筆（對齊 002
+   `HistoryService.lastState`），避免洪水。US1 徽章／US3 事件共用同一份「上一個 state」判斷。
+5. **卡片時間戳（US1）**：相對「Ns ago」需要每秒 tick 重算——沿用 004 既有的 `store.tickNow()`
+   每秒 tick，不另開計時器。是否保留 hover/點擊時顯示絕對時間的 tooltip？
+6. **機台分組來源（US6）**：群組對照放前端靜態表（對齊 004 `machine-labels.ts` 的做法）即可，
+   確認群組定義（Stamping／Fluids／Machining／Handling → 哪些 machineId）。
+7. **Search 範圍（US4）**：只過濾卡片、或同時過濾 sidebar 機台清單？比對 machineId 還是顯示名稱？
+
+### 12.6 初步技術方向
+
+- **US1 卡片保真**：只改 `MachineNodeCard.vue` 的呈現層——狀態徽章用既有 `SeverityBadge`／自繪 pill；
+  warning 數值染 amber 用 token class（不新增 hex）；單位為靜態字串；相對時間用小工具函式讀
+  `store.now`。**不動卡片尺寸與 grid**，維持 FR-020 的無 layout shift。
+- **US2 Fleet Health = store getter 聚合**，不新增資料流：
+
+```ts
+// monitoring.store.ts getters（示意，實際以 tasks 為準）
+fleetHealth(state): { healthy: number; warning: number; critical: number } {
+  const counts = { healthy: 0, warning: 0, critical: 0 };
+  for (const point of state.machines.values()) counts[point.state] += 1;
+  return counts;
+}
+```
+
+- **US3 Event Stream = 前端衍生**：在 `applyTelemetryBatch` 批次提交時比對每台機台的前一個 state，
+  只在「轉換成 warning／critical」時 push 一筆事件並裁切上限。與 002 `HistoryService.lastState` 同一
+  思路，只是搬到前端；事件與 Fleet Health 都在批次後才更新，不逐筆觸發 reactive（沿用 004 rAF）。
+- **US4 TopBar**：pause/resume 控制 `useHighFrequencyWs` 的批次提交開關（暫停時停止 flush，但仍
+  收訊息進 buffer 或明示丟棄——於 clarify 決定）；延遲 ms 由 ping→pong 的 RTT 導出並存 store；
+  search 以 computed filter 既有名冊。
+- **US7 Drawer active meta/步驟**：meta（attempt/queue/concurrency）與步驟清單由既有 `job/status`
+  進度里程碑（005 FR-018 的 0/20/40/60/80/100）對應成「已完成／進行中／待辦」呈現，不需新事件。
+- 新元件落地（對齊 §9 file mapping 精神）：
+  `apps/web/src/domains/monitoring/components/FleetHealth.vue`、`EventStrip.vue`；
+  sidebar／main 版位由既有 `AppLayout` slot 掛入；卡片、TopBar、drawer 為就地擴充既有元件。
+
+### 12.7 Feature 006 驗收（初步）
+
+- **US1**：卡片三態徽章與狀態燈一致；warning 數值 amber、邊框 subtle；單位與相對時間正確；hover／
+  selected／critical pulse 不造成 layout shift（對照 `node-states.png` 六態）。
+- **US2**：Fleet Health 三色計數與卡片狀態一致，total 對得上訂閱機台數。
+- **US3**：觸發 critical（mock producer press-02 尖峰）時 Event Stream 出現對應列，連續抖動不重複灌。
+- **US4**：pause 後畫面停更、resume 後恢復；chip 顯示合理 ms；search 能即時過濾。
+- **US5–US7**：標題列機台數正確；sidebar 分組正確；drawer active 顯示 meta 與步驟推進。
+- **全域**：四 viewport 無溢出／重疊／layout shift；手機版依 §6.2 退化；高頻下 DevTools Performance
+  無新的 long task；`git diff` 不含 `packages/contracts` 與 `apps/api`／`apps/worker` 變更（守住護欄）。
+
+commit（依 `/speckit.implement` 的 phase-by-phase 規則，標記 phase；同一 phase 拆多個 commit 時
+type 可不同——US1 的卡片對齊屬 `fix`，其餘能力增量屬 `feat`）：
+
+```bash
+# 例（feature 編號用 006）：
+git commit -m "fix(006): [Phase 3: US1] 對齊 node-states 修正機台卡片狀態呈現"
+git commit -m "feat(006): [Phase 4: US2] 加入 Fleet Health 聚合面板"
+git commit -m "feat(006): [Phase 5: US3] 加入 Event Stream 事件列"
+# 驗收通過後 --no-ff 併回 develop（MUST NOT fast-forward）
+git checkout develop
+git merge --no-ff 006-monitoring-console-fidelity
+```
+
+---
+
+## 13. 本機啟動與端到端 Demo
+
+### 13.1 第一次啟動
 
 Terminal 1：infra
 
@@ -2551,7 +2717,7 @@ Terminal 4：web
 pnpm --filter web dev
 ```
 
-### 12.2 Demo 劇本
+### 13.2 Demo 劇本
 
 1. 開 `http://localhost:5173`。
 2. 看到 machine cards 持續更新。
@@ -2565,7 +2731,7 @@ pnpm --filter web dev
 10. 再點同一台同類型錯誤，顯示 cached。
 11. 暫停 worker，再建立 job，說明 API/Gateway 不崩潰且 job 可追蹤。
 
-### 12.3 demo 時 60 秒講法
+### 13.3 demo 時 60 秒講法
 
 ```text
 flow-gatekeeper 是我用 Spec Kit 做的一個即時監控與 AI 診斷 side project。
@@ -2578,7 +2744,7 @@ MongoDB 存 telemetry、errorlogs、maintenanceRecords 與 diagnoses；Redis 負
 
 ---
 
-## 13. 常見坑
+## 14. 常見坑
 
 | 問題 | 解法 |
 | --- | --- |
@@ -2596,7 +2762,7 @@ MongoDB 存 telemetry、errorlogs、maintenanceRecords 與 diagnoses；Redis 負
 
 ---
 
-## 14. 指令速查
+## 15. 指令速查
 
 ```bash
 # install Spec Kit
@@ -2638,7 +2804,7 @@ pnpm --filter web dev
 
 ---
 
-## 15. 參考來源
+## 16. 參考來源
 
 - 架構決策 ADR-001（原生 WebSocket vs Socket.IO）：`docs/adr-001-native-websocket.md`
 - GitHub Spec Kit 官方 repo：`https://github.com/github/spec-kit`
