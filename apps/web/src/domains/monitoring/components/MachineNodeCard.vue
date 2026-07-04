@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { Stethoscope } from "lucide-vue-next";
-import type { MachineState } from "@flow-gatekeeper/contracts";
 import type { MachineLive } from "../stores/monitoring.store.js";
 import { machineLabel } from "../lib/machine-labels.js";
 import {
@@ -10,6 +9,7 @@ import {
   relativeTimeLabel,
   type MetricKey,
 } from "../lib/telemetry-format.js";
+import { STATE_STYLE } from "../../../shared/lib/state-style.js";
 import StatusLight from "../../../shared/components/StatusLight.vue";
 
 const props = defineProps<{
@@ -28,19 +28,14 @@ const emit = defineEmits<{
 const label = computed(() => machineLabel(props.machineId));
 
 /**
- * 狀態文字徽章（FR-001）——由契約 `machine.state` 決定，與 `StatusLight` 同源。
- * 固定字級/內距、uppercase，避免狀態切換造成盒模型變化（FR-005）。
+ * 狀態文字徽章（FR-001）——由契約 `machine.state` 決定，樣式取自共用 `STATE_STYLE`（與
+ * `StatusLight` 同源）。徽章 label 在模板以 `uppercase` 呈現，固定字級/內距避免盒模型變化（FR-005）。
  */
-const STATE_BADGE: Record<MachineState, { label: string; cls: string }> = {
-  healthy: { label: "HEALTHY", cls: "text-ok-fg bg-ok-bg" },
-  warning: { label: "WARNING", cls: "text-warn-fg bg-warn-bg" },
-  critical: { label: "CRITICAL", cls: "text-crit-fg bg-crit-bg" },
-};
 
 /**
  * 狀態 → 卡片外觀 token（design-spec §7.3）。
- * warning：邊框**維持 subtle**、僅加 warn 系 subtle inset（`ring-inset`，非盒模型、不位移，FR-002/005）；
- * critical：crit-bg tint + pulse。placeholder 用中性面。
+ * warning：`bg-surface` + `warn-bg` subtle inset（`ring-warn-bg` 內嵌環，忠實對映 §7.3；
+ * 非盒模型、不位移，FR-002/005）；critical：crit-bg tint + pulse。placeholder 用中性面。
  */
 const stateClass = computed(() => {
   if (!props.machine) return "border-subtle bg-surface";
@@ -48,7 +43,7 @@ const stateClass = computed(() => {
     case "healthy":
       return "border-subtle bg-surface";
     case "warning":
-      return "border-subtle bg-surface ring-1 ring-inset ring-warn-border";
+      return "border-subtle bg-surface ring-1 ring-inset ring-warn-bg";
     case "critical":
       return "border-crit-border bg-crit-bg animate-critical-pulse";
   }
@@ -65,28 +60,26 @@ interface MetricView {
   cls: string;
 }
 
+/** 單一 metric 描述子（key/label/格式化）——placeholder 與實值分支共用同一份，避免兩處漂移。 */
+const METRIC_DESCRIPTORS: readonly {
+  key: MetricKey;
+  label: string;
+  format: (t: MachineLive["telemetry"]) => string;
+}[] = [
+  { key: "temperature", label: "Temp", format: (t) => `${t.temperature.toFixed(1)}${metricUnit("temperature")}` },
+  { key: "vibration", label: "Vibration", format: (t) => `${t.vibration.toFixed(2)} ${metricUnit("vibration")}` },
+  { key: "throughput", label: "Throughput", format: (t) => `${Math.round(t.throughput)} ${metricUnit("throughput")}` },
+  { key: "errorRate", label: "Errors", format: (t) => `${(t.errorRate * 100).toFixed(1)}${metricUnit("errorRate")}` },
+];
+
 const metrics = computed<MetricView[]>(() => {
   const m = props.machine;
   const off = m ? offendingMetrics(m.telemetry) : null;
-  function view(key: MetricKey, headline: string, text: string): MetricView {
-    const offense = off ? off[key] : null;
+  return METRIC_DESCRIPTORS.map((d) => {
+    const offense = off ? off[d.key] : null;
     const cls = offense === "crit" ? "text-crit" : offense === "warn" ? "text-warn" : "text-fg";
-    return { key, label: headline, text, cls };
-  }
-  if (!m) {
-    return [
-      view("temperature", "Temp", PLACEHOLDER),
-      view("vibration", "Vibration", PLACEHOLDER),
-      view("throughput", "Throughput", PLACEHOLDER),
-      view("errorRate", "Errors", PLACEHOLDER),
-    ];
-  }
-  return [
-    view("temperature", "Temp", `${m.telemetry.temperature.toFixed(1)}${metricUnit("temperature")}`),
-    view("vibration", "Vibration", `${m.telemetry.vibration.toFixed(2)} ${metricUnit("vibration")}`),
-    view("throughput", "Throughput", `${Math.round(m.telemetry.throughput)} ${metricUnit("throughput")}`),
-    view("errorRate", "Errors", `${(m.telemetry.errorRate * 100).toFixed(1)}${metricUnit("errorRate")}`),
-  ];
+    return { key: d.key, label: d.label, text: m ? d.format(m.telemetry) : PLACEHOLDER, cls };
+  });
 });
 
 /** 相對時間「Ns ago」＋絕對時間 tooltip（FR-004）。 */
@@ -127,8 +120,8 @@ const absoluteTime = computed(() =>
           <span
             v-if="machine"
             class="rounded-pill px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-wide"
-            :class="STATE_BADGE[machine.state].cls"
-          >{{ STATE_BADGE[machine.state].label }}</span>
+            :class="[STATE_STYLE[machine.state].badgeText, STATE_STYLE[machine.state].badgeSurface]"
+          >{{ STATE_STYLE[machine.state].label }}</span>
           <StatusLight
             v-if="machine"
             :state="machine.state"

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { FleetHealthSummary } from "../lib/fleet-health.js";
+import { STATE_STYLE, STALE_DOT } from "../../../shared/lib/state-style.js";
 
 /**
  * US2 Fleet Health 面板（design-spec §6 sidebar 左下）。純呈現：四類計數 + 比例條。
@@ -17,11 +18,12 @@ interface Segment {
   dot: string; // legend 圓點色（token）
 }
 
+// 顏色 token 與 label 取自共用 STATE_STYLE；stale 為聚合層第四類（中性 STALE_DOT）。
 const segments = computed<Segment[]>(() => [
-  { key: "healthy", label: "Healthy", count: props.summary.healthy, bar: "bg-ok", dot: "bg-ok" },
-  { key: "warning", label: "Warning", count: props.summary.warning, bar: "bg-warn", dot: "bg-warn" },
-  { key: "critical", label: "Critical", count: props.summary.critical, bar: "bg-crit", dot: "bg-crit" },
-  { key: "stale", label: "Stale", count: props.summary.stale, bar: "bg-strong", dot: "bg-strong" },
+  { key: "healthy", label: STATE_STYLE.healthy.label, count: props.summary.healthy, bar: STATE_STYLE.healthy.dot, dot: STATE_STYLE.healthy.dot },
+  { key: "warning", label: STATE_STYLE.warning.label, count: props.summary.warning, bar: STATE_STYLE.warning.dot, dot: STATE_STYLE.warning.dot },
+  { key: "critical", label: STATE_STYLE.critical.label, count: props.summary.critical, bar: STATE_STYLE.critical.dot, dot: STATE_STYLE.critical.dot },
+  { key: "stale", label: "Stale", count: props.summary.stale, bar: STALE_DOT, dot: STALE_DOT },
 ]);
 
 /** 各類佔比（%）；total 為固定名冊長度（>0），呈現層計算不入資料型別。 */

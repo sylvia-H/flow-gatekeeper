@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { DerivedEvent } from "../lib/events.js";
+import { STATE_STYLE } from "../../../shared/lib/state-style.js";
 
 /**
  * US3 Event Stream（design-spec §7.8 `EventStrip`）：列出最近門檻跨越/錯誤事件。
@@ -8,9 +9,10 @@ import type { DerivedEvent } from "../lib/events.js";
  */
 defineProps<{ events: DerivedEvent[] }>();
 
+// 顏色 token 取自共用 STATE_STYLE；僅縮寫 label 為呈現層自理。
 const SEVERITY: Record<DerivedEvent["severity"], { label: string; cls: string; dot: string }> = {
-  warning: { label: "WARN", cls: "text-warn-fg", dot: "bg-warn" },
-  critical: { label: "CRIT", cls: "text-crit-fg", dot: "bg-crit" },
+  warning: { label: "WARN", cls: STATE_STYLE.warning.badgeText, dot: STATE_STYLE.warning.dot },
+  critical: { label: "CRIT", cls: STATE_STYLE.critical.badgeText, dot: STATE_STYLE.critical.dot },
 };
 
 function clockLabel(ts: number): string {

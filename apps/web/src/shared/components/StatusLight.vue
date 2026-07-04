@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { MachineState } from "@flow-gatekeeper/contracts";
+import { STATE_STYLE } from "../lib/state-style.js";
 
 const props = withDefaults(
   defineProps<{
@@ -10,20 +11,9 @@ const props = withDefaults(
   { pulse: false },
 );
 
-/** 狀態 → 色票 token（design-spec §7.4，healthy→ok / warning→warn / critical→crit）。 */
-const DOT_CLASS: Record<MachineState, string> = {
-  healthy: "bg-ok",
-  warning: "bg-warn",
-  critical: "bg-crit",
-};
-const LABEL: Record<MachineState, string> = {
-  healthy: "Healthy",
-  warning: "Warning",
-  critical: "Critical",
-};
-
-const dotClass = computed(() => DOT_CLASS[props.state]);
-const label = computed(() => LABEL[props.state]);
+/** 狀態 → 色票 token 與 label 皆取自共用 STATE_STYLE（design-spec §7.4）。 */
+const dotClass = computed(() => STATE_STYLE[props.state].dot);
+const label = computed(() => STATE_STYLE[props.state].label);
 
 // critical 且要求 pulse 時才動效；wrapper 尺寸固定，pulse 不造 layout shift（FR-020、§10）。
 const shouldPulse = computed(() => props.pulse && props.state === "critical");
