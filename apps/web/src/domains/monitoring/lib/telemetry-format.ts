@@ -1,4 +1,5 @@
 import type { TelemetryPoint } from "@flow-gatekeeper/contracts";
+import { METRIC_THRESHOLDS } from "@flow-gatekeeper/shared";
 
 /**
  * US1 卡片呈現純函式（telemetry 的呈現投影，不改 store 型別、不動契約）。
@@ -23,17 +24,10 @@ export function metricUnit(key: MetricKey): string {
 }
 
 /**
- * 越界門檻——**鏡射 002 `mock-telemetry.service.ts` 推導 `state` 的門檻**（research R1）：
- * warning 為 `temp>78 / vib>0.9 / err>0.04`，critical 為 `temp>95 / vib>1.7 / err>0.12`。
+ * 越界門檻取自**跨端單一來源** `@flow-gatekeeper/shared` 的 `METRIC_THRESHOLDS`
+ * （與 002 producer 推導 `state` 共用同一組數字，改門檻只改 shared，不再兩處鏡射）。
  * `throughput` 為下降型、非 state 觸發指標，不參與 amber。errorRate 以原始比例（如 0.04）比對。
- * 若後端調門檻，此處需同步（純呈現，機台整體 state 仍以契約 `state` 為準）。
  */
-const THRESHOLDS: Record<"temperature" | "vibration" | "errorRate", { warn: number; crit: number }> = {
-  temperature: { warn: 78, crit: 95 },
-  vibration: { warn: 0.9, crit: 1.7 },
-  errorRate: { warn: 0.04, crit: 0.12 },
-};
-
 function classify(value: number, warn: number, crit: number): Offense {
   if (value > crit) return "crit";
   if (value > warn) return "warn";
@@ -43,9 +37,13 @@ function classify(value: number, warn: number, crit: number): Offense {
 /** 逐 metric 回傳越界程度；卡片據此只染**越界的數值本身**（FR-002），不染整卡。 */
 export function offendingMetrics(t: TelemetryPoint["telemetry"]): Record<MetricKey, Offense> {
   return {
-    temperature: classify(t.temperature, THRESHOLDS.temperature.warn, THRESHOLDS.temperature.crit),
-    vibration: classify(t.vibration, THRESHOLDS.vibration.warn, THRESHOLDS.vibration.crit),
-    errorRate: classify(t.errorRate, THRESHOLDS.errorRate.warn, THRESHOLDS.errorRate.crit),
+    temperature: classify(
+      t.temperature,
+      METRIC_THRESHOLDS.temperature.warn,
+      METRIC_THRESHOLDS.temperature.crit,
+    ),
+    vibration: classify(t.vibration, METRIC_THRESHOLDS.vibration.warn, METRIC_THRESHOLDS.vibration.crit),
+    errorRate: classify(t.errorRate, METRIC_THRESHOLDS.errorRate.warn, METRIC_THRESHOLDS.errorRate.crit),
     throughput: null,
   };
 }

@@ -7,3 +7,5 @@
 
 /** workspace 佔位常數，證明 package 可被建置與 import。 */
 export const SHARED_PACKAGE = "@flow-gatekeeper/shared" as const;
+
+export * from "./telemetry-thresholds.js";
