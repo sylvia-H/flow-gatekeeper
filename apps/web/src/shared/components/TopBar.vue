@@ -43,14 +43,11 @@ const connectionLabel = computed(() => CONNECTION_LABEL[store.connectionStatus])
 const connectionChip = computed(() => CONNECTION_CHIP[store.connectionStatus]);
 const chipPulse = computed(() => store.connectionStatus === "disconnected");
 
-/** US4：連線中顯示 RTT ms；首個 pong 前（latencyMs===null）顯示 `—`。 */
-const latencyText = computed(() =>
-  store.connectionStatus === "connected"
-    ? store.latencyMs !== null
-      ? `${store.latencyMs}ms`
-      : "—"
-    : null,
-);
+/** US4：連線中顯示 RTT ms；首個 pong 前（latencyMs===null）顯示 `—`；未連線回 null（不顯示）。 */
+const latencyText = computed(() => {
+  if (store.connectionStatus !== "connected") return null;
+  return store.latencyMs !== null ? `${store.latencyMs}ms` : "—";
+});
 
 /** US4 search：綁定 store.searchQuery（sidebar 清單與主區卡片共用）。 */
 function onSearchInput(event: Event): void {
