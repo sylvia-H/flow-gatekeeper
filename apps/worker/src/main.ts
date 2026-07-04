@@ -155,6 +155,19 @@ function createProcessor(db: Db, pub: Redis, cache: Redis, ai: AiProvider) {
 }
 
 export async function bootstrap(): Promise<void> {
+  // 韌性守門（縱深防禦）：單一 job 的 LLM 串流可能拋出「浮空」的 rejection（例如 Gemini SDK
+  // 的背景 response promise 於串流解析失敗時 reject）。若放任 Node 預設行為會**終止整個 worker
+  // 進程**，導致其後所有 job 卡在佇列無人消化。這裡記 log 但不 exit，讓單一壞串流不拖垮 worker
+  // ——該 job 本身仍由 processor／BullMQ 走 `ai/error` 與重試路徑收尾。
+  // （正式環境應另配 process 監督者重啟；此處優先確保 worker 不會悄悄整個掛掉。）
+  process.on("unhandledRejection", (reason) => {
+    const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+    log("error", `unhandledRejection（已忽略、worker 續跑）：${detail}`);
+  });
+  process.on("uncaughtException", (err) => {
+    log("error", `uncaughtException（已忽略、worker 續跑）：${err.stack ?? err.message}`);
+  });
+
   const mongoClient = new MongoClient(process.env.MONGO_URL ?? "mongodb://127.0.0.1:27017/flow-gatekeeper");
   await mongoClient.connect();
   const db = mongoClient.db(process.env.MONGO_DB ?? "flow-gatekeeper");
