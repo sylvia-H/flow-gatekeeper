@@ -114,9 +114,13 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     const receivedAt = Date.now();
     for (const point of batch) {
       // US3：覆寫快照**前**讀 prevState，於狀態轉入 warning/critical 時衍生一筆事件（去重、上限 50）。
-      // 同一批次共用 receivedAt，同機台可能多次轉態（pause/resume 後尤然），故以單調 eventSeq 保 id 唯一。
+      // 事件時間用 payload 自身 timestamp（非批次 receivedAt）：pause 後 resume 一次沖出整段
+      // buffer 時，各筆仍保留真實發生時序，不會全被壓成同一個 resume 時刻（review 006）。
+      // timestamp 解析失敗才退回 receivedAt。id 唯一性另由單調 eventSeq 保證（見 events.ts）。
       const prevState = machines.value.get(point.machineId)?.state;
-      const event = deriveTransitionEvent(prevState, point.state, point.machineId, receivedAt, eventSeq);
+      const parsedTs = Date.parse(point.timestamp);
+      const eventTs = Number.isNaN(parsedTs) ? receivedAt : parsedTs;
+      const event = deriveTransitionEvent(prevState, point.state, point.machineId, eventTs, eventSeq);
       if (event) {
         eventSeq += 1;
         pushCapped(events.value, event, EVENT_CAP);

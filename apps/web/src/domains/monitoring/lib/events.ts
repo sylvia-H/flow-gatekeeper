@@ -11,11 +11,11 @@ export type Severity = "warning" | "critical"; // 只記門檻跨越/錯誤，�
 export interface DerivedEvent {
   /**
    * 唯一鍵（`${ts}-${machineId}#${seq}`），供 v-for key。`seq` 為呼叫端傳入的單調序號：
-   * 同一批次（共用一個 `receivedAt`）內同機台多次轉態時，`ts`+`machineId` 會相同，
+   * 同機台多次轉態若落在同一 `ts`（同 payload 時戳或同批次），`ts`+`machineId` 會相同，
    * 需 `seq` 才能保證 key 唯一（否則 EventStrip 的 v-for 重複 key）。
    */
   id: string;
-  /** 產生時間（批次接收時刻 Date.now()）。 */
+  /** 事件對應遙測的來源時間（payload timestamp 之 epoch ms）；保序不受 pause/resume 批次沖出影響。 */
   ts: number;
   machineId: string;
   /** = 轉入的 nextState。 */
