@@ -94,8 +94,9 @@ watch(
     >{{ STATUS_CHIP[state.status].label }}</span>
     <button
       type="button"
-      class="ml-1 shrink-0 rounded-control p-1 text-fg-subtle hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent md:hidden"
-      aria-label="關閉 Copilot"
+      class="ml-1 shrink-0 rounded-control p-1 text-fg-subtle hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      aria-label="關閉／收合 Copilot 面板"
+      title="關閉／收合 Copilot 面板"
       @click="emit('close')"
     >
       <X class="h-4 w-4" aria-hidden="true" />

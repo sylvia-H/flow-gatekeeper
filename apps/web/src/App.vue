@@ -21,14 +21,26 @@ import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.j
 const store = useMonitoringStore();
 const copilot = useCopilotStore();
 
-// 手機 bottom-sheet 開關；桌機（md+）drawer 常駐、無視此值（R8）。選台即開啟手機 sheet。
+// 手機 bottom-sheet 開關。桌機（md+）改為「可折疊常駐」：desktopPanelOpen 控制是否顯示，
+// 收合後中間欄拿回面板寬度、右側改露出可展開的細把手（修正：小螢幕中欄被壓、Diagnose 被裁）。
+// 選台即（重新）開啟兩種形態，確保對機台操作時 Copilot 一定看得到。
 const drawerOpen = ref(false);
+const desktopPanelOpen = ref(true);
 watch(
   () => store.selectedMachineId,
   (id) => {
-    if (id !== null) drawerOpen.value = true;
+    if (id !== null) {
+      drawerOpen.value = true;
+      desktopPanelOpen.value = true;
+    }
   },
 );
+
+/** header X：手機關閉 sheet、桌機收合常駐面板（兩者一併處理即可，互不干擾）。 */
+function onCloseDrawer(): void {
+  drawerOpen.value = false;
+  desktopPanelOpen.value = false;
+}
 
 /** drawer 恆依 selectedMachineId 取對應那一份狀態（未選取→idle 空殼，由 machineId=null 走空狀態）。 */
 const selectedState = computed<CopilotJobState>(() =>
@@ -127,7 +139,9 @@ const handle = useHighFrequencyWs({
   <AppLayout
     :connection-status="store.connectionStatus"
     :drawer-open="drawerOpen"
+    :panel-open="desktopPanelOpen"
     @close-drawer="drawerOpen = false"
+    @open-panel="desktopPanelOpen = true"
   >
     <template #sidebar>
       <div class="flex items-center gap-2 border-b border-subtle px-4 py-3">
@@ -205,7 +219,7 @@ const handle = useHighFrequencyWs({
         :has-client="store.clientId !== null"
         @diagnose="onDiagnose"
         @retry="onRetry"
-        @close="drawerOpen = false"
+        @close="onCloseDrawer"
       />
     </template>
   </AppLayout>
