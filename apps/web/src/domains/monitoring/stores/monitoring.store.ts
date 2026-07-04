@@ -1,6 +1,13 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
+import { fleetHealthOf, type FleetHealthSummary } from "../lib/fleet-health.js";
+import { KNOWN_MACHINE_IDS } from "../lib/machine-labels.js";
+import { deriveTransitionEvent, pushCapped, type DerivedEvent } from "../lib/events.js";
+import { filterMachineIds } from "../lib/machine-search.js";
+
+/** US3 事件保留上限（FR-011）。 */
+const EVENT_CAP = 50;
 
 /**
  * 連線三態（design-spec §8.2）。單一資料來源為本 store 的 `connectionStatus`，
@@ -44,6 +51,16 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   const renderedBatches = ref(0);
   /** 低頻更新的當前時間戳，驅動 stale 重算（每秒一次）。 */
   const now = ref(Date.now());
+  /** US3 前端衍生事件（最近 50 筆，最新在頂端）；於 applyTelemetryBatch 批次點衍生。 */
+  const events = ref<DerivedEvent[]>([]);
+  /** US3 事件唯一鍵用單調序號（非 reactive）：保 v-for key 在同批次同機台多筆時仍唯一。 */
+  let eventSeq = 0;
+  /** US4 即時通道 ping→pong RTT（ms）；null＝尚無量測（首個 pong 前 / 斷線後重置）。 */
+  const latencyMs = ref<number | null>(null);
+  /** US4 pause 開關；true 時 composable pump 跳過 flush、續存 buffer（畫面凍結）。 */
+  const paused = ref(false);
+  /** US4 search 查詢字串；空＝全部。sidebar 清單與主區卡片共用 `visibleMachineIds`。 */
+  const searchQuery = ref("");
 
   // ── Getters ────────────────────────────────────────────────────────
   /** 背壓比值：renderedBatches>0 ? round(received/rendered) : 0（design-spec §7.2.1）。 */
@@ -71,6 +88,23 @@ export const useMonitoringStore = defineStore("monitoring", () => {
       : null,
   );
 
+  /**
+   * US2 Fleet Health 四類聚合（FR-006/007/008）。委派純函式 `fleetHealthOf`，
+   * 走固定名冊 KNOWN_MACHINE_IDS（total 穩定＝5）。依賴 `machines` 與 `now`（每秒 tick
+   * 重算 stale），屬低頻 reactive，不逐筆 telemetry 觸發（憲章 IV）。
+   */
+  const fleetHealth = computed<FleetHealthSummary>(() =>
+    fleetHealthOf(machines.value, now.value, KNOWN_MACHINE_IDS),
+  );
+
+  /**
+   * US4 search 結果——sidebar 清單與主區卡片**共用**此單一 computed（FR-015、SC-006），
+   * 確保兩處過濾一致。空查詢回全部名冊。
+   */
+  const visibleMachineIds = computed<string[]>(() =>
+    filterMachineIds(KNOWN_MACHINE_IDS, searchQuery.value),
+  );
+
   // ── Actions ────────────────────────────────────────────────────────
   /**
    * 每次呼叫 = 一個 rAF 幀 = 一次批次（不論 batch 幾筆）：
@@ -79,6 +113,18 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   function applyTelemetryBatch(batch: TelemetryPoint[]): void {
     const receivedAt = Date.now();
     for (const point of batch) {
+      // US3：覆寫快照**前**讀 prevState，於狀態轉入 warning/critical 時衍生一筆事件（去重、上限 50）。
+      // 事件時間用 payload 自身 timestamp（非批次 receivedAt）：pause 後 resume 一次沖出整段
+      // buffer 時，各筆仍保留真實發生時序，不會全被壓成同一個 resume 時刻（review 006）。
+      // timestamp 解析失敗才退回 receivedAt。id 唯一性另由單調 eventSeq 保證（見 events.ts）。
+      const prevState = machines.value.get(point.machineId)?.state;
+      const parsedTs = Date.parse(point.timestamp);
+      const eventTs = Number.isNaN(parsedTs) ? receivedAt : parsedTs;
+      const event = deriveTransitionEvent(prevState, point.state, point.machineId, eventTs, eventSeq);
+      if (event) {
+        eventSeq += 1;
+        pushCapped(events.value, event, EVENT_CAP);
+      }
       machines.value.set(point.machineId, project(point, receivedAt));
     }
     receivedMessages.value += batch.length;
@@ -90,6 +136,9 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   }
 
   function setConnectionStatus(status: ConnectionStatus): void {
+    // 離開 connected（斷線/重連）即清除延遲量測，避免重連後 chip 沿用上一段連線的過期 RTT；
+    // 重連後需等下一個 pong 才重新有值（首個 pong 前顯示 —）。
+    if (status !== "connected") latencyMs.value = null;
     connectionStatus.value = status;
   }
 
@@ -101,6 +150,21 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     now.value = Date.now();
   }
 
+  /** US4：切換 pause（畫面凍結／恢復）。 */
+  function togglePause(): void {
+    paused.value = !paused.value;
+  }
+
+  /** US4：由 composable `onLatency` 餵入 ping/pong RTT。 */
+  function setLatency(ms: number): void {
+    latencyMs.value = ms;
+  }
+
+  /** US4：更新 search 查詢字串（TopBar 綁定）。 */
+  function setSearchQuery(query: string): void {
+    searchQuery.value = query;
+  }
+
   return {
     machines,
     selectedMachineId,
@@ -109,13 +173,22 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     receivedMessages,
     renderedBatches,
     now,
+    events,
+    latencyMs,
+    paused,
+    searchQuery,
     batchRatio,
     machineList,
     selectedMachine,
+    fleetHealth,
+    visibleMachineIds,
     applyTelemetryBatch,
     selectMachine,
     setConnectionStatus,
     setClientId,
     tickNow,
+    togglePause,
+    setLatency,
+    setSearchQuery,
   };
 });

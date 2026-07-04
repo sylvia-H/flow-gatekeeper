@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
+import { deriveMachineState } from "@flow-gatekeeper/shared";
 
 /** 固定 5 台示範機台（spec Assumptions / data-model）。 */
 const MACHINE_IDS = ["mixer-01", "press-02", "pack-03", "oven-04", "sorter-05"] as const;
@@ -29,12 +30,8 @@ export class MockTelemetryService {
       const throughput = 120 - (criticalSpike ? 45 : warningSpike ? 18 : 0) + noise * 6;
       const errorRate = criticalSpike ? 0.16 : warningSpike ? 0.06 : Math.max(0, noise * 0.01);
 
-      const state: MachineState =
-        temperature > 95 || vibration > 1.7 || errorRate > 0.12
-          ? "critical"
-          : temperature > 78 || vibration > 0.9 || errorRate > 0.04
-            ? "warning"
-            : "healthy";
+      // 門檻為跨端單一來源（@flow-gatekeeper/shared）；以未四捨五入值判定，避免前後端門檻漂移。
+      const state: MachineState = deriveMachineState({ temperature, vibration, errorRate });
 
       return {
         type: "machine/data",

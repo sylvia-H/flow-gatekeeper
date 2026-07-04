@@ -3,6 +3,13 @@ import { computed } from "vue";
 import { Stethoscope } from "lucide-vue-next";
 import type { MachineLive } from "../stores/monitoring.store.js";
 import { machineLabel } from "../lib/machine-labels.js";
+import {
+  metricUnit,
+  offendingMetrics,
+  relativeTimeLabel,
+  type MetricKey,
+} from "../lib/telemetry-format.js";
+import { STATE_STYLE } from "../../../shared/lib/state-style.js";
 import StatusLight from "../../../shared/components/StatusLight.vue";
 
 const props = defineProps<{
@@ -10,6 +17,7 @@ const props = defineProps<{
   machineId: string;
   selected: boolean;
   stale: boolean; // >10s 未更新：降透明＋Stale badge，數值不清空（FR-017）
+  now: number; // 每秒 tick，驅動相對時間「Ns ago」更新（FR-004）
 }>();
 
 const emit = defineEmits<{
@@ -19,14 +27,23 @@ const emit = defineEmits<{
 
 const label = computed(() => machineLabel(props.machineId));
 
-/** 狀態 → 卡片外觀 token（design-spec §7.3）；placeholder 用中性面。 */
+/**
+ * 狀態文字徽章（FR-001）——由契約 `machine.state` 決定，樣式取自共用 `STATE_STYLE`（與
+ * `StatusLight` 同源）。徽章 label 在模板以 `uppercase` 呈現，固定字級/內距避免盒模型變化（FR-005）。
+ */
+
+/**
+ * 狀態 → 卡片外觀 token（design-spec §7.3）。
+ * warning：`bg-surface` + `warn-bg` subtle inset（`ring-warn-bg` 內嵌環，忠實對映 §7.3；
+ * 非盒模型、不位移，FR-002/005）；critical：crit-bg tint + pulse。placeholder 用中性面。
+ */
 const stateClass = computed(() => {
   if (!props.machine) return "border-subtle bg-surface";
   switch (props.machine.state) {
     case "healthy":
       return "border-subtle bg-surface";
     case "warning":
-      return "border-warn-border bg-surface";
+      return "border-subtle bg-surface ring-1 ring-inset ring-warn-bg";
     case "critical":
       return "border-crit-border bg-crit-bg animate-critical-pulse";
   }
@@ -35,24 +52,42 @@ const stateClass = computed(() => {
 
 const PLACEHOLDER = "—";
 
-const temperature = computed(() =>
-  props.machine ? `${props.machine.telemetry.temperature.toFixed(1)}°` : PLACEHOLDER,
+/** 越界數值染色（FR-002）：warn→amber（`text-warn`）、crit→`text-crit`、否則預設 `text-fg`。 */
+interface MetricView {
+  key: MetricKey;
+  label: string;
+  text: string;
+  cls: string;
+}
+
+/** 單一 metric 描述子（key/label/格式化）——placeholder 與實值分支共用同一份，避免兩處漂移。 */
+const METRIC_DESCRIPTORS: readonly {
+  key: MetricKey;
+  label: string;
+  format: (t: MachineLive["telemetry"]) => string;
+}[] = [
+  { key: "temperature", label: "Temp", format: (t) => `${t.temperature.toFixed(1)}${metricUnit("temperature")}` },
+  { key: "vibration", label: "Vibration", format: (t) => `${t.vibration.toFixed(2)} ${metricUnit("vibration")}` },
+  { key: "throughput", label: "Throughput", format: (t) => `${Math.round(t.throughput)} ${metricUnit("throughput")}` },
+  { key: "errorRate", label: "Errors", format: (t) => `${(t.errorRate * 100).toFixed(1)}${metricUnit("errorRate")}` },
+];
+
+const metrics = computed<MetricView[]>(() => {
+  const m = props.machine;
+  const off = m ? offendingMetrics(m.telemetry) : null;
+  return METRIC_DESCRIPTORS.map((d) => {
+    const offense = off ? off[d.key] : null;
+    const cls = offense === "crit" ? "text-crit" : offense === "warn" ? "text-warn" : "text-fg";
+    return { key: d.key, label: d.label, text: m ? d.format(m.telemetry) : PLACEHOLDER, cls };
+  });
+});
+
+/** 相對時間「Ns ago」＋絕對時間 tooltip（FR-004）。 */
+const relativeTime = computed(() =>
+  props.machine ? relativeTimeLabel(props.machine.lastUpdated, props.now) : PLACEHOLDER,
 );
-const vibration = computed(() =>
-  props.machine ? props.machine.telemetry.vibration.toFixed(2) : PLACEHOLDER,
-);
-const throughput = computed(() =>
-  props.machine ? String(Math.round(props.machine.telemetry.throughput)) : PLACEHOLDER,
-);
-const errorRate = computed(() =>
-  props.machine
-    ? `${(props.machine.telemetry.errorRate * 100).toFixed(1)}%`
-    : PLACEHOLDER,
-);
-const lastUpdated = computed(() =>
-  props.machine
-    ? new Date(props.machine.lastUpdated).toLocaleTimeString()
-    : PLACEHOLDER,
+const absoluteTime = computed(() =>
+  props.machine ? new Date(props.machine.lastUpdated).toLocaleString() : undefined,
 );
 </script>
 
@@ -69,7 +104,7 @@ const lastUpdated = computed(() =>
       :aria-pressed="selected"
       @click="emit('select', machineId)"
     >
-      <!-- Header：顯示名稱 + machine id（mono）+ 狀態燈 -->
+      <!-- Header：顯示名稱 + machine id（mono）+ 狀態文字徽章 + 狀態燈 -->
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
           <div class="flex items-center gap-1.5">
@@ -81,38 +116,33 @@ const lastUpdated = computed(() =>
           </div>
           <div class="truncate font-mono text-xs text-fg-muted">{{ machineId }}</div>
         </div>
-        <StatusLight
-          v-if="machine"
-          :state="machine.state"
-          :pulse="machine.state === 'critical'"
-        />
-        <span v-else class="inline-flex h-3 w-3 shrink-0 items-center justify-center">
-          <span class="block h-[9px] w-[9px] rounded-pill bg-strong" />
-        </span>
+        <div class="flex shrink-0 items-center gap-1.5">
+          <span
+            v-if="machine"
+            class="rounded-pill px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-wide"
+            :class="[STATE_STYLE[machine.state].badgeText, STATE_STYLE[machine.state].badgeSurface]"
+          >{{ STATE_STYLE[machine.state].label }}</span>
+          <StatusLight
+            v-if="machine"
+            :state="machine.state"
+            :pulse="machine.state === 'critical'"
+          />
+          <span v-else class="inline-flex h-3 w-3 items-center justify-center">
+            <span class="block h-[9px] w-[9px] rounded-pill bg-strong" />
+          </span>
+        </div>
       </div>
 
-      <!-- Telemetry：固定 2×2 grid，數值 mono，避免寬度跳動造成 layout shift -->
+      <!-- Telemetry：固定 2×2 grid，數值 mono，越界值染 amber/crit；避免寬度跳動造成 layout shift -->
       <div class="grid grid-cols-2 gap-x-3 gap-y-2">
-        <div>
-          <div class="text-xs text-fg-subtle">Temp</div>
-          <div class="font-mono text-number leading-none text-fg">{{ temperature }}</div>
-        </div>
-        <div>
-          <div class="text-xs text-fg-subtle">Vibration</div>
-          <div class="font-mono text-number leading-none text-fg">{{ vibration }}</div>
-        </div>
-        <div>
-          <div class="text-xs text-fg-subtle">Throughput</div>
-          <div class="font-mono text-number leading-none text-fg">{{ throughput }}</div>
-        </div>
-        <div>
-          <div class="text-xs text-fg-subtle">Errors</div>
-          <div class="font-mono text-number leading-none text-fg">{{ errorRate }}</div>
+        <div v-for="metric in metrics" :key="metric.key">
+          <div class="text-xs text-fg-subtle">{{ metric.label }}</div>
+          <div class="font-mono text-number leading-none" :class="metric.cls">{{ metric.text }}</div>
         </div>
       </div>
 
-      <div class="mt-auto font-mono text-xs text-fg-subtle">
-        updated {{ lastUpdated }}
+      <div class="mt-auto font-mono text-xs text-fg-subtle" :title="absoluteTime">
+        updated {{ relativeTime }}
       </div>
     </button>
 

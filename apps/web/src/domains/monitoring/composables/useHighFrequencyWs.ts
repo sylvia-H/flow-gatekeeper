@@ -30,6 +30,13 @@ export interface UseHighFrequencyWsOptions {
    * 憲章 IV／FR-017：診斷事件 MUST NOT 進遙測 buffer，直接分流不破壞遙測 rAF 批次。
    */
   onDiagnosisEvent?: (event: DiagnosisEvent) => void;
+  /** 選用（US4）：pong 到達時回報 ping→pong RTT（ms）→ store.setLatency。 */
+  onLatency?: (ms: number) => void;
+  /**
+   * 選用（US4）：pump 每幀讀它——回 true 時**跳過 flush、續存 buffer**（畫面凍結），
+   * resume（回 false）後下一幀 flush 整個 buffer＝直接跳到最新（FR-013／research R6）。
+   */
+  isPaused?: () => boolean;
   /** buffer 上限，超過丟最舊保最新（背景分頁 rAF 暫停時護記憶體）。 */
   maxBufferSize?: number;
   /** 心跳週期（ms），預設 15000。 */
@@ -61,12 +68,18 @@ export function useHighFrequencyWs(
 
   let manualClose = false;
   let attempt = 0;
+  let lastPingAt = 0; // US4：最近一次送 ping 的時刻，供 pong 計 RTT。
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let pongTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** rAF pump：每幀把整批 buffer 一次交給 onBatch（=一次批次）。跨重連持續運作。 */
   function pump(): void {
+    // US4 pause：跳過 flush 但**保留 rAF 迴圈與 buffer 累積**（buffer 仍受 maxBufferSize 保護）。
+    if (options.isPaused?.()) {
+      rafId = requestAnimationFrame(pump);
+      return;
+    }
     if (buffer.length > 0) {
       const batch = buffer.splice(0);
       onBatch(batch);
@@ -100,6 +113,7 @@ export function useHighFrequencyWs(
   function startHeartbeat(): void {
     clearHeartbeat();
     heartbeatTimer = setInterval(() => {
+      lastPingAt = Date.now(); // US4：記發送時刻，pong 到達時計 RTT。
       send({ type: "ping" });
       clearPongTimer();
       pongTimer = setTimeout(() => {
@@ -160,6 +174,7 @@ export function useHighFrequencyWs(
         }
         break;
       case "pong":
+        if (lastPingAt > 0) options.onLatency?.(Date.now() - lastPingAt); // US4：回報 RTT
         clearPongTimer(); // 心跳確認
         break;
       // machine/subscribed／system/unauthorized：忽略。

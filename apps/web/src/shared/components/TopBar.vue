@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { Search, Stethoscope, Gauge } from "lucide-vue-next";
+import { Search, Stethoscope, Gauge, Pause, Play } from "lucide-vue-next";
 import BackpressureBadge from "./BackpressureBadge.vue";
 import {
   useMonitoringStore,
@@ -42,6 +42,17 @@ const CONNECTION_CHIP: Record<ConnectionStatus, { dot: string; text: string }> =
 const connectionLabel = computed(() => CONNECTION_LABEL[store.connectionStatus]);
 const connectionChip = computed(() => CONNECTION_CHIP[store.connectionStatus]);
 const chipPulse = computed(() => store.connectionStatus === "disconnected");
+
+/** US4：連線中顯示 RTT ms；首個 pong 前（latencyMs===null）顯示 `—`；未連線回 null（不顯示）。 */
+const latencyText = computed(() => {
+  if (store.connectionStatus !== "connected") return null;
+  return store.latencyMs !== null ? `${store.latencyMs}ms` : "—";
+});
+
+/** US4 search：綁定 store.searchQuery（sidebar 清單與主區卡片共用）。 */
+function onSearchInput(event: Event): void {
+  store.setSearchQuery((event.target as HTMLInputElement).value);
+}
 </script>
 
 <template>
@@ -56,11 +67,26 @@ const chipPulse = computed(() => store.connectionStatus === "disconnected");
         type="search"
         placeholder="Search machines"
         aria-label="Search machines"
+        :value="store.searchQuery"
         class="h-9 w-full rounded-control border border-subtle bg-inset pl-8 pr-3 text-sm text-fg placeholder:text-fg-subtle focus:border-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        @input="onSearchInput"
       />
     </div>
 
     <div class="ml-auto flex items-center gap-3">
+      <!-- Pause/Resume：凍結/恢復畫面更新（US4）；暫停期間續收 buffer、resume 跳最新 -->
+      <button
+        type="button"
+        class="flex h-9 items-center gap-1.5 rounded-control border border-subtle bg-surface px-2.5 text-xs text-fg-muted hover:bg-surface-hover hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        :aria-pressed="store.paused"
+        :aria-label="store.paused ? 'Resume telemetry' : 'Pause telemetry'"
+        :title="store.paused ? '恢復畫面更新' : '暫停畫面更新（續收 buffer）'"
+        @click="store.togglePause()"
+      >
+        <component :is="store.paused ? Play : Pause" class="h-4 w-4" aria-hidden="true" />
+        <span class="hidden md:inline">{{ store.paused ? "Resume" : "Pause" }}</span>
+      </button>
+
       <!-- Mock frequency 控制（disabled 佔位，FR-027） -->
       <button
         type="button"
@@ -91,6 +117,7 @@ const chipPulse = computed(() => store.connectionStatus === "disconnected");
           :class="[connectionChip.dot, chipPulse ? 'animate-critical-pulse' : '']"
         />
         {{ connectionLabel }}
+        <span v-if="latencyText" class="font-mono text-fg-muted">· {{ latencyText }}</span>
       </span>
 
       <!-- Diagnose：作用於 selectedMachineId；無選取／無連線／該台 active 時 disabled -->

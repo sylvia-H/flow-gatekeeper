@@ -4,11 +4,14 @@ import { Activity, Boxes } from "lucide-vue-next";
 import AppLayout from "./shared/components/AppLayout.vue";
 import TopBar from "./shared/components/TopBar.vue";
 import TopologyCanvas from "./domains/monitoring/components/TopologyCanvas.vue";
+import FleetHealth from "./domains/monitoring/components/FleetHealth.vue";
+import EventStrip from "./domains/monitoring/components/EventStrip.vue";
 import CopilotDrawer from "./domains/ai-copilot/components/CopilotDrawer.vue";
 import { useMonitoringStore } from "./domains/monitoring/stores/monitoring.store.js";
 import { useCopilotStore } from "./domains/ai-copilot/stores/copilot.store.js";
 import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFrequencyWs.js";
 import { KNOWN_MACHINE_IDS, machineLabel } from "./domains/monitoring/lib/machine-labels.js";
+import { MACHINE_GROUPS, machineGroup } from "./domains/monitoring/lib/machine-groups.js";
 import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.js";
 
 /**
@@ -51,6 +54,18 @@ function onRetry(): void {
   }
 }
 
+// US5 主區標題列機台數（N＝固定名冊長度；不含 Graph/拓樸切換，僅標題）。
+const machineCount = computed(() => KNOWN_MACHINE_IDS.length);
+
+// US6 sidebar 分組：直接依 MACHINE_GROUPS 順序分區，成員經 search 過濾；過濾後為空的群組略去
+// 標題（FR-017、Edge Cases）。roster 5 台皆已分組（machine-groups 測試保證），故無需 Ungrouped 桶。
+const sidebarGroups = computed(() =>
+  MACHINE_GROUPS.map((group) => ({
+    name: group.name,
+    ids: store.visibleMachineIds.filter((id) => machineGroup(id) === group.name),
+  })).filter((group) => group.ids.length > 0),
+);
+
 // 冷啟動/斷線橫幅（design-spec §8.2）：連上前顯示 Connecting，之後依三態提示；不清空資料。
 const banner = computed(() => {
   switch (store.connectionStatus) {
@@ -89,6 +104,9 @@ const handle = useHighFrequencyWs({
   url: wsUrl,
   onBatch: store.applyTelemetryBatch,
   onStatus: store.setConnectionStatus,
+  // US4：pause 時 pump 跳過 flush（續存 buffer）；pong RTT 回報 store.latencyMs。
+  isPaused: () => store.paused,
+  onLatency: store.setLatency,
   // 診斷事件分流交 copilot.store（憲章 IV／FR-017：不進遙測 buffer）。
   onDiagnosisEvent: copilot.applyEvent,
   // 每次（重）連線都會觸發：保存 clientId（供 005）並用單一名冊訂閱 5 台（dev 送空 token）。
@@ -119,24 +137,31 @@ const handle = useHighFrequencyWs({
           <div class="text-xs text-fg-subtle">development</div>
         </div>
       </div>
-      <nav class="px-3 py-4">
-        <div class="px-1 pb-2 text-xs font-medium uppercase tracking-wide text-fg-subtle">
-          Machines
+      <nav class="space-y-4 px-3 py-4">
+        <div v-for="group in sidebarGroups" :key="group.name">
+          <div class="px-1 pb-2 text-xs font-medium uppercase tracking-wide text-fg-subtle">
+            {{ group.name }}
+          </div>
+          <ul class="space-y-0.5">
+            <li v-for="id in group.ids" :key="id">
+              <button
+                type="button"
+                class="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-sm text-fg-muted hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                :class="store.selectedMachineId === id ? 'bg-accent-bg text-fg' : ''"
+                @click="store.selectMachine(id)"
+              >
+                <Boxes class="h-4 w-4 shrink-0 text-fg-subtle" aria-hidden="true" />
+                <span class="truncate">{{ machineLabel(id) }}</span>
+              </button>
+            </li>
+          </ul>
         </div>
-        <ul class="space-y-0.5">
-          <li v-for="id in KNOWN_MACHINE_IDS" :key="id">
-            <button
-              type="button"
-              class="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-sm text-fg-muted hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-              :class="store.selectedMachineId === id ? 'bg-accent-bg text-fg' : ''"
-              @click="store.selectMachine(id)"
-            >
-              <Boxes class="h-4 w-4 shrink-0 text-fg-subtle" aria-hidden="true" />
-              <span class="truncate">{{ machineLabel(id) }}</span>
-            </button>
-          </li>
-        </ul>
       </nav>
+
+      <!-- Fleet Health（design-spec §6 左欄下方）：四類聚合，隨遙測即時更新 -->
+      <div class="mt-auto border-t border-subtle px-3 py-4">
+        <FleetHealth :summary="store.fleetHealth" />
+      </div>
     </template>
 
     <template #topbar>
@@ -153,8 +178,19 @@ const handle = useHighFrequencyWs({
         >
           {{ banner.text }}
         </div>
+        <!-- US5 主區標題列：「Fleet monitor · N machines」（僅標題，不含 Graph 視圖） -->
+        <div class="flex shrink-0 items-center gap-2 border-b border-subtle px-4 py-2.5">
+          <Boxes class="h-4 w-4 text-accent" aria-hidden="true" />
+          <h1 class="text-sm font-semibold text-fg">Fleet monitor</h1>
+          <span class="text-fg-subtle" aria-hidden="true">·</span>
+          <span class="text-sm text-fg-muted">{{ machineCount }} machines</span>
+        </div>
         <div class="min-h-0 flex-1">
           <TopologyCanvas />
+        </div>
+        <!-- Event Stream（design-spec §7.8，main 底部）：前端衍生最近事件 -->
+        <div class="shrink-0 border-t border-subtle">
+          <EventStrip :events="store.events" />
         </div>
       </div>
     </template>
