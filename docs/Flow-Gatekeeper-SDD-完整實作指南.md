@@ -2687,9 +2687,128 @@ git merge --no-ff 006-monitoring-console-fidelity
 
 ---
 
-## 13. 本機啟動與端到端 Demo
+## 13. Feature 007：worker 生產化與 process 監督（Worker Process Supervision）
 
-### 13.1 第一次啟動
+> **狀態：方向藍圖（尚未 `/speckit.specify`）**。本節只記錄方向與待澄清問題，作為日後開 feature
+> 前的起草；正式流程仍走 `specify -> clarify -> plan -> checklist -> tasks -> analyze -> implement ->
+> 驗收 -> merge`。下面的 prompt 與設定皆為草案，最終以 spec/tasks 為準。
+>
+> **前置**：待 `develop` 上所有未合併分支都檢視、收尾並合併後，再從 `develop` 依本節另開一條 branch。
+
+### 13.1 由來：從 `fix/worker-stream-resilience` 拆出的「另一半」
+
+`fix/worker-stream-resilience` 這條 hotfix 修的是**單一壞串流不該拖垮整個 worker**，落地了三件與監督者
+無關、單獨做只會更好的事：
+
+- **崩潰根因深修**：`GeminiProvider.streamDiagnosis` 接住 SDK 背景 `result.response` 的 rejection
+  （串流解析失敗時它也會 reject），避免變成 `unhandledRejection`（見 `apps/worker/src/ai/gemini-provider.ts`）。
+- **fire-and-forget 源頭收斂**：`publish()` 自帶 `.catch` 記 log，單筆 token 發布失敗不汙染全域守門
+  （見 `apps/worker/src/main.ts`）。
+- **全域守門一致性**：`unhandledRejection`／`uncaughtException` 兩個 handler 的非 Error 值防護對齊。
+
+但那條 branch **刻意沒動**兩個 process handler 的「log + 續跑」策略。原因是：**本專案目前沒有任何 process
+監督者**——`api`／`worker`／`web` 都在 host 上各開一個 PowerShell 視窗用 `tsx watch` 跑（見
+`scripts/dev-up.ps1`），`docker-compose.yml` 只起 Redis + Mongo 兩個 infra，沒有 Dockerfile、沒有 restart
+策略。
+
+在「沒有監督者」的現況下，若把 `uncaughtException` 改成 `process.exit(1)`，效果是「worker 死了就死了、
+後續 job 全部卡在佇列無人消化」——**比現在的「log + 續跑」更糟**。也就是說：**`exit(1)` 與「監督者重啟」
+是同一件事的兩半，只做一半會退步**。因此把「`exit(1)` + 監督者」整包留給本 feature，走正式 SDD
+做到位，而不是塞進 hotfix。
+
+### 13.2 為什麼「log + 續跑」是暫時、而非長久解
+
+`uncaughtException` 之後行程狀態**未定義**（Node 官方文件明言 "It is not safe to resume normal
+operation"）：可能殘留寫到一半的資料、懸空的 handle、不一致的記憶體狀態。原地續跑會**悄悄產出錯誤結果、
+並遮蔽真正的 bug**。生產正解是奉行「let it crash」：非預期致命錯誤 → 記 log → `exit(1)` → 由監督者重啟一個
+**乾淨行程**。這個「有監督者」在生產是不變量，只是實作層（容器／pm2／systemd）可選。
+
+### 13.3 範圍：要做什麼 vs 明確不做
+
+**要做**：
+
+- **worker 監督層**（三選一或並存，見 13.5 clarify）：
+  - 容器化：worker `Dockerfile` + `docker-compose.yml` 新增 worker service（`restart: on-failure`／
+    `unless-stopped`）；或
+  - process manager：pm2 `ecosystem.config`（`autorestart`、`max_restarts`、指數退避 `exp_backoff_restart_delay`）；或
+  - 系統層：systemd unit（`Restart=on-failure`、`RestartSec`、`StartLimitBurst`）。
+- **翻轉 process handler 為 `exit(1)`**：把 `apps/worker/src/main.ts` 的 `unhandledRejection`／
+  `uncaughtException` 由「log + 續跑」改為「log + `process.exit(1)`」（可抽共用 `fatal(kind, value)` helper，
+  順帶統一非 Error 值處理）。**務必與既有 graceful shutdown（SIGTERM／SIGINT → `worker.close` →
+  `mongoClient.close` → redis `quit`）界線清楚**，避免致命退出路徑與正常關閉路徑互相干擾。
+- **crash-loop 防護**：連續過快重啟要有退避與上限（避免熱迴圈打爆 LLM 配額與 Redis／Mongo）。
+- **健康探針（選配）**：worker 存活／就緒訊號（如寫一個 heartbeat key 或簡易 HTTP `/healthz`），供監督者
+  判斷「還活著但卡住」的情況。
+
+**明確不做（避免膨脹）**：
+
+- api／web 的容器化與部署編排（如需，另案；本 feature 聚焦 worker 的崩潰韌性與重啟）。
+- 完整 CI/CD 發布管線、image registry、雲端編排（k8s）——除非 clarify 明確納入。
+- 對 BullMQ 重試策略（attempts／backoff）的調整——那是 job 級語意，與 process 級監督正交。
+
+### 13.4 Branch（草案）
+
+```bash
+git checkout develop
+git checkout -b 007-worker-process-supervision   # 或依當時排定的 feature 編號
+```
+
+### 13.5 待 `/speckit.clarify` 決定的關鍵問題
+
+1. **監督者選型**（最重要，決定整條技術路線）：容器化（Docker + compose restart）／pm2／systemd 三選一
+   或組合？需同時考量：dev（目前 `tsx watch` 於 PowerShell 視窗）與 prod-ish/demo 的執行模型是否統一。
+2. **dev 是否也要監督**：dev 保持 `tsx watch`（人為在場、看 log 即可）還是也套監督者？`tsx watch` 在行程
+   自行 `exit` 後是「等待檔案變更」而非自動重拉，需釐清 dev 期望行為。
+3. **crash-loop 政策**：重啟上限與退避參數（如 pm2 `max_restarts` / `exp_backoff_restart_delay`；systemd
+   `StartLimitIntervalSec`／`StartLimitBurst`）取值？超過上限後的行為（停擺並告警？）。
+4. **graceful shutdown 交互**：`exit(1)` 致命路徑與現有 SIGTERM／SIGINT 優雅關閉如何不打架？致命退出前是否
+   仍嘗試釋放連線（還是直接硬退、交由監督者重啟後重建連線）？
+5. **健康探針**：是否要 `/healthz` 或 heartbeat，以偵測「行程還在但卡住」（純靠 process 退出碼偵測不到
+   活鎖）？若要，判準與逾時？
+6. **in-flight job 的收尾**：worker 崩潰重啟後，BullMQ 的 `stalled` 機制與 `attempts` 是否已足以讓當時
+   in-flight 的 job 被重派？需驗證（本專案 `concurrency: 2`、有 limiter）。
+7. **Windows vs Linux**：dev 在 Windows/PowerShell、prod 若在 Linux 容器，監督設定要否分環境？
+
+### 13.6 初步技術方向
+
+- **process handler 收斂為 `fatal` helper**（示意，實際以 tasks 為準）：
+
+```ts
+// apps/worker/src/main.ts bootstrap() 內
+const fatal = (kind: string, value: unknown): never => {
+  const detail = value instanceof Error ? (value.stack ?? value.message) : String(value);
+  log("error", `${kind}（致命，worker 將結束交由監督者重啟）：${detail}`);
+  process.exit(1);
+};
+process.on("unhandledRejection", (reason) => fatal("unhandledRejection", reason));
+process.on("uncaughtException", (err) => fatal("uncaughtException", err));
+```
+
+  前提是屆時**監督者已就位**——否則不得合併此翻轉（見 13.1 的「兩半」論）。
+
+- **容器化路線**：新增 `apps/worker/Dockerfile`（多階段：`pnpm install --frozen-lockfile` →
+  `pnpm --filter worker build` → 跑 `node dist/main.js`），`docker-compose.yml` 增 worker service 依賴
+  redis／mongo（`depends_on`）並設 `restart: on-failure`；env 由 `.env`／compose `environment` 注入。
+- **pm2 路線**：加 `ecosystem.config.cjs`（`script: dist/main.js`、`autorestart: true`、`max_restarts`、
+  `exp_backoff_restart_delay`），並提供對應啟動 script（可與 `scripts/dev-up.ps1` 的視窗模型整合或替代）。
+- **驗證崩潰重啟**：以可控方式注入一個 `uncaughtException`（如臨時拋錯的測試旗標），觀察行程 `exit(1)`
+  後由監督者拉起新行程、且佇列中的 job 被 BullMQ 重派、`ai/error`／重試語意不受影響。
+
+### 13.7 驗收（初步）
+
+- 注入致命錯誤（`uncaughtException`／浮空 `unhandledRejection`）時，worker `exit(1)` 並由監督者在退避策略內
+  自動重啟；log 明確標示致命與重啟。
+- 重啟後 in-flight／佇列中的 job 能被消化（不永久卡死），`ai/error`／重試語意與 hotfix 前一致。
+- crash-loop 情境（連續快速失敗）觸發退避與上限，不會無限熱迴圈打爆 LLM 配額／Redis／Mongo。
+- graceful shutdown（SIGTERM／SIGINT）仍正常：正常關閉不誤觸致命路徑；致命退出不殘留半開連線。
+- `apps/worker/src/main.ts` 的 handler 已由「log + 續跑」翻為「log + `exit(1)`」，且本指南與程式碼註解一致
+  （移除 hotfix 期的「暫時策略」但書）。
+
+---
+
+## 14. 本機啟動與端到端 Demo
+
+### 14.1 第一次啟動
 
 Terminal 1：infra
 
@@ -2717,7 +2836,7 @@ Terminal 4：web
 pnpm --filter web dev
 ```
 
-### 13.2 Demo 劇本
+### 14.2 Demo 劇本
 
 1. 開 `http://localhost:5173`。
 2. 看到 machine cards 持續更新。
@@ -2731,7 +2850,7 @@ pnpm --filter web dev
 10. 再點同一台同類型錯誤，顯示 cached。
 11. 暫停 worker，再建立 job，說明 API/Gateway 不崩潰且 job 可追蹤。
 
-### 13.3 demo 時 60 秒講法
+### 14.3 demo 時 60 秒講法
 
 ```text
 flow-gatekeeper 是我用 Spec Kit 做的一個即時監控與 AI 診斷 side project。
@@ -2744,7 +2863,7 @@ MongoDB 存 telemetry、errorlogs、maintenanceRecords 與 diagnoses；Redis 負
 
 ---
 
-## 14. 常見坑
+## 15. 常見坑
 
 | 問題 | 解法 |
 | --- | --- |
@@ -2762,7 +2881,7 @@ MongoDB 存 telemetry、errorlogs、maintenanceRecords 與 diagnoses；Redis 負
 
 ---
 
-## 15. 指令速查
+## 16. 指令速查
 
 ```bash
 # install Spec Kit
@@ -2804,7 +2923,7 @@ pnpm --filter web dev
 
 ---
 
-## 16. 參考來源
+## 17. 參考來源
 
 - 架構決策 ADR-001（原生 WebSocket vs Socket.IO）：`docs/adr-001-native-websocket.md`
 - GitHub Spec Kit 官方 repo：`https://github.com/github/spec-kit`
