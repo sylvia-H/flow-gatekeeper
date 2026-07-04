@@ -21,6 +21,16 @@ export const useCopilotStore = defineStore("copilot", () => {
   const jobs = ref<Map<string, CopilotJobState>>(new Map());
   /** 最近一次連線的 clientId；用於偵測重連（新 clientId）以收尾中斷任務（FR-012）。 */
   const lastClientId = ref<string | null>(null);
+  /**
+   * 每台 active 任務「最後一次有進展」的時刻（進度/串流 token 抵達即更新）。
+   * 供 `checkStalls` 的前端逾時 watchdog 判定：後端事件久久不來時自動收尾為 failed，
+   * 避免 drawer 永遠卡在 active 又無從脫身（純呈現層，不新增通訊契約）。
+   */
+  const lastActivityAt = ref<Map<string, number>>(new Map());
+  /** 記某台目前有進展（開始診斷、或收到屬於當前 job 的事件時呼叫）。 */
+  function touch(machineId: string): void {
+    lastActivityAt.value.set(machineId, Date.now());
+  }
 
   // ── Getters ────────────────────────────────────────────────────────
   /** 取某台狀態（無則 idle）；drawer 依 selectedMachineId 呼叫。 */
@@ -57,6 +67,7 @@ export const useCopilotStore = defineStore("copilot", () => {
     try {
       const { jobId } = await postDiagnose(machineId, socketId as string, requestedBy);
       jobs.value.set(machineId, startActiveState(machineId, jobId));
+      touch(machineId);
     } catch (err) {
       jobs.value.set(machineId, {
         status: "failed",
@@ -84,7 +95,43 @@ export const useCopilotStore = defineStore("copilot", () => {
     const machineId =
       event.type === "job/status" ? event.machineId : findMachineByJobId(event.jobId);
     if (machineId === undefined) return;
-    jobs.value.set(machineId, copilotReducer(stateFor(machineId), event));
+    const next = copilotReducer(stateFor(machineId), event);
+    jobs.value.set(machineId, next);
+    // watchdog 計時：只有「屬於當前 job 且仍 active」的事件才算有進展並重置逾時；
+    // 離開 active（completed/failed）即清掉該台計時。
+    if (next.status === "active" && event.jobId === next.jobId) touch(machineId);
+    else if (next.status !== "active") lastActivityAt.value.delete(machineId);
+  }
+
+  /**
+   * 中止／放棄該台目前診斷（問題修正）：把狀態切回 idle，Diagnose 立即可再按。
+   * 被放棄任務的遲到事件由 reducer 以 `isStaleJobEvent`／非 active 保護忽略，不會復活畫面。
+   */
+  function cancel(machineId: string): void {
+    jobs.value.set(machineId, { status: "idle", machineId });
+    lastActivityAt.value.delete(machineId);
+  }
+
+  /**
+   * 前端逾時 watchdog（問題修正）：掃描仍 active 的台，若距最後一次進展超過 `thresholdMs`
+   * 未有任何進度/串流更新，判定卡住並收尾為 failed（可讀訊息 + 沿用現成 Retry）。
+   * 由 App 每隔數秒帶當前時間呼叫；純呈現層自癒，不依賴後端補送事件。
+   */
+  function checkStalls(nowMs: number, thresholdMs: number): void {
+    for (const [machineId, state] of jobs.value) {
+      if (state.status !== "active") continue;
+      const last = lastActivityAt.value.get(machineId) ?? nowMs;
+      if (nowMs - last > thresholdMs) {
+        jobs.value.set(machineId, {
+          status: "failed",
+          machineId,
+          jobId: state.jobId,
+          streamText: state.streamText,
+          error: "診斷逾時或無回應，請重試",
+        });
+        lastActivityAt.value.delete(machineId);
+      }
+    }
   }
 
   /**
@@ -104,6 +151,7 @@ export const useCopilotStore = defineStore("copilot", () => {
           streamText: state.streamText,
           error: "連線中斷，請重試",
         });
+        lastActivityAt.value.delete(machineId);
       }
     }
   }
@@ -115,6 +163,8 @@ export const useCopilotStore = defineStore("copilot", () => {
     canDiagnose,
     diagnose,
     retry,
+    cancel,
+    checkStalls,
     applyEvent,
     onReconnect,
   };

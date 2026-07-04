@@ -65,6 +65,12 @@ function onRetry(): void {
     void copilot.retry(store.selectedMachineId, store.clientId);
   }
 }
+/** 中止：放棄該台目前診斷（→ idle，可立即重新診斷）。 */
+function onCancel(): void {
+  if (store.selectedMachineId !== null) {
+    copilot.cancel(store.selectedMachineId);
+  }
+}
 
 // US5 主區標題列機台數（N＝固定名冊長度；不含 Graph/拓樸切換，僅標題）。
 const machineCount = computed(() => KNOWN_MACHINE_IDS.length);
@@ -100,9 +106,15 @@ const banner = computed(() => {
 });
 
 // 每秒 tick 驅動 stale 重算（低頻，不需高頻；research R7）。
+// 同一個 tick 順帶跑診斷逾時 watchdog：active 任務逾 STALL_TIMEOUT_MS 無進展即自動收尾為
+// failed（可 Retry），避免後端卡住時 drawer 永遠停在 active（門檻取 worker AI_TIMEOUT 30s + 餘裕）。
+const STALL_TIMEOUT_MS = 45_000;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
-  tickTimer = setInterval(() => store.tickNow(), 1000);
+  tickTimer = setInterval(() => {
+    store.tickNow();
+    copilot.checkStalls(Date.now(), STALL_TIMEOUT_MS);
+  }, 1000);
 });
 onUnmounted(() => {
   if (tickTimer !== null) clearInterval(tickTimer);
@@ -219,6 +231,7 @@ const handle = useHighFrequencyWs({
         :has-client="store.clientId !== null"
         @diagnose="onDiagnose"
         @retry="onRetry"
+        @cancel="onCancel"
         @close="onCloseDrawer"
       />
     </template>
