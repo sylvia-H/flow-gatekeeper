@@ -2850,17 +2850,6 @@ pnpm --filter web dev
 10. 再點同一台同類型錯誤，顯示 cached。
 11. 暫停 worker，再建立 job，說明 API/Gateway 不崩潰且 job 可追蹤。
 
-### 14.3 demo 時 60 秒講法
-
-```text
-flow-gatekeeper 是我用 Spec Kit 做的一個即時監控與 AI 診斷 side project。
-前端面對 10-50ms 級 WebSocket telemetry，不逐筆寫 reactive state，而是先進 buffer，再用 requestAnimationFrame 批次提交，所以能穩住 UI。
-後端用 NestJS Gateway 處理 WebSocket，BullMQ 把診斷任務丟給獨立 worker，避免 AI 呼叫阻塞主服務。
-Worker 沒有 WebSocket connection，所以 AI token streaming 走 Redis Pub/Sub 回 Gateway，再轉送前端。
-MongoDB 存 telemetry、errorlogs、maintenanceRecords 與 diagnoses；Redis 負責 queue、cache、Pub/Sub、dedupe lock。
-整個開發流程用 Spec Kit 的 constitution/spec/plan/tasks/implement 管理，每個 feature 都有驗收條件。
-```
-
 ---
 
 ## 15. 常見坑
