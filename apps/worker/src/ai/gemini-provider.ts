@@ -35,6 +35,11 @@ export class GeminiProvider implements AiProvider {
     const run = (async (): Promise<string> => {
       let full = "";
       const result = await model.generateContentStream(prompt);
+      // SDK 在串流之外還提供一個背景的 `result.response` promise（彙總完整回應）；當 SSE
+      // 串流解析失敗（"Failed to parse stream"）時它也會 reject。本方法只迭代 result.stream，
+      // 若不接住此背景 rejection，會變成 unhandledRejection、依 Node 預設終止整個 worker 進程。
+      // 真正的錯誤仍由下方 for-await 拋出、交給 worker 轉 `ai/error` 與重試，故這裡安全吞掉即可。
+      void result.response.catch(() => {});
       for await (const chunk of result.stream) {
         const text = chunk.text();
         if (text) {

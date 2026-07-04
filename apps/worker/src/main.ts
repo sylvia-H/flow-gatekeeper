@@ -35,7 +35,13 @@ function log(level: "log" | "warn" | "error", msg: string): void {
 
 /** 發布 AI 串流事件到 Redis Pub/Sub（worker MUST NOT 直接 emit ws，憲章 IV）。 */
 function publish(pub: Redis, jobId: string, event: AiStreamEvent): void {
-  void pub.publish(`ai-stream:${jobId}`, JSON.stringify(event));
+  // fire-and-forget，但在源頭接住 publish 失敗並記 log：單筆 token 發布失敗不該拖垮整個 worker，
+  // 也不該變成浮空 rejection 汙染全域守門。真正的 Redis 中斷會由後續被 await 的 cache 指令
+  // （get/set/del）拋出，走 processor 的 ai/error 與重試路徑收尾。
+  void pub.publish(`ai-stream:${jobId}`, JSON.stringify(event)).catch((err: unknown) => {
+    const detail = err instanceof Error ? err.message : String(err);
+    log("warn", `publish 失敗 ai-stream:${jobId} type=${event.type}：${detail}`);
+  });
 }
 
 function sleep(ms: number): Promise<void> {
@@ -155,6 +161,24 @@ function createProcessor(db: Db, pub: Redis, cache: Redis, ai: AiProvider) {
 }
 
 export async function bootstrap(): Promise<void> {
+  // 韌性守門（縱深防禦）：單一 job 的 LLM 串流可能拋出「浮空」的 rejection（例如 Gemini SDK
+  // 的背景 response promise 於串流解析失敗時 reject）。若放任 Node 預設行為會**終止整個 worker
+  // 進程**，導致其後所有 job 卡在佇列無人消化。這裡記 log 但不 exit，讓單一壞串流不拖垮 worker
+  // ——該 job 本身仍由 processor／BullMQ 走 `ai/error` 與重試路徑收尾。
+  //
+  // 註：此「log + 續跑」是**目前尚無 process 監督者**下的暫時策略。生產正解是「exit(1) + 由
+  // 監督者（容器 restart 策略／pm2／systemd）重啟乾淨行程」，屬獨立的 worker 生產化工作，
+  // 方向藍圖見 docs/Flow-Gatekeeper-SDD-完整實作指南.md「Feature 007：worker 生產化與
+  // process 監督」一節，另立 feature 走正式 SDD。
+  process.on("unhandledRejection", (reason) => {
+    const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+    log("error", `unhandledRejection（已忽略、worker 續跑）：${detail}`);
+  });
+  process.on("uncaughtException", (err) => {
+    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    log("error", `uncaughtException（已忽略、worker 續跑）：${detail}`);
+  });
+
   const mongoClient = new MongoClient(process.env.MONGO_URL ?? "mongodb://127.0.0.1:27017/flow-gatekeeper");
   await mongoClient.connect();
   const db = mongoClient.db(process.env.MONGO_DB ?? "flow-gatekeeper");
