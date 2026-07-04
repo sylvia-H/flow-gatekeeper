@@ -21,14 +21,26 @@ import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.j
 const store = useMonitoringStore();
 const copilot = useCopilotStore();
 
-// 手機 bottom-sheet 開關；桌機（md+）drawer 常駐、無視此值（R8）。選台即開啟手機 sheet。
+// 手機 bottom-sheet 開關。桌機（md+）改為「可折疊常駐」：desktopPanelOpen 控制是否顯示，
+// 收合後中間欄拿回面板寬度、右側改露出可展開的細把手（修正：小螢幕中欄被壓、Diagnose 被裁）。
+// 選台即（重新）開啟兩種形態，確保對機台操作時 Copilot 一定看得到。
 const drawerOpen = ref(false);
+const desktopPanelOpen = ref(true);
 watch(
   () => store.selectedMachineId,
   (id) => {
-    if (id !== null) drawerOpen.value = true;
+    if (id !== null) {
+      drawerOpen.value = true;
+      desktopPanelOpen.value = true;
+    }
   },
 );
+
+/** header X：手機關閉 sheet、桌機收合常駐面板（兩者一併處理即可，互不干擾）。 */
+function onCloseDrawer(): void {
+  drawerOpen.value = false;
+  desktopPanelOpen.value = false;
+}
 
 /** drawer 恆依 selectedMachineId 取對應那一份狀態（未選取→idle 空殼，由 machineId=null 走空狀態）。 */
 const selectedState = computed<CopilotJobState>(() =>
@@ -51,6 +63,12 @@ function onDiagnose(): void {
 function onRetry(): void {
   if (store.selectedMachineId !== null) {
     void copilot.retry(store.selectedMachineId, store.clientId);
+  }
+}
+/** 中止：放棄該台目前診斷（→ idle，可立即重新診斷）。 */
+function onCancel(): void {
+  if (store.selectedMachineId !== null) {
+    copilot.cancel(store.selectedMachineId);
   }
 }
 
@@ -88,9 +106,15 @@ const banner = computed(() => {
 });
 
 // 每秒 tick 驅動 stale 重算（低頻，不需高頻；research R7）。
+// 同一個 tick 順帶跑診斷逾時 watchdog：active 任務逾 STALL_TIMEOUT_MS 無進展即自動收尾為
+// failed（可 Retry），避免後端卡住時 drawer 永遠停在 active（門檻取 worker AI_TIMEOUT 30s + 餘裕）。
+const STALL_TIMEOUT_MS = 45_000;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
-  tickTimer = setInterval(() => store.tickNow(), 1000);
+  tickTimer = setInterval(() => {
+    store.tickNow();
+    copilot.checkStalls(Date.now(), STALL_TIMEOUT_MS);
+  }, 1000);
 });
 onUnmounted(() => {
   if (tickTimer !== null) clearInterval(tickTimer);
@@ -127,7 +151,9 @@ const handle = useHighFrequencyWs({
   <AppLayout
     :connection-status="store.connectionStatus"
     :drawer-open="drawerOpen"
+    :panel-open="desktopPanelOpen"
     @close-drawer="drawerOpen = false"
+    @open-panel="desktopPanelOpen = true"
   >
     <template #sidebar>
       <div class="flex items-center gap-2 border-b border-subtle px-4 py-3">
@@ -205,7 +231,8 @@ const handle = useHighFrequencyWs({
         :has-client="store.clientId !== null"
         @diagnose="onDiagnose"
         @retry="onRetry"
-        @close="drawerOpen = false"
+        @cancel="onCancel"
+        @close="onCloseDrawer"
       />
     </template>
   </AppLayout>

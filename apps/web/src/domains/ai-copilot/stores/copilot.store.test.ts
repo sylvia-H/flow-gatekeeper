@@ -108,6 +108,57 @@ describe("copilot store（contracts/copilot-store）", () => {
     expect(store.stateFor("press-02").status).toBe("active");
   });
 
+  it("cancel：中止 active → idle，Diagnose 立即可再按", async () => {
+    mockDiagnoseOk("job-1");
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", "sock-1");
+    expect(store.stateFor("mixer-01").status).toBe("active");
+    store.cancel("mixer-01");
+    expect(store.stateFor("mixer-01").status).toBe("idle");
+    expect(store.canDiagnose("mixer-01", true)).toBe(true);
+  });
+
+  it("cancel 後：被放棄任務的遲到事件被忽略，不復活畫面", async () => {
+    mockDiagnoseOk("job-1");
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", "sock-1");
+    store.cancel("mixer-01");
+    store.applyEvent({ type: "ai/done", jobId: "job-1", cached: false, result: RESULT });
+    expect(store.stateFor("mixer-01").status).toBe("idle");
+  });
+
+  it("checkStalls watchdog：逾時無進展 → failed（可重試）；未逾時不動", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    mockDiagnoseOk("job-1");
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", "sock-1"); // 記活動時刻 @1_000_000
+    store.checkStalls(1_000_000 + 10_000, 45_000); // 未逾時
+    expect(store.stateFor("mixer-01").status).toBe("active");
+    store.checkStalls(1_000_000 + 46_000, 45_000); // 逾時
+    const s = store.stateFor("mixer-01");
+    expect(s.status).toBe("failed");
+    if (s.status === "failed") expect(s.error).toBe("診斷逾時或無回應，請重試");
+  });
+
+  it("checkStalls：屬當前 job 的進度事件會重置逾時計時", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    mockDiagnoseOk("job-1");
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", "sock-1"); // 活動 @1_000_000
+    nowSpy.mockReturnValue(1_040_000);
+    store.applyEvent({
+      type: "job/status",
+      jobId: "job-1",
+      machineId: "mixer-01",
+      status: "active",
+      progress: 60,
+    }); // 進度更新 → 重置活動 @1_040_000
+    store.checkStalls(1_046_000, 45_000); // 距重置僅 6s → 不逾時
+    expect(store.stateFor("mixer-01").status).toBe("active");
+    store.checkStalls(1_040_000 + 46_000, 45_000); // 距重置 46s → 逾時
+    expect(store.stateFor("mixer-01").status).toBe("failed");
+  });
+
   it("onReconnect：clientId 變更使 active 台轉 failed（中斷）；首次/同 id 不動（FR-012）", async () => {
     mockDiagnoseOk("job-1");
     const store = useCopilotStore();

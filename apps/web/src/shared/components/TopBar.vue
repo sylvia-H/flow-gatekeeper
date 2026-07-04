@@ -56,9 +56,9 @@ function onSearchInput(event: Event): void {
 </script>
 
 <template>
-  <div class="flex w-full items-center gap-3">
-    <!-- Search（外觀，邏輯留待後續） -->
-    <div class="relative w-full max-w-xs">
+  <div class="tb-bar flex w-full items-center gap-3">
+    <!-- Search：可隨中間欄寬度收縮（min-w-0 flex-1），最寬到 xs；空間不足時先讓它讓位 -->
+    <div class="relative min-w-0 flex-1 max-w-xs">
       <Search
         class="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-subtle"
         aria-hidden="true"
@@ -73,7 +73,9 @@ function onSearchInput(event: Event): void {
       />
     </div>
 
-    <div class="ml-auto flex items-center gap-3">
+    <!-- 右側工具群組：整體 shrink-0 並固定在右緣；空間不足時先隱藏次要項（見下），
+         確保 Diagnose 永遠完整可見、不被中間欄壓縮而裁切。 -->
+    <div class="flex shrink-0 items-center gap-2 sm:gap-3">
       <!-- Pause/Resume：凍結/恢復畫面更新（US4）；暫停期間續收 buffer、resume 跳最新 -->
       <button
         type="button"
@@ -87,23 +89,26 @@ function onSearchInput(event: Event): void {
         <span class="hidden md:inline">{{ store.paused ? "Resume" : "Pause" }}</span>
       </button>
 
-      <!-- Mock frequency 控制（disabled 佔位，FR-027） -->
+      <!-- Mock frequency 控制（disabled 佔位，FR-027）：次要項；工具列自身變窄時（容器查詢）
+           先隱藏以把空間留給 Diagnose，避免溢出遮住右側 Copilot 面板。 -->
       <button
         type="button"
         disabled
         title="Mock telemetry frequency（後續啟用）"
         aria-label="Mock telemetry frequency"
-        class="flex h-9 cursor-not-allowed items-center gap-1.5 rounded-control border border-subtle bg-surface px-2.5 text-xs text-fg-subtle opacity-60"
+        class="tb-optional flex h-9 cursor-not-allowed items-center gap-1.5 rounded-control border border-subtle bg-surface px-2.5 text-xs text-fg-subtle opacity-60"
       >
         <Gauge class="h-4 w-4" aria-hidden="true" />
         <span class="hidden md:inline">Mock Hz</span>
       </button>
 
-      <!-- 背壓計量 -->
-      <BackpressureBadge
-        :received-messages="store.receivedMessages"
-        :rendered-batches="store.renderedBatches"
-      />
+      <!-- 背壓計量：次要項，工具列變窄時先讓位（寬螢幕/收合面板時仍完整呈現） -->
+      <div class="tb-optional">
+        <BackpressureBadge
+          :received-messages="store.receivedMessages"
+          :rendered-batches="store.renderedBatches"
+        />
+      </div>
 
       <!-- Connection status chip（讀 store.connectionStatus 單一來源，依三態上色） -->
       <span
@@ -132,7 +137,7 @@ function onSearchInput(event: Event): void {
               : 'Run AI diagnosis'
         "
         aria-label="Run AI diagnosis"
-        class="flex h-9 items-center gap-1.5 rounded-control bg-accent px-3 text-sm font-medium text-base hover:bg-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
+        class="flex h-9 shrink-0 items-center gap-1.5 rounded-control bg-accent px-3 text-sm font-medium text-base hover:bg-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
         @click="onDiagnose"
       >
         <Stethoscope class="h-4 w-4" aria-hidden="true" />
@@ -141,3 +146,19 @@ function onSearchInput(event: Event): void {
     </div>
   </div>
 </template>
+
+<style scoped>
+/*
+ * 依「工具列自身的實際寬度」（＝中間欄可用空間，會隨 Copilot 面板開合與視窗寬度變化）決定
+ * 是否隱藏次要項——比視窗斷點更準：面板開啟壓縮中間欄時，即使視窗很寬也會讓位給 Diagnose，
+ * 避免工具列溢出遮住右側面板；面板收合、空間變寬時自動恢復顯示。
+ */
+.tb-bar {
+  container-type: inline-size;
+}
+@container (max-width: 820px) {
+  .tb-optional {
+    display: none;
+  }
+}
+</style>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Stethoscope, X, ChevronDown, RotateCcw } from "lucide-vue-next";
+import { Stethoscope, X, ChevronDown, RotateCcw, Ban } from "lucide-vue-next";
 import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
 import type { MachineLive } from "../../monitoring/stores/monitoring.store.js";
 import { progressLabel, type CopilotJobState } from "../lib/copilot-reducer.js";
@@ -26,6 +26,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: "diagnose"): void;
   (e: "retry"): void;
+  (e: "cancel"): void;
   (e: "close"): void;
 }>();
 
@@ -94,8 +95,9 @@ watch(
     >{{ STATUS_CHIP[state.status].label }}</span>
     <button
       type="button"
-      class="ml-1 shrink-0 rounded-control p-1 text-fg-subtle hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent md:hidden"
-      aria-label="關閉 Copilot"
+      class="ml-1 shrink-0 rounded-control p-1 text-fg-subtle hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      aria-label="關閉／收合 Copilot 面板"
+      title="關閉／收合 Copilot 面板"
       @click="emit('close')"
     >
       <X class="h-4 w-4" aria-hidden="true" />
@@ -186,6 +188,16 @@ watch(
       </ol>
 
       <StreamingPanel :text="state.streamText" :streaming="true" />
+
+      <!-- 中止／放棄：診斷卡住或不想等時的脫身出口（→ idle，可立即重新診斷） -->
+      <button
+        type="button"
+        class="flex w-full items-center justify-center gap-2 rounded-control border border-subtle bg-surface px-3 py-2 text-sm text-fg-muted hover:bg-surface-hover hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        @click="emit('cancel')"
+      >
+        <Ban class="h-4 w-4" aria-hidden="true" />
+        中止診斷
+      </button>
     </div>
 
     <!-- completed：結構化結果 + 收合的串流文字 -->
