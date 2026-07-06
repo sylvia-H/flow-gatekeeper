@@ -54,7 +54,7 @@ Spec Kit 的價值是把規格、計畫、任務、驗收與實作串成流程�
   -> commit / merge
 ```
 
-本指南把專案切成 5 個 feature，再穿插 CI 與 Claude Design 階段。
+本指南把專案切成多個 feature：core 為 001–005，再穿插 CI 與 Claude Design 階段；其後依實作經驗擴充 006（前端保真補完）與生產化三部曲 007–009（見 §13–§15 與 ADR-002）。
 
 > **如何使用本指南的程式碼區塊**
 > 文件內的 `asyncapi.yaml`、`contracts`、service、hook 等完整 code，定位是 **「期望產出 / reference 附錄」**，不是要你手貼進 repo 後就跳過 Spec Kit。
@@ -2693,7 +2693,12 @@ git merge --no-ff 006-monitoring-console-fidelity
 > 前的起草；正式流程仍走 `specify -> clarify -> plan -> checklist -> tasks -> analyze -> implement ->
 > 驗收 -> merge`。下面的 prompt 與設定皆為草案，最終以 spec/tasks 為準。
 >
-> **前置**：待 `develop` 上所有未合併分支都檢視、收尾並合併後，再從 `develop` 依本節另開一條 branch。
+> **選型已定案**：監督者採**容器化路線**（Docker + compose restart policy），pm2/systemd 出局；
+> 本 feature 是生產化三部曲（007 → 008 → 009）的第一步。完整決策理由與範圍邊界見
+> `docs/adr-002-productionization-scope.md`（下稱 ADR-002），本節不重複論證、只落地。
+>
+> **前置**：Feature 006 已併回 `develop`；待 `develop` 上所有未合併分支都檢視、收尾並合併後，
+> 再從 `develop` 依本節另開一條 branch。
 
 ### 13.1 由來：從 `fix/worker-stream-resilience` 拆出的「另一半」
 
@@ -2723,53 +2728,83 @@ operation"）：可能殘留寫到一半的資料、懸空的 handle、不一致
 並遮蔽真正的 bug**。生產正解是奉行「let it crash」：非預期致命錯誤 → 記 log → `exit(1)` → 由監督者重啟一個
 **乾淨行程**。這個「有監督者」在生產是不變量，只是實作層（容器／pm2／systemd）可選。
 
-### 13.3 範圍：要做什麼 vs 明確不做
+### 13.3 監督者選型定案與生產化路線圖（ADR-002 摘要）
+
+原藍圖把監督者列為「容器化／pm2／systemd 三選一」留給 clarify；經 ADR-002 盤點後**定案為容器化**：
+
+- **systemd 出局**：dev 在 Windows/PowerShell，systemd 不存在，監督設定會變成 dev 上無法演練的平台特定資產。
+- **pm2 出局**：只為 restart 引入一套新工具鏈，卻不提供環境隔離與可攜性；且 infra 已在 compose，再加 pm2 等於維護兩套執行模型。
+- **容器化勝出**：與既有 `docker-compose.yml` 收斂成單一系統描述；Docker 內建 restart 指數退避（100ms 起、每次翻倍、有上限），crash-loop 防護即取即用；Windows dev 用 Docker Desktop 即可驗收；worker 趟完 pnpm monorepo 容器化的坑後，008 的 api/web 幾乎複製貼上。
+
+同時，原藍圖「api/web 容器化如需另案」升格為明確排程，生產化拆成三部曲：
+
+| Feature | 主題 | 性質 | 章節 |
+| --- | --- | --- | --- |
+| 007 | worker 容器化 + 監督 + let it crash | **行為翻轉**（崩潰語意改變，需驗證 job 重派） | 本章 |
+| 008 | api/web 容器化、`docker compose up` 一鍵全棧 demo | **純打包**（無行為變更） | §14 |
+| 009 | 可觀測性基線（結構化日誌、healthz、指標入 log） | **橫切三端** | §15 |
+
+拆三個而不是併一個大 feature 的理由、以及「只文件化不實作」（Gateway 擴展、Pub/Sub 語意、認證、
+有損寫入）與「明確拒絕」（k8s、Kafka、TSDB、OIDC、Redis HA）的完整清單，見 ADR-002 §5–§7。
+
+### 13.4 範圍：要做什麼 vs 明確不做
 
 **要做**：
 
-- **worker 監督層**（三選一或並存，見 13.5 clarify）：
-  - 容器化：worker `Dockerfile` + `docker-compose.yml` 新增 worker service（`restart: on-failure`／
-    `unless-stopped`）；或
-  - process manager：pm2 `ecosystem.config`（`autorestart`、`max_restarts`、指數退避 `exp_backoff_restart_delay`）；或
-  - 系統層：systemd unit（`Restart=on-failure`、`RestartSec`、`StartLimitBurst`）。
+- **worker 容器化**：`apps/worker/Dockerfile`（多階段建置，處理 pnpm workspace 依賴裁剪），
+  `docker-compose.yml` 新增 worker service（`depends_on` redis/mongo、`restart: on-failure`、env 注入）。
 - **翻轉 process handler 為 `exit(1)`**：把 `apps/worker/src/main.ts` 的 `unhandledRejection`／
   `uncaughtException` 由「log + 續跑」改為「log + `process.exit(1)`」（可抽共用 `fatal(kind, value)` helper，
   順帶統一非 Error 值處理）。**務必與既有 graceful shutdown（SIGTERM／SIGINT → `worker.close` →
   `mongoClient.close` → redis `quit`）界線清楚**，避免致命退出路徑與正常關閉路徑互相干擾。
-- **crash-loop 防護**：連續過快重啟要有退避與上限（避免熱迴圈打爆 LLM 配額與 Redis／Mongo）。
-- **健康探針（選配）**：worker 存活／就緒訊號（如寫一個 heartbeat key 或簡易 HTTP `/healthz`），供監督者
-  判斷「還活著但卡住」的情況。
+- **crash-loop 防護**：以 Docker 內建 restart 退避 + `on-failure` 重試上限承接（不自己造輪子），
+  但要**驗證**行為：連續快速失敗時間隔遞增、達上限後停止並可從 log 判讀（避免熱迴圈打爆 LLM 配額與 Redis／Mongo）。
+- **健康探針（必做，輕量）**：worker 週期性寫 Redis heartbeat key（帶 TTL），compose `healthcheck` 讀取判定，
+  補「行程還活著但卡住」這個 restart policy 偵測不到的盲點。判準與後續動作見 13.6 clarify。
+- **驗證 in-flight job 重派**：worker 被殺／崩潰重啟後，BullMQ 的 `stalled` 機制與 `attempts` 讓當時
+  in-flight 的 job 被重新消化（本專案 `concurrency: 2`、有 limiter）。
+- **可控故障注入旗標（正式交付，非臨時 code）**：以 env flag（如 `WORKER_CHAOS=uncaught|rejection`）
+  讓 worker 在啟動後以可控方式拋出致命錯誤。它既是本 feature 驗收的注入手段，也保留下來作為日後
+  「故障演練 demo」的正式機制（見 §16 的預告）——監控台監控它自己的死而復生，是 007/009 串成
+  一個畫面的敘事。預設關閉、文件寫明僅供演練。
 
 **明確不做（避免膨脹）**：
 
-- api／web 的容器化與部署編排（如需，另案；本 feature 聚焦 worker 的崩潰韌性與重啟）。
-- 完整 CI/CD 發布管線、image registry、雲端編排（k8s）——除非 clarify 明確納入。
+- api／web 的容器化與一鍵 demo——**排程在 Feature 008（§14）**，不是「如需另案」。
+- 結構化日誌、api `/healthz`、指標——**排程在 Feature 009（§15）**；本 feature 只做監督所需的最小存活訊號。
+- 完整 CI/CD 發布管線、image registry、雲端編排（k8s）——ADR-002 §7 明確拒絕／另議。
 - 對 BullMQ 重試策略（attempts／backoff）的調整——那是 job 級語意，與 process 級監督正交。
 
-### 13.4 Branch（草案）
+### 13.5 Branch（草案）
 
 ```bash
 git checkout develop
 git checkout -b 007-worker-process-supervision   # 或依當時排定的 feature 編號
 ```
 
-### 13.5 待 `/speckit.clarify` 決定的關鍵問題
+### 13.6 待 `/speckit.clarify` 決定的關鍵問題
 
-1. **監督者選型**（最重要，決定整條技術路線）：容器化（Docker + compose restart）／pm2／systemd 三選一
-   或組合？需同時考量：dev（目前 `tsx watch` 於 PowerShell 視窗）與 prod-ish/demo 的執行模型是否統一。
-2. **dev 是否也要監督**：dev 保持 `tsx watch`（人為在場、看 log 即可）還是也套監督者？`tsx watch` 在行程
-   自行 `exit` 後是「等待檔案變更」而非自動重拉，需釐清 dev 期望行為。
-3. **crash-loop 政策**：重啟上限與退避參數（如 pm2 `max_restarts` / `exp_backoff_restart_delay`；systemd
-   `StartLimitIntervalSec`／`StartLimitBurst`）取值？超過上限後的行為（停擺並告警？）。
-4. **graceful shutdown 交互**：`exit(1)` 致命路徑與現有 SIGTERM／SIGINT 優雅關閉如何不打架？致命退出前是否
-   仍嘗試釋放連線（還是直接硬退、交由監督者重啟後重建連線）？
-5. **健康探針**：是否要 `/healthz` 或 heartbeat，以偵測「行程還在但卡住」（純靠 process 退出碼偵測不到
-   活鎖）？若要，判準與逾時？
-6. **in-flight job 的收尾**：worker 崩潰重啟後，BullMQ 的 `stalled` 機制與 `attempts` 是否已足以讓當時
-   in-flight 的 job 被重派？需驗證（本專案 `concurrency: 2`、有 limiter）。
-7. **Windows vs Linux**：dev 在 Windows/PowerShell、prod 若在 Linux 容器，監督設定要否分環境？
+> 原藍圖的第一題「監督者選型」已由 ADR-002 定案為容器化（見 13.3），不再是 clarify 議題。
 
-### 13.6 初步技術方向
+1. **dev 是否也用容器跑 worker**：初步方向是 dev 保留 `tsx watch`（熱重載價值 > 監督價值、人在場看 log
+   即可；見 ADR-002 §4.4），容器 + 監督用於 demo/prod-ish 情境。需釐清兩種模式的切換方式（compose
+   profile？獨立 script？）與文件呈現。另注意 `tsx watch` 在行程自行 `exit` 後是「等待檔案變更」而非
+   自動重拉——dev 模式下致命錯誤的期望行為要說清楚。
+2. **restart 策略細節**：`restart: on-failure` 是否帶最大重試次數（如 `on-failure:5`）？達上限停擺後
+   如何被注意到（目前只有 `docker ps`／log；系統性告警屬 009 之後的範圍）？或改用 `unless-stopped`
+   接受無限重啟（Docker 退避有上限但不會放棄）？
+3. **graceful shutdown 交互**：`exit(1)` 致命路徑與現有 SIGTERM／SIGINT 優雅關閉如何不打架？致命退出前是否
+   仍嘗試釋放連線（還是直接硬退、交由監督者重啟後重建連線）？另 `docker stop` 走 SIGTERM + 逾時 SIGKILL，
+   `stop_grace_period` 要涵蓋 `worker.close()` 的收尾時間。
+4. **健康探針判準**：heartbeat key 的寫入週期與 TTL、compose `healthcheck` 的 `interval`／`timeout`／
+   `retries` 取值？以及 unhealthy 之後的動作——compose 本身**不會**自動重啟 unhealthy 容器，探針定位是
+   「可觀察的示警」還是要搭配重啟機制？
+5. **in-flight job 重派的驗證方式**：worker 崩潰重啟後，BullMQ 的 `stalled` 機制與 `attempts` 是否已足以讓
+   當時 in-flight 的 job 被重派？需設計可重現的驗證場景（本專案 `concurrency: 2`、有 limiter）。
+6. **image 基底與建置細節**：Node 基底（`node:24-alpine`？）、workspace 依賴裁剪方式（`pnpm deploy` vs
+   filtered install）、`.dockerignore` 範圍、建置產物與 `tsx` 的取捨（容器內跑 `node dist/main.js` 而非 `tsx`）。
+
+### 13.7 初步技術方向
 
 - **process handler 收斂為 `fatal` helper**（示意，實際以 tasks 為準）：
 
@@ -2786,29 +2821,190 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
 
   前提是屆時**監督者已就位**——否則不得合併此翻轉（見 13.1 的「兩半」論）。
 
-- **容器化路線**：新增 `apps/worker/Dockerfile`（多階段：`pnpm install --frozen-lockfile` →
-  `pnpm --filter worker build` → 跑 `node dist/main.js`），`docker-compose.yml` 增 worker service 依賴
-  redis／mongo（`depends_on`）並設 `restart: on-failure`；env 由 `.env`／compose `environment` 注入。
-- **pm2 路線**：加 `ecosystem.config.cjs`（`script: dist/main.js`、`autorestart: true`、`max_restarts`、
-  `exp_backoff_restart_delay`），並提供對應啟動 script（可與 `scripts/dev-up.ps1` 的視窗模型整合或替代）。
-- **驗證崩潰重啟**：以可控方式注入一個 `uncaughtException`（如臨時拋錯的測試旗標），觀察行程 `exit(1)`
-  後由監督者拉起新行程、且佇列中的 job 被 BullMQ 重派、`ai/error`／重試語意不受影響。
+- **worker Dockerfile（多階段草案）**：builder 階段 `pnpm install --frozen-lockfile`（workspace root context，
+  帶入 `packages/contracts`、`packages/shared`）→ `pnpm --filter worker build`；runtime 階段只帶入建置產物與
+  production 依賴（`pnpm deploy --filter worker --prod` 或等效裁剪），入口 `node dist/main.js`。
+- **compose worker service（草案）**：
 
-### 13.7 驗收（初步）
+```yaml
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: on-failure          # 重試上限與否見 13.6 Q2
+    depends_on:
+      - redis
+      - mongo
+    env_file: apps/worker/.env   # 覆蓋 REDIS_HOST/MONGO_URL 為 service name
+    healthcheck:                 # 讀 heartbeat，判準見 13.6 Q4
+      test: ["CMD-SHELL", "node dist/healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+```
 
-- 注入致命錯誤（`uncaughtException`／浮空 `unhandledRejection`）時，worker `exit(1)` 並由監督者在退避策略內
+  注意容器內連線位址是 compose service name（`redis`／`mongo`），與 host 上 `tsx watch` 用的
+  `127.0.0.1` 不同——env 注入策略要把這件事處理乾淨（`.env` 分檔或 compose `environment` 覆蓋）。
+
+- **heartbeat 探針**：worker 主迴圈（或 BullMQ worker 事件）週期性 `SET worker:heartbeat <ts> EX <ttl>`；
+  healthcheck script 檢查 key 存在且未過期。活著但卡住（活鎖）→ key 過期 → unhealthy 可見。
+- **crash-loop 防護交給 Docker**：restart 退避是 Docker 內建（指數、有上限），本 feature 的工作是**驗證**
+  而非實作：連續快速失敗時觀察 `docker inspect`／log 的重啟間隔遞增，與 `on-failure` 上限行為。
+- **驗證崩潰重啟**：用 13.4 的故障注入旗標（`WORKER_CHAOS` env flag，正式機制而非臨時拋錯 code）注入
+  `uncaughtException`／浮空 rejection，觀察行程 `exit(1)` 後由 Docker 拉起新容器、且佇列中的 job 被
+  BullMQ 重派、`ai/error`／重試語意不受影響。同一旗標日後供 §16 的故障演練劇本重複使用。
+
+### 13.8 驗收（初步）
+
+- `docker compose up -d worker` 能成功建置並啟動 worker 容器，端到端消化診斷 job（cache、streaming、
+  `ai/error` 語意與 host 模式一致）。
+- 注入致命錯誤（`uncaughtException`／浮空 `unhandledRejection`）時，worker `exit(1)` 並由 Docker 依退避策略
   自動重啟；log 明確標示致命與重啟。
 - 重啟後 in-flight／佇列中的 job 能被消化（不永久卡死），`ai/error`／重試語意與 hotfix 前一致。
-- crash-loop 情境（連續快速失敗）觸發退避與上限，不會無限熱迴圈打爆 LLM 配額／Redis／Mongo。
-- graceful shutdown（SIGTERM／SIGINT）仍正常：正常關閉不誤觸致命路徑；致命退出不殘留半開連線。
+- crash-loop 情境（連續快速失敗）觀察到重啟間隔遞增；若設 `on-failure` 上限，達上限後停止且可從 log 判讀，
+  不會無限熱迴圈打爆 LLM 配額／Redis／Mongo。
+- graceful shutdown 仍正常：`docker stop`（SIGTERM）走既有優雅關閉、在 `stop_grace_period` 內收尾，
+  不誤觸致命路徑；致命退出不殘留半開連線。
+- 健康探針可判別「活著但卡住」：人工使 heartbeat 停寫，容器狀態轉為 unhealthy。
+- 故障注入旗標（`WORKER_CHAOS`）為正式交付：預設關閉、有文件說明，且上述崩潰重啟驗收可用它
+  **可重現地**重演（不需改 code 重 build）。
+- dev 模式（`tsx watch`）不受影響：`scripts/dev-up.ps1` 照常可用，文件寫清楚兩種模式的使用情境。
 - `apps/worker/src/main.ts` 的 handler 已由「log + 續跑」翻為「log + `exit(1)`」，且本指南與程式碼註解一致
   （移除 hotfix 期的「暫時策略」但書）。
 
 ---
 
-## 14. 本機啟動與端到端 Demo
+## 14. Feature 008：整棧容器化與一鍵 Demo（Full-Stack Containerization & One-Command Demo）
 
-### 14.1 第一次啟動
+> **狀態：方向藍圖（尚未 `/speckit.specify`）**。正式流程仍走完整 SDD；本節為起草。
+>
+> **前置**：Feature 007 已併回 `develop`（worker Dockerfile 與 compose 模式先由 007 趟坑，本 feature 收割）。
+> 決策脈絡見 ADR-002 §5：api/web 容器化從「如需另案」升格為明確排程。
+
+### 14.1 為什麼要有這個 feature（背景）
+
+- **api（Gateway）崩潰的後果比 worker 更重**：所有 WebSocket 連線、訂閱表、jobId 路由同時蒸發。007 只
+  監督了錯誤後果較輕的行程，補上 api 的容器化與 restart 才算把「執行模型」這個差距真正收掉。
+- **demo 第一印象**：README 的啟動說明從「開四個終端機」變成「`docker compose up` 一鍵起全棧」，對
+  可攜性與「我懂容器化」的訊號都是大回報。
+- **純打包、無行為變更**：本 feature 不改任何執行語意，與 007 的「行為翻轉」性質不同，所以獨立成案
+  （ADR-002 §5.2）。
+
+### 14.2 範圍：要做什麼 vs 明確不做
+
+**要做**：
+
+- **api 容器化**：`apps/api/Dockerfile`（沿用 007 的多階段模式），compose 增 api service（`depends_on`
+  redis/mongo、`restart: on-failure`、port 映射）。
+- **web 容器化**：多階段建置（`pnpm --filter web build` → 靜態伺服 `dist/`），伺服方式見 14.3 clarify。
+- **compose profiles 切分執行模式**：`docker compose up -d` 維持只起 infra（dev 迴圈不變，app 仍用
+  `tsx watch`）；`docker compose --profile full up -d`（命名見 clarify）起全棧 demo。
+- **環境變數與定址收斂**：容器內用 service name（`redis`／`mongo`／`api`）、瀏覽器端用 host port，
+  WS/API URL 的注入方式要一致且文件化。
+- **文件更新**：README 與本指南 §16 的啟動說明改為雙軌（dev 四終端機 vs 一鍵 demo）；`scripts/dev-up.ps1`
+  保留為 dev 模式入口。
+
+**明確不做（避免膨脹）**：
+
+- image registry 發布、雲端部署、k8s、CI/CD 管線（ADR-002 §7）。
+- HTTPS／網域／反向代理的生產級配置——demo 仍走 `http://localhost`。
+- 任何執行語意變更（背壓、queue、streaming 行為一律不動）。
+
+### 14.3 待 `/speckit.clarify` 決定的關鍵問題
+
+1. **web 伺服方式**：`nginx:alpine` 伺服靜態檔（可順帶反代 `/ws` 與 API，路徑同源）vs Node 靜態伺服
+   （棧單純但少了反代示範）？
+2. **前端的 WS/API URL 注入**：build-time env（`VITE_*`，簡單但 image 綁定環境）vs runtime config
+   （`config.json`／entrypoint 置換，image 可攜但多一層機制）？
+3. **profile 切法與命名**：infra 預設無 profile、全棧掛 `full`／`demo`？worker 在 007 加入後屬於哪個
+   profile（dev 模式下它不該自動起來）？
+4. **seed 時機**：一鍵 demo 是否要自動跑 `pnpm --filter api seed`（init container／entrypoint 判斷）？
+   還是文件註明手動一次？
+
+### 14.4 驗收（初步）
+
+- 單一指令（`docker compose --profile <name> up -d`）起全棧：web、api、worker、redis、mongo 全部 healthy。
+- 開 `http://localhost:<port>` 能完整走 §16.2 的 demo 劇本（telemetry、背壓比值、診斷 streaming、cache 命中）。
+- `docker compose down` 乾淨收場；`down -v` 後重起可重現初始狀態。
+- dev 模式不受影響：不帶 profile 的 `docker compose up -d` 仍只起 infra，四終端機流程照舊。
+- README 啟動說明雙軌清楚，新機器（只裝 Docker Desktop + clone repo + `.env`）可一鍵起 demo。
+
+---
+
+## 15. Feature 009：可觀測性基線（Observability Baseline）
+
+> **狀態：方向藍圖（尚未 `/speckit.specify`）**。正式流程仍走完整 SDD；本節為起草。
+>
+> **前置**：Feature 007 已併回 `develop`（延續其 heartbeat 探針）；可與 008 並行或先後。
+> 決策脈絡見 ADR-002 §5.3：範圍刻意壓在「基線」，Prometheus/Grafana/OTel 明確不做。
+
+### 15.1 為什麼要有這個 feature（背景）
+
+- **這個專案本身是監控台，但它自己目前不可被監控**——三端只有 console 純文字 log，無法聚合、無法判讀
+  健康狀態。把這句話收掉本身就是 demo 敘事的一部分。
+- 007 的監督者只解「行程死沒死」；「系統此刻健不健康、行為是否正常」需要日誌與指標承接。
+- 結構化日誌 + healthz 是生產的入場券，成本一天級，是「生產意識」最便宜的證明（ADR-002 §3）。
+
+### 15.2 範圍：要做什麼 vs 明確不做
+
+**要做**：
+
+- **結構化日誌（api/worker）**：以 pino 取代手寫 `log()`／`console.log`，統一 JSON 格式與欄位約定
+  （level、time、context、jobId/machineId 等關聯鍵），支援 `LOG_LEVEL` 環境變數。
+- **api `/healthz`**：回報自身與依賴狀態（Redis ping、Mongo ping、WS server 連線數概況），供 compose
+  healthcheck 與人工檢查使用。
+- **關鍵指標入 log（週期性摘要）**：queue 深度與 active/failed 計數、WS 連線數、LLM 呼叫延遲、cache
+  命中率。呈現方式見 15.3 clarify。
+- **有損寫入語意明文化**：把「可丟失最後數秒 telemetry、errorlog 在重啟邊界可能重複」寫進
+  `persistBatch` 註解與 README，引用 ADR-002 §6.4——有損是可以的，未宣告的有損才是問題。
+
+**明確不做（避免膨脹）**：
+
+- Prometheus／Grafana、`/metrics` exporter、OTel tracing、告警系統、log 聚合服務（ADR-002 §7 的邊界：
+  這些不會讓三個核心賣點更亮）。
+- web 端的 log 蒐集／上報（瀏覽器 console 即可）。
+- 修改任何寫入語意（fire-and-forget 維持，只是明文化）。
+
+### 15.3 待 `/speckit.clarify` 決定的關鍵問題
+
+1. **日誌欄位約定**：關聯鍵（jobId、machineId、clientId）如何統一命名？pretty-print 只在 dev 開啟？
+2. **指標呈現**：只入 log（最省）vs 簡易 `/stats` endpoint vs 前端 TopBar 加 dev 面板（既有
+   BackpressureBadge 已是一例）？
+3. **healthz 判準**：依賴失聯多久算 degraded/unhealthy？回應格式（HTTP status vs body 細節）？
+4. **與 007 heartbeat 的整合**：worker 的心跳與 api 的 healthz 是否共用格式／key 命名空間？
+
+### 15.4 驗收（初步）
+
+- api/worker 的所有 log 輸出為結構化 JSON，含 level 與 context，`LOG_LEVEL` 可調。
+- `GET /healthz` 正確反映依賴狀態：手動停掉 Redis 或 Mongo，healthz 轉為非 healthy 並含原因。
+- 從 log 可直接讀出關鍵指標的週期摘要（queue 深度、WS 連線數、LLM 延遲、cache 命中率）。
+- `persistBatch` 的有損語意已明文（註解 + README + ADR-002 引用），與程式行為一致。
+- 三端行為無回歸：telemetry、診斷、streaming 全流程與改動前一致。
+
+### 15.5 007–009 之後的候選方向（未排程，刻意不併入三部曲）
+
+以下兩項通過 ADR-002 §7 的判準（會讓核心賣點更亮），但**不併入 007–009**——併入會破壞三個
+feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是否立案：
+
+- **效能證據自動化**（強化賣點一）：把 ADR-001 §8 的背壓比值（收 N 筆訊息、只觸發 M 次渲染批次）
+  做成可重跑的 benchmark 場景（不同 mock 頻率下的比值、幀率），數字與圖表固化進 README，
+  取代「demo 時現場手動演」。不併入的理由：它是 **web 端**的量測工作——007 聚焦 worker、
+  008 明文「無行為變更」、009 明文排除 web 端，塞進任何一個都稀釋該 feature 的驗收。
+  與 009 的 15.3 Q2（前端 dev 面板）相鄰但不同件事：那是 runtime 觀測，這是離線量測證據。
+- **Redis Streams token 回放**（強化賣點三）：斷線重連後 streaming 續傳，是 ADR-002 §6 四項
+  「只文件化」差距中唯一會讓賣點更亮的（升級路徑見 ADR-002 §6.2）。不併入的理由：這是
+  **streaming 行為變更**，直接牴觸 008「純打包」與 009「不修改任何寫入語意」的邊界；若立案，
+  須獨立 feature 並同步修訂 ADR-002 §6.2（從「文件化」升格為「實作」），走完整 SDD。
+
+---
+
+## 16. 本機啟動與端到端 Demo
+
+> Feature 008 完成後，本章會補上「一鍵 demo」路徑；Feature 007／009 完成後，會補上「故障演練」
+> 劇本：用 007 的 `WORKER_CHAOS` 旗標注入致命錯誤 → 觀察容器退避重啟、BullMQ 重派 in-flight job、
+> heartbeat 轉 unhealthy → 監控台恢復——監控台監控它自己的死而復生。以下為 dev 模式（四終端機）流程。
+
+### 16.1 第一次啟動
 
 Terminal 1：infra
 
@@ -2836,7 +3032,7 @@ Terminal 4：web
 pnpm --filter web dev
 ```
 
-### 14.2 Demo 劇本
+### 16.2 Demo 劇本
 
 1. 開 `http://localhost:5173`。
 2. 看到 machine cards 持續更新。
@@ -2852,7 +3048,7 @@ pnpm --filter web dev
 
 ---
 
-## 15. 常見坑
+## 17. 常見坑
 
 | 問題 | 解法 |
 | --- | --- |
@@ -2870,7 +3066,7 @@ pnpm --filter web dev
 
 ---
 
-## 16. 指令速查
+## 18. 指令速查
 
 ```bash
 # install Spec Kit
@@ -2912,9 +3108,13 @@ pnpm --filter web dev
 
 ---
 
-## 17. 參考來源
+## 19. 參考來源
 
 - 架構決策 ADR-001（原生 WebSocket vs Socket.IO）：`docs/adr-001-native-websocket.md`
+- 架構決策 ADR-002（生產化範圍邊界：監督者選型、整棧容器化、運維層取捨）：`docs/adr-002-productionization-scope.md`
+- Docker restart policy 與退避行為：`https://docs.docker.com/engine/containers/start-containers-automatically/`
+- Compose healthcheck：`https://docs.docker.com/reference/compose-file/services/#healthcheck`
+- Node.js `uncaughtException`（"not safe to resume"）：`https://nodejs.org/api/process.html#warning-using-uncaughtexception-correctly`
 - GitHub Spec Kit 官方 repo：`https://github.com/github/spec-kit`
 - Spec Kit installation guide：`https://github.com/github/spec-kit/blob/main/docs/installation.md`
 - BullMQ 官方文件：`https://docs.bullmq.io/`
