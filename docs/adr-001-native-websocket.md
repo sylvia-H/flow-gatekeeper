@@ -5,7 +5,7 @@
 | 狀態 | Accepted |
 | 日期 | 2026-06-29 |
 | 範圍 | 前端 telemetry/streaming 通道、後端 NestJS Gateway |
-| 相關 | `useHighFrequencyWs`、`MonitoringGateway`、`AiStreamRelayService`、Redis Pub/Sub relay |
+| 相關 | `useHighFrequencyWs`、`MonitoringGateway`、`AiStreamRelayService`、Redis Pub/Sub relay、ADR-002 §6.1（Gateway 擴展差距的文件化與升級路徑） |
 
 ---
 
