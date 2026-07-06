@@ -8,7 +8,7 @@
     1) 檢查 infra（Redis 6379 / Mongo 27017）可連，未就緒即中止並提示。
     2) 同步跑一次 `pnpm --filter api seed`（等它跑完；失敗即中止）。
     3) 各開一個新 PowerShell 視窗，分別啟動 api / worker / web 三個長駐服務
-       （分開看 log、可各自 Ctrl-C；貼合實作指南 §12.1 的 4-terminal 模型）。
+       （分開看 log、可各自 Ctrl-C；貼合實作指南 §16.1 的 4-terminal 模型）。
 
   註：demo 前若要「清 AI 快取讓首次診斷可見串流」，那是刻意的資料重置，
   請單獨執行 `./scripts/demo-reset.ps1`（與啟動分開，職責清楚）。
