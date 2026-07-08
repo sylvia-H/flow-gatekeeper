@@ -24,7 +24,7 @@ pnpm monorepo（`apps/{api,worker,web}`、`packages/{contracts,shared}`）；本
 
 **Purpose**: 建置脈絡的共用前置——`.dockerignore` 是 Dockerfile 的先決（build context 為 repo root），也是憲章 VI 的守門（`.env` 不得進 image）。
 
-- [ ] T001 建立根目錄 `.dockerignore`：排除 `**/node_modules`、`.git`、`**/.env`（僅允許 `.env.example`）、`**/dist`、`apps/web`、`docs`、`specs`、`.codegraph` 等非建置必需內容（research D2、憲章 VI）
+- [X] T001 建立根目錄 `.dockerignore`：排除 `**/node_modules`、`.git`、`**/.env`（僅允許 `.env.example`）、`**/dist`、`apps/web`、`docs`、`specs`、`.codegraph` 等非建置必需內容（research D2、憲章 VI）
 
 ---
 
