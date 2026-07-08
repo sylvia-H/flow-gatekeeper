@@ -41,7 +41,7 @@ docker compose --profile supervised up -d worker   # 重建容器吃新 env（�
 1. 觸發一筆診斷（避開 cache：換機台或先跑 `scripts/demo-reset.ps1`）。
 2. job 進入處理 → worker 拋未捕捉例外 → log 出現 `uncaughtException（致命，worker 將結束交由監督者重啟）：...`。
 3. Docker 自動重啟 worker（`docker logs --timestamps` 判讀「致命 → ready」先後）。
-4. **量測 SC-002**：重啟後 60s 內 worker 恢復消化（新 job 可立即處理）。
+4. **量測 SC-002**：自致命 log 時點起算 60s 內恢復消化——判定事件為重啟後的 worker 可處理**新** job（`worker ready` 後觸發新診斷即被消化）。
 5. **量測 SC-003**：崩潰當下 in-flight 那筆 job 在 lock 過期＋stalled 掃描（最壞約 60–90s）後被重新消化或走 `ai/error` 終態——不永久卡死。
 6. 換 `WORKER_CHAOS=rejection` 重演 → 同樣走「致命 → 重啟 → 恢復」。
 7. **量測 SC-006**：同一設定連續重演 3 次，結果一致；全程未改 code、未重新 build。

@@ -51,7 +51,7 @@
   - 優雅關閉路徑零改動：SIGTERM/SIGINT → `worker.close()` → `mongoClient.close()` → redis `quit()` → `exit(0)`（僅加入 heartbeat timer 的清除）。
   - 兩路徑以 **exit code 為唯一交會點**：`0`＝正常停止、監督者不重啟；`1`＝致命、監督者重啟。優雅關閉進行中若發生致命，`process.exit(1)` 立即生效、直接搶先結束（Edge case「停止指令與致命事件重疊」）——不存在互相等待。
   - `stop_grace_period: 45s`：`docker stop` 的 SIGTERM → SIGKILL 寬限需涵蓋 `worker.close()` 最長收尾（等待 in-flight job 完成，上限 ≈ `AI_TIMEOUT_MS` 30s）+ Mongo/Redis 關閉緩衝（Edge case「寬限期不足」、SC-007）。
-- **Rationale**: 致命後行程狀態未定義，任何「盡力收尾」都可能卡住或二次拋錯（clarify Q5 定案「立即結束」）；殘留的 Redis/Mongo/BullMQ 連線由 TCP 斷線與 BullMQ lock 過期自然回收，不會使外部服務不可用（Edge case「崩潰瞬間的外部連線」）。
+- **Rationale**: 致命後行程狀態未定義，任何「盡力收尾」都可能卡住或二次拋錯（clarify Q5 定案「立即結束」）；殘留的 Redis/Mongo/BullMQ 連線由 TCP 斷線與 BullMQ lock 過期自然回收（`ai-lock:<sig>` 去重鎖本就帶 TTL、過期自然釋放；BullMQ job lock ≤30s 過期後由 stalled 掃描重派，見 D9），不會使外部服務不可用（Edge case「崩潰瞬間的外部連線」）。
 - **Alternatives considered**: 退出前短逾時盡力收尾——界線模糊、可能卡住，捨棄；致命也走完整 graceful——與 let-it-crash 相悖，捨棄。
 
 ## D8：開發模式零改動與已知差異
