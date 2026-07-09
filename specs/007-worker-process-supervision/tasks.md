@@ -61,11 +61,12 @@ pnpm monorepo（`apps/{api,worker,web}`、`packages/{contracts,shared}`）；本
 
 ### Implementation for User Story 2
 
-- [ ] T007 [P] [US2] 建立 `apps/worker/src/lib/fatal.ts`：`formatFatal(kind, value)` 純函式（格式 `<kind>（致命，worker 將結束交由監督者重啟）：<detail>`；Error 取 `stack ?? message`、非 Error 一律 `String(value)`）＋ `fatal()` helper（log error → `process.exit(1)`）（contracts §5、research D7）
-- [ ] T008 [P] [US2] 建立 `apps/worker/src/lib/fatal.test.ts`：Error（有 stack）／Error（無 stack 取 message）／非 Error 值（字串、數字、undefined）的格式化決定性（憲章測試門檻）
-- [ ] T009 [US2] 修改 `apps/worker/src/main.ts`：`unhandledRejection`／`uncaughtException` handler 改為呼叫 `fatal()`；**移除**「暫時策略（log + 續跑）」的整段註解但書，改為指向新語意與 supervision 契約；優雅關閉路徑（SIGTERM/SIGINT → close → `exit(0)`）不動；順帶核對既有 `bootstrap().catch`（`bootstrap failed: <detail>` → `exit(1)`）已符 FR-003 的 bootstrap 致命語意——不套 `formatFatal`、沿用既有格式（contracts §5）（FR-003、FR-011、research D7）
-- [ ] T010 [P] [US2] 收斂 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` 中「log + 續跑為暫時策略」的但書描述（§13 由來段落保留歷史敘述、但現況描述更新為已翻轉）（FR-011）
-- [ ] T011 [US2] 重啟與重派驗證：受監督模式下以 `docker kill <worker>` 模擬行程非正常終止 → Docker 自動重啟、log 判讀「終止 → ready」先後；崩潰當下 in-flight job 於 lock 過期＋stalled 掃描後被重新消化或走 `ai/error` 終態（quickstart 場景 3 步驟 4–5 的語意；research D9）
+- [X] T007 [P] [US2] 建立 `apps/worker/src/lib/fatal.ts`：`formatFatal(kind, value)` 純函式（格式 `<kind>（致命，worker 將結束交由監督者重啟）：<detail>`；Error 取 `stack ?? message`、非 Error 一律 `String(value)`）＋ `fatal()` helper（log error → `process.exit(1)`）（contracts §5、research D7）
+- [X] T008 [P] [US2] 建立 `apps/worker/src/lib/fatal.test.ts`：Error（有 stack）／Error（無 stack 取 message）／非 Error 值（字串、數字、undefined）的格式化決定性（憲章測試門檻）
+- [X] T009 [US2] 修改 `apps/worker/src/main.ts`：`unhandledRejection`／`uncaughtException` handler 改為呼叫 `fatal()`；**移除**「暫時策略（log + 續跑）」的整段註解但書，改為指向新語意與 supervision 契約；優雅關閉路徑（SIGTERM/SIGINT → close → `exit(0)`）不動；順帶核對既有 `bootstrap().catch`（`bootstrap failed: <detail>` → `exit(1)`）已符 FR-003 的 bootstrap 致命語意——不套 `formatFatal`、沿用既有格式（contracts §5）（FR-003、FR-011、research D7）
+- [X] T010 [P] [US2] 收斂 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` 中「log + 續跑為暫時策略」的但書描述（§13 由來段落保留歷史敘述、但現況描述更新為已翻轉）（FR-011）
+- [X] T011 [US2] 重啟與重派驗證：受監督模式下以 `docker kill <worker>` 模擬行程非正常終止 → Docker 自動重啟、log 判讀「終止 → ready」先後；崩潰當下 in-flight job 於 lock 過期＋stalled 掃描後被重新消化或走 `ai/error` 終態（quickstart 場景 3 步驟 4–5 的語意；research D9）
+  - **驗收證據（2026-07-09）與修正**：①重要發現——`docker kill`（容器級）屬**手動停止操作**，Docker 對手動 stop/kill 不套用 restart policy（實測 exited、RestartCount=0、不重啟）；正確的「行程非正常死亡」模擬是殺**容器內** node 行程：`docker exec <worker> sh -c 'kill -KILL $(pgrep -f "dist/main.js")'`（tini 以子行程退出碼收場→容器自行退出→on-failure 生效）。②自動重啟 ✅：容器內 SIGKILL node → RestartCount=1、數秒內 `bootstrapped → worker ready`（timestamps 可判讀先後）。③in-flight 重派 ✅：處理中（LLM call 已記）被 kill 的 job，worker 回來後 ~60s 由 stalled 掃描重派，同一 jobId `job active → LLM call → job completed`，未卡死
 
 **Checkpoint**: 崩潰語意已翻轉且監督閉環成立；佇列不會因 worker 死亡永久卡死。
 

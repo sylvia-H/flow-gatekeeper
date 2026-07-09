@@ -2689,9 +2689,9 @@ git merge --no-ff 006-monitoring-console-fidelity
 
 ## 13. Feature 007：worker 生產化與 process 監督（Worker Process Supervision）
 
-> **狀態：方向藍圖（尚未 `/speckit.specify`）**。本節只記錄方向與待澄清問題，作為日後開 feature
-> 前的起草；正式流程仍走 `specify -> clarify -> plan -> checklist -> tasks -> analyze -> implement ->
-> 驗收 -> merge`。下面的 prompt 與設定皆為草案，最終以 spec/tasks 為準。
+> **狀態：已落地**——本 feature 已走完正式 SDD（`specs/007-worker-process-supervision/`），
+> 崩潰語意已翻轉為「記致命 → `exit(1)` → 監督者重啟」。本節保留為**起草時的方向藍圖與歷史脈絡**；
+> 現況以 spec/plan/contracts 與 README「執行模式」章節為準，下面的 prompt 與設定草案僅供回顧。
 >
 > **選型已定案**：監督者採**容器化路線**（Docker + compose restart policy），pm2/systemd 出局；
 > 本 feature 是生產化三部曲（007 → 008 → 009）的第一步。完整決策理由與範圍邊界見
@@ -2711,13 +2711,13 @@ git merge --no-ff 006-monitoring-console-fidelity
   （見 `apps/worker/src/main.ts`）。
 - **全域守門一致性**：`unhandledRejection`／`uncaughtException` 兩個 handler 的非 Error 值防護對齊。
 
-但那條 branch **刻意沒動**兩個 process handler 的「log + 續跑」策略。原因是：**本專案目前沒有任何 process
+但那條 branch **刻意沒動**兩個 process handler 的「log + 續跑」策略。原因是：**當時本專案沒有任何 process
 監督者**——`api`／`worker`／`web` 都在 host 上各開一個 PowerShell 視窗用 `tsx watch` 跑（見
 `scripts/dev-up.ps1`），`docker-compose.yml` 只起 Redis + Mongo 兩個 infra，沒有 Dockerfile、沒有 restart
 策略。
 
-在「沒有監督者」的現況下，若把 `uncaughtException` 改成 `process.exit(1)`，效果是「worker 死了就死了、
-後續 job 全部卡在佇列無人消化」——**比現在的「log + 續跑」更糟**。也就是說：**`exit(1)` 與「監督者重啟」
+在「沒有監督者」的當時現況下，若把 `uncaughtException` 改成 `process.exit(1)`，效果是「worker 死了就死了、
+後續 job 全部卡在佇列無人消化」——**比當時的「log + 續跑」更糟**。也就是說：**`exit(1)` 與「監督者重啟」
 是同一件事的兩半，只做一半會退步**。因此把「`exit(1)` + 監督者」整包留給本 feature，走正式 SDD
 做到位，而不是塞進 hotfix。
 
@@ -2727,6 +2727,9 @@ git merge --no-ff 006-monitoring-console-fidelity
 operation"）：可能殘留寫到一半的資料、懸空的 handle、不一致的記憶體狀態。原地續跑會**悄悄產出錯誤結果、
 並遮蔽真正的 bug**。生產正解是奉行「let it crash」：非預期致命錯誤 → 記 log → `exit(1)` → 由監督者重啟一個
 **乾淨行程**。這個「有監督者」在生產是不變量，只是實作層（容器／pm2／systemd）可選。
+本 feature 已落地此翻轉：handler 統一走 `fatal(kind, value)`（`apps/worker/src/lib/fatal.ts`，log 格式與
+exit code 語意見 `specs/007-worker-process-supervision/contracts/supervision-runtime.md`），
+「暫時策略」但書自此收斂。
 
 ### 13.3 監督者選型定案與生產化路線圖（ADR-002 摘要）
 
