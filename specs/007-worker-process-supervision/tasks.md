@@ -42,11 +42,12 @@ pnpm monorepo（`apps/{api,worker,web}`、`packages/{contracts,shared}`）；本
 
 ### Implementation for User Story 1
 
-- [ ] T002 [US1] 建立 `apps/worker/Dockerfile` 多階段建置：builder（`node:22-alpine` + corepack pnpm → `pnpm install --frozen-lockfile` → build `contracts`/`shared`/`worker` → `pnpm deploy --filter worker --prod`）→ runtime（僅 COPY 裁剪產物、`CMD ["node","dist/main.js"]`）（research D1/D2）
-- [ ] T003 [US1] `docker-compose.yml` 新增 worker service：`profiles: ["supervised"]`、`build`（context repo root）、`depends_on: [redis, mongo]`、`restart: on-failure:5`、`init: true`（tini 為 PID 1、node 為子行程——同 namespace 對 PID 1 送 SIGSTOP 會被核心忽略，US5 活鎖演練需凍結 node 子行程）、`stop_grace_period: 45s`、`env_file: apps/worker/.env`、`environment` 覆蓋 `REDIS_HOST=redis`／`MONGO_URL=mongodb://mongo:27017/flow-gatekeeper`（healthcheck 區塊留待 US5 的 T023）（data-model E1、contracts §2）
-- [ ] T004 [P] [US1] `README.md` 新增「雙模式」章節：開發／受監督模式的使用情境、切換指令表（contracts §6）、兩模式不併行運行的注意事項（避免雙 consumer 搶 job）、dev 模式致命錯誤差異的預告（FR-010）
-- [ ] T005 [US1] 建置與雙指令驗證：`docker compose --profile supervised up -d --build` 成功啟動且 log 出現 `worker ready`；`docker compose up -d`（無 profile）維持只起 redis/mongo（SC-008 機制面）
-- [ ] T006 [US1] 依 `specs/007-worker-process-supervision/quickstart.md` 場景 1、2、6 驗收：端到端一致（串流／快取／錯誤語意）、優雅關閉（ExitCode 0、45s 內收尾）、dev 流程零影響（`scripts/dev-up.ps1` 照常）。注意：本階段 healthcheck 尚未加入（T023），`docker ps` 只顯示 `Up`——`Up (healthy)` 待 US5 交付後才出現
+- [X] T002 [US1] 建立 `apps/worker/Dockerfile` 多階段建置：builder（`node:22-alpine` + corepack pnpm → `pnpm install --frozen-lockfile` → build `contracts`/`shared`/`worker` → `pnpm deploy --filter worker --prod`）→ runtime（僅 COPY 裁剪產物、`CMD ["node","dist/main.js"]`）（research D1/D2）
+- [X] T003 [US1] `docker-compose.yml` 新增 worker service：`profiles: ["supervised"]`、`build`（context repo root）、`depends_on: [redis, mongo]`、`restart: on-failure:5`、`init: true`（tini 為 PID 1、node 為子行程——同 namespace 對 PID 1 送 SIGSTOP 會被核心忽略，US5 活鎖演練需凍結 node 子行程）、`stop_grace_period: 45s`、`env_file: apps/worker/.env`、`environment` 覆蓋 `REDIS_HOST=redis`／`MONGO_URL=mongodb://mongo:27017/flow-gatekeeper`（healthcheck 區塊留待 US5 的 T023）（data-model E1、contracts §2）
+- [X] T004 [P] [US1] `README.md` 新增「雙模式」章節：開發／受監督模式的使用情境、切換指令表（contracts §6）、兩模式不併行運行的注意事項（避免雙 consumer 搶 job）、dev 模式致命錯誤差異的預告（FR-010）
+- [X] T005 [US1] 建置與雙指令驗證：`docker compose --profile supervised up -d --build` 成功啟動且 log 出現 `worker ready`；`docker compose up -d`（無 profile）維持只起 redis/mongo（SC-008 機制面）
+- [X] T006 [US1] 依 `specs/007-worker-process-supervision/quickstart.md` 場景 1、2、6 驗收：端到端一致（串流／快取／錯誤語意）、優雅關閉（ExitCode 0、45s 內收尾）、dev 流程零影響（`scripts/dev-up.ps1` 照常）。注意：本階段 healthcheck 尚未加入（T023），`docker ps` 只顯示 `Up`——`Up (healthy)` 待 US5 交付後才出現
+  - **驗收證據（2026-07-08/09）**：場景 1 ✅——受監督 worker 端到端消化（`job active → LLM call → job completed`）；ai/token 串流經 `ai-stream:*` 訂閱實收（單筆 job tokens=12、內容為結構化診斷 JSON、`ai/done cached:false`）；同簽章重觸發 `cache hit` 不重打 LLM（另見：狀態改變→簽章不同→正確重算；TTL 600s 過期→正確重算）。場景 2 ✅——`stop worker` → `received SIGTERM` → ExitCode 0、秒級收尾、未重啟。場景 6 ✅——無 profile 指令只起 redis/mongo；seed／api `start:dev`／worker `start:dev`（tsx watch → `worker ready`）照常，`dev-up.ps1` 零改動。備註：驗收期間發現「host 端背景行程的 Redis 訂閱連線會被靜默斷線」為本機環境怪癖（前景行程正常），與 app 無關
 
 **Checkpoint**: 受監督形態可獨立交付——行為與直跑一致、可優雅停啟、dev 不受影響。
 

@@ -34,6 +34,7 @@
 - [功能導覽（依 feature 逐一交付）](#功能導覽依-feature-逐一交付)
 - [Monorepo 結構](#monorepo-結構)
 - [快速開始](#快速開始)
+- [執行模式：開發模式與受監督模式](#執行模式開發模式與受監督模式)
 - [環境變數](#環境變數)
 - [測試與品質門檻](#測試與品質門檻)
 - [開發方法論：Spec-Driven Development](#開發方法論spec-driven-development)
@@ -410,6 +411,33 @@ Demo 前若想「清 AI 快取讓首次診斷看得到逐字串流」，另外�
 ```powershell
 pnpm check
 ```
+
+---
+
+## 執行模式：開發模式與受監督模式
+
+worker 有兩種執行形態，以**同一份** `docker-compose.yml` 的 profile 分組切換（單一真實來源；Feature 007）：
+
+| 模式 | 使用情境 | worker 執行方式 | 致命錯誤後的行為 |
+| --- | --- | --- | --- |
+| **開發模式**（預設） | 日常開發、熱重載 | host 直跑 `tsx watch`（`dev-up.ps1`） | 行程結束後 `tsx watch` 停在**等待檔案變更**，不自動重啟（已知且刻意的差異） |
+| **受監督模式** | demo、貼近生產情境 | Docker 容器＋`restart: on-failure:5` | 監督者自動以乾淨行程重啟（指數退避）；連續失敗 5 次後停止 |
+
+### 指令對照
+
+| 情境 | 指令 |
+| --- | --- |
+| 開發模式（零變化） | `docker compose up -d`（只起 infra）→ `./scripts/dev-up.ps1` |
+| 受監督模式啟動 | `docker compose --profile supervised up -d --build` |
+| 受監督模式停止（優雅） | `docker compose --profile supervised stop worker`（SIGTERM，45s 寬限） |
+| 健康／重啟狀態查詢 | `docker ps`（STATUS 欄含 health）；`docker inspect --format "{{.RestartCount}} {{.State.Status}} {{.State.Health.Status}}" <worker 容器名>` |
+| 記錄判讀 | `docker logs --timestamps <worker 容器名>` |
+
+### 注意事項
+
+- **兩模式擇一運行**：受監督 worker 運行期間，host 端**不要**再啟動 dev worker——兩個 consumer 會分食佇列 job，使演練與驗收不可判讀（不致損壞資料，但屬非支援情境）。
+- 受監督 worker 的環境設定沿用 `apps/worker/.env`（compose `env_file` 於**執行時**注入，祕密不烘入 image）；`REDIS_HOST`／`MONGO_URL` 由 compose 覆蓋為容器網路位址，host 直跑照舊用 `.env` 的 `127.0.0.1`，兩模式互不干擾。
+- **致命錯誤語意（let it crash）**：worker 遇非預期致命錯誤（未捕捉例外／未處理拒絕）會記錄明確標示「致命」的訊息後**立即結束行程**，由監督者以乾淨行程重啟。開發模式下沒有監督者——行程停在等待檔案變更，需修改檔案或手動重啟；這是文件化的已知差異，不是 bug。
 
 ---
 
