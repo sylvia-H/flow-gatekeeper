@@ -80,11 +80,12 @@ pnpm monorepo（`apps/{api,worker,web}`、`packages/{contracts,shared}`）；本
 
 ### Implementation for User Story 3
 
-- [ ] T012 [P] [US3] 建立 `apps/worker/src/lib/chaos.ts`：`parseChaosConfig(env)` 純函式（合法值解析、非法值 → warn＋視為關閉、`WORKER_CHAOS_AT` 預設 `startup`）＋ `armChaos(config, worker)`（`startup`：bootstrap 後約 2s 拋；`job`：BullMQ `active` 事件＋`setImmediate` 拋出以脫離 processor try/catch；`rejection` 型態以浮空 `Promise.reject` 觸發）（research D6、data-model E3）
-- [ ] T013 [P] [US3] 建立 `apps/worker/src/lib/chaos.test.ts`：合法組合、非法值（→ 關閉）、未設定（→ 關閉）、時點預設值的解析決定性（憲章測試門檻）
-- [ ] T014 [US3] 修改 `apps/worker/src/main.ts`：bootstrap 內解析 chaos 設定並 `armChaos`（傳入 Worker 實例掛 `active` 事件）；未設定時零程式路徑差異（FR-008）
-- [ ] T015 [P] [US3] `apps/worker/.env.example` 新增 `WORKER_CHAOS`／`WORKER_CHAOS_AT` 說明區塊（合法值、預設關閉、**僅供故障演練**、demo 前務必移除）（contracts §2、憲章 VI 僅提交 example）
-- [ ] T016 [US3] 依 quickstart 場景 3 完整驗收：`uncaught@job` 觸發「致命 → 重啟 → 恢復」（SC-002 ≤60s）、in-flight 重派（SC-003）、換 `rejection` 重演、**連續 3 次結果一致（SC-006）**、移除旗標後恢復完全正常——全程不改 code、不重建；加驗場景 3b（停止指令×致命重疊，FR-009／US2 場景 4：寬限期內終止、非 137、不重啟）與場景 6 選做（dev 模式致命差異實測，US2 場景 5）
+- [X] T012 [P] [US3] 建立 `apps/worker/src/lib/chaos.ts`：`parseChaosConfig(env)` 純函式（合法值解析、非法值 → warn＋視為關閉、`WORKER_CHAOS_AT` 預設 `startup`）＋ `armChaos(config, worker)`（`startup`：bootstrap 後約 2s 拋；`job`：BullMQ `active` 事件＋`setImmediate` 拋出以脫離 processor try/catch；`rejection` 型態以浮空 `Promise.reject` 觸發）（research D6、data-model E3）
+- [X] T013 [P] [US3] 建立 `apps/worker/src/lib/chaos.test.ts`：合法組合、非法值（→ 關閉）、未設定（→ 關閉）、時點預設值的解析決定性（憲章測試門檻）
+- [X] T014 [US3] 修改 `apps/worker/src/main.ts`：bootstrap 內解析 chaos 設定並 `armChaos`（傳入 Worker 實例掛 `active` 事件）；未設定時零程式路徑差異（FR-008）
+- [X] T015 [P] [US3] `apps/worker/.env.example` 新增 `WORKER_CHAOS`／`WORKER_CHAOS_AT` 說明區塊（合法值、預設關閉、**僅供故障演練**、demo 前務必移除）（contracts §2、憲章 VI 僅提交 example）
+- [X] T016 [US3] 依 quickstart 場景 3 完整驗收：`uncaught@job` 觸發「致命 → 重啟 → 恢復」（SC-002 ≤60s）、in-flight 重派（SC-003）、換 `rejection` 重演、**連續 3 次結果一致（SC-006）**、移除旗標後恢復完全正常——全程不改 code、不重建；加驗場景 3b（停止指令×致命重疊，FR-009／US2 場景 4：寬限期內終止、非 137、不重啟）與場景 6 選做（dev 模式致命差異實測，US2 場景 5）
+  - **驗收證據（2026-07-09/10，全程只改 env、未改 code、未重建）**：①`uncaught@job` ✅——job active 後毫秒級拋出，log 逐字符合契約格式；SC-002：致命 09:34:17.79 → `worker ready` 09:34:22.37（**4.6s**，遠低於 60s）。②SC-006 ✅——同設定觀察到 6 輪「致命 → 重啟 → ready」，每輪 2.4–4.6s，結果一致。③`rejection@startup` ✅——已武裝後約 2s 拋 `unhandledRejection（致命…）`；並自然演示崩潰迴圈煞停（RestartCount=5 → exited，US4 正式驗收留待 T017）。④SC-003 ✅——演練 job 全數收束：或被重派重新消化，或走既有錯誤語意終態（`job stalled more than allowable limit` → failed；佇列最終 wait 0／active 0，無一卡死）。⑤場景 3b ✅（3 輪）——核心不變量成立：行程即刻終止（遠低於 45s 寬限）、**非 137**、容器不卡住、stop 後維持停止不重啟；實測補充第三種合法 ExitCode `143`（SIGTERM 落在致命觸發重啟後的新行程啟動早期窗口），已回填 quickstart 場景 3b。⑥移除旗標 ✅——無「已武裝」log、零影響恢復正常。⑦dev 模式選做 ✅——host `WORKER_CHAOS=uncaught` 直跑：已武裝 → 2s 致命 → 行程結束，`tsx watch` 停在等待檔案變更、不自動重啟，與 README 描述一致。⚠ 過程中發現 `apps/worker/.env` 的 `GEMINI_API_KEY` 行遺失（時序證據指向非本次工具寫入所致，但無法完全排除），已補回空白佔位行，**值需使用者自行補回**（T027 總驗收前必須就緒）
 
 **Checkpoint**: 演練機制正式交付；US2 的致命路徑驗收至此完整。
 

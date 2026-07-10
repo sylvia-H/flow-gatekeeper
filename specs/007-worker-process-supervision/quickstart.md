@@ -52,8 +52,8 @@ docker compose --profile supervised up -d worker   # 重建容器吃新 env（�
 沿用場景 3 的設定（`WORKER_CHAOS=uncaught`、`WORKER_CHAOS_AT=job`）：
 
 1. 觸發一筆診斷，待 job 進入處理後**立即**下 `docker compose --profile supervised stop worker`，使優雅關閉與致命注入在同一窗口重疊。
-2. **預期**：行程仍在 45s 寬限期內終止（ExitCode 為 0 或 1 皆可，取決於哪條路徑先完成；**不得為 137**）；容器不卡住、不遺留半開連線；停止為明確指令，Docker 不重啟（stop 意圖優先於 on-failure）。
-3. 若時序未重疊（job 先拋致命才收到 stop），重跑一次即可——本場景驗的是「兩路徑互不干擾」，不要求每次精準重疊。
+2. **預期**：行程仍在 45s 寬限期內終止（**不得為 137**＝寬限不足被 SIGKILL）；容器不卡住、不遺留半開連線；停止為明確指令，Docker 不重啟（stop 意圖優先於 on-failure）。ExitCode 依重疊時序有三種合法結局：`0`（stop 先完成優雅關閉）、`1`（致命搶先結束）、`143`（致命已觸發重啟，SIGTERM 落在**重啟中新行程**尚未掛好 handler 的啟動早期窗口——實測 `job` 時點注入在 job active 後毫秒級觸發，而 `compose stop` 下達有秒級延遲，此結局最常見）。
+3. 若時序未重疊（job 先拋致命才收到 stop），重跑一次即可——本場景驗的是「兩路徑互不干擾」（即刻終止、非 137、stop 後維持停止），不要求每次精準重疊、也不要求特定 ExitCode。
 
 ## 場景 4：崩潰迴圈防護（US4 → SC-004）
 

@@ -14,6 +14,7 @@ import { GeminiProvider } from "./ai/gemini-provider.js";
 import { buildPrompt } from "./ai/prompt.js";
 import { buildDiagnosisContext } from "./context/context-builder.js";
 import { buildDiagnosisSignature } from "./cache/signature.js";
+import { armChaos, parseChaosConfig } from "./lib/chaos.js";
 import { fatal } from "./lib/fatal.js";
 import { parseResult } from "./lib/parse-result.js";
 
@@ -196,6 +197,12 @@ export async function bootstrap(): Promise<void> {
   });
 
   worker.on("ready", () => log("log", `worker ready, consuming queue '${DIAGNOSIS_QUEUE}'`));
+
+  // 故障注入旗標（FR-008）：未設定＝關閉、零程式路徑差異；非法值 warn 後視為關閉。
+  // 供 quickstart 場景 3/4 可重現演練「致命 → 重啟 → 恢復」，不改 code、不重建。
+  const chaos = parseChaosConfig(process.env);
+  for (const w of chaos.warnings) log("warn", w);
+  if (chaos.config) armChaos(chaos.config, worker, (msg) => log("warn", msg));
 
   // 失敗處理（US3）：僅在 attempts **用盡**（最終終態）後通知 ai/error（FR-020／US3 案例3）；
   // 尚有重試時只記 warn，交由 BullMQ 指數退避重試。
