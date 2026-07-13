@@ -99,8 +99,9 @@ pnpm monorepo（`apps/{api,worker,web}`、`packages/{contracts,shared}`）；本
 
 ### Implementation for User Story 4
 
-- [ ] T017 [US4] 依 quickstart 場景 4 驗收：設 `WORKER_CHAOS=uncaught`＋`WORKER_CHAOS_AT=startup` → 以 `docker events`（filter `event=die`——restart policy 的自動重啟只發 `die`/`start` 事件、不發 `restart` 事件）／`docker logs --timestamps` 觀察重啟間隔逐次遞增（FR-006）；`docker inspect` 判讀 `RestartCount=5`、`State.Status=exited`；其後 10 分鐘無新重啟（SC-004）；期間 log 無密集 LLM/DB 連打（US4 場景 3）
-- [ ] T018 [P] [US4] `README.md` 雙模式章節補「崩潰迴圈防護」小節：達上限停止的判讀方式（`docker ps -a`／`inspect` 指令）與**復原手段**（排除故障後 `docker compose --profile supervised up -d worker` 重新拉起）（FR-006 可判讀性；checklist CHK004）
+- [X] T017 [US4] 依 quickstart 場景 4 驗收：設 `WORKER_CHAOS=uncaught`＋`WORKER_CHAOS_AT=startup` → 以 `docker events`（filter `event=die`——restart policy 的自動重啟只發 `die`/`start` 事件、不發 `restart` 事件）／`docker logs --timestamps` 觀察重啟間隔逐次遞增（FR-006）；`docker inspect` 判讀 `RestartCount=5`、`State.Status=exited`；其後 10 分鐘無新重啟（SC-004）；期間 log 無密集 LLM/DB 連打（US4 場景 3）
+  - **驗收證據（2026-07-13）**：①退避遞增 ✅——以 `die → 下一次 start` 間距量測**純退避延遲**（比 die-to-die 更精確，排除 bootstrap 時間抖動）：0.334 → 0.350 → 0.519 → 0.970 → 1.755s，吻合 Docker 100ms 起翻倍＋約 0.2s 容器啟動開銷。②達上限停止 ✅——`RestartCount=5`、`Status=exited`、`ExitCode=1`，迴圈自啟動至煞停共 27s。③10 分鐘無新重啟 ✅——窗口結束時 RestartCount 仍為 5、`docker events` 查詢窗口內 start 事件 **0 筆**。④外部資源零連打 ✅——迴圈期間 log 無任何 `LLM call`／`job active`（startup 注入在消化 job 前拋出）。備註：本版 docker 的 `docker events --format` 欄位為 `{{.Action}}`（`{{.Status}}` 會報錯）
+- [X] T018 [P] [US4] `README.md` 雙模式章節補「崩潰迴圈防護」小節：達上限停止的判讀方式（`docker ps -a`／`inspect` 指令）與**復原手段**（排除故障後 `docker compose --profile supervised up -d worker` 重新拉起）（FR-006 可判讀性；checklist CHK004）
 
 **Checkpoint**: 崩潰迴圈防護行為已驗證且運維者可判讀、可復原。
 

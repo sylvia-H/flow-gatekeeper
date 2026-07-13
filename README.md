@@ -433,6 +433,22 @@ worker 有兩種執行形態，以**同一份** `docker-compose.yml` 的 profile
 | 健康／重啟狀態查詢 | `docker ps`（STATUS 欄含 health）；`docker inspect --format "{{.RestartCount}} {{.State.Status}} {{.State.Health.Status}}" <worker 容器名>` |
 | 記錄判讀 | `docker logs --timestamps <worker 容器名>` |
 
+### 崩潰迴圈防護（達重試上限停止與復原）
+
+worker 連續快速失敗（如設定錯誤導致啟動即崩潰）時，Docker 內建的重啟退避會讓間隔逐次遞增（100ms 起翻倍），連續失敗 **5 次**（`restart: on-failure:5`）後**停止重啟**——避免熱迴圈打爆 LLM 額度與資料庫連線。
+
+- **判讀「已達上限停止」**：
+  ```powershell
+  docker ps -a                       # worker 顯示 Exited (1)，不再自動拉起
+  docker inspect --format "{{.RestartCount}} {{.State.Status}}" <worker 容器名>   # 預期 5 exited
+  docker logs --timestamps <worker 容器名>   # 可見多輪「致命 → ready」與遞增間隔
+  ```
+- **復原手段**：先排除故障根因（如修正錯誤設定、移除演練旗標 `WORKER_CHAOS`），再重新拉起：
+  ```powershell
+  docker compose --profile supervised up -d worker
+  ```
+  重新 `up` 會重建容器並歸零重試計數；若容器成功運行超過 10 秒，Docker 也會自動重置失敗計數。
+
 ### 注意事項
 
 - **兩模式擇一運行**：受監督 worker 運行期間，host 端**不要**再啟動 dev worker——兩個 consumer 會分食佇列 job，使演練與驗收不可判讀（不致損壞資料，但屬非支援情境）。
