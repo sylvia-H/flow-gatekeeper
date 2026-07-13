@@ -207,9 +207,17 @@ export async function bootstrap(): Promise<void> {
 
   // 故障注入旗標（FR-008）：未設定＝關閉、零程式路徑差異；非法值 warn 後視為關閉。
   // 供 quickstart 場景 3/4 可重現演練「致命 → 重啟 → 恢復」，不改 code、不重建。
+  // 硬防護：production 一律拒絕武裝——chaos 是測試專用機制，遺留在 production .env 會靜默
+  // 造成崩潰迴圈（restart:on-failure:5 用盡後 worker 停擺）。演練請在非 production 環境進行。
   const chaos = parseChaosConfig(process.env);
   for (const w of chaos.warnings) log("warn", w);
-  if (chaos.config) armChaos(chaos.config, worker, (msg) => log("warn", msg));
+  if (chaos.config) {
+    if (process.env.NODE_ENV === "production") {
+      log("error", `WORKER_CHAOS 於 production 一律忽略（測試專用機制，勿留在 production .env）：${chaos.config.kind}@${chaos.config.at}`);
+    } else {
+      armChaos(chaos.config, worker, (msg) => log("warn", msg));
+    }
+  }
 
   // 失敗處理（US3）：僅在 attempts **用盡**（最終終態）後通知 ai/error（FR-020／US3 案例3）；
   // 尚有重試時只記 warn，交由 BullMQ 指數退避重試。
@@ -233,8 +241,11 @@ export async function bootstrap(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     log("log", `received ${signal}, shutting down worker...`);
     try {
-      stopHeartbeat(); // 優雅關閉清 timer；致命路徑不清、key 靠 TTL 過期（data-model E2）
+      // 先 drain 在途 job 再停心跳：worker.close() 會等在途 job（含長串流）收尾，期間仍需
+      // 持續寫 heartbeat，否則 key 於 TTL 過期、healthcheck 在正常優雅關閉途中誤翻 unhealthy。
+      // 致命路徑不走這裡、不清 timer，key 靠 TTL 過期（data-model E2）。
       await worker.close();
+      stopHeartbeat();
       await mongoClient.close();
       await pub.quit();
       await cache.quit();
