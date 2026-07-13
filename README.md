@@ -47,7 +47,7 @@
 
 **flow-gatekeeper** 是一個模擬工廠機台艦隊（fleet）的即時監控台：5 台示範機台以 10–50ms 的節拍持續吐出遙測（溫度、振動、吞吐、錯誤率），前端即時渲染每台的健康狀態；當某台轉為 warning／critical 時，操作者可以**就地對那台機台觸發一次 AI 診斷**，並在同一畫面的 Copilot 面板中，看著 AI 的推理**逐字串流**出現，最後收斂成一份結構化診斷（嚴重度、可能原因、佐證、建議動作）。
 
-它的定位不是「把即時通訊接起來」而已，而是刻意親手實作即時／分散式系統裡**較難、較有展示價值的那幾塊**：前端高頻背壓、跨進程串流 relay、佇列削峰、cache-aside 去重、契約優先的全棧型別安全。整個專案以 [GitHub Spec Kit](https://github.com/github/spec-kit)（Spec-Driven Development）逐 feature 開發，工程原則以 `memory/constitution.md`（專案憲章）為準。
+它的定位不是「把即時通訊接起來」而已，而是刻意親手實作即時／分散式系統裡**較難、較有展示價值的那幾塊**：前端高頻背壓、跨進程串流 relay、佇列削峰、cache-aside 去重、契約優先的全棧型別安全。整個專案以 [GitHub Spec Kit](https://github.com/github/spec-kit)（Spec-Driven Development）逐 feature 開發，工程原則以 `.specify/memory/constitution.md`（專案憲章）為準。
 
 **一分鐘看懂資料怎麼流**：前端面對 10–50ms 級的 WebSocket telemetry，不逐筆寫 reactive state，而是先進 buffer、再以 `requestAnimationFrame` 每幀批次提交，藉此穩住畫面；後端以 NestJS Gateway 承接 WebSocket，並把耗時的 AI 診斷交給 BullMQ 丟進獨立 worker，避免阻塞主服務。worker 本身沒有前端連線，AI token 因此改走 Redis Pub/Sub 回到 Gateway、再轉送前端；資料層由 MongoDB 保存 telemetry、errorlogs、maintenanceRecords 與 diagnoses，Redis 則負責 queue、cache、Pub/Sub 與 dedupe lock。整個開發流程以 Spec Kit 的 constitution / spec / plan / tasks / implement 管理，每條 feature 都帶可驗收條件。
 
@@ -364,7 +364,7 @@ flow-gatekeeper/
 ├── asyncapi.yaml      # 即時通道契約（Spectral lint）
 ├── docker-compose.yml # Redis 7 + MongoDB 7
 ├── .env.example       # 環境設定「總覽指引」（非載入檔；指向各 app 的 .env.example）
-└── memory/            # 專案憲章 constitution.md（工程原則單一來源）
+└── .specify/memory/   # 專案憲章 constitution.md（工程原則單一來源）
 ```
 
 ---
@@ -495,7 +495,7 @@ env **分散在各 app**（執行期不讀根目錄 `.env`）：`apps/api/.env` 
 
 ## 開發方法論：Spec-Driven Development
 
-本專案全程以 [GitHub Spec Kit](https://github.com/github/spec-kit) 開發，工程原則以 `memory/constitution.md`（專案憲章）為單一來源。每條 feature 從 `develop` 開 branch，走完整流程：
+本專案全程以 [GitHub Spec Kit](https://github.com/github/spec-kit) 開發，工程原則以 `.specify/memory/constitution.md`（專案憲章）為單一來源。每條 feature 從 `develop` 開 branch，走完整流程：
 
 ```
 specify → clarify → plan → checklist → tasks → analyze → implement → 驗收 → merge(--no-ff) 回 develop
