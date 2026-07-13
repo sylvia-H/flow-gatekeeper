@@ -16,6 +16,7 @@ import { buildDiagnosisContext } from "./context/context-builder.js";
 import { buildDiagnosisSignature } from "./cache/signature.js";
 import { armChaos, parseChaosConfig } from "./lib/chaos.js";
 import { fatal } from "./lib/fatal.js";
+import { startHeartbeat, stopHeartbeat } from "./lib/heartbeat.js";
 import { parseResult } from "./lib/parse-result.js";
 
 /**
@@ -196,7 +197,13 @@ export async function bootstrap(): Promise<void> {
     limiter: { max: Number(process.env.AI_RPM ?? 8), duration: 60_000 },
   });
 
-  worker.on("ready", () => log("log", `worker ready, consuming queue '${DIAGNOSIS_QUEUE}'`));
+  worker.on("ready", () => {
+    log("log", `worker ready, consuming queue '${DIAGNOSIS_QUEUE}'`);
+    // 存活訊號（FR-007）：ready 後每 10s 寫 worker:heartbeat（TTL 30s，掛既有 cache 連線）。
+    // 事件迴圈被卡死時 timer 停擺、key 過期 → compose healthcheck 轉 unhealthy（僅示警）。
+    // ready 於連線重建時會重複觸發——startHeartbeat 冪等，重入只重設 timer。
+    startHeartbeat(cache, (msg) => log("warn", msg));
+  });
 
   // 故障注入旗標（FR-008）：未設定＝關閉、零程式路徑差異；非法值 warn 後視為關閉。
   // 供 quickstart 場景 3/4 可重現演練「致命 → 重啟 → 恢復」，不改 code、不重建。
@@ -226,6 +233,7 @@ export async function bootstrap(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     log("log", `received ${signal}, shutting down worker...`);
     try {
+      stopHeartbeat(); // 優雅關閉清 timer；致命路徑不清、key 靠 TTL 過期（data-model E2）
       await worker.close();
       await mongoClient.close();
       await pub.quit();

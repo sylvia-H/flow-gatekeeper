@@ -115,12 +115,13 @@ pnpm monorepo（`apps/{api,worker,web}`、`packages/{contracts,shared}`）；本
 
 ### Implementation for User Story 5
 
-- [ ] T019 [P] [US5] 建立 `apps/worker/src/lib/heartbeat.ts`：`startHeartbeat(redis)`（`setInterval` 每 10s `SET worker:heartbeat <ISO ts> EX 30`，掛既有 `cache` 連線）／`stopHeartbeat()`＋`isHeartbeatFresh(pttl)` 純函式（research D5、data-model E2）
-- [ ] T020 [P] [US5] 建立 `apps/worker/src/lib/heartbeat.test.ts`：`isHeartbeatFresh` 邊界（PTTL 正值／0／-1／-2）（憲章測試門檻）
-- [ ] T021 [P] [US5] 建立 `apps/worker/src/healthcheck.ts`：獨立進入點（**不** import main，避免 bootstrap 副作用）——建短命 Redis 連線讀 `PTTL worker:heartbeat` → fresh 則 exit 0、否則 exit 1，含連線逾時保護（contracts §3）
-- [ ] T022 [US5] 修改 `apps/worker/src/main.ts`：worker `ready` 後啟動 heartbeat；`shutdown()` 中清除 heartbeat timer（優雅關閉不留 timer；致命路徑不清、key 靠 TTL 過期）（data-model E2 生命週期）
-- [ ] T023 [US5] `docker-compose.yml` worker service 補 healthcheck 區塊：`test: ["CMD","node","dist/healthcheck.js"]`、`interval: 30s`、`timeout: 5s`、`retries: 3`、`start_period: 30s`（contracts §4）
-- [ ] T024 [US5] 依 quickstart 場景 5 驗收：healthy → `docker exec <worker> sh -c 'kill -STOP $(pgrep -f dist/main.js)'` 凍結 node 子行程（不可對 PID 1 送 STOP——同 namespace 會被核心忽略；已由 T003 的 `init: true` 使 node 非 PID 1）→ 自 STOP 時點起算典型約 90s、最壞約 120s（≤2min）轉 `running (unhealthy)`（SC-005）→ `sh -c 'kill -CONT $(pgrep -f dist/main.js)'` 恢復 healthy；確認全程不自動重啟、可與「行程死亡」情境判別（US5 場景 3）
+- [X] T019 [P] [US5] 建立 `apps/worker/src/lib/heartbeat.ts`：`startHeartbeat(redis)`（`setInterval` 每 10s `SET worker:heartbeat <ISO ts> EX 30`，掛既有 `cache` 連線）／`stopHeartbeat()`＋`isHeartbeatFresh(pttl)` 純函式（research D5、data-model E2）
+- [X] T020 [P] [US5] 建立 `apps/worker/src/lib/heartbeat.test.ts`：`isHeartbeatFresh` 邊界（PTTL 正值／0／-1／-2）（憲章測試門檻）
+- [X] T021 [P] [US5] 建立 `apps/worker/src/healthcheck.ts`：獨立進入點（**不** import main，避免 bootstrap 副作用）——建短命 Redis 連線讀 `PTTL worker:heartbeat` → fresh 則 exit 0、否則 exit 1，含連線逾時保護（contracts §3）
+- [X] T022 [US5] 修改 `apps/worker/src/main.ts`：worker `ready` 後啟動 heartbeat；`shutdown()` 中清除 heartbeat timer（優雅關閉不留 timer；致命路徑不清、key 靠 TTL 過期）（data-model E2 生命週期）
+- [X] T023 [US5] `docker-compose.yml` worker service 補 healthcheck 區塊：`test: ["CMD","node","dist/healthcheck.js"]`、`interval: 30s`、`timeout: 5s`、`retries: 3`、`start_period: 30s`（contracts §4）
+- [X] T024 [US5] 依 quickstart 場景 5 驗收：healthy → `docker exec <worker> sh -c 'kill -STOP $(pgrep -f dist/main.js)'` 凍結 node 子行程（不可對 PID 1 送 STOP——同 namespace 會被核心忽略；已由 T003 的 `init: true` 使 node 非 PID 1）→ 自 STOP 時點起算典型約 90s、最壞約 120s（≤2min）轉 `running (unhealthy)`（SC-005）→ `sh -c 'kill -CONT $(pgrep -f dist/main.js)'` 恢復 healthy；確認全程不自動重啟、可與「行程死亡」情境判別（US5 場景 3）
+  - **驗收證據（2026-07-13）**：啟動後 heartbeat key 即存活（PTTL 22.5s）→ start_period 內轉 `Up (healthy)`（啟動後 21s）→ `kill -STOP` 凍結 node 子行程（PTTL 降至 -2、11s 後仍 -2＝訊號確實停止）→ **自 STOP 起約 98s** 轉 `running unhealthy`（SC-005 ≤2min ✅），期間 `RestartCount=0`（示警定位、不自動重啟；`running`+`unhealthy` 與「行程死亡→exited」可判別）→ `kill -CONT` 後 heartbeat 立即恢復（PTTL 25.6s）、40s 內回 `healthy`，全程零重啟
 
 **Checkpoint**: 監督完整性補齊——行程死亡（US2/US4）與活鎖（US5）皆可察覺。
 

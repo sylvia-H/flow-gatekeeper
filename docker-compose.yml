@@ -37,6 +37,14 @@ services:
     environment:
       REDIS_HOST: redis
       MONGO_URL: mongodb://mongo:27017/flow-gatekeeper
+    # 健康判定（FR-007，僅示警、不自動重啟）：讀 Redis heartbeat key（10s 週期／TTL 30s），
+    # 連續 3 次失敗轉 unhealthy——補「行程活著但卡住」的偵測盲點（contracts §3–§4）
+    healthcheck:
+      test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   redis-data: {}
