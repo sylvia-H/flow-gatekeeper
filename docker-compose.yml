@@ -14,6 +14,38 @@ services:
     volumes:
       - mongo-data:/data/db
 
+  # worker 受監督形態（Feature 007）。掛 profile 分組：既有 `docker compose up -d`
+  # 只起 infra、行為零變化；受監督模式為 `docker compose --profile supervised up -d --build`。
+  worker:
+    profiles: ["supervised"]
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    depends_on:
+      - redis
+      - mongo
+    # 監督語意（ADR-002／research D4）：非零退出才重啟（Docker 內建指數退避），
+    # 連續失敗 5 次後停止；優雅關閉 exit(0) 不觸發重啟。
+    restart: on-failure:5
+    # tini 為 PID 1、node 為子行程——同 namespace 對 PID 1 送 SIGSTOP 會被核心忽略，
+    # US5 活鎖演練需凍結 node 子行程（research D5）。
+    init: true
+    # SIGTERM → SIGKILL 寬限：涵蓋 worker.close() 最長收尾（≈ AI_TIMEOUT_MS 30s）＋關閉緩衝（research D7）
+    stop_grace_period: 45s
+    # 祕密與調參於執行時注入（憲章 VI：不烘入 image）；容器內連線位址由 environment 覆蓋
+    env_file: apps/worker/.env
+    environment:
+      REDIS_HOST: redis
+      MONGO_URL: mongodb://mongo:27017/flow-gatekeeper
+    # 健康判定（FR-007，僅示警、不自動重啟）：讀 Redis heartbeat key（10s 週期／TTL 30s），
+    # 連續 3 次失敗轉 unhealthy——補「行程活著但卡住」的偵測盲點（contracts §3–§4）
+    healthcheck:
+      test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
 volumes:
   redis-data: {}
   mongo-data: {}

@@ -1,0 +1,44 @@
+# .dockerignore（build context 為 repo root，見 apps/worker/Dockerfile 與 research D2）
+#
+# 兩個目的：
+# 1. 憲章 VI 守門：任何 .env（祕密）絕不進 build context，映像不可能烘入祕密；
+#    祕密僅於執行時由 compose env_file 注入。
+# 2. 縮小 context：依賴與建置產物容器內重做，文件/規格/前端資產與 worker 映像無關。
+
+# ---- 祕密：.env 絕不進 image（僅允許 .env.example 記錄形狀）----
+**/.env
+**/.env.*
+!**/.env.example
+
+# ---- 依賴與建置產物（容器內以 frozen lockfile 重新安裝、重新建置）----
+**/node_modules
+**/dist
+coverage
+
+# ---- 版控與本機工具狀態 ----
+.git
+.github
+.codegraph
+.claude
+.specify
+.vscode
+.idea
+
+# ---- 與 worker 映像無關的內容 ----
+# 注意：apps/api、apps/web 的 package.json 必須留在 context——
+# `pnpm install --frozen-lockfile` 會核對 lockfile 的全部 workspace importers，
+# 缺任何一個 package.json 都會判定 lockfile 過期而失敗；故只排除其源碼與資產。
+apps/api/src
+apps/api/test
+apps/web/src
+apps/web/public
+apps/web/design
+apps/web/index.html
+docs
+specs
+scripts
+*.log
+*.md
+asyncapi.yaml
+.spectral.yaml
+docker-compose.yml

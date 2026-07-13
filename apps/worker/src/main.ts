@@ -14,6 +14,9 @@ import { GeminiProvider } from "./ai/gemini-provider.js";
 import { buildPrompt } from "./ai/prompt.js";
 import { buildDiagnosisContext } from "./context/context-builder.js";
 import { buildDiagnosisSignature } from "./cache/signature.js";
+import { armChaos, parseChaosConfig } from "./lib/chaos.js";
+import { fatal } from "./lib/fatal.js";
+import { startHeartbeat, stopHeartbeat } from "./lib/heartbeat.js";
 import { parseResult } from "./lib/parse-result.js";
 
 /**
@@ -35,9 +38,10 @@ function log(level: "log" | "warn" | "error", msg: string): void {
 
 /** 發布 AI 串流事件到 Redis Pub/Sub（worker MUST NOT 直接 emit ws，憲章 IV）。 */
 function publish(pub: Redis, jobId: string, event: AiStreamEvent): void {
-  // fire-and-forget，但在源頭接住 publish 失敗並記 log：單筆 token 發布失敗不該拖垮整個 worker，
-  // 也不該變成浮空 rejection 汙染全域守門。真正的 Redis 中斷會由後續被 await 的 cache 指令
-  // （get/set/del）拋出，走 processor 的 ai/error 與重試路徑收尾。
+  // fire-and-forget，但在源頭接住 publish 失敗並記 log：單筆 token 發布失敗不該拖垮整個 worker
+  // ——若放任成浮空 rejection，會觸發全域致命守門（let it crash → exit(1) 重啟），把 job 級
+  // 小故障放大成行程級重啟。真正的 Redis 中斷會由後續被 await 的 cache 指令（get/set/del）
+  // 拋出，走 processor 的 ai/error 與重試路徑收尾。
   void pub.publish(`ai-stream:${jobId}`, JSON.stringify(event)).catch((err: unknown) => {
     const detail = err instanceof Error ? err.message : String(err);
     log("warn", `publish 失敗 ai-stream:${jobId} type=${event.type}：${detail}`);
@@ -161,23 +165,15 @@ function createProcessor(db: Db, pub: Redis, cache: Redis, ai: AiProvider) {
 }
 
 export async function bootstrap(): Promise<void> {
-  // 韌性守門（縱深防禦）：單一 job 的 LLM 串流可能拋出「浮空」的 rejection（例如 Gemini SDK
-  // 的背景 response promise 於串流解析失敗時 reject）。若放任 Node 預設行為會**終止整個 worker
-  // 進程**，導致其後所有 job 卡在佇列無人消化。這裡記 log 但不 exit，讓單一壞串流不拖垮 worker
-  // ——該 job 本身仍由 processor／BullMQ 走 `ai/error` 與重試路徑收尾。
-  //
-  // 註：此「log + 續跑」是**目前尚無 process 監督者**下的暫時策略。生產正解是「exit(1) + 由
-  // 監督者（容器 restart 策略／pm2／systemd）重啟乾淨行程」，屬獨立的 worker 生產化工作，
-  // 方向藍圖見 docs/Flow-Gatekeeper-SDD-完整實作指南.md「Feature 007：worker 生產化與
-  // process 監督」一節，另立 feature 走正式 SDD。
-  process.on("unhandledRejection", (reason) => {
-    const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
-    log("error", `unhandledRejection（已忽略、worker 續跑）：${detail}`);
-  });
-  process.on("uncaughtException", (err) => {
-    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
-    log("error", `uncaughtException（已忽略、worker 續跑）：${detail}`);
-  });
+  // 致命錯誤語意（007 let it crash）：未捕捉例外／未處理拒絕代表行程狀態未定義，
+  // 記錄明確標示「致命」的訊息後**立即 exit(1)**、不嘗試收尾——重建交由監督者
+  // （compose `restart: on-failure`）重啟後的乾淨行程；優雅關閉走 exit(0)、不觸發重啟。
+  // 進行中與佇列中的 job 由 BullMQ 既有 stalled/attempts 機制重派（FR-005）。
+  // 運維層契約（exit code／log 格式／演練旗標）見
+  // specs/007-worker-process-supervision/contracts/supervision-runtime.md；
+  // 雙模式差異（dev 直跑無監督者、致命後停在等待檔案變更）見 README「執行模式」章節。
+  process.on("unhandledRejection", (reason) => fatal("unhandledRejection", reason));
+  process.on("uncaughtException", (err) => fatal("uncaughtException", err));
 
   const mongoClient = new MongoClient(process.env.MONGO_URL ?? "mongodb://127.0.0.1:27017/flow-gatekeeper");
   await mongoClient.connect();
@@ -201,7 +197,27 @@ export async function bootstrap(): Promise<void> {
     limiter: { max: Number(process.env.AI_RPM ?? 8), duration: 60_000 },
   });
 
-  worker.on("ready", () => log("log", `worker ready, consuming queue '${DIAGNOSIS_QUEUE}'`));
+  worker.on("ready", () => {
+    log("log", `worker ready, consuming queue '${DIAGNOSIS_QUEUE}'`);
+    // 存活訊號（FR-007）：ready 後每 10s 寫 worker:heartbeat（TTL 30s，掛既有 cache 連線）。
+    // 事件迴圈被卡死時 timer 停擺、key 過期 → compose healthcheck 轉 unhealthy（僅示警）。
+    // ready 於連線重建時會重複觸發——startHeartbeat 冪等，重入只重設 timer。
+    startHeartbeat(cache, (msg) => log("warn", msg));
+  });
+
+  // 故障注入旗標（FR-008）：未設定＝關閉、零程式路徑差異；非法值 warn 後視為關閉。
+  // 供 quickstart 場景 3/4 可重現演練「致命 → 重啟 → 恢復」，不改 code、不重建。
+  // 硬防護：production 一律拒絕武裝——chaos 是測試專用機制，遺留在 production .env 會靜默
+  // 造成崩潰迴圈（restart:on-failure:5 用盡後 worker 停擺）。演練請在非 production 環境進行。
+  const chaos = parseChaosConfig(process.env);
+  for (const w of chaos.warnings) log("warn", w);
+  if (chaos.config) {
+    if (process.env.NODE_ENV === "production") {
+      log("error", `WORKER_CHAOS 於 production 一律忽略（測試專用機制，勿留在 production .env）：${chaos.config.kind}@${chaos.config.at}`);
+    } else {
+      armChaos(chaos.config, worker, (msg) => log("warn", msg));
+    }
+  }
 
   // 失敗處理（US3）：僅在 attempts **用盡**（最終終態）後通知 ai/error（FR-020／US3 案例3）；
   // 尚有重試時只記 warn，交由 BullMQ 指數退避重試。
@@ -225,7 +241,11 @@ export async function bootstrap(): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     log("log", `received ${signal}, shutting down worker...`);
     try {
+      // 先 drain 在途 job 再停心跳：worker.close() 會等在途 job（含長串流）收尾，期間仍需
+      // 持續寫 heartbeat，否則 key 於 TTL 過期、healthcheck 在正常優雅關閉途中誤翻 unhealthy。
+      // 致命路徑不走這裡、不清 timer，key 靠 TTL 過期（data-model E2）。
       await worker.close();
+      stopHeartbeat();
       await mongoClient.close();
       await pub.quit();
       await cache.quit();

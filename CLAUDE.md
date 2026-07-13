@@ -1,13 +1,13 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/006-monitoring-console-fidelity/plan.md`
+`specs/007-worker-process-supervision/plan.md`
 <!-- SPECKIT END -->
 
 # flow-gatekeeper — Agent 操作指引
 
 flow-gatekeeper 是一個致敬 Argo CD 的即時流程監控與 AI 診斷 side project，用 GitHub Spec Kit（SDD）開發。
-**工程原則以 `memory/constitution.md` 為準**；本檔只放 constitution 不會逐 feature 重述的操作層約束。
+**工程原則以 `.specify/memory/constitution.md` 為準**；本檔只放 constitution 不會逐 feature 重述的操作層約束。
 
 ## 溝通語言
 
@@ -20,6 +20,13 @@ flow-gatekeeper 是一個致敬 Argo CD 的即時流程監控與 AI 診斷 side 
 - **通訊契約**：一律依 `packages/contracts`（Zod schema 為單一來源，type 由 `z.infer` 推導）與 `asyncapi.yaml`。新增 event/payload 先改契約，再改 API/worker/web。
 - **開發步驟**：依 `docs/Flow-Gatekeeper-SDD-完整實作指南.md`。指南中的完整 code 區塊是「期望產出 / reference」，正式流程仍走 Spec Kit。
 - **架構決策**：重大技術取捨記錄在 `docs/adr-*.md`。即時通道為何用原生 ws 而非 Socket.IO，見 `docs/adr-001-native-websocket.md`。
+- **跨 Feature 決策 MUST 回補真實來源**：SDD 流程**任一階段**（specify／clarify／plan／checklist／tasks／analyze／implement／驗收）修正或新定的決策，若影響**當前 feature 以外**的範圍（修改既定藍圖方向、推翻先前假設、調整共用契約／參數／指令形狀、變更後續 feature 依賴的行為語意），MUST 在該 feature 收尾前寫入對應的真實來源，**並同步修訂既有內容使其與新決策一致、消除矛盾**（受影響的舊段落須一併改寫，不得留下自相矛盾的敘述）：
+  - 架構／執行／設計細節與 feature 藍圖 → `docs/Flow-Gatekeeper-SDD-完整實作指南.md` 相關章節、後續 feature 的方向藍圖／spec 草稿；
+  - 重大技術取捨 → `docs/adr-*.md`；
+  - 涉及**非協商原則**時 → `.specify/memory/constitution.md`（走 `/speckit-constitution` 修訂）；
+  - 影響使用者操作面時 → `README.md`。
+
+  **MUST NOT** 只寫進 Agent memory、或僅留在當前 feature 的 spec/clarify/tasks 工件就當作已定案——Agent memory 可作輔助備忘，但不是專案真實來源；**未同步到上述文件前，該跨 Feature 決策一律視為「未落地」**。理由：下一條 feature 起草時以這些文件為據，決策未回補就會拿過時決策開發、造成邏輯衝突。回補時**不重寫歷史**：ADR 的決策背景、指南的「由來」段保留原敘述（必要時改過去式、標註「已落地／已變更，現況見 ×××」），只更新「現況描述」。範例：007 把崩潰語意翻轉落地後，指南 §13 狀態改為「已落地」、「log + 續跑」但書收斂為歷史敘述。
 
 ## 環境
 

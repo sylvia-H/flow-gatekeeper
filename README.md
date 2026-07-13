@@ -34,6 +34,7 @@
 - [功能導覽（依 feature 逐一交付）](#功能導覽依-feature-逐一交付)
 - [Monorepo 結構](#monorepo-結構)
 - [快速開始](#快速開始)
+- [執行模式：開發模式與受監督模式](#執行模式開發模式與受監督模式)
 - [環境變數](#環境變數)
 - [測試與品質門檻](#測試與品質門檻)
 - [開發方法論：Spec-Driven Development](#開發方法論spec-driven-development)
@@ -46,7 +47,7 @@
 
 **flow-gatekeeper** 是一個模擬工廠機台艦隊（fleet）的即時監控台：5 台示範機台以 10–50ms 的節拍持續吐出遙測（溫度、振動、吞吐、錯誤率），前端即時渲染每台的健康狀態；當某台轉為 warning／critical 時，操作者可以**就地對那台機台觸發一次 AI 診斷**，並在同一畫面的 Copilot 面板中，看著 AI 的推理**逐字串流**出現，最後收斂成一份結構化診斷（嚴重度、可能原因、佐證、建議動作）。
 
-它的定位不是「把即時通訊接起來」而已，而是刻意親手實作即時／分散式系統裡**較難、較有展示價值的那幾塊**：前端高頻背壓、跨進程串流 relay、佇列削峰、cache-aside 去重、契約優先的全棧型別安全。整個專案以 [GitHub Spec Kit](https://github.com/github/spec-kit)（Spec-Driven Development）逐 feature 開發，工程原則以 `memory/constitution.md`（專案憲章）為準。
+它的定位不是「把即時通訊接起來」而已，而是刻意親手實作即時／分散式系統裡**較難、較有展示價值的那幾塊**：前端高頻背壓、跨進程串流 relay、佇列削峰、cache-aside 去重、契約優先的全棧型別安全。整個專案以 [GitHub Spec Kit](https://github.com/github/spec-kit)（Spec-Driven Development）逐 feature 開發，工程原則以 `.specify/memory/constitution.md`（專案憲章）為準。
 
 **一分鐘看懂資料怎麼流**：前端面對 10–50ms 級的 WebSocket telemetry，不逐筆寫 reactive state，而是先進 buffer、再以 `requestAnimationFrame` 每幀批次提交，藉此穩住畫面；後端以 NestJS Gateway 承接 WebSocket，並把耗時的 AI 診斷交給 BullMQ 丟進獨立 worker，避免阻塞主服務。worker 本身沒有前端連線，AI token 因此改走 Redis Pub/Sub 回到 Gateway、再轉送前端；資料層由 MongoDB 保存 telemetry、errorlogs、maintenanceRecords 與 diagnoses，Redis 則負責 queue、cache、Pub/Sub 與 dedupe lock。整個開發流程以 Spec Kit 的 constitution / spec / plan / tasks / implement 管理，每條 feature 都帶可驗收條件。
 
@@ -363,7 +364,7 @@ flow-gatekeeper/
 ├── asyncapi.yaml      # 即時通道契約（Spectral lint）
 ├── docker-compose.yml # Redis 7 + MongoDB 7
 ├── .env.example       # 環境設定「總覽指引」（非載入檔；指向各 app 的 .env.example）
-└── memory/            # 專案憲章 constitution.md（工程原則單一來源）
+└── .specify/memory/   # 專案憲章 constitution.md（工程原則單一來源）
 ```
 
 ---
@@ -413,6 +414,49 @@ pnpm check
 
 ---
 
+## 執行模式：開發模式與受監督模式
+
+worker 有兩種執行形態，以**同一份** `docker-compose.yml` 的 profile 分組切換（單一真實來源；Feature 007）：
+
+| 模式 | 使用情境 | worker 執行方式 | 致命錯誤後的行為 |
+| --- | --- | --- | --- |
+| **開發模式**（預設） | 日常開發、熱重載 | host 直跑 `tsx watch`（`dev-up.ps1`） | 行程結束後 `tsx watch` 停在**等待檔案變更**，不自動重啟（已知且刻意的差異） |
+| **受監督模式** | demo、貼近生產情境 | Docker 容器＋`restart: on-failure:5` | 監督者自動以乾淨行程重啟（指數退避）；連續失敗 5 次後停止 |
+
+### 指令對照
+
+| 情境 | 指令 |
+| --- | --- |
+| 開發模式（零變化） | `docker compose up -d`（只起 infra）→ `./scripts/dev-up.ps1` |
+| 受監督模式啟動 | `docker compose --profile supervised up -d --build` |
+| 受監督模式停止（優雅） | `docker compose --profile supervised stop worker`（SIGTERM，45s 寬限） |
+| 健康／重啟狀態查詢 | `docker ps`（STATUS 欄含 health）；`docker inspect --format "{{.RestartCount}} {{.State.Status}} {{.State.Health.Status}}" <worker 容器名>` |
+| 記錄判讀 | `docker logs --timestamps <worker 容器名>` |
+
+### 崩潰迴圈防護（達重試上限停止與復原）
+
+worker 連續快速失敗（如設定錯誤導致啟動即崩潰）時，Docker 內建的重啟退避會讓間隔逐次遞增（100ms 起翻倍），連續失敗 **5 次**（`restart: on-failure:5`）後**停止重啟**——避免熱迴圈打爆 LLM 額度與資料庫連線。
+
+- **判讀「已達上限停止」**：
+  ```powershell
+  docker ps -a                       # worker 顯示 Exited (1)，不再自動拉起
+  docker inspect --format "{{.RestartCount}} {{.State.Status}}" <worker 容器名>   # 預期 5 exited
+  docker logs --timestamps <worker 容器名>   # 可見多輪「致命 → ready」與遞增間隔
+  ```
+- **復原手段**：先排除故障根因（如修正錯誤設定、移除演練旗標 `WORKER_CHAOS`），再重新拉起：
+  ```powershell
+  docker compose --profile supervised up -d worker
+  ```
+  重新 `up` 會重建容器並歸零重試計數；若容器成功運行超過 10 秒，Docker 也會自動重置失敗計數。
+
+### 注意事項
+
+- **兩模式擇一運行**：受監督 worker 運行期間，host 端**不要**再啟動 dev worker——兩個 consumer 會分食佇列 job，使演練與驗收不可判讀（不致損壞資料，但屬非支援情境）。
+- 受監督 worker 的環境設定沿用 `apps/worker/.env`（compose `env_file` 於**執行時**注入，祕密不烘入 image）；`REDIS_HOST`／`MONGO_URL` 由 compose 覆蓋為容器網路位址，host 直跑照舊用 `.env` 的 `127.0.0.1`，兩模式互不干擾。
+- **致命錯誤語意（let it crash）**：worker 遇非預期致命錯誤（未捕捉例外／未處理拒絕）會記錄明確標示「致命」的訊息後**立即結束行程**，由監督者以乾淨行程重啟。開發模式下沒有監督者——行程停在等待檔案變更，需修改檔案或手動重啟；這是文件化的已知差異，不是 bug。
+
+---
+
 ## 環境變數
 
 env **分散在各 app**（執行期不讀根目錄 `.env`）：`apps/api/.env` 由 `apps/api/src/main.ts` 明確載入本層檔、`apps/worker/.env` 由 worker 以 `dotenv/config`（cwd）載入本層檔、`apps/web` 不需 env。各處以其 `.env.example` 為準：
@@ -451,7 +495,7 @@ env **分散在各 app**（執行期不讀根目錄 `.env`）：`apps/api/.env` 
 
 ## 開發方法論：Spec-Driven Development
 
-本專案全程以 [GitHub Spec Kit](https://github.com/github/spec-kit) 開發，工程原則以 `memory/constitution.md`（專案憲章）為單一來源。每條 feature 從 `develop` 開 branch，走完整流程：
+本專案全程以 [GitHub Spec Kit](https://github.com/github/spec-kit) 開發，工程原則以 `.specify/memory/constitution.md`（專案憲章）為單一來源。每條 feature 從 `develop` 開 branch，走完整流程：
 
 ```
 specify → clarify → plan → checklist → tasks → analyze → implement → 驗收 → merge(--no-ff) 回 develop

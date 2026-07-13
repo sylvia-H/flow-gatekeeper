@@ -22,3 +22,9 @@ pnpm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
+
+# .claude
+.claude/settings.json
+
+# local code index
+.codegraph/
