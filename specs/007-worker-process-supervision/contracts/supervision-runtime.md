@@ -9,6 +9,7 @@
 | `0` | 優雅關閉完成（SIGTERM/SIGINT → close → quit） | 不重啟（正常停止） |
 | `1` | 致命：`uncaughtException`／`unhandledRejection`（含 chaos 注入）、bootstrap 失敗 | 依退避自動重啟；連續失敗 5 次後停止 |
 | `137` 等（SIGKILL） | `stop_grace_period`（45s）內未收尾被強制終止 | 視為異常——SC-007 要求 0 次發生 |
+| `143`（SIGTERM 預設處置） | stop 的 SIGTERM 落在行程啟動早期、handler 尚未掛上（如「致命觸發重啟中」與 stop 重疊的窗口） | 屬 stop 意圖——手動 stop 優先於 on-failure，不重啟；非異常（詳見 quickstart 場景 3b） |
 
 ## 2. 環境變數契約（新增項；既有項見 `apps/worker/.env.example`）
 

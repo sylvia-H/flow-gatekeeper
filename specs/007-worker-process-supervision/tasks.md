@@ -131,10 +131,14 @@ pnpm monorepo（`apps/{api,worker,web}`、`packages/{contracts,shared}`）；本
 
 **Purpose**: 全案品質門檻、文件一致性與總驗收。
 
-- [ ] T025 [P] 全套品質門檻：`pnpm check`（contract lint＋typecheck＋lint＋test）全綠；確認新測試（fatal/chaos/heartbeat）均納入 `pnpm --filter worker test`
-- [ ] T026 [P] 文件終檢：`README.md`、`docs/Flow-Gatekeeper-SDD-完整實作指南.md`、`apps/worker/.env.example`、contracts/supervision-runtime.md 與最終實作行為逐項一致（FR-010/FR-011；無殘留「暫時策略」措辭）
-- [ ] T027 SC-001–SC-008 總驗收：依 quickstart「SC 對照」表逐項確認（含 SC-007 半開連線觀測：`docker compose stop` 後以 redis `CLIENT LIST`／mongo `serverStatus.connections` 對照關閉前後）
-- [ ] T028 覆核 `specs/007-worker-process-supervision/checklists/supervision.md` 29 項並勾選；發現的需求缺口回填 spec/plan 後再結案
+- [X] T025 [P] 全套品質門檻：`pnpm check`（contract lint＋typecheck＋lint＋test）全綠；確認新測試（fatal/chaos/heartbeat）均納入 `pnpm --filter worker test`
+  - **證據（2026-07-13）**：`pnpm check` exit 0——contract lint、全 workspace typecheck/lint、測試 api 9／web 104／worker 29（含 fatal 5、chaos 7、heartbeat 4 新測試）全數通過
+- [X] T026 [P] 文件終檢：`README.md`、`docs/Flow-Gatekeeper-SDD-完整實作指南.md`、`apps/worker/.env.example`、contracts/supervision-runtime.md 與最終實作行為逐項一致（FR-010/FR-011；無殘留「暫時策略」措辭）
+  - **證據（2026-07-13）**：殘留措辭全庫掃描——worker 原始碼與 README 零殘留；僅存於歷史記錄（ADR-002 決策背景、指南 §13 已改過去式的由來敘述、spec/tasks 對翻轉本身的描述），屬應保留內容。contracts §1 補 `143` 結局註記與 quickstart 場景 3b 對齊；§5 致命 log 格式與實測輸出逐字相符
+- [X] T027 SC-001–SC-008 總驗收：依 quickstart「SC 對照」表逐項確認（含 SC-007 半開連線觀測：`docker compose stop` 後以 redis `CLIENT LIST`／mongo `serverStatus.connections` 對照關閉前後）
+  - **總驗收對照（2026-07-13）**：SC-001 ✅ 單一指令啟動、串流（實收 token）／快取（cache hit 不重打 LLM）／錯誤語意與直跑一致（T006＋key 補回後複驗 tokens=14）。SC-002 ✅ 致命→恢復 4.6s（≤60s，T016）。SC-003 ✅ 演練 job 100% 收束——重派消化或 stalled 終態，佇列淨空（T011/T016）。SC-004 ✅ 退避 0.334→1.755s 遞增、RestartCount=5 停止、10 分鐘 0 新啟動（T017）。SC-005 ✅ 訊號停止→unhealthy 約 98s（≤2min，T024）。SC-006 ✅ 同設定 6 輪一致、全程不改 code 不重建（T016）。SC-007 ✅ 優雅停止：worker 的 redis 連線 4→0、mongo current 24→21、ExitCode 0、0 次強制中斷。SC-008 ✅ 無 profile 指令只起 infra、seed／api／worker `start:dev` 照常、`dev-up.ps1` 零改動（T006）
+- [X] T028 覆核 `specs/007-worker-process-supervision/checklists/supervision.md` 29 項並勾選；發現的需求缺口回填 spec/plan 後再結案
+  - **結案（2026-07-13）**：29/29 已於 implement 前覆核勾選（7 項缺口回填 spec/research/quickstart，見該檔 Notes）；實作後複核無回歸——唯一的驗收層修正是 quickstart 場景 3b 補 `143` 第三種合法結局與 contracts §1 對齊，不影響 spec 需求層（「不得為 137」與「不卡住、stop 後不重啟」不變量維持）
 
 ---
 
