@@ -1,7 +1,7 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-`specs/007-worker-process-supervision/plan.md`
+`specs/008-fullstack-containerization/plan.md`
 <!-- SPECKIT END -->
 
 # flow-gatekeeper — Agent 操作指引
