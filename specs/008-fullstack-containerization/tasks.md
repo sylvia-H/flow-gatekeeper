@@ -24,7 +24,7 @@ pnpm monorepo：`apps/{api,worker,web}`、`packages/{contracts,shared}`；編排
 
 **Purpose**: 建置脈絡的共用前置。**這是全案第一個必做項**——三個映像共用同一份 build context，現行 `.dockerignore` 是為 007 的 worker 單一映像調校的，不改則 api／web 映像必然建置失敗，且錯誤訊息（找不到源碼）不會指向 `.dockerignore`（research D4、plan「實作順序」）。
 
-- [ ] T001 重寫 `.dockerignore`：移除 `apps/api/src`、`apps/api/test`、`apps/web/src`、`apps/web/public`、`apps/web/design`、`apps/web/index.html` 六條排除；**祕密防線 `**/.env`、`**/.env.*`、`!**/.env.example` 一字不動**（憲章 VI／SC-006 的機制基礎）；`**/node_modules`、`**/dist`、`.git` 等 context 縮減項維持；改寫頂部註解，消除「與 worker 映像無關的內容」這句已與現況矛盾的敘述
+- [X] T001 重寫 `.dockerignore`：移除 `apps/api/src`、`apps/api/test`、`apps/web/src`、`apps/web/public`、`apps/web/design`、`apps/web/index.html` 六條排除；**祕密防線 `**/.env`、`**/.env.*`、`!**/.env.example` 一字不動**（憲章 VI／SC-006 的機制基礎）；`**/node_modules`、`**/dist`、`.git` 等 context 縮減項維持；改寫頂部註解，消除「與 worker 映像無關的內容」這句已與現況矛盾的敘述
 
 **Checkpoint**: `docker compose --profile demo build` 的 context 已能涵蓋三端源碼（此時尚無 api/web Dockerfile，僅為後續解除阻斷）。
 
@@ -164,7 +164,8 @@ pnpm monorepo：`apps/{api,worker,web}`、`packages/{contracts,shared}`；編排
 - [ ] T025 全案品質門檻：`pnpm check`（contract lint + typecheck + lint + test）全綠；確認 `packages/contracts` **零變更**（憲章 III）、**`apps/worker/` 源碼與建置行為零變更**——worker 在本 feature 的異動僅限三處，皆不觸碰其執行語意或監督參數：
   1. `docker-compose.yml` 的分組名 `supervised` → `demo`（T002，編排層）；
   2. `docker-compose.yml` 新增 `image: flow-gatekeeper-worker:local`（T002，編排層）；
-  3. `apps/worker/Dockerfile:4` 的**檔頭註解**更名（T020，FR-016 回補）——**只動註解、不動任何建置指令**，映像產物逐 byte 相同。
+  3. `apps/worker/Dockerfile:4` 的**檔頭註解**更名（T020，FR-016 回補）——**只動註解、不動任何建置指令**，映像產物逐 byte 相同；
+  4. `apps/worker/Dockerfile:26` 的**行內註解**更正（T001 實作期補）——原文「api/web 源碼已被 `.dockerignore` 排除、不進 context」在 T001 執行後即為**假敘述**（三映像共用 context，api/web 源碼自此在場）。改為「只複製 worker 建置鏈需要的源碼（api/web 源碼自 008 起也在 context 中，本映像不取用）」。**只動註解**，`COPY` 指令一字未改，映像產物逐 byte 相同（已實測 worker 映像照常建置）。
   **判定準則**：`git diff` 的 `apps/worker/` 若出現註解以外的任何變更（`src/`、建置階段、`CMD`、healthcheck），即為違反本門檻
 - [ ] T026 勾選本檔與 [checklists/requirements.md](./checklists/requirements.md)，確認 tasks／checklist／spec 三者一致，準備 merge 回 `develop`（`--no-ff`，憲章 I）
 

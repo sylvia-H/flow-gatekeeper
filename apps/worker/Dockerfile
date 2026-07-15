@@ -23,7 +23,7 @@ COPY packages/contracts/package.json packages/contracts/
 COPY packages/shared/package.json packages/shared/
 RUN pnpm install --frozen-lockfile
 
-# 複製 worker 建置鏈的源碼（api/web 源碼已被 .dockerignore 排除、不進 context）
+# 只複製 worker 建置鏈需要的源碼（api/web 源碼自 008 起也在 context 中，本映像不取用）
 COPY packages/contracts packages/contracts
 COPY packages/shared packages/shared
 COPY apps/worker apps/worker
