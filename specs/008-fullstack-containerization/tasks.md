@@ -92,7 +92,7 @@ pnpm monorepo：`apps/{api,worker,web}`、`packages/{contracts,shared}`；編排
 
 **Independent Test**: quickstart 場景 3。
 
-- [ ] T017 [US3] 驗收 quickstart 場景 3 並記錄結果：`docker compose up -d`（不帶分組）後 `docker compose ps` **只有 redis／mongo**（SC-004：服務清單與本 feature 之前完全相同）；`./scripts/dev-up.ps1` 後改一行前端與一行後端 code，確認熱重載行為與本 feature 之前一致、步驟數不變；從 demo 模式切回開發模式**不需額外清理步驟**。**同時確認 T004 的已知副作用**——開發模式 Ctrl-C 現在會走優雅關閉，須確認對 dev 迴圈無可觀察影響（research D5）
+- [X] T017 [US3] 驗收 quickstart 場景 3 並記錄結果：`docker compose up -d`（不帶分組）後 `docker compose ps` **只有 redis／mongo**（SC-004：服務清單與本 feature 之前完全相同）；`./scripts/dev-up.ps1` 後改一行前端與一行後端 code，確認熱重載行為與本 feature 之前一致、步驟數不變；從 demo 模式切回開發模式**不需額外清理步驟**。**同時確認 T004 的已知副作用**——開發模式 Ctrl-C 現在會走優雅關閉，須確認對 dev 迴圈無可觀察影響（research D5）
 
 **Checkpoint**: 開發體驗零回歸已驗證。
 
@@ -104,7 +104,7 @@ pnpm monorepo：`apps/{api,worker,web}`、`packages/{contracts,shared}`；編排
 
 **Independent Test**: quickstart 場景 4a–4b。
 
-- [ ] T018 [US4] 驗收 quickstart 場景 4a–4b 並記錄結果：`down` 後所有服務在各自寬限期內結束、`netstat` 確認 **0 個殘留行程佔用 8080**（SC-005）；`down -v` → `up` 後 volume 清空、seed 重跑、系統回到初始狀態、**同一份劇本可重跑並得到同等結果**；確認 `demo-reset.ps1`（只清 `ai-cache:*`／`ai-lock:*`）在 demo 模式下仍可用且與 `down -v` 粒度不同
+- [X] T018 [US4] 驗收 quickstart 場景 4a–4b 並記錄結果：`down` 後所有服務在各自寬限期內結束、`netstat` 確認 **0 個殘留行程佔用 8080**（SC-005）；`down -v` → `up` 後 volume 清空、seed 重跑、系統回到初始狀態、**同一份劇本可重跑並得到同等結果**；確認 `demo-reset.ps1`（只清 `ai-cache:*`／`ai-lock:*`）在 demo 模式下仍可用且與 `down -v` 粒度不同
 
 **Checkpoint**: demo 可反覆演練（憲章「可重播驗收」門檻）。
 
