@@ -50,6 +50,42 @@ services:
       retries: 3
       start_period: 30s
 
+  # api（Gateway）受監督形態（Feature 008 US1）。行為與 host 直跑逐項一致，
+  # 崩潰自動重啟，停止時在寬限期內優雅收尾且不被重啟（FR-001／FR-003／FR-004）。
+  api:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: flow-gatekeeper-api:local
+    # 監督語意（沿用 007 worker）：非零退出才重啟，連續 5 次後停止；exit(0) 不觸發重啟。
+    restart: on-failure:5
+    init: true
+    # 15s MUST NOT 照抄 worker 的 45s——後者為涵蓋 AI_TIMEOUT_MS 的 LLM 收尾而算，
+    # api 不呼叫 LLM，收尾僅為關閉連線、量級為秒內（FR-004、contracts §4）。
+    stop_grace_period: 15s
+    depends_on:
+      - redis
+      - mongo
+    # 祕密與調參於執行時注入（憲章 VI）；容器內連線位址由 environment 覆蓋
+    env_file: apps/api/.env
+    environment:
+      REDIS_HOST: redis
+      MONGO_URL: mongodb://mongo:27017/flow-gatekeeper
+    # 健康判定（FR-011）：/ws 握手收到 system/connected 才算 healthy——證明 Gateway 已 attach，
+    # 非只證明行程在聽（api 無 GET 路由，探 HTTP 必得 404）。探針不需 token（research D6）。
+    healthcheck:
+      test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # ⚠️ US1 專用暫時發佈（T008）——本 phase 尚無 web 容器，US1 的一致性比對須以 host dev
+    # 前端連上容器化 Gateway，而 vite proxy target 寫死 localhost:3000。MUST 於 T012（web
+    # 容器交付）移除——全棧模式下 Gateway MUST NOT 另行對外暴露連接埠（FR-006、CHK054）。
+    ports:
+      - "3000:3000"
+
 volumes:
   redis-data: {}
   mongo-data: {}
