@@ -1,7 +1,7 @@
 # apps/worker/Dockerfile — worker 受監督形態的映像（Feature 007；research D1/D2）
 #
 # build context 為 repo root（pnpm workspace 需要 lockfile 與各套件 manifest）：
-#   docker compose --profile supervised up -d --build
+#   docker compose --profile demo up -d --build
 #
 # 憲章 VI：祕密絕不烘入 image——.dockerignore 已把 **/.env 排除在 context 外，
 # 祕密於執行時由 compose 的 env_file 注入。
