@@ -64,9 +64,15 @@ services:
     # 15s MUST NOT 照抄 worker 的 45s——後者為涵蓋 AI_TIMEOUT_MS 的 LLM 收尾而算，
     # api 不呼叫 LLM，收尾僅為關閉連線、量級為秒內（FR-004、contracts §4）。
     stop_grace_period: 15s
+    # 長式 depends_on：seed 一次性服務成功完成才啟動 api（示範資料先於服務備妥，FR-012）。
+    # depends_on 只在啟動編排時求值——api 崩潰重啟不會重跑 seed（research D7、CHK044）。
     depends_on:
-      - redis
-      - mongo
+      redis:
+        condition: service_started
+      mongo:
+        condition: service_started
+      seed:
+        condition: service_completed_successfully
     # 祕密與調參於執行時注入（憲章 VI）；容器內連線位址由 environment 覆蓋
     env_file: apps/api/.env
     environment:
@@ -80,11 +86,48 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    # ⚠️ US1 專用暫時發佈（T008）——本 phase 尚無 web 容器，US1 的一致性比對須以 host dev
-    # 前端連上容器化 Gateway，而 vite proxy target 寫死 localhost:3000。MUST 於 T012（web
-    # 容器交付）移除——全棧模式下 Gateway MUST NOT 另行對外暴露連接埠（FR-006、CHK054）。
+    # api 不宣告 ports——全棧模式下 Gateway MUST NOT 另行對外暴露連接埠（FR-006）。
+    # 瀏覽器只面對 web 的 8080，/ws 與 /diagnoses 由 nginx 同源轉發至 api:3000。
+    # （T008 曾為 US1 一致性比對暫時發佈 3000，已於 T012 web 容器交付時移除，CHK054。）
+
+  # seed 一次性服務（Feature 008 US2）：復用 api 映像的第三進入點備妥示範資料。
+  # 每次啟動執行一次、完成即結束（restart: "no"）；api 以其成功完成為啟動條件。
+  seed:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    # 與 api 同映像名——seed 只寫 image 而不寫 build 會讓 compose 去 pull 不存在的遠端映像（research D7）。
+    image: flow-gatekeeper-api:local
+    command: ["node", "dist/scripts/seed.js"]
+    restart: "no"
+    depends_on:
+      - mongo
+    env_file: apps/api/.env
+    environment:
+      MONGO_URL: mongodb://mongo:27017/flow-gatekeeper
+
+  # web（監控台前端）容器形態（Feature 008 US2）。nginx 是唯一對外入口（8080），
+  # 同時提供靜態產物與 /ws、/diagnoses 的同源反向代理至 api（FR-002／FR-006）。
+  web:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: flow-gatekeeper-web:local
+    # 唯一對外入口——避開 dev 的 5173／3000（research D2）。改埠只改此一行（同源相對路徑使前端自然可攜）。
     ports:
-      - "3000:3000"
+      - "8080:80"
+    restart: on-failure:5
+    depends_on:
+      - api
+    # 入口位址有回應即 healthy（FR-011）。nginx:alpine 的 busybox 附 wget（build 後實測確認）。
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
 volumes:
   redis-data: {}
