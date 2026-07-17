@@ -161,15 +161,15 @@ pnpm monorepo：`apps/{api,worker,web}`、`packages/{contracts,shared}`；編排
 
   **與 T020 的分工**：T020 只處理 `supervised` 字面的更名（README／worker Dockerfile 檔頭），**指南全檔一律由本任務處理**——經 analyze 校正後兩者已無共同檔案，故 `[P]` 成立
 - [X] T022 祕密衛生驗收（SC-006／憲章 VI）：以 quickstart「祕密衛生驗收」節的指令確認 **api／worker／web 三個映像**內祕密數皆為 0；`git status --porcelain` 確認設定範本以外的祕密檔案未進版控
-- [ ] T023 文件驗收（SC-007）：請一位未跑過本專案的人**只讀 `README.md`**，確認能在不詢問任何人的前提下正確選出模式並完成啟動；確認全案無殘留 `supervised` 分組的現況敘述
-- [ ] T024 覆核 [checklists/release-gate.md](./checklists/release-gate.md) 全部 54 項並逐項勾選；**含三項 [須實作後判定]**（CHK043 `nginx:alpine` 探測工具、CHK044 `depends_on` 不因 restart 重新求值、CHK054 api 的暫時 `ports` 已移除）。任一項未過即不得 merge，或須就地明文記錄接受理由
+- [X] T023 文件驗收（SC-007）：請一位未跑過本專案的人**只讀 `README.md`**，確認能在不詢問任何人的前提下正確選出模式並完成啟動；確認全案無殘留 `supervised` 分組的現況敘述
+- [X] T024 覆核 [checklists/release-gate.md](./checklists/release-gate.md) 全部 54 項並逐項勾選；**含三項 [須實作後判定]**（CHK043 `nginx:alpine` 探測工具、CHK044 `depends_on` 不因 restart 重新求值、CHK054 api 的暫時 `ports` 已移除）。任一項未過即不得 merge，或須就地明文記錄接受理由
 - [X] T025 全案品質門檻：`pnpm check`（contract lint + typecheck + lint + test）全綠；確認 `packages/contracts` **零變更**（憲章 III）、**`apps/worker/` 源碼與建置行為零變更**——worker 在本 feature 的異動僅限三處，皆不觸碰其執行語意或監督參數：
   1. `docker-compose.yml` 的分組名 `supervised` → `demo`（T002，編排層）；
   2. `docker-compose.yml` 新增 `image: flow-gatekeeper-worker:local`（T002，編排層）；
   3. `apps/worker/Dockerfile:4` 的**檔頭註解**更名（T020，FR-016 回補）——**只動註解、不動任何建置指令**，映像產物逐 byte 相同；
   4. `apps/worker/Dockerfile:26` 的**行內註解**更正（T001 實作期補）——原文「api/web 源碼已被 `.dockerignore` 排除、不進 context」在 T001 執行後即為**假敘述**（三映像共用 context，api/web 源碼自此在場）。改為「只複製 worker 建置鏈需要的源碼（api/web 源碼自 008 起也在 context 中，本映像不取用）」。**只動註解**，`COPY` 指令一字未改，映像產物逐 byte 相同（已實測 worker 映像照常建置）。
   **判定準則**：`git diff` 的 `apps/worker/` 若出現註解以外的任何變更（`src/`、建置階段、`CMD`、healthcheck），即為違反本門檻
-- [ ] T026 勾選本檔與 [checklists/requirements.md](./checklists/requirements.md)，確認 tasks／checklist／spec 三者一致，準備 merge 回 `develop`（`--no-ff`，憲章 I）
+- [X] T026 勾選本檔與 [checklists/requirements.md](./checklists/requirements.md)，確認 tasks／checklist／spec 三者一致，準備 merge 回 `develop`（`--no-ff`，憲章 I）
 
 ---
 
