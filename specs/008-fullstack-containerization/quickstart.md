@@ -11,12 +11,15 @@
 3. 複製兩份設定範本並填值：
 
    ```powershell
-   Copy-Item apps/api/.env.example    apps/api/.env
-   Copy-Item apps/worker/.env.example apps/worker/.env
+   Copy-Item apps/api/.env.demo.example apps/api/.env.demo   # demo 容器（api／seed service）讀本檔
+   Copy-Item apps/worker/.env.example   apps/worker/.env
    # 編輯 apps/worker/.env，填入 GEMINI_API_KEY
+
+   # 場景 1（US1）另需 host 直跑工具用的 apps/api/.env（pnpm seed／dev 讀本檔）；場景 2 純容器則免。
+   Copy-Item apps/api/.env.example      apps/api/.env
    ```
 
-   `apps/api/.env` 可全用預設值。**不需要**安裝 Node 或 pnpm（SC-001）。
+   `apps/api/.env.demo`（demo 容器）與 `apps/api/.env`（host 工具）皆可全用預設值——兩者刻意分開，避免 dev 的 `WS_AUTH_SECRET`／`API_PORT` 滲入 demo。**不需要**安裝 Node 或 pnpm 即可跑場景 2（SC-001）。
 
 > **首次啟動需建置三個映像**，視網路與機器約需數分鐘。這是預期行為，不是卡住（Edge case：首次啟動的建置成本）。
 
@@ -108,15 +111,15 @@ docker compose logs api                                        # 看崩潰原因
 
 ### 1g. 認證語意一致（FR-001）
 
-> **為何需要獨立一節**：FR-001 要求逐項一致的六項中，認證是**唯一不會被預設設定走到**的一項——`apps/api/.env.example` 的 `WS_AUTH_SECRET` 預設留空，而 Gateway 只在「有設密鑰時」才驗證（[monitoring.gateway.ts:95](../../apps/api/src/modules/websocket/monitoring.gateway.ts#L95)）。照 1a 的預設值跑一輪，容器化後的授權路徑一次都不會被執行，缺陷會安靜地躲過整個 US1 驗收。
+> **為何需要獨立一節**：FR-001 要求逐項一致的六項中，認證是**唯一不會被預設設定走到**的一項——`apps/api/.env.demo`（api 容器讀的檔）的 `WS_AUTH_SECRET` 預設留空，而 Gateway 只在「有設密鑰時」才驗證（[monitoring.gateway.ts:95](../../apps/api/src/modules/websocket/monitoring.gateway.ts#L95)）。照 1a 的預設值跑一輪，容器化後的授權路徑一次都不會被執行，缺陷會安靜地躲過整個 US1 驗收。
 
-**1. 暫時設密鑰**：在**編輯器**裡把 `apps/api/.env` 的 `WS_AUTH_SECRET=` 改為 `WS_AUTH_SECRET=demo-secret`，然後重建 api 容器吃新 env（不需 `--build`）：
+**1. 暫時設密鑰**：在**編輯器**裡把 `apps/api/.env.demo`（api 容器實際讀取的檔）的 `WS_AUTH_SECRET=` 改為 `WS_AUTH_SECRET=demo-secret`，然後重建 api 容器吃新 env（不需 `--build`）：
 
 ```powershell
 docker compose --profile demo up -d api
 ```
 
-> **MUST NOT 用 `(Get-Content …) -replace … | Set-Content` 改 `.env`**：PowerShell 5.1 的 `Get-Content` 以 ANSI 讀檔，會把 `.env` 裡的中文註解整段毀掉（`.env` 是從 `.env.example` 複製來的，含大量中文說明）。用編輯器改，或確認 `-Encoding utf8` 讀寫兩端都指定。
+> **MUST NOT 用 `(Get-Content …) -replace … | Set-Content` 改 `.env.demo`**：PowerShell 5.1 的 `Get-Content` 以 ANSI 讀檔，會把 `.env.demo` 裡的中文註解整段毀掉（它是從 `.env.demo.example` 複製來的，含大量中文說明）。用編輯器改，或確認 `-Encoding utf8` 讀寫兩端都指定。
 
 **反向路徑（瀏覽器）**：重整 `http://localhost:5173` → 前端收到 `system/unauthorized`、**不建立訂閱、無遙測進畫面**。
 

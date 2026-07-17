@@ -350,7 +350,8 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 flow-gatekeeper/
 ├── apps/
 │   ├── api/           # NestJS：WebSocket Gateway、mock producer、POST /diagnoses、Pub/Sub relay、seed
-│   │   └── .env.example   # ← api 專屬 env 範本（複製成 apps/api/.env）
+│   │   ├── .env.example        # ← host 直跑（軌道 A）的 env 範本（複製成 apps/api/.env）
+│   │   └── .env.demo.example   # ← demo 容器（軌道 B）的 env 範本（複製成 apps/api/.env.demo）
 │   ├── worker/        # 獨立 process：BullMQ consumer、cache/dedupe、AiProvider(Gemini) streaming
 │   │   └── .env.example   # ← worker 專屬 env 範本（GEMINI_API_KEY 只在這；複製成 apps/worker/.env）
 │   └── web/           # Vue 3 + Pinia：monitoring / ai-copilot domains、design-spec token（不需 .env）
@@ -415,9 +416,10 @@ Demo 前若想「清 AI 快取讓首次診斷看得到逐字串流」，另外�
 **前置需求**：**只需**容器執行環境（Docker Desktop）、此 repo、依範本填妥的祕密——**不需**安裝 Node 或 pnpm。
 
 ```powershell
-# 1) 準備兩份設定範本（apps/api/.env 可全用預設值；apps/worker/.env 填 GEMINI_API_KEY）
-Copy-Item apps/api/.env.example    apps/api/.env
-Copy-Item apps/worker/.env.example apps/worker/.env
+# 1) 準備設定範本（demo 容器讀 apps/api/.env.demo，與 host 軌道 A 的 apps/api/.env 刻意分開，
+#    避免 dev 的 WS_AUTH_SECRET／API_PORT 滲入 demo；apps/api/.env.demo 可全用預設值）
+Copy-Item apps/api/.env.demo.example apps/api/.env.demo
+Copy-Item apps/worker/.env.example   apps/worker/.env
 #   → 編輯 apps/worker/.env，填入 GEMINI_API_KEY
 #   → 沒有 Gemini 帳號也能跑：遙測與背壓比值照常，只有 AI 診斷會失敗並指名金鑰（見下方「祕密缺漏」）
 
@@ -501,7 +503,7 @@ api 或 worker 連續快速失敗（如設定錯誤導致啟動即崩潰）時�
 - **兩模式擇一運行、不要混跑**：`redis`／`mongo` 為兩模式共用，同時啟動兩模式會使資料層互相干擾、演練與驗收不可判讀（8080 與 5173 雖不互撞，但那不是安全的理由）。切換時先 `docker compose --profile demo down` 再走另一軌。
 - **連接埠被佔用**：入口 `8080`（或 `6379`／`27017`）已被 host 上其他行程佔用時，compose 會以 **bind 失敗訊息指名該埠**中止——改 `docker-compose.yml` 的 `ports` 一行即可（前端走同源相對路徑，改埠不需重建映像）。
 - **祕密缺漏（`GEMINI_API_KEY` 留空）**：全棧**照常啟動、不擋任何服務**；遙測與背壓比值正常（4 個賣點中的 2 個仍可見），僅 AI 診斷失敗——畫面訊息會**指名金鑰**（「AI 服務金鑰無效或未授權——請確認 `apps/worker/.env` 的 `GEMINI_API_KEY`…」），而非通用失敗語。這是刻意設計，讓沒有 Gemini 帳號的評估者仍看得到系統跑起來。
-- 三端的環境設定沿用各自 `apps/*/.env`（compose `env_file` 於**執行時**注入，祕密不烘入 image）；`REDIS_HOST`／`MONGO_URL` 由 compose 覆蓋為容器網路位址，host 直跑照舊用 `.env` 的 `127.0.0.1`，兩模式互不干擾。
+- 環境設定於**執行時**由 compose `env_file` 注入，祕密不烘入 image。demo 的 api／seed 讀 **`apps/api/.env.demo`**（與 host 軌道 A 的 `apps/api/.env` 刻意分開，避免 dev 的 `WS_AUTH_SECRET`／`API_PORT` 滲入 demo）；worker 讀 `apps/worker/.env`。拓樸關鍵值 `API_PORT`（釘 3000，與 nginx 反代目標對齊）、`REDIS_HOST`／`MONGO_URL`（容器網路位址）由 compose `environment` 覆蓋釘死、不受 env 檔漂移；host 直跑照舊用 `.env` 的 `127.0.0.1`，兩模式互不干擾。
 - **致命錯誤語意（let it crash）**：行程遇非預期致命錯誤會記錄明確標示「致命」的訊息後**立即結束行程**，由監督者以乾淨行程重啟。開發模式下沒有監督者——行程停在等待檔案變更，需修改檔案或手動重啟；這是文件化的已知差異，不是 bug。
 
 ---

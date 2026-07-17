@@ -2901,8 +2901,10 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
 - **api 容器化**：`apps/api/Dockerfile`（沿用 007 的多階段模式），compose 增 api service（`depends_on`
   redis/mongo/seed、`restart: on-failure:5`、`stop_grace_period: 15s`、`init: true`）。**api 不宣告 `ports`**
   ——瀏覽器只面對 web 的單一入口，`/ws`／`/diagnoses` 由 nginx 同源反代至 `api:3000`（起草時寫「port 映射」
-  已被 clarify 的單一入口拓樸取代，見 FR-006）。並補上優雅關閉處理（`enableShutdownHooks` + SIGTERM/SIGINT，
-  FR-004）與 `/ws` 握手健康探針（FR-011）。
+  已被 clarify 的單一入口拓樸取代，見 FR-006）。並補上優雅關閉處理（顯式 SIGTERM/SIGINT handler →
+  `app.close()`；Gateway 的 `onModuleDestroy` 於收尾釋放 ws 連線並關 ws server，否則活躍連線會使關閉掛住，
+  FR-004）與 `/ws` 握手健康探針（FR-011）。收尾 code-review 移除了原併用的 `enableShutdownHooks()`（會另掛
+  一組訊號監聽器與顯式 handler 競態、重複觸發 `app.close()`），現況與由來見 008 research D5。
 - **web 容器化**：多階段建置（`pnpm --filter web build`）→ runtime 用 **`nginx:alpine`**（起草時列為 14.3
   clarify，已定案）同時提供靜態產物與 `/ws`、`/diagnoses` 的同源反向代理。
 - **compose profiles 切分執行模式**：`docker compose up -d` 維持只起 infra（dev 迴圈不變，app 仍用
@@ -3045,9 +3047,11 @@ pnpm --filter web dev
 
 ### 16.1b 一鍵 demo（單一指令、單一入口容器）
 
-只需 Docker Desktop + 此 repo + 填妥兩份 `.env`（`apps/api/.env` 可全用預設；`apps/worker/.env` 填 `GEMINI_API_KEY`），**不需** Node／pnpm：
+只需 Docker Desktop + 此 repo + 填妥兩份設定（`apps/api/.env.demo` 可全用預設；`apps/worker/.env` 填 `GEMINI_API_KEY`），**不需** Node／pnpm。demo 容器讀 `apps/api/.env.demo`（與 host 直跑的 `apps/api/.env` 刻意分開，避免 dev 值滲入 demo）：
 
 ```bash
+Copy-Item apps/api/.env.demo.example apps/api/.env.demo   # demo 容器（api/seed）的 env
+Copy-Item apps/worker/.env.example   apps/worker/.env      # 填 GEMINI_API_KEY
 docker compose --profile demo up -d --build   # 首次建三個映像約數分鐘
 docker compose ps -a                          # 判讀就緒：seed Exited(0) + api/web/worker healthy
 ```
