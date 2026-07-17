@@ -73,9 +73,14 @@ services:
         condition: service_started
       seed:
         condition: service_completed_successfully
-    # 祕密與調參於執行時注入（憲章 VI）；容器內連線位址由 environment 覆蓋
-    env_file: apps/api/.env
+    # demo 專用 env 檔（與開發者 dev 的 apps/api/.env 完全隔離，避免 dev 值滲入 demo）——
+    # 先 Copy-Item apps/api/.env.demo.example apps/api/.env.demo 再啟動（憲章 VI：只提交 .example）。
+    # WS_AUTH_SECRET 於此檔留空，demo 的 web 前端（不帶 token）才連得上（否則遙測/背壓兩個賣點靜默消失）。
+    env_file: apps/api/.env.demo
+    # 拓樸關鍵值一律於 compose 釘死，不受 env 檔編輯漂移：服務彼此的連線位址、以及 nginx 硬編轉發的
+    # api:3000（API_PORT 若被改成別的埠，nginx 仍轉 3000 → 通道靜默連不上，且健康探針讀同一 env 仍 green）。
     environment:
+      API_PORT: "3000"
       REDIS_HOST: redis
       MONGO_URL: mongodb://mongo:27017/flow-gatekeeper
     # 健康判定（FR-011）：/ws 握手收到 system/connected 才算 healthy——證明 Gateway 已 attach，
@@ -103,7 +108,8 @@ services:
     restart: "no"
     depends_on:
       - mongo
-    env_file: apps/api/.env
+    # 與 api 同一份 demo env 檔（seed 只需 MONGO_*，位址由 environment 覆蓋）。
+    env_file: apps/api/.env.demo
     environment:
       MONGO_URL: mongodb://mongo:27017/flow-gatekeeper
 
@@ -121,9 +127,10 @@ services:
     restart: on-failure:5
     depends_on:
       - api
-    # 入口位址有回應即 healthy（FR-011）。nginx:alpine 的 busybox 附 wget（build 後實測確認）。
+    # 入口位址有回應即 healthy（FR-011）。用 `-O /dev/null` 而非 `--spider`——後者的支援隨
+    # busybox 版本浮動（nginx:alpine 未鎖版），`-O /dev/null` 在 busybox wget 一律可用、意義等同。
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
       interval: 30s
       timeout: 5s
       retries: 3
