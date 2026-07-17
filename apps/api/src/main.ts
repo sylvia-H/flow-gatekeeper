@@ -23,7 +23,30 @@ export async function bootstrap(): Promise<void> {
   const port = Number(process.env.API_PORT ?? 3000);
   await app.listen(port);
   app.get(MonitoringGateway).attach(app.getHttpServer());
-  new Logger("api").log(`flow-gatekeeper api listening on :${port} (ws path /ws)`);
+  const logger = new Logger("api");
+  logger.log(`flow-gatekeeper api listening on :${port} (ws path /ws)`);
+
+  // 優雅關閉（FR-004、008 research D5）：api 現況原無任何訊號處理——收到 SIGTERM 即刻
+  // 死亡，既有的四個 onModuleDestroy（Mongo／QueueEvents／AI relay／Gateway timers）從未
+  // 被觸發。enableShutdownHooks() 讓 app.close() 逐一呼叫它們；顯式 handler 讓退出碼成為
+  // 眼前可讀的決策——FR-003 的 on-failure:5 完全靠退出碼區分「崩潰」與「優雅關閉」。
+  //
+  // 範圍紀律（FR-014 的唯一例外）：本段僅觸碰關閉路徑，MUST NOT 改動任何 onModuleDestroy
+  // 的內容——它們的既有語意（含 ADR-002 §6.4 接受的有損寫入）一行未動，只是第一次真的被執行。
+  app.enableShutdownHooks();
+  const shutdown = async (signal: string): Promise<void> => {
+    logger.log(`received ${signal}, shutting down api...`);
+    try {
+      await app.close();
+    } catch (err) {
+      // 收尾失敗不是崩潰：記 log 後仍以 0 退出。若以非零退出，監督者會誤判為崩潰而重啟
+      // 一個正要停止的服務（contracts §3）。
+      logger.error(`shutdown error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
 }
 
 // 僅在被直接執行時才啟動；被 import（含 entry smoke 測試）時不產生副作用。
