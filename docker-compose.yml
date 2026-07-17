@@ -14,13 +14,17 @@ services:
     volumes:
       - mongo-data:/data/db
 
-  # worker 受監督形態（Feature 007）。掛 profile 分組：既有 `docker compose up -d`
-  # 只起 infra、行為零變化；受監督模式為 `docker compose --profile supervised up -d --build`。
+  # worker 受監督形態（Feature 007，008 收進 demo 分組，與 api／web／seed 同組）。
+  # 既有 `docker compose up -d` 只起 infra、行為零變化；全棧 demo 為
+  # `docker compose --profile demo up -d --build`。
   worker:
-    profiles: ["supervised"]
+    profiles: ["demo"]
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
+    # 明確宣告 image 名——否則 compose 自動生成 <專案名>-worker（專案名取目錄名、不穩定），
+    # 與 T022 祕密衛生驗收逐一 docker run 三個具名映像的指令對不上（008 T002）。
+    image: flow-gatekeeper-worker:local
     depends_on:
       - redis
       - mongo
@@ -41,6 +45,92 @@ services:
     # 連續 3 次失敗轉 unhealthy——補「行程活著但卡住」的偵測盲點（contracts §3–§4）
     healthcheck:
       test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # api（Gateway）受監督形態（Feature 008 US1）。行為與 host 直跑逐項一致，
+  # 崩潰自動重啟，停止時在寬限期內優雅收尾且不被重啟（FR-001／FR-003／FR-004）。
+  api:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: flow-gatekeeper-api:local
+    # 監督語意（沿用 007 worker）：非零退出才重啟，連續 5 次後停止；exit(0) 不觸發重啟。
+    restart: on-failure:5
+    init: true
+    # 15s MUST NOT 照抄 worker 的 45s——後者為涵蓋 AI_TIMEOUT_MS 的 LLM 收尾而算，
+    # api 不呼叫 LLM，收尾僅為關閉連線、量級為秒內（FR-004、contracts §4）。
+    stop_grace_period: 15s
+    # 長式 depends_on：seed 一次性服務成功完成才啟動 api（示範資料先於服務備妥，FR-012）。
+    # depends_on 只在啟動編排時求值——api 崩潰重啟不會重跑 seed（research D7、CHK044）。
+    depends_on:
+      redis:
+        condition: service_started
+      mongo:
+        condition: service_started
+      seed:
+        condition: service_completed_successfully
+    # demo 專用 env 檔（與開發者 dev 的 apps/api/.env 完全隔離，避免 dev 值滲入 demo）——
+    # 先 Copy-Item apps/api/.env.demo.example apps/api/.env.demo 再啟動（憲章 VI：只提交 .example）。
+    # WS_AUTH_SECRET 於此檔留空，demo 的 web 前端（不帶 token）才連得上（否則遙測/背壓兩個賣點靜默消失）。
+    env_file: apps/api/.env.demo
+    # 拓樸關鍵值一律於 compose 釘死，不受 env 檔編輯漂移：服務彼此的連線位址、以及 nginx 硬編轉發的
+    # api:3000（API_PORT 若被改成別的埠，nginx 仍轉 3000 → 通道靜默連不上，且健康探針讀同一 env 仍 green）。
+    environment:
+      API_PORT: "3000"
+      REDIS_HOST: redis
+      MONGO_URL: mongodb://mongo:27017/flow-gatekeeper
+    # 健康判定（FR-011）：/ws 握手收到 system/connected 才算 healthy——證明 Gateway 已 attach，
+    # 非只證明行程在聽（api 無 GET 路由，探 HTTP 必得 404）。探針不需 token（research D6）。
+    healthcheck:
+      test: ["CMD", "node", "dist/healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    # api 不宣告 ports——全棧模式下 Gateway MUST NOT 另行對外暴露連接埠（FR-006）。
+    # 瀏覽器只面對 web 的 8080，/ws 與 /diagnoses 由 nginx 同源轉發至 api:3000。
+    # （T008 曾為 US1 一致性比對暫時發佈 3000，已於 T012 web 容器交付時移除，CHK054。）
+
+  # seed 一次性服務（Feature 008 US2）：復用 api 映像的第三進入點備妥示範資料。
+  # 每次啟動執行一次、完成即結束（restart: "no"）；api 以其成功完成為啟動條件。
+  seed:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    # 與 api 同映像名——seed 只寫 image 而不寫 build 會讓 compose 去 pull 不存在的遠端映像（research D7）。
+    image: flow-gatekeeper-api:local
+    command: ["node", "dist/scripts/seed.js"]
+    restart: "no"
+    depends_on:
+      - mongo
+    # 與 api 同一份 demo env 檔（seed 只需 MONGO_*，位址由 environment 覆蓋）。
+    env_file: apps/api/.env.demo
+    environment:
+      MONGO_URL: mongodb://mongo:27017/flow-gatekeeper
+
+  # web（監控台前端）容器形態（Feature 008 US2）。nginx 是唯一對外入口（8080），
+  # 同時提供靜態產物與 /ws、/diagnoses 的同源反向代理至 api（FR-002／FR-006）。
+  web:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: flow-gatekeeper-web:local
+    # 唯一對外入口——避開 dev 的 5173／3000（research D2）。改埠只改此一行（同源相對路徑使前端自然可攜）。
+    ports:
+      - "8080:80"
+    restart: on-failure:5
+    depends_on:
+      - api
+    # 入口位址有回應即 healthy（FR-011）。用 `-O /dev/null` 而非 `--spider`——後者的支援隨
+    # busybox 版本浮動（nginx:alpine 未鎖版），`-O /dev/null` 在 busybox wget 一律可用、意義等同。
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
       interval: 30s
       timeout: 5s
       retries: 3

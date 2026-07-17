@@ -34,7 +34,7 @@
 - [功能導覽（依 feature 逐一交付）](#功能導覽依-feature-逐一交付)
 - [Monorepo 結構](#monorepo-結構)
 - [快速開始](#快速開始)
-- [執行模式：開發模式與受監督模式](#執行模式開發模式與受監督模式)
+- [執行模式：開發模式與一鍵 demo](#執行模式開發模式與一鍵-demo)
 - [環境變數](#環境變數)
 - [測試與品質門檻](#測試與品質門檻)
 - [開發方法論：Spec-Driven Development](#開發方法論spec-driven-development)
@@ -350,7 +350,8 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 flow-gatekeeper/
 ├── apps/
 │   ├── api/           # NestJS：WebSocket Gateway、mock producer、POST /diagnoses、Pub/Sub relay、seed
-│   │   └── .env.example   # ← api 專屬 env 範本（複製成 apps/api/.env）
+│   │   ├── .env.example        # ← host 直跑（軌道 A）的 env 範本（複製成 apps/api/.env）
+│   │   └── .env.demo.example   # ← demo 容器（軌道 B）的 env 範本（複製成 apps/api/.env.demo）
 │   ├── worker/        # 獨立 process：BullMQ consumer、cache/dedupe、AiProvider(Gemini) streaming
 │   │   └── .env.example   # ← worker 專屬 env 範本（GEMINI_API_KEY 只在這；複製成 apps/worker/.env）
 │   └── web/           # Vue 3 + Pinia：monitoring / ai-copilot domains、design-spec token（不需 .env）
@@ -373,14 +374,18 @@ flow-gatekeeper/
 
 > 環境為 **Windows / PowerShell**；套件管理用 **pnpm workspace**。
 
-### 前置需求
+有**兩種啟動軌道**，用途不同、前置需求不同、各自成段——依你的目的擇一：
 
-- Node.js 20 LTS+
-- pnpm 9+
-- Docker Desktop（跑 Redis 7 + MongoDB 7）
-- 一組 Gemini API key（`GEMINI_API_KEY`）——僅診斷會用到，監控台不需要
+| 軌道 | 適合誰 | 前置需求 | 入口 |
+| --- | --- | --- | --- |
+| **開發模式** | 日常改 code、要熱重載的開發者 | Node 20+、pnpm 9+、Docker Desktop | web `http://localhost:5173` |
+| **一鍵 demo（全棧容器）** | 拿到 repo 想最快看到系統跑起來的展示者／評估者 | **只需** Docker Desktop + 此 repo + 填妥兩份設定範本 | 單一入口 `http://localhost:8080` |
 
-### 步驟
+> 兩軌**不要同時啟動**——`redis`／`mongo` 為兩模式共用，資料層會互相干擾（詳見下方「執行模式」的注意事項）。
+
+### 軌道 A — 開發模式（日常開發，熱重載）
+
+**前置需求**：Node.js 20 LTS+、pnpm 9+、Docker Desktop（跑 Redis 7 + MongoDB 7）、一組 Gemini API key（僅診斷會用到）。
 
 ```powershell
 # 1) 安裝所有 workspace
@@ -396,7 +401,7 @@ Copy-Item apps/worker/.env.example apps/worker/.env
 # 3) 起本機 infra（Redis + MongoDB）
 docker compose up -d
 
-# 4) 一鍵起全棧：seed → api → worker → web（各開一個 PowerShell 視窗，方便分開看 log）
+# 4) 一鍵起 host 端全棧：seed → api → worker → web（各開一個 PowerShell 視窗，方便分開看 log）
 ./scripts/dev-up.ps1
 #   已 seed 過可加 -SkipSeed
 
@@ -406,6 +411,48 @@ docker compose up -d
 
 Demo 前若想「清 AI 快取讓首次診斷看得到逐字串流」，另外單獨執行 `./scripts/demo-reset.ps1`（與啟動分開、職責清楚）。
 
+### 軌道 B — 一鍵 demo（全棧容器，單一入口）
+
+**前置需求**：**只需**容器執行環境（Docker Desktop）、此 repo、依範本填妥的祕密——**不需**安裝 Node 或 pnpm。
+
+```powershell
+# 1) 準備設定範本（demo 容器讀 apps/api/.env.demo，與 host 軌道 A 的 apps/api/.env 刻意分開，
+#    避免 dev 的 WS_AUTH_SECRET／API_PORT 滲入 demo；apps/api/.env.demo 可全用預設值）
+Copy-Item apps/api/.env.demo.example apps/api/.env.demo
+Copy-Item apps/worker/.env.example   apps/worker/.env
+#   → 編輯 apps/worker/.env，填入 GEMINI_API_KEY
+#   → 沒有 Gemini 帳號也能跑：遙測與背壓比值照常，只有 AI 診斷會失敗並指名金鑰（見下方「祕密缺漏」）
+
+# 2) 一道指令起完整系統（seed → api → worker → web，全為受監督容器）
+docker compose --profile demo up -d --build
+#   ⚠ 首次啟動需建置三個映像，視網路與機器約需數分鐘——這是預期行為，不是卡住
+
+# 3) 判讀「全部就緒」（見下），然後開單一入口
+#   http://localhost:8080
+```
+
+**判讀「全部就緒」**（複合訊號——單一服務健康不代表可 demo）：
+
+```powershell
+docker compose ps -a      # -a 不可省：seed 完成後即 exited，預設不列出
+```
+
+四項全部成立才算就緒：
+
+| 服務 | 就緒的樣子 | 未就緒代表 |
+| --- | --- | --- |
+| `seed` | `Exited (0)` | 非 0 → 示範資料備妥失敗，api 不會啟動 |
+| `api` | `Up (healthy)` | `start_period` 30s 內顯示 `starting` 屬正常；逾時未 healthy → `/ws` 未可服務 |
+| `worker` | `Up (healthy)` | heartbeat 未更新 |
+| `web` | `Up (healthy)` | 入口位址無回應 |
+
+**停止／重設**：
+
+```powershell
+docker compose --profile demo down       # 乾淨收場（各服務依寬限期收尾，不留孤兒行程）
+docker compose --profile demo down -v    # 連同資料清除的重設（清 volume）→ 再 up 即回初始狀態、劇本可重跑
+```
+
 ### 全域檢查（契約 lint + typecheck + lint + test）
 
 ```powershell
@@ -414,46 +461,50 @@ pnpm check
 
 ---
 
-## 執行模式：開發模式與受監督模式
+## 執行模式：開發模式與一鍵 demo
 
-worker 有兩種執行形態，以**同一份** `docker-compose.yml` 的 profile 分組切換（單一真實來源；Feature 007）：
+系統有兩種執行形態，以**同一份** `docker-compose.yml` 的 profile 分組切換（單一真實來源；開發模式不帶分組，全棧 demo 掛 `demo` 分組，涵蓋 web／api／worker／seed 三端加一次性服務）：
 
-| 模式 | 使用情境 | worker 執行方式 | 致命錯誤後的行為 |
+| 模式 | 使用情境 | 執行方式 | 崩潰後的行為 |
 | --- | --- | --- | --- |
-| **開發模式**（預設） | 日常開發、熱重載 | host 直跑 `tsx watch`（`dev-up.ps1`） | 行程結束後 `tsx watch` 停在**等待檔案變更**，不自動重啟（已知且刻意的差異） |
-| **受監督模式** | demo、貼近生產情境 | Docker 容器＋`restart: on-failure:5` | 監督者自動以乾淨行程重啟（指數退避）；連續失敗 5 次後停止 |
+| **開發模式**（不帶分組） | 日常開發、熱重載 | app 於 host 直跑（`dev-up.ps1`：`tsx watch`／`nest start --watch`／`vite`） | 行程結束後停在**等待檔案變更**，不自動重啟（無監督者，已知且刻意的差異） |
+| **一鍵 demo**（`demo` 分組） | demo、評估、貼近生產情境 | 三端皆 Docker 容器＋`restart: on-failure:5` | 監督者自動以乾淨行程重啟（指數退避）；連續失敗 5 次後停止 |
+
+> Feature 008 起：`demo` 分組涵蓋全棧三端（不再只是 worker）；api（Gateway）與 web 一併容器化，瀏覽器只面對單一入口 `http://localhost:8080`（nginx 同源反代 `/ws`、`/diagnoses` 至 api，api 不對外暴露埠）。
 
 ### 指令對照
 
 | 情境 | 指令 |
 | --- | --- |
 | 開發模式（零變化） | `docker compose up -d`（只起 infra）→ `./scripts/dev-up.ps1` |
-| 受監督模式啟動 | `docker compose --profile supervised up -d --build` |
-| 受監督模式停止（優雅） | `docker compose --profile supervised stop worker`（SIGTERM，45s 寬限） |
-| 健康／重啟狀態查詢 | `docker ps`（STATUS 欄含 health）；`docker inspect --format "{{.RestartCount}} {{.State.Status}} {{.State.Health.Status}}" <worker 容器名>` |
-| 記錄判讀 | `docker logs --timestamps <worker 容器名>` |
+| 一鍵 demo 啟動 | `docker compose --profile demo up -d --build`（單一入口 `http://localhost:8080`） |
+| 判讀全部就緒 | `docker compose ps -a`（`-a` 不可省——seed 完成後即 exited）→ seed `Exited (0)`＋api／web／worker `Up (healthy)` 四項全成立 |
+| 乾淨停止 | `docker compose --profile demo down` |
+| 連同資料清除的重設 | `docker compose --profile demo down -v`（清 volume）→ 再 `up` 回初始狀態 |
+| 單獨起某一端 | `docker compose --profile demo up -d worker`（指名服務；分組不影響指名） |
+| 健康／重啟狀態查詢 | `docker inspect --format "{{.RestartCount}} {{.State.Status}} {{.State.Health.Status}}" <容器名>` |
+| 記錄判讀 | `docker compose logs --timestamps <服務名>` |
 
 ### 崩潰迴圈防護（達重試上限停止與復原）
 
-worker 連續快速失敗（如設定錯誤導致啟動即崩潰）時，Docker 內建的重啟退避會讓間隔逐次遞增（100ms 起翻倍），連續失敗 **5 次**（`restart: on-failure:5`）後**停止重啟**——避免熱迴圈打爆 LLM 額度與資料庫連線。
+api 或 worker 連續快速失敗（如設定錯誤導致啟動即崩潰）時，Docker 內建的重啟退避會讓間隔逐次遞增（100ms 起翻倍），連續失敗 **5 次**（`restart: on-failure:5`）後**停止重啟**——避免熱迴圈打爆 LLM 額度與資料庫連線。
 
-- **判讀「已達上限停止」**：
+- **判讀「已達上限停止」**（展示者看到的症狀是「web 入口正常載入、但即時通道／診斷連不上」）：
   ```powershell
-  docker ps -a                       # worker 顯示 Exited (1)，不再自動拉起
-  docker inspect --format "{{.RestartCount}} {{.State.Status}}" <worker 容器名>   # 預期 5 exited
-  docker logs --timestamps <worker 容器名>   # 可見多輪「致命 → ready」與遞增間隔
+  docker compose ps -a               # 該服務顯示 Exited，不再自動拉起
+  docker inspect --format "{{.RestartCount}} {{.State.Status}}" <容器名>   # 預期 5 exited
+  docker compose logs <服務名>       # 看崩潰原因
   ```
-- **復原手段**：先排除故障根因（如修正錯誤設定、移除演練旗標 `WORKER_CHAOS`），再重新拉起：
-  ```powershell
-  docker compose --profile supervised up -d worker
-  ```
-  重新 `up` 會重建容器並歸零重試計數；若容器成功運行超過 10 秒，Docker 也會自動重置失敗計數。
+- **復原手段**：先排除故障根因，再 `docker compose --profile demo up -d <服務名>` 重新拉起（重建容器並歸零重試計數；容器成功運行超過 10 秒後 Docker 也會自動重置失敗計數）。
+- **要演練「崩潰自癒」給人看**：MUST 用 **in-process kill** 觸發真實崩潰——`docker exec <api 容器名> pkill -KILL -f "dist/main.js"`。**不要用 `docker kill <容器>`**：那是「經 daemon 對容器下的手動停止」，Docker 會抑制所有 restart policy，容器停在 `exited` 不會自動重啟（只有行程自身非零退出才算 failure）。
 
 ### 注意事項
 
-- **兩模式擇一運行**：受監督 worker 運行期間，host 端**不要**再啟動 dev worker——兩個 consumer 會分食佇列 job，使演練與驗收不可判讀（不致損壞資料，但屬非支援情境）。
-- 受監督 worker 的環境設定沿用 `apps/worker/.env`（compose `env_file` 於**執行時**注入，祕密不烘入 image）；`REDIS_HOST`／`MONGO_URL` 由 compose 覆蓋為容器網路位址，host 直跑照舊用 `.env` 的 `127.0.0.1`，兩模式互不干擾。
-- **致命錯誤語意（let it crash）**：worker 遇非預期致命錯誤（未捕捉例外／未處理拒絕）會記錄明確標示「致命」的訊息後**立即結束行程**，由監督者以乾淨行程重啟。開發模式下沒有監督者——行程停在等待檔案變更，需修改檔案或手動重啟；這是文件化的已知差異，不是 bug。
+- **兩模式擇一運行、不要混跑**：`redis`／`mongo` 為兩模式共用，同時啟動兩模式會使資料層互相干擾、演練與驗收不可判讀（8080 與 5173 雖不互撞，但那不是安全的理由）。切換時先 `docker compose --profile demo down` 再走另一軌。
+- **連接埠被佔用**：入口 `8080`（或 `6379`／`27017`）已被 host 上其他行程佔用時，compose 會以 **bind 失敗訊息指名該埠**中止——改 `docker-compose.yml` 的 `ports` 一行即可（前端走同源相對路徑，改埠不需重建映像）。
+- **祕密缺漏（`GEMINI_API_KEY` 留空）**：全棧**照常啟動、不擋任何服務**；遙測與背壓比值正常（4 個賣點中的 2 個仍可見），僅 AI 診斷失敗——畫面訊息會**指名金鑰**（「AI 服務金鑰無效或未授權——請確認 `apps/worker/.env` 的 `GEMINI_API_KEY`…」），而非通用失敗語。這是刻意設計，讓沒有 Gemini 帳號的評估者仍看得到系統跑起來。
+- 環境設定於**執行時**由 compose `env_file` 注入，祕密不烘入 image。demo 的 api／seed 讀 **`apps/api/.env.demo`**（與 host 軌道 A 的 `apps/api/.env` 刻意分開，避免 dev 的 `WS_AUTH_SECRET`／`API_PORT` 滲入 demo）；worker 讀 `apps/worker/.env`。拓樸關鍵值 `API_PORT`（釘 3000，與 nginx 反代目標對齊）、`REDIS_HOST`／`MONGO_URL`（容器網路位址）由 compose `environment` 覆蓋釘死、不受 env 檔漂移；host 直跑照舊用 `.env` 的 `127.0.0.1`，兩模式互不干擾。
+- **致命錯誤語意（let it crash）**：行程遇非預期致命錯誤會記錄明確標示「致命」的訊息後**立即結束行程**，由監督者以乾淨行程重啟。開發模式下沒有監督者——行程停在等待檔案變更，需修改檔案或手動重啟；這是文件化的已知差異，不是 bug。
 
 ---
 

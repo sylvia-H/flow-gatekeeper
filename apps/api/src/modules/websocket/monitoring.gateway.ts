@@ -55,6 +55,15 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   onModuleDestroy(): void {
     if (this.producerTimer) clearInterval(this.producerTimer);
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    // 優雅關閉（FR-004）：主動 terminate 所有連線並關閉 ws server。升級後的 ws 是「活躍連線」，
+    // 不主動釋放的話 app.close() 等待的 http.Server 'close' 永不回呼——關閉會掛到 stop_grace_period
+    // 逾時被 SIGKILL（非零退出→被監督者誤判為崩潰而重啟一個正被停止的服務）。terminate 觸發的
+    // 'close' 事件會再進 cleanup()，其冪等守衛可安全重入。
+    for (const [clientId, socket] of [...this.clients]) {
+      socket.terminate();
+      this.cleanup(clientId, "shutdown");
+    }
+    this.wss?.close();
   }
 
   /** 由 main.ts 在 app.listen() 後呼叫，與 HTTP 共用同一個 port（ws://host:port/ws）。 */

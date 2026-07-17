@@ -73,8 +73,10 @@ export function humanizeError(raw: string | undefined, code?: string): string {
   const hay = `${code ?? ""} ${msg}`.toLowerCase();
 
   if (code === "schema_invalid" || hay.includes("schema")) return "AI 回傳格式不符，請重試。";
-  if (hay.includes("api_key_invalid") || hay.includes("api key not valid") || hay.includes("unauthorized") || hay.includes("permission"))
-    return "AI 服務金鑰無效或未授權，請聯繫管理員。";
+  // "unregistered"：空金鑰時 Gemini 回 "Method doesn't allow unregistered callers…"（403），
+  // 該句不含下列其他關鍵字，且含 "fetching" 會誤命中下方網路分支——實測補齊（008 T016b、research D11）。
+  if (hay.includes("api_key_invalid") || hay.includes("api key not valid") || hay.includes("unauthorized") || hay.includes("permission") || hay.includes("unregistered"))
+    return "AI 服務金鑰無效或未授權——請確認 apps/worker/.env 的 GEMINI_API_KEY 已填入有效金鑰（範本見 apps/worker/.env.example）。";
   if (hay.includes("429") || hay.includes("quota") || hay.includes("rate limit") || hay.includes("resource_exhausted"))
     return "AI 服務暫時繁忙（速率限制），請稍後重試。";
   if (hay.includes("timeout") || hay.includes("timed out") || hay.includes("etimedout"))
