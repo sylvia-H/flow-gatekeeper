@@ -143,7 +143,18 @@ describe("isStaleJobEvent（FR-011）", () => {
 describe("humanizeError（FR-007 可讀訊息，非原始堆疊）", () => {
   it("Gemini 金鑰無效原文 → 友善句", () => {
     const raw = '[GoogleGenerativeAI Error]: [400 Bad Request] API key not valid. Please pass a valid API key. reason:"API_KEY_INVALID"';
-    expect(humanizeError(raw, "worker_failed")).toBe("AI 服務金鑰無效或未授權，請聯繫管理員。");
+    expect(humanizeError(raw, "worker_failed")).toBe(
+      "AI 服務金鑰無效或未授權——請確認 apps/worker/.env 的 GEMINI_API_KEY 已填入有效金鑰（範本見 apps/worker/.env.example）。",
+    );
+  });
+  it("空金鑰的 Gemini 403 原文（unregistered callers）→ 金鑰友善句，非網路句（008 T016b 實測）", () => {
+    // 008 implement 期實測捕獲的空金鑰供應商回應：不含 api_key_invalid/unauthorized/permission，
+    // 且含 "fetching" 會誤命中網路分支——補 "unregistered" 條件後 MUST 命中金鑰條目。
+    const raw =
+      "[GoogleGenerativeAI Error]: Error fetching from https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse: [403 Forbidden] Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API.";
+    expect(humanizeError(raw, "worker_failed")).toBe(
+      "AI 服務金鑰無效或未授權——請確認 apps/worker/.env 的 GEMINI_API_KEY 已填入有效金鑰（範本見 apps/worker/.env.example）。",
+    );
   });
   it("速率限制（429/quota）→ 友善句", () => {
     expect(humanizeError("Error: [429] RESOURCE_EXHAUSTED quota exceeded")).toBe("AI 服務暫時繁忙（速率限制），請稍後重試。");
