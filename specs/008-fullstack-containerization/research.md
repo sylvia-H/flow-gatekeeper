@@ -105,6 +105,31 @@
 - **文案（無條件執行，非 SHOULD）**: 現行「AI 服務金鑰無效或未授權，**請聯繫管理員**。」預設使用者另有管理員可找，但 demo 的評估者自己就是管理員——FR-017 對此有明文 **MUST NOT**（「MUST NOT 假設使用者另有管理員可聯繫」），故文案改寫是**無條件義務**（tasks T016a），**不依賴 T015 的實測結果**；只有「指名應填的設定項與其所在範本」這個更好的形式是 SHOULD。改寫會牽動 [copilot-reducer.test.ts:146](../../apps/web/src/domains/ai-copilot/lib/copilot-reducer.test.ts#L146) 的既有斷言——該斷言驗的是**呈現層文案**，更新它不觸及 FR-014（文案不是執行語意）；真正 MUST NOT 動的是比對條件、觸發時機、重試次數與事件流。
   > **修訂註（analyze 修正）**: 本項起草時列為 SHOULD，與 FR-017 的 MUST NOT 字面衝突，且使其在「T015 命中金鑰條目」的分支下無任務涵蓋（analyze 發現 C1）。現改為無條件義務並拆為 T016a／T016b。
 
+## D13：崩潰自癒的驗證與 demo 指令——用 in-process kill，非 `docker kill`（implement 期實測）
+
+- **Decision**: SC-003／US1 場景 3 的「崩潰自動重啟」驗證與 demo，MUST 以**殺容器內的行程**觸發——
+  `docker exec flow-gatekeeper-api-1 pkill -KILL -f "dist/main.js"`（映像內 busybox 附 `pkill`，已實測存在）。
+  **MUST NOT 用 `docker kill --signal=SIGKILL <容器>`**——該指令在本平台不會觸發任何 restart policy。
+  quickstart 場景 1c／2f 與指南 §16 demo 劇本一律改用 in-process kill；api 的 code、compose 監督參數
+  **完全不動**（機制本身正確，改的只有「怎麼觸發崩潰來驗證/展示」）。
+- **Rationale（implement 期實測，Docker Desktop 29.0.1）**:
+  - 殺容器內 `node dist/main.js` 子行程（PID 7，tini 為 PID 1）→ events `die`→`start`→`health_status: healthy`，
+    `RestartCount=1`、狀態回 `running`——**崩潰自癒成立**（FR-003／SC-003 在機制層通過）。
+  - `docker kill --signal=SIGKILL <容器>` → `exited(137)`、`RestartCount=0`、**不重啟**。且以拋棄式容器實測
+    `restart: always`／`unless-stopped`／`on-failure` **三者皆不重啟**——證實這不是策略選型問題，而是 Docker 的
+    平台語意：**經 daemon 對容器下的 stop／kill 會設「手動停止」旗標，抑制所有 restart policy，直到手動 start
+    或 daemon 重啟**（避免啟動即失敗的容器陷入重啟迴圈）。只有「行程自身非零退出」才被視為 failure。
+  - 這與 007 一致——007 驗證 worker 自癒用的是 `WORKER_CHAOS` 讓行程 `exit(1)`，從未用 `docker kill` 對 PID1。
+- **為何忠實**: FR-003 原文是「因非預期錯誤以**非零碼結束**」、SC-003 是「行程被強制終結後自動恢復」。in-process
+  kill 精確命中此語意——它就是一次真實崩潰；`docker kill` 是「手動停止」，是 spec 未要求展示的另一回事。以
+  `docker kill` 驗收會得到**假失敗**（機制正確卻顯示沒過），且展示者在 demo 當下若直覺地 `docker kill`，Gateway
+  不會回來，直接傷及 SC-003 的展示價值。
+- **PID1 訊號的旁註**: 從容器**內部**對 PID1（tini）送 SIGKILL 會被核心忽略（namespace-init 保護，與 worker
+  compose 註解「同 namespace 對 PID 1 送訊號會被核心忽略」同源），故驗證 MUST 殺**子行程**（`pkill -f "dist/main.js"`
+  精準命中 node，不誤傷 tini）。
+- **回補範圍**: 本檔（D13）；quickstart 場景 1c／2f（換指令 + 註明 `docker kill` 是手動停止不重啟）；指南 §16 demo
+  劇本由 **T021**（Phase 7）一併改用 in-process kill。api code／compose 不動。
+
 ## D12：設定與祕密的注入——維持各 app 一份 `.env`，compose `env_file` 注入
 
 - **Decision**: 三端一致地以 compose `env_file` 注入（web 無祕密、不需 `.env`），容器內定址由 `environment` 覆蓋（`REDIS_HOST: redis`、`MONGO_URL: mongodb://mongo:27017/flow-gatekeeper`）——與現行 worker service 完全同形。MUST NOT 引入根目錄 `.env`。

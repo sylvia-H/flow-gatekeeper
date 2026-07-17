@@ -66,12 +66,18 @@ pnpm --filter web dev
 
 ### 1c. 崩潰自動重啟（SC-003）
 
+**以 in-process kill 觸發真實崩潰**（殺容器內的 node 行程，讓其非零退出）——**MUST NOT 用 `docker kill <容器>`**：後者是「經 daemon 對容器下的手動停止」，Docker 會設「手動停止」旗標抑制**所有** restart policy（`always`／`unless-stopped`／`on-failure` 皆然，已實測），容器停在 `exited` 不會自動重啟；只有**行程自身**非零退出才被視為 failure 而觸發 `on-failure:5`（research D13、與 007 用 `WORKER_CHAOS` 讓行程 `exit(1)` 驗證自癒同源）。
+
 ```powershell
-docker kill --signal=SIGKILL $(docker compose ps -q api)
-docker compose ps        # api 應在數秒內回到 running
+# 殺容器內的 node 主行程（tini 為 PID1、node 為子行程；pkill 精準命中 dist/main.js 不誤傷 tini）
+docker exec flow-gatekeeper-api-1 pkill -KILL -f "dist/main.js"
+docker compose ps        # api 應在數秒內回到 running（RestartCount +1）
+docker inspect --format='{{.RestartCount}} {{.State.Status}}' flow-gatekeeper-api-1
 ```
 
-**預期**：無需人工介入，`http://localhost:5173` 的前端 **≤ 30s** 內重新連上並繼續收到遙測（起算點：`docker kill` 送出當下）。
+**預期**：無需人工介入，api 自動以乾淨行程重啟（`RestartCount` +1、狀態回 `running`）；`http://localhost:5173` 的前端 **≤ 30s** 內重新連上並繼續收到遙測（起算點：`pkill` 送出當下）。
+
+> **為何不用 `docker kill`**：那條指令**不會**觸發重啟（見上），照它驗會得到「機制正確卻顯示沒過」的假失敗；demo 當下若直覺地 `docker kill`，Gateway 也不會回來（research D13）。
 
 > 「崩潰重啟不重置示範資料」（US2 場景 5）在本 phase **不適用**——那是 seed 容器的 `depends_on` 語意，seed 於 T013 才建立，故該項在**場景 2f** 驗收。
 
@@ -209,11 +215,11 @@ docker compose --profile demo up -d    # 再跑一次
 
 > **為何場景 1c 之外還要再做一次**：1c 的重連路徑是 dev 前端直連 api（不經 nginx），**與 demo 實際拓樸不同**。SC-003 要保證的是展示者在 demo 當下看到的行為，而該路徑穿過 nginx——反向代理對 upstream 的解析與連線復原是 1c 完全沒驗到的一段。此外 US2 場景 5（資料不重置）需要 seed 容器存在，1c 當時尚無。
 
-先記下一筆可辨識的示範資料狀態（供重啟後比對），再從 `http://localhost:8080` 觸發一次診斷確認通道正常，然後：
+先記下一筆可辨識的示範資料狀態（供重啟後比對），再從 `http://localhost:8080` 觸發一次診斷確認通道正常，然後——**以 in-process kill 觸發真實崩潰**（理由同 1c：`docker kill <容器>` 是手動停止、不觸發 restart policy，research D13）：
 
 ```powershell
-docker kill --signal=SIGKILL $(docker compose ps -q api)
-docker compose ps                       # api 應在數秒內回到 running
+docker exec flow-gatekeeper-api-1 pkill -KILL -f "dist/main.js"
+docker compose ps                       # api 應在數秒內回到 running（RestartCount +1）
 docker compose logs seed                # 應仍是「上一次」的執行紀錄，未新增
 ```
 
@@ -221,7 +227,7 @@ docker compose logs seed                # 應仍是「上一次」的執行紀�
 
 | 項目 | 預期 |
 |---|---|
-| 重連（SC-003） | **不重整瀏覽器**，`http://localhost:8080` 的通道 **≤ 30s** 自行重連並繼續收到遙測（起算點：`docker kill` 送出當下） |
+| 重連（SC-003） | **不重整瀏覽器**，`http://localhost:8080` 的通道 **≤ 30s** 自行重連並繼續收到遙測（起算點：`pkill` 送出當下） |
 | 代理復原 | 重連後 `/ws` 與 `/diagnoses` 皆正常——**不得出現持續 502**（nginx 若把 upstream IP 快取成失效位址，症狀正是「web 載入正常但通道永遠連不上」，與重啟上限耗盡的症狀**同形**，故 MUST 以 `docker compose ps` 確認 api 確實 `running` 來區分兩者） |
 | 資料保全（US2 場景 5） | 示範資料**維持原狀、未被重置**；`seed` 未重跑（`depends_on` 只在啟動編排時求值，research D7／CHK044） |
 
