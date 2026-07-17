@@ -2879,7 +2879,8 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
 
 ## 14. Feature 008：整棧容器化與一鍵 Demo（Full-Stack Containerization & One-Command Demo）
 
-> **狀態：方向藍圖（尚未 `/speckit.specify`）**。正式流程仍走完整 SDD；本節為起草。
+> **狀態：已落地**——本 feature 已走完正式 SDD（`specs/008-fullstack-containerization/`）並實作驗收通過。
+> 以下「要做／待 clarify」等段落保留起草時的規劃敘述作為由來，現況以各子節的「✅ 已落地」標註為準。
 >
 > **前置**：Feature 007 已併回 `develop`（worker Dockerfile 與 compose 模式先由 007 趟坑，本 feature 收割）。
 > 決策脈絡見 ADR-002 §5：api/web 容器化從「如需另案」升格為明確排程。
@@ -2895,16 +2896,24 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
 
 ### 14.2 範圍：要做什麼 vs 明確不做
 
-**要做**：
+**要做**（✅ 皆已落地，現況以此處為準）：
 
 - **api 容器化**：`apps/api/Dockerfile`（沿用 007 的多階段模式），compose 增 api service（`depends_on`
-  redis/mongo、`restart: on-failure`、port 映射）。
-- **web 容器化**：多階段建置（`pnpm --filter web build` → 靜態伺服 `dist/`），伺服方式見 14.3 clarify。
+  redis/mongo/seed、`restart: on-failure:5`、`stop_grace_period: 15s`、`init: true`）。**api 不宣告 `ports`**
+  ——瀏覽器只面對 web 的單一入口，`/ws`／`/diagnoses` 由 nginx 同源反代至 `api:3000`（起草時寫「port 映射」
+  已被 clarify 的單一入口拓樸取代，見 FR-006）。並補上優雅關閉處理（`enableShutdownHooks` + SIGTERM/SIGINT，
+  FR-004）與 `/ws` 握手健康探針（FR-011）。
+- **web 容器化**：多階段建置（`pnpm --filter web build`）→ runtime 用 **`nginx:alpine`**（起草時列為 14.3
+  clarify，已定案）同時提供靜態產物與 `/ws`、`/diagnoses` 的同源反向代理。
 - **compose profiles 切分執行模式**：`docker compose up -d` 維持只起 infra（dev 迴圈不變，app 仍用
-  `tsx watch`）；`docker compose --profile full up -d`（命名見 clarify）起全棧 demo。
-- **環境變數與定址收斂**：容器內用 service name（`redis`／`mongo`／`api`）、瀏覽器端用 host port，
-  WS/API URL 的注入方式要一致且文件化。
-- **文件更新**：README 與本指南 §16 的啟動說明改為雙軌（dev 四終端機 vs 一鍵 demo）；`scripts/dev-up.ps1`
+  `tsx watch`）；**`docker compose --profile demo up -d --build`**（起草暫名 `full`，定案為 `demo`）起全棧
+  demo，單一入口 `http://localhost:8080`。`demo` 分組涵蓋 web／api／worker／seed。
+- **環境變數與定址收斂**：容器內用 service name（`redis`／`mongo`／`api`）；**瀏覽器端走同源相對路徑**
+  ——前端產物不內嵌後端絕對位址，故起草時的「WS/API URL 注入方式」一問**已失去適用前提**（同源即無位址
+  可注入，FR-009，見 §14.3）。設定經各 app 的 `env_file` 於執行時注入，三端一致。
+- **一次性 seed 服務**：復用 api 映像的第三進入點 `node dist/scripts/seed.js`（`restart: "no"`），api 以其
+  `service_completed_successfully` 為啟動條件（示範資料先於服務備妥，FR-012）。
+- **文件更新**：README 與本指南 §16 的啟動說明改為雙軌（開發模式 vs 一鍵 demo）；`scripts/dev-up.ps1`
   保留為 dev 模式入口。
 
 **明確不做（避免膨脹）**：
@@ -2913,24 +2922,20 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
 - HTTPS／網域／反向代理的生產級配置——demo 仍走 `http://localhost`。
 - 任何執行語意變更（背壓、queue、streaming 行為一律不動）。
 
-### 14.3 待 `/speckit.clarify` 決定的關鍵問題
+### 14.3 待 `/speckit.clarify` 決定的關鍵問題（✅ 四題皆已定案）
 
-1. **web 伺服方式**：`nginx:alpine` 伺服靜態檔（可順帶反代 `/ws` 與 API，路徑同源）vs Node 靜態伺服
-   （棧單純但少了反代示範）？
-2. **前端的 WS/API URL 注入**：build-time env（`VITE_*`，簡單但 image 綁定環境）vs runtime config
-   （`config.json`／entrypoint 置換，image 可攜但多一層機制）？
-3. **profile 切法與命名**：infra 預設無 profile、全棧掛 `full`／`demo`？worker 在 007 加入後屬於哪個
-   profile（dev 模式下它不該自動起來）？
-4. **seed 時機**：一鍵 demo 是否要自動跑 `pnpm --filter api seed`（init container／entrypoint 判斷）？
-   還是文件註明手動一次？
+1. **web 伺服方式** → **定案：`nginx:alpine`**（伺服靜態檔並順帶同源反代 `/ws`、`/diagnoses`；一個容器兩件事、零應用程式碼）。
+2. **前端的 WS/API URL 注入** → **已失去適用前提**：clarify 定案入口拓樸為「單一入口 + 同源相對路徑」，前端產物**不內嵌任何後端絕對位址**，故「build-time env vs runtime config」這個選擇題**不再存在**（同源即無位址可注入，FR-009）。後續 feature MUST NOT 據此問題重新設計注入機制。
+3. **profile 切法與命名** → **定案：`demo`**（起草暫名 `full`）。infra 不帶分組；`demo` 分組涵蓋 web／api／worker／seed。單獨起某一端以指名服務達成（`docker compose --profile demo up -d worker`）。
+4. **seed 時機** → **定案：獨立的一次性服務**（init container 語意，`restart: "no"`），api 以其成功完成為啟動條件；展示者無需執行第二道指令。
 
-### 14.4 驗收（初步）
+### 14.4 驗收（✅ 已通過，判準以 spec SC-001–SC-007 為準）
 
-- 單一指令（`docker compose --profile <name> up -d`）起全棧：web、api、worker、redis、mongo 全部 healthy。
-- 開 `http://localhost:<port>` 能完整走 §16.2 的 demo 劇本（telemetry、背壓比值、診斷 streaming、cache 命中）。
-- `docker compose down` 乾淨收場；`down -v` 後重起可重現初始狀態。
+- 單一指令 `docker compose --profile demo up -d --build` 起全棧：seed `Exited (0)` → web／api／worker `healthy`（複合就緒訊號）。
+- 開單一入口 `http://localhost:8080` 完整走 §16.2 的 demo 劇本（telemetry、背壓比值、診斷 streaming、cache 命中）。
+- `docker compose --profile demo down` 乾淨收場；`down -v` 後重起可重現初始狀態、劇本可重跑。
 - dev 模式不受影響：不帶 profile 的 `docker compose up -d` 仍只起 infra，四終端機流程照舊。
-- README 啟動說明雙軌清楚，新機器（只裝 Docker Desktop + clone repo + `.env`）可一鍵起 demo。
+- README 啟動說明雙軌清楚，新機器（只裝 Docker Desktop + clone repo + 填兩份 `.env`）可一鍵起 demo。
 
 ---
 
@@ -3003,11 +3008,12 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 ## 16. 本機啟動與端到端 Demo
 
-> Feature 008 完成後，本章會補上「一鍵 demo」路徑；Feature 007／009 完成後，會補上「故障演練」
-> 劇本：用 007 的 `WORKER_CHAOS` 旗標注入致命錯誤 → 觀察容器退避重啟、BullMQ 重派 in-flight job、
-> heartbeat 轉 unhealthy → 監控台恢復——監控台監控它自己的死而復生。以下為 dev 模式（四終端機）流程。
+> 啟動有**兩種軌道**（Feature 008 起）：**開發模式**（§16.1，四終端機、host 熱重載）與**一鍵 demo**（§16.1b，
+> 單一指令、單一入口容器）。§16.2 的 demo 劇本兩軌皆適用，僅**入口位址**不同（dev `5173`／demo `8080`）。
+> Feature 009 完成後會再補上「故障演練」劇本：用 007 的 `WORKER_CHAOS` 旗標注入致命錯誤 → 觀察容器退避重啟、
+> BullMQ 重派 in-flight job、heartbeat 轉 unhealthy → 監控台恢復——監控台監控它自己的死而復生。
 
-### 16.1 第一次啟動
+### 16.1 開發模式（四終端機、host 熱重載）
 
 Terminal 1：infra
 
@@ -3035,9 +3041,22 @@ Terminal 4：web
 pnpm --filter web dev
 ```
 
+入口：`http://localhost:5173`（api `http://localhost:3000`，ws 在 `/ws`）。
+
+### 16.1b 一鍵 demo（單一指令、單一入口容器）
+
+只需 Docker Desktop + 此 repo + 填妥兩份 `.env`（`apps/api/.env` 可全用預設；`apps/worker/.env` 填 `GEMINI_API_KEY`），**不需** Node／pnpm：
+
+```bash
+docker compose --profile demo up -d --build   # 首次建三個映像約數分鐘
+docker compose ps -a                          # 判讀就緒：seed Exited(0) + api/web/worker healthy
+```
+
+入口：**`http://localhost:8080`**（單一入口；nginx 同源反代 `/ws`、`/diagnoses` 至 api，api 不對外暴露埠）。停止＝`docker compose --profile demo down`；連同資料清除的重設＝`down -v` 後再 `up`。
+
 ### 16.2 Demo 劇本
 
-1. 開 `http://localhost:5173`。
+1. 開入口位址——**開發模式** `http://localhost:5173`／**一鍵 demo** `http://localhost:8080`。
 2. 看到 machine cards 持續更新。
 3. 顯示 connection status 為 connected。
 4. 把 mock frequency 調快，指著 TopBar 的 BackpressureBadge 說明：收進上萬筆訊息、只觸發數百次渲染批次（例如 41:1），這就是 rAF batching 的背壓效果，把抽象說法變成畫面上看得見的數字。
@@ -3048,6 +3067,10 @@ pnpm --filter web dev
 9. done 後顯示 severity、likely causes、evidence、suggested actions。
 10. 再點同一台同類型錯誤，顯示 cached。
 11. 暫停 worker，再建立 job，說明 API/Gateway 不崩潰且 job 可追蹤。
+    （開發模式：Ctrl-C 該 worker 終端機；**一鍵 demo**：`docker compose --profile demo stop worker`。）
+12. （選配，一鍵 demo）**Gateway 崩潰自癒演練**：`docker exec <api 容器名> pkill -KILL -f "dist/main.js"`
+    → 監督者自動重啟、前端經 nginx ≤30s 自行重連。**MUST 用 in-process kill，不要用 `docker kill <容器>`**
+    ——後者是手動停止、Docker 會抑制 restart，容器停在 `exited` 不會自動重啟（見 008 research D13）。
 
 ---
 
