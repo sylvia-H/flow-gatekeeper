@@ -27,14 +27,21 @@ export async function bootstrap(): Promise<void> {
   logger.log(`flow-gatekeeper api listening on :${port} (ws path /ws)`);
 
   // 優雅關閉（FR-004、008 research D5）：api 現況原無任何訊號處理——收到 SIGTERM 即刻
-  // 死亡，既有的四個 onModuleDestroy（Mongo／QueueEvents／AI relay／Gateway timers）從未
-  // 被觸發。enableShutdownHooks() 讓 app.close() 逐一呼叫它們；顯式 handler 讓退出碼成為
-  // 眼前可讀的決策——FR-003 的 on-failure:5 完全靠退出碼區分「崩潰」與「優雅關閉」。
+  // 死亡，四個 onModuleDestroy（Mongo／QueueEvents／AI relay／Gateway）從未被觸發。此顯式
+  // handler 收到訊號即 app.close()，它會逐一呼叫那些 onModuleDestroy（含 Gateway 主動
+  // terminate ws 連線並關閉 ws server，讓 HTTP server 的 close 能真正完成，否則活躍的 ws
+  // 連線會使關閉掛住至寬限期逾時），再以顯式退出碼 0 收場——FR-003 的 on-failure:5 靠退出碼
+  // 區分「崩潰」與「優雅關閉」。
   //
-  // 範圍紀律（FR-014 的唯一例外）：本段僅觸碰關閉路徑，MUST NOT 改動任何 onModuleDestroy
-  // 的內容——它們的既有語意（含 ADR-002 §6.4 接受的有損寫入）一行未動，只是第一次真的被執行。
-  app.enableShutdownHooks();
+  // 不使用 enableShutdownHooks()：app.close() 本就會執行 onModuleDestroy，enableShutdownHooks()
+  // 只會「另外」再掛一組 SIGTERM/SIGINT 監聽器，與本 handler 競態、重複觸發 app.close()。
+  //
+  // 範圍紀律（FR-014 的唯一例外）：關閉路徑之外一律不動；onModuleDestroy 的既有清理語意
+  // （含 ADR-002 §6.4 接受的有損寫入）未變，Gateway 僅新增「釋放 ws 連線」這一收尾必要步驟。
+  let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
+    if (shuttingDown) return; // 重入防護：第二個訊號不再另起一輪 close
+    shuttingDown = true;
     logger.log(`received ${signal}, shutting down api...`);
     try {
       await app.close();
