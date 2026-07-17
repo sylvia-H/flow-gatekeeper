@@ -114,14 +114,14 @@ pnpm monorepo：`apps/{api,worker,web}`、`packages/{contracts,shared}`；編排
 
 **Purpose**: 跨 Feature 回補、文件雙軌化、全案品質門檻與總驗收。
 
-- [ ] T019 [P] 更新 **`README.md` 與設定範本**（FR-015／FR-011／FR-017）：
+- [X] T019 [P] 更新 **`README.md` 與設定範本**（FR-015／FR-011／FR-017）：
   1. **`README.md` 啟動說明改雙軌**（FR-015）：開發模式（`docker compose up -d` → `./scripts/dev-up.ps1`，web 5173／api 3000）vs 一鍵 demo（`docker compose --profile demo up -d --build` → `http://localhost:8080`），**各自成段標示用途、指令與前置需求**；demo 段須列明前置為「容器執行環境 + repo + 複製兩份範本並填 `GEMINI_API_KEY`」（research D12）、預告首次建置需數分鐘、並載明金鑰未填時的症狀與成因（FR-017）。
   2. **README demo 段須含「全部就緒」的判讀方式**（FR-011）：`docker compose ps -a`（`-a` 不可省——seed 完成後即 exited，預設不列出）對照四項複合訊號（seed `exited(0)` → api `healthy` → web `healthy` → worker `healthy`），並註明 api 的 `start_period` 30s 內顯示 `starting` 屬正常。**這是 FR-011 明文要求的使用者面**——「讓展示者能辨識可開始 demo 的時點，而非只能靠肉眼猜測」；healthcheck 只提供機制，不提供辨識，判讀方式不寫進 README 則該義務無人承接。
   3. **README demo 段須載明兩則 Edge case 的處置**（spec Edge Cases「同時啟動兩種模式」「連接埠被佔用」——前者明文要求「**文件需說明不應混跑**」，後者要求「啟動失敗需可診斷，且不得污染既有的開發模式流程」。**analyze 發現此兩則原無任何任務承接**——quickstart 場景 3 雖有一句提醒，但展示者只讀 README（SC-007），看不到 quickstart）：
      - **不應混跑**：開發模式與 demo 模式 MUST NOT 同時啟動——`redis`／`mongo` 為兩模式共用，資料層會互相干擾（`8080` 與 `5173`／`3000` 雖不互撞，但那不是安全的理由）。切換時先 `docker compose --profile demo down` 再走另一軌。
      - **埠被佔用**：`8080`（或 `6379`／`27017`）已被 host 上其他行程佔用時，compose 會以 **bind 失敗訊息指名該埠**中止，改 `docker-compose.yml` 的 `ports` 一行即可（可攜性由同源相對路徑保證，見 2d）。**MUST NOT 為此新增任何前置檢查機制**——診斷資訊由 compose 原生錯誤承接即已足夠（ADR-002 不造輪子）；此為 release-gate CHK037 的判定依據
   4. **更新 `apps/worker/.env.example` 的 `GEMINI_API_KEY` 註解**（FR-017 明文：「`README.md` **與設定範本** MUST 載明此症狀與其成因」）：現行只寫「留空則診斷會走 ai/error」——那是技術語，不是展示者看得懂的症狀。改為載明**症狀**（全棧照常啟動、遙測與背壓正常，僅 AI 診斷失敗且畫面訊息指名金鑰）與**成因**（本專案刻意不擋啟動，讓沒有 Gemini 帳號的評估者仍看得到 2/4 賣點）。**MUST NOT 改變該檔的任何變數值或形狀**——僅動註解
-- [ ] T020 [P] `supervised` → `demo` 更名回補（FR-016）：`README.md`（受監督模式指令一帶，**431／432／448 行**）與 **[apps/worker/Dockerfile:4](../../apps/worker/Dockerfile#L4)** 的檔頭註解（`docker compose --profile supervised up -d --build`——該句敘述的是「**現在**怎麼建置這個映像」，屬**現況描述**而非歷史敘述，更名後即為殘留的錯誤指令）。**MUST NOT 重寫歷史**——007 的決策背景保留原敘述，僅更新現況描述（必要時標註「已更名為 `demo`，現況見 §14」）。
+- [X] T020 [P] `supervised` → `demo` 更名回補（FR-016）：`README.md`（受監督模式指令一帶，**431／432／448 行**）與 **[apps/worker/Dockerfile:4](../../apps/worker/Dockerfile#L4)** 的檔頭註解（`docker compose --profile supervised up -d --build`——該句敘述的是「**現在**怎麼建置這個映像」，屬**現況描述**而非歷史敘述，更名後即為殘留的錯誤指令）。**MUST NOT 重寫歷史**——007 的決策背景保留原敘述，僅更新現況描述（必要時標註「已更名為 `demo`，現況見 §14」）。
   **全域搜尋已於 analyze 階段執行完畢**（release-gate CHK048），`supervised` 字面的全部出處與處置如下，回補時逐一核對即可：
 
   | 出處 | 處置 | 由誰 |
@@ -136,7 +136,7 @@ pnpm monorepo：`apps/{api,worker,web}`、`packages/{contracts,shared}`；編排
 
   **指南 §13 為何不動（analyze 修正）**：起草時列為更名標的，但全域搜尋確認**指南全檔 0 處** `supervised`——§13 通篇是 007 的決策背景與待決問題（第 2793 行仍寫「compose profile？獨立 script？」），分組名是 007 實作期才定的，從未寫回 §13。**無標的可更名**，且它正是 FR-016 明文保護的「決策背景」。**MUST NOT 為了讓本任務有事可做而在 §13 補寫現況敘述**——指南的現況面由 §14／§16 承接（T021）。spec FR-016 與 research D8 的列舉已同步校正。
   **`specs/007-*` 為何不動**：那是 007 當時的決策紀錄與已結案工件，屬 FR-016 明文保護的「歷史」——改它就是重寫歷史。`ADR-002`、`asyncapi.yaml`、`.env.example` 經搜尋**未出現** `supervised`，無需回補
-- [ ] T021 [P] 更新 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` 的 **§14 與 §16** 兩章（FR-016／FR-015）：
+- [X] T021 [P] 更新 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` 的 **§14 與 §16** 兩章（FR-016／FR-015）：
 
   1. **§14 → 現況已落地**（FR-016）。**MUST 於 008 實作完成、驗收通過後才寫**——本章要翻成「現況」，而現況在 T003–T018 跑完前並不存在（CHK043／CHK044／CHK054 三項 `[須實作後判定]` 未定案前，任何「已落地」敘述都是憑空發明，違反憲章 II）。逐項處置如下（**analyze 覆核指南全文所得，MUST 逐條核對，勿只改點名的那兩行**）：
 
@@ -160,10 +160,10 @@ pnpm monorepo：`apps/{api,worker,web}`、`packages/{contracts,shared}`；編排
      - **MUST NOT 重寫 §16 的既有 dev 流程或劇本步驟語意**——只做「標明是哪一軌」與「補上另一軌」，劇本的 11 個步驟本身不動（FR-014）。
 
   **與 T020 的分工**：T020 只處理 `supervised` 字面的更名（README／worker Dockerfile 檔頭），**指南全檔一律由本任務處理**——經 analyze 校正後兩者已無共同檔案，故 `[P]` 成立
-- [ ] T022 祕密衛生驗收（SC-006／憲章 VI）：以 quickstart「祕密衛生驗收」節的指令確認 **api／worker／web 三個映像**內祕密數皆為 0；`git status --porcelain` 確認設定範本以外的祕密檔案未進版控
+- [X] T022 祕密衛生驗收（SC-006／憲章 VI）：以 quickstart「祕密衛生驗收」節的指令確認 **api／worker／web 三個映像**內祕密數皆為 0；`git status --porcelain` 確認設定範本以外的祕密檔案未進版控
 - [ ] T023 文件驗收（SC-007）：請一位未跑過本專案的人**只讀 `README.md`**，確認能在不詢問任何人的前提下正確選出模式並完成啟動；確認全案無殘留 `supervised` 分組的現況敘述
 - [ ] T024 覆核 [checklists/release-gate.md](./checklists/release-gate.md) 全部 54 項並逐項勾選；**含三項 [須實作後判定]**（CHK043 `nginx:alpine` 探測工具、CHK044 `depends_on` 不因 restart 重新求值、CHK054 api 的暫時 `ports` 已移除）。任一項未過即不得 merge，或須就地明文記錄接受理由
-- [ ] T025 全案品質門檻：`pnpm check`（contract lint + typecheck + lint + test）全綠；確認 `packages/contracts` **零變更**（憲章 III）、**`apps/worker/` 源碼與建置行為零變更**——worker 在本 feature 的異動僅限三處，皆不觸碰其執行語意或監督參數：
+- [X] T025 全案品質門檻：`pnpm check`（contract lint + typecheck + lint + test）全綠；確認 `packages/contracts` **零變更**（憲章 III）、**`apps/worker/` 源碼與建置行為零變更**——worker 在本 feature 的異動僅限三處，皆不觸碰其執行語意或監督參數：
   1. `docker-compose.yml` 的分組名 `supervised` → `demo`（T002，編排層）；
   2. `docker-compose.yml` 新增 `image: flow-gatekeeper-worker:local`（T002，編排層）；
   3. `apps/worker/Dockerfile:4` 的**檔頭註解**更名（T020，FR-016 回補）——**只動註解、不動任何建置指令**，映像產物逐 byte 相同；
