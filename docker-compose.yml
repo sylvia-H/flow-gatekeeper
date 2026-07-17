@@ -14,13 +14,17 @@ services:
     volumes:
       - mongo-data:/data/db
 
-  # worker 受監督形態（Feature 007）。掛 profile 分組：既有 `docker compose up -d`
-  # 只起 infra、行為零變化；受監督模式為 `docker compose --profile supervised up -d --build`。
+  # worker 受監督形態（Feature 007，008 收進 demo 分組，與 api／web／seed 同組）。
+  # 既有 `docker compose up -d` 只起 infra、行為零變化；全棧 demo 為
+  # `docker compose --profile demo up -d --build`。
   worker:
-    profiles: ["supervised"]
+    profiles: ["demo"]
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
+    # 明確宣告 image 名——否則 compose 自動生成 <專案名>-worker（專案名取目錄名、不穩定），
+    # 與 T022 祕密衛生驗收逐一 docker run 三個具名映像的指令對不上（008 T002）。
+    image: flow-gatekeeper-worker:local
     depends_on:
       - redis
       - mongo

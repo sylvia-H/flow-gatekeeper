@@ -34,7 +34,7 @@ pnpm monorepo：`apps/{api,worker,web}`、`packages/{contracts,shared}`；編排
 
 **Purpose**: 分組更名——US1 的 api service 要掛 `demo` 分組，故此項須先於所有 user story。**破壞性變更**：007 交付的 `--profile supervised` 指令自此失效（contracts §1）。
 
-- [ ] T002 `docker-compose.yml` 的 worker service：`profiles: ["supervised"]` → `["demo"]`，並更新其上方註解中的指令範例（`--profile supervised` → `--profile demo`）；**同時補 `image: flow-gatekeeper-worker:local`**——worker 現況未宣告 `image:`，映像名由 compose 自動生成為 `<專案名>-worker`（專案名預設取目錄名，亦可被 `COMPOSE_PROJECT_NAME` 覆蓋），該名稱不穩定且與 T008／T012 明確宣告的 `flow-gatekeeper-api:local`／`flow-gatekeeper-web:local` 不同形，會使 T022 的祕密衛生驗收（quickstart「祕密衛生驗收」節逐一 `docker run` 三個映像）指令失效。**此為 compose 層宣告，不觸碰 `apps/worker/` 任何 code**（T025 的「worker 源碼零變更」仍成立）
+- [X] T002 `docker-compose.yml` 的 worker service：`profiles: ["supervised"]` → `["demo"]`，並更新其上方註解中的指令範例（`--profile supervised` → `--profile demo`）；**同時補 `image: flow-gatekeeper-worker:local`**——worker 現況未宣告 `image:`，映像名由 compose 自動生成為 `<專案名>-worker`（專案名預設取目錄名，亦可被 `COMPOSE_PROJECT_NAME` 覆蓋），該名稱不穩定且與 T008／T012 明確宣告的 `flow-gatekeeper-api:local`／`flow-gatekeeper-web:local` 不同形，會使 T022 的祕密衛生驗收（quickstart「祕密衛生驗收」節逐一 `docker run` 三個映像）指令失效。**此為 compose 層宣告，不觸碰 `apps/worker/` 任何 code**（T025 的「worker 源碼零變更」仍成立）
   **同一任務內同步更新 `.claude/settings.json`**：該檔有 **17 條**權限允許清單條目寫死 `docker compose --profile supervised …`（第 16／17／19／24／26／68／76／78／85／87／88／90／91／92／98／100／106 行，計 17 行；以 `Select-String "profile supervised"` 覆核，勿憑數字停手），更名後全部失效，使 Phase 3–6 的每道 demo 指令重新跳權限詢問。**此為工具設定、非專案真實來源**（FR-016 不涵蓋它，故不列入 T020 的回補範圍），但 MUST 與 compose 的更名在**同一個 commit 內**生效——否則中間會出現「compose 已改名、允許清單還沒改」的空窗
 
 **Checkpoint**: `docker compose --profile demo up -d worker` 可起 worker；`docker compose up -d`（不帶分組）仍只起 redis／mongo——SC-004 的機制基礎已就位。
