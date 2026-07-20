@@ -34,6 +34,20 @@ export class HistoryService implements OnModuleInit, OnModuleDestroy {
     await this.client?.close();
   }
 
+  /**
+   * Mongo 連通探測（009 US2，contracts/health-endpoint.md §4）：複用既有 `Db`，不另開連線。
+   * `db` 未就緒（啟動中）或指令本身失敗一律 **reject**——這正是 spec Edge Case「api 啟動中、
+   * 依賴尚未就緒」的落地：兩種情形對呼叫端而言是同一種「探測不到」，故用同一條錯誤路徑，
+   * 不需在此另外分岔。呼叫端（health.service）MUST 統一把任何拋出轉為 `{ status: "down" }`
+   * （FR-007），本方法不做這層轉換。
+   */
+  async ping(): Promise<void> {
+    if (!this.db) {
+      throw new Error("mongo not ready");
+    }
+    await this.db.command({ ping: 1 });
+  }
+
   private async ensureCollections(db: Db): Promise<void> {
     try {
       await db.createCollection("telemetry", {

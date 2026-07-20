@@ -21,4 +21,6 @@ export class AppConfigService {
   // 設定內省，複用同一組純函式避免解析邏輯重複，FR-003/research R3）。
   readonly logLevel = resolveLogLevel(process.env).level;
   readonly logPretty = resolvePretty(process.env);
+  // 009 US2：健康端點對每個依賴探測的獨立逾時（FR-007）。
+  readonly healthProbeTimeoutMs = Number(process.env.HEALTH_PROBE_TIMEOUT_MS ?? 2000);
 }
