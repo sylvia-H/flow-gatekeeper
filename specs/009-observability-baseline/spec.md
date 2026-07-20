@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-17
 
-**Status**: 已收斂（clarify／plan／checklist／tasks／analyze 完成，analyze 修補回補於 2026-07-20），待 `/speckit-implement`
+**Status**: 已收斂（clarify／plan／checklist／tasks／analyze 完成，analyze 兩輪修補皆回補於 2026-07-20；第二輪 E1–E9 見 tasks.md §Notes），待 `/speckit-implement`
 
 **Input**: User description: "009-Observability Baseline"（依 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15 方向藍圖與 `docs/adr-002-productionization-scope.md` §5.3／§6.4 既定決策起草）
 
@@ -119,7 +119,7 @@
   - **快取命中率**——採**週期內**計數（每週期結算後清零，非開機累計）；分母為零時 MUST 回報為「本週期無樣本」而非 0%，避免誤讀為命中率崩潰。
 
   摘要輸出間隔採固定週期，預設每 60 秒一則，MUST 可經環境變數 `METRICS_INTERVAL_MS` 調整；為與 FR-009 相容，間隔下限為 **5000ms**，低於下限的設定值 MUST 回退至預設（60000ms）。任一指標來源缺席或蒐集失敗時，摘要 MUST 仍照常輸出、僅將該項標記為不可用（worker 側缺席時以 `worker: null` 表達，見 data-model E3），MUST NOT 因單一來源缺席而中止整則摘要。
-- **FR-008a**: 除「摘要入日誌」外，web 端 MUST 額外提供一個唯讀的 dev 面板，呈現同組關鍵指標的最新快照供人工判讀。指標 MUST 經既有即時通道以**新增的控制訊息**送達前端，且該訊息 MUST 依契約先行原則納入共用通訊契約與 AsyncAPI 文件；MUST NOT 為此新增 HTTP 端點。面板 MUST 標示快照的新鮮度，當快照超過 **2 個摘要週期**（預設 120 秒）未更新時 MUST 以過期樣態呈現，MUST NOT 讓過期數值看起來像即時值。此面板僅**展示**後端輸出的指標，MUST NOT 承擔瀏覽器端日誌蒐集／上報（與 FR-013 不衝突），MUST NOT 提供任何觸發後端動作的控制項，亦 MUST NOT 改變任何即時行為或寫入語意。
+- **FR-008a**: 除「摘要入日誌」外，web 端 MUST 額外提供一個唯讀的 dev 面板，呈現同組關鍵指標的最新快照供人工判讀。指標 MUST 經既有即時通道以**新增的控制訊息**送達前端，且該訊息 MUST 依契約先行原則納入共用通訊契約與 AsyncAPI 文件；MUST NOT 為此新增 HTTP 端點。面板 MUST 標示快照的新鮮度，當快照超過 **2 個摘要週期**（預設 120 秒）未更新時 MUST 以過期樣態呈現，MUST NOT 讓過期數值看起來像即時值。面板 MUST 進一步區分「**即時通道已斷線**」與「**通道連著但後端停止更新**」兩種情形（兩者的排查方向相反），MUST NOT 將兩者以同一種樣態呈現；尚未收到任何快照時 MUST 呈現為「尚無資料」，MUST NOT 判為過期。此面板僅**展示**後端輸出的指標，MUST NOT 承擔瀏覽器端日誌蒐集／上報（與 FR-013 不衝突），MUST NOT 提供任何觸發後端動作的控制項，亦 MUST NOT 改變任何即時行為或寫入語意。
 - **FR-009**: 高頻 telemetry MUST NOT 被逐筆寫入日誌（避免日誌量爆炸而抵銷可觀測性）。可驗證門檻為：**正常路徑下，每筆遙測的接收與處理 MUST 不產生任何日誌條目**；僅異常、狀態轉換與週期摘要得記錄。
 - **FR-010**: 本 feature 對關聯鍵與健康／心跳訊號的命名 MUST 與 007 既有 heartbeat 探針共存不衝突：api 健康端點與 worker heartbeat 各自獨立命名與格式，MUST NOT 共用命名空間、亦不強行統一；僅須確保 key 名／語意不相衝突，且不破壞 007 已交付的 heartbeat key。
 - **FR-011**: 有損寫入語意（telemetry 持久化為 fire-and-forget、可丟失最後數秒；errorlog 在重啟邊界可能重複）MUST 明文化於對應的持久化程式註解、README，並引用 `ADR-002 §6.4`。
@@ -127,7 +127,7 @@
 - **FR-013**: web 端（瀏覽器）的日誌蒐集／上報 MUST NOT 納入本 feature。
 - **FR-014**: Prometheus／Grafana、`/metrics` 匯出器、OpenTelemetry tracing、告警系統、日誌聚合服務 MUST NOT 納入本 feature（ADR-002 §7 邊界）。FR-008a 的 dev 面板為唯讀 UI 呈現，MUST NOT 演變為機器可抓取的匯出端點，故與本條不衝突。
 - **FR-015**（跨 Feature 回補）: 本 feature 於 SDD 各階段所定、影響當前 feature 以外範圍的決策，MUST 於收尾前寫回真實來源，並同步修訂既有內容以消除矛盾，MUST NOT 殘留指向舊決策的敘述。標的逐項為：(1) 實作指南 §15.2／§15.3——四項 clarify 問題標記為已定案並填入答案，「要做」清單補上 web dev 面板；(2) 實作指南 §14（Feature 008 章節）——api 容器 healthcheck 由 `/ws` 握手改為健康端點的現況描述（FR-006a）；(3) 實作指南 §15.4——驗收清單補「web dev 面板」與「二態 200／503」判準；(4) `ADR-002 §6.4`——「落地」欄位由「Feature 009 將寫入…」改為已落地的現況描述；(5) `README.md`——新增「已宣告的取捨」小節（FR-011）、新增環境變數說明與 dev 指標面板開關說明；(6) `asyncapi.yaml`——新增指標控制訊息定義（FR-008a）。回補 MUST NOT 重寫歷史：既有的決策背景與由來敘述保留（必要時改過去式並標註現況出處），僅更新現況描述。
-- **FR-016**: 本 feature 新增的所有環境變數 MUST 同步登錄於 `.env.example`，並註明用途與預設值，使設定形狀有單一可查來源（憲章 VI 只規範不得提交祕密，未涵蓋此項）。
+- **FR-016**: 本 feature 新增的所有環境變數 MUST 同步登錄於 `.env.example`，並註明用途與預設值，使設定形狀有單一可查來源（憲章 VI 只規範不得提交祕密，未涵蓋此項）。登錄位置 MUST 是**該變數實際生效的那一份** `.env.example`——僅登錄在不會被讀取的位置不算完成（例如前端建置工具的環境變數，其 env 根目錄未必是 repo 根目錄）。
 
 ### Key Entities *(include if feature involves data)*
 

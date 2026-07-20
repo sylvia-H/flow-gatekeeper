@@ -154,3 +154,52 @@ FR-010 的 heartbeat 共存補 T042 禁令與 quickstart 8.9；容器內 pino �
 `METRICS_INTERVAL` 統一為 `METRICS_INTERVAL_MS`；plan 檔案清單補 `interval.ts`；
 T031 補「healthcheck.ts 的舊 doc 註解須一併改寫」（`/healthz` 落地後「api 無任何 GET 路由」即不成立）；
 research R1b 的 `⚠️ 需確認` 結案為已定案。
+
+---
+
+### `/speckit-analyze` 第二輪複驗與修補紀錄（2026-07-20）
+
+第二輪檢查發現 9 項（0 CRITICAL、1 HIGH、4 MEDIUM、4 LOW），已全數修補。
+其中三項需使用者裁定，裁定結果如下：
+
+| ID | 問題 | 裁定／修補 |
+| --- | --- | --- |
+| **E1**（HIGH） | `VITE_METRICS_PANEL` 只登錄在根 `.env.example`，但 `apps/web/vite.config.ts` 未設 `envDir`，Vite 的 env 根目錄是 `apps/web/`——**該變數永遠讀不到**，FR-016 在 web 端形同未落地，T052 的旗標在 dev 直接失效 | **裁定：新增 `apps/web/.env.example`**（與既有每-app 慣例一致），`envDir` 不動。新增 **T004a**；根 `.env.example` 保留一列作總覽並註明實際來源。FR-016 同步收緊為「登錄位置 MUST 是實際生效的那一份」 |
+| **E3**（MEDIUM） | `METRICS_INTERVAL_MS` 下限回退的 `warn` 同時要求在 `createLogger`（T011a）與 `config.service`（T048）處理，可能重複輸出或雙方互推致漏輸出 | **裁定：由呼叫端各自輸出**。`createLogger` 只管 `LOG_LEVEL` 那一則；間隔回退的 warn 歸 T048（api）與 T042（worker） |
+| **E4**（MEDIUM） | quickstart 6.2 以「停掉 api」驗過期樣態，但停 api 會**同時斷 ws**，過期態與斷線態混在一起，FR-008a 的判準無從被證實 | **裁定：面板區分兩態**。狀態機擴為 `empty`／`live`／`stale`／`disconnected`（見 research R12、contracts §2.1），FR-008a 同步收緊；quickstart 6.2 改為分段驗證 |
+
+其餘六項：**E2** T042 補「worker 側摘要 MUST 用專屬 metrics child logger」（原措辭只要求 `context: "metrics"`，
+若誤用一般 logger 則 `LOG_LEVEL=warn` 時 worker 摘要會消失、SC-005 在 worker 側不成立），
+quickstart 場景 5 判準同步拆為 api／worker 兩端；
+**E5** T049 的過期門檻改由 payload `windowMs` 推導（後端環境變數前端讀不到），未收快照時為 `empty`；
+**E6** tasks 兩處對 US4 相依性的敘述矛盾（「只依賴 Phase 1」vs「零相依」），統一為零相依；
+**E7** T061 補 FR-013／FR-014 的邊界搜尋詞（`/metrics`、`prometheus`、`opentelemetry`、`tracing` 等）
+——這兩條否定式需求原本無任何任務守門；
+**E8** plan.md §Project Structure 的 `lib/` 目錄重複列示，併回同一區塊；
+**E9** T062 補場景 6 的前置（`WS_AUTH_SECRET` 須為空、`VITE_METRICS_PANEL` 放 `apps/web/.env`）。
+
+**教訓**：第一輪 analyze 只比對「工件之間」是否一致，未比對「工件與實際建置設定」是否一致——
+E1 正是這類缺口（tasks 與 plan 彼此完全一致，但都與 `vite.config.ts` 的實際行為不符）。
+後續 feature 的 analyze SHOULD 對**新增設定項**額外確認其在真實建置鏈上會被讀取。
+
+### 事實斷言逐項驗證（2026-07-20，取代第三輪 analyze）
+
+依上述教訓，改以**針對性驗證**取代再跑一輪工件對工件的 analyze——逐項核對 plan／research
+對現有程式碼與建置設定所做的事實斷言。結果：**7 項符合、1 項需修正**。
+
+| 斷言 | 出處 | 核對結果 |
+| --- | --- | --- |
+| `packages/shared` 的 `rootDir: src` / `outDir: dist` 可產生 `dist/logging/index.js` | T002 | ✅ 符合 |
+| `apps/web` 確實相依 `@flow-gatekeeper/shared`（`telemetry-format.ts` 匯入 `METRIC_THRESHOLDS`） | research R10 | ✅ 符合——pino 進 bundle 的風險屬實，子路徑 export 有必要 |
+| api 已全面使用 Nest `Logger`，共 **6 處** | research R1 | ✅ 精確符合（`main`／`history`／`jobs`／兩支 relay／gateway） |
+| worker `log()` helper 位於 `main.ts:35`，呼叫點約 20 | research R1／T017 | ✅ 實測 18–19 處，「約 20」成立 |
+| 全案殘留 `console.*` 僅 `seed.ts`／`smoke-gemini.ts`／`fatal.ts` | FR-004／SC-001 範圍界定 | ✅ 精確符合——三處皆為已明文豁免者，SC-001 的 100% 判準可達成 |
+| compose api healthcheck 的 `test` 為 `["CMD","node","dist/healthcheck.js"]`、不需變更 | T031 | ✅ 符合（`docker-compose.yml:88-93`） |
+| healthcheck 自我逾時 4000ms < compose `timeout: 5s` | T031／research R4a | ✅ 符合 |
+| quickstart 3.5 停 Redis 後等 **60s** 即應見容器 `unhealthy` | quickstart 3.5 | ❌ **不成立，已修正**——compose 為 `interval: 30s` / `retries: 3`，需連續 3 次失敗才翻牌，最壞約 90s+。等 60s 會看到仍是 `healthy` 而**誤判驗收失敗**。已改為 120s，並補「判準是最終翻牌而非翻牌速度」與恢復方向的驗證 |
+
+**結論**：斷言基礎穩固，唯一缺陷是驗收演練的等待時間算錯——同樣屬「工件 vs 真實設定」這一類，
+而非工件互相矛盾。兩輪 analyze 已把工件互相矛盾這一類掃過兩遍（第二輪 9 項中僅 1 項 HIGH，
+且該項無法由工件互比發現），本輪針對性驗證又已覆蓋剩餘的高風險類別，**判定不再跑第三輪
+analyze**，直接進入 `/speckit-implement`。殘餘風險改由 implement 各 phase 的
+typecheck／lint／test 與 quickstart 逐項演練承接。

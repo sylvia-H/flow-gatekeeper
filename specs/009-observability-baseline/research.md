@@ -301,6 +301,29 @@ analyze 發現 FR-008 的「間隔下限」與 FR-008a 的「合理週期數」�
 `worker: null`），面板門檻管的是「前端多久沒收到廣播就不該假裝即時」。兩者是不同層的問題，
 數值不必一致，MUST NOT 互相對齊。
 
+**前端如何取得該間隔值**（2026-07-20 analyze 第二輪，E5）：`METRICS_INTERVAL_MS` 是後端環境變數，
+前端讀不到，故門檻一律由**最近一則 payload 的 `windowMs`** 推導（data-model E3 已有此欄位），
+MUST NOT 在前端硬編 60000。**收到第一則快照之前**沒有 `collectedAt` 也沒有 `windowMs`，
+面板狀態為 `empty`（尚無資料），MUST NOT 判為過期。
+
+---
+
+## R12 — dev 面板的四態狀態機（2026-07-20 analyze 第二輪，E4）
+
+**Decision**：面板 MUST 區分 `empty` / `live` / `stale` / `disconnected` 四態，其中 **`stale`
+（ws 連著但後端停止廣播）與 `disconnected`（ws 斷線）MUST 在文案與視覺上可區分**。
+
+**Rationale**：
+- 兩者的排查方向完全相反——`stale` 要查 api 的指標收集器，`disconnected` 要查連線／後端存活。
+  混為一態，面板作為「判讀工具」的價值歸零。
+- **驗收可證性**：原 quickstart 6.2 以「停掉 api」演練過期，但停 api 會**同時斷 ws**，
+  過期態與斷線態混在一起，`MUST NOT 讓過期數值看起來像即時值`（FR-008a）無從被證實。
+  分態後，6.2 改以「保持 ws 連線但停止廣播」驗 `stale`、以「停 api」驗 `disconnected`，
+  兩者各自可獨立觀察。
+
+**Constraint**：此為**純呈現層**的狀態細分，不新增訊息、不改傳輸語意，
+與 FR-012「不改變既有即時行為」不衝突。
+
 ---
 
 ## 新增環境變數彙總（須同步 `.env.example`）
@@ -313,6 +336,13 @@ analyze 發現 FR-008 的「間隔下限」與 FR-008a 的「合理週期數」�
 | `METRICS_LOG_LEVEL` | `info` | 指標摘要專屬等級，獨立於 `LOG_LEVEL`（R6） | api、worker |
 | `HEALTH_PROBE_TIMEOUT_MS` | `2000` | 依賴探測逾時（FR-007） | api |
 | `VITE_METRICS_PANEL` | dev `true` / prod `false` | 是否渲染 dev 指標面板（R7） | web |
+
+**登錄位置**（2026-07-20 analyze 第二輪，E1）：前五個變數登錄於根 `.env.example` +
+`apps/api/.env.example` + `apps/worker/.env.example`。`VITE_METRICS_PANEL` **MUST 另外登錄於
+新增的 `apps/web/.env.example`**——`apps/web/vite.config.ts` 未設 `envDir`，Vite 的 env 根目錄
+即為 `apps/web/`，根 `.env` 的 `VITE_` 變數**不會被讀取**。根 `.env.example` 仍保留一列作為
+全案設定形狀總覽，但須註明實際生效來源。**MUST NOT 改設 `envDir`** ——那會產生兩個生效來源，
+且偏離 Vite 預設行為、容器 build context 也須一併調整。此為全案第一個 `VITE_` 變數。
 
 ---
 

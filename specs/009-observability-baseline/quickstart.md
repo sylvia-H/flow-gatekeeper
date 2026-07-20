@@ -124,13 +124,20 @@ docker compose stop mongo   # …再 start
 docker compose up -d --build
 docker compose ps            # api 應轉 healthy
 docker compose stop redis
-Start-Sleep -Seconds 60      # interval 30s × retries
+# ⚠️ compose 的 api healthcheck 為 interval 30s / retries 3 ——需「連續 3 次」失敗才翻牌，
+#    最壞約 90s+。等 60s 會看到仍是 healthy 而誤判為失敗，故取 120s 留餘裕。
+Start-Sleep -Seconds 120
 docker compose ps            # api 應轉 unhealthy
 docker compose start redis
+Start-Sleep -Seconds 60      # 恢復只需單次成功探測（interval 30s）
+docker compose ps            # api 應轉回 healthy
 ```
 
 - [ ] 停 Redis 後 api 容器最終轉 `unhealthy`（008 的 `/ws` 握手探活**做不到**這件事——
-      這正是本 feature 補上的深度）。
+      這正是本 feature 補上的深度）。**判準是「最終翻牌」而非「多久翻牌」**——翻牌延遲由
+      compose 的 `interval`／`retries` 決定，不是端點的反應速度；端點本身的 5 秒內反應
+      已由場景 3.2 驗過（SC-003）。
+- [ ] 恢復 Redis 後 api 容器轉回 `healthy`。
 
 ```powershell
 docker compose logs api --tail 20
@@ -177,15 +184,25 @@ $env:LOG_LEVEL="warn"    # 一般 info 雜訊應消失
 ```
 
 **通過判準**：
-- [ ] 一般 info 級日誌消失。
-- [ ] `context: "metrics"` 的週期摘要**仍持續輸出**——觀測能力未隨過濾一起失效。
+- [ ] 一般 info 級日誌消失（**api 與 worker 兩端皆須確認**）。
+- [ ] **api 側** `context: "metrics"` 的週期摘要仍持續輸出。
+- [ ] **worker 側** `context: "metrics"` 的自身摘要**亦仍持續輸出**——worker 的摘要同樣走專屬
+      metrics child logger（contracts/log-fields.md §3／§5），若此處消失即代表 worker 側誤用了
+      一般 logger，SC-005 不成立。
 
 ---
 
 ## 場景 6 — web dev 指標面板（SC-004 後半、FR-008a）
 
+**前置**：
+1. `apps/api/.env` 的 `WS_AUTH_SECRET` 須為空，或前端帶對 token（見 §0 既知陷阱）——
+   本場景需要前端實際連上 ws，未授權會讓面板永遠收不到快照。
+2. 旗標放 **`apps/web/.env`**（Vite 的 env 根目錄是 `apps/web/`，根目錄 `.env` 的 `VITE_` 變數
+   讀不到）：
+
 ```powershell
-$env:VITE_METRICS_PANEL="true"
+# apps/web/.env（可從 apps/web/.env.example 複製）
+# VITE_METRICS_PANEL=true
 pnpm --filter @flow-gatekeeper/web dev
 ```
 
@@ -198,17 +215,32 @@ pnpm --filter @flow-gatekeeper/web dev
 - [ ] **憲章 IV 邊界**：`system/metrics` 未進 rAF buffer——面板約每 60 秒更新一次，
       且 `BackpressureBadge` 的背壓比值**與改動前一致**（未被污染）。
 
-### 6.2 面板過期樣態（FR-008a）
+### 6.2 面板四態：`empty` / `live` / `stale` / `disconnected`（FR-008a）
+
+面板狀態機見 contracts/metrics-summary.md §2.1。**`stale`（後端停更）與 `disconnected`（前端沒連上）
+必須分開驗**——停掉 api 會同時斷 ws，只驗那一步無法證實過期樣態成立。
+
+**(a) `empty`**：面板開啟後、收到第一則快照之前（最長一個週期）
+
+- [ ] 呈現「尚無資料」，**不是**過期樣態（此時無 `collectedAt`／`windowMs` 可算門檻）。
+
+**(b) `live` → `stale`**：ws 保持連線，只讓後端停止廣播
 
 ```powershell
-# 面板開啟、已看到一次快照後，停掉 api（廣播來源），瀏覽器不重整
-# 等待 > 2 個週期（預設 120 秒 + 餘裕）
+# 面板已看到一次快照後，於 api 端停掉指標廣播但保持 ws 連線：
+# 最省事的做法是把 METRICS_INTERVAL_MS 調大後重啟 api，
+# 再等超過「舊 windowMs × 2」（例如原 60s → 面板應在 ~120s 後轉 stale）
 ```
 
-- [ ] 超過 **2 × `METRICS_INTERVAL_MS`** 未收到新快照後，面板轉為**過期樣態**
-      （contracts/metrics-summary.md §2.1）。
-- [ ] 過期時數值**不再看起來像即時值**——讀者能一眼看出這是舊快照，而非「系統剛好沒動靜」。
-- [ ] api 恢復並廣播下一則後，面板自動轉回正常樣態。
+- [ ] 超過 **2 × 最近一則 payload 的 `windowMs`** 未收到新快照後，面板轉為 **`stale`**。
+- [ ] `stale` 時數值**不再看起來像即時值**——讀者能一眼看出這是舊快照，而非「系統剛好沒動靜」。
+- [ ] 收到下一則廣播後自動轉回 `live`。
+
+**(c) `disconnected`**：停掉 api（ws 直接斷線），瀏覽器不重整
+
+- [ ] 面板轉為 **`disconnected`**，且**文案／視覺與 `stale` 明顯不同**——讀者能分辨
+      「前端沒連上」與「後端停止產指標」是兩件事。
+- [ ] api 重啟、ws 重連並收到下一則廣播後，面板轉回 `live`。
 
 ### 6.1 pino 未進入瀏覽器 bundle（research R10）
 

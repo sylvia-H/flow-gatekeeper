@@ -69,8 +69,22 @@ export type ServerControlMessage =
 | 項目 | 值 |
 | --- | --- |
 | 新鮮度來源 | payload 的 `collectedAt`（api 結算時間，非前端收訊時間） |
-| 過期門檻 | **2 × `METRICS_INTERVAL_MS`**（預設 120 秒）未收到新快照即視為過期 |
+| 門檻的間隔來源 | **最近一則 payload 的 `windowMs` 欄位**。`METRICS_INTERVAL_MS` 是後端環境變數，前端無從讀取，MUST NOT 在前端硬編 60000 |
+| 過期門檻 | **2 × `windowMs`**（預設 120 秒）未收到新快照即視為過期 |
 | 過期呈現 | 面板 MUST 以過期樣態呈現（數值仍可顯示，但 MUST NOT 看起來像即時值） |
+
+**面板狀態機（四態，MUST 可區分）**：
+
+| 狀態 | 條件 | 呈現 |
+| --- | --- | --- |
+| `empty` | 尚未收到任何 `system/metrics` | 「尚無資料」。**MUST NOT 判為過期**——沒有 `collectedAt` 也沒有 `windowMs`，無從計算門檻 |
+| `live` | ws 已連線且距 `collectedAt` ≤ 2 × `windowMs` | 正常數值 |
+| `stale` | **ws 已連線**但距 `collectedAt` > 2 × `windowMs` | 過期樣態——代表**後端停止廣播** |
+| `disconnected` | ws 未連線 | 斷線樣態，MUST 在文案／視覺上與 `stale` 可區分——代表**前端沒連上**，與後端是否還在產指標無關 |
+
+**為何 `stale` 與 `disconnected` 必須分開**：兩者的排查方向完全相反（一個查後端收集器、一個查連線），
+混為一態會讓面板的判讀價值歸零；且驗收時無法乾淨證實「過期樣態」確實成立
+（停掉 api 會同時斷 ws，只有分態才觀察得到兩者的差異，見 quickstart 場景 6.2）。
 
 **為何是 2×**：本訊息的保證是 at-most-once、不重送不補發（見上表），漏收單一則屬正常運作範圍，
 連續漏兩則才代表真的停更。1.5× 會讓一次抖動就誤報過期；3× 要三分鐘才看得出停更（research R11）。

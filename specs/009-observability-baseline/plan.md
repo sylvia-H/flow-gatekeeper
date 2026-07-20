@@ -137,7 +137,8 @@ apps/api/src/
 │   ├── health-aggregate.ts             # ➕ aggregateHealth（純函式）
 │   ├── health-aggregate.test.ts        # ➕
 │   ├── metrics-merge.ts                # ➕ mergeMetrics（純函式，含降級）
-│   └── metrics-merge.test.ts           # ➕
+│   ├── metrics-merge.test.ts           # ➕
+│   └── errorlog-transition.ts          # ✏️ 重啟邊界重複的註解（US4）
 ├── logging/
 │   └── pino-logger.service.ts          # ➕ Nest LoggerService adapter
 ├── modules/
@@ -152,7 +153,6 @@ apps/api/src/
 │   │   └── metrics.module.ts
 │   ├── jobs/jobs.service.ts            # ✏️ 暴露 queue.getJobCounts()
 │   └── websocket/monitoring.gateway.ts # ✏️ 暴露連線數 + broadcast(system/metrics)
-├── lib/errorlog-transition.ts          # ✏️ 重啟邊界重複的註解（US4）
 └── app.module.ts                       # ✏️ 掛 Health/Metrics module
 
 apps/worker/src/
@@ -166,13 +166,16 @@ apps/worker/src/
 │   └── hit-rate.test.ts                # ➕
 └── package.json                        # ✏️ 無新增直接相依（pino 經 shared）
 
-apps/web/src/
-├── domains/monitoring/
-│   ├── stores/metrics.store.ts         # ➕ 低頻直寫（非 rAF 路徑）
-│   └── lib/ws-message.ts               # ✏️ 分派 system/metrics
-└── shared/components/
-    ├── MetricsPanel.vue                # ➕ 唯讀 dev 面板，預設收合
-    └── TopBar.vue                      # ✏️ 依 VITE_METRICS_PANEL 掛載面板
+apps/web/
+├── .env.example                        # ➕ VITE_METRICS_PANEL（Vite 的 env 根目錄為 apps/web/，
+│                                       #    根 .env.example 的 VITE_ 變數不會被讀取；envDir 不改）
+└── src/
+    ├── domains/monitoring/
+    │   ├── stores/metrics.store.ts     # ➕ 低頻直寫（非 rAF 路徑）+ live/stale/disconnected/empty 四態
+    │   └── lib/ws-message.ts           # ✏️ 分派 system/metrics
+    └── shared/components/
+        ├── MetricsPanel.vue            # ➕ 唯讀 dev 面板，預設收合
+        └── TopBar.vue                  # ✏️ 依 VITE_METRICS_PANEL 掛載面板
 
 # 根層
 asyncapi.yaml                           # ✏️ 新增 system/metrics
@@ -180,6 +183,7 @@ README.md                               # ✏️ 「已宣告的取捨」+ 新�
 docs/Flow-Gatekeeper-SDD-完整實作指南.md   # ✏️ ⚑ 回補 §14 / §15.2 / §15.3 / §15.4
 docs/adr-002-productionization-scope.md  # ✏️ ⚑ 回補 §6.4「落地」現況
 .env.example / apps/api/.env.example / apps/worker/.env.example  # ✏️ 6 個新變數
+                                        #    （web 的 VITE_METRICS_PANEL 另見 apps/web/.env.example）
 ```
 
 **Structure Decision**：沿用既有 pnpm monorepo 佈局（`apps/{api,worker,web}` +
