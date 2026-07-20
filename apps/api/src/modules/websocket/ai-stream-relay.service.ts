@@ -5,6 +5,7 @@ import type { Redis } from "ioredis";
 import type { AiStreamEvent } from "@flow-gatekeeper/contracts";
 import { AppConfigService } from "../config/config.service.js";
 import { MonitoringGateway } from "./monitoring.gateway.js";
+import { getAppLogger } from "../../logging/app-logger.js";
 
 /** jobId → 發起連線綁定（記憶體，重連失效——已知限制，spec Assumptions）。 */
 export type JobBinding = { clientId: string; machineId: string; boundAt: number };
@@ -21,6 +22,8 @@ export type JobBinding = { clientId: string; machineId: string; boundAt: number 
 @Injectable()
 export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AiStreamRelayService.name);
+  // jobId 為 SC-002 跨行程串接的關聯鍵，MUST 為獨立結構化欄位（FR-002）。
+  private readonly plog = getAppLogger().child({ context: AiStreamRelayService.name });
   private subscriber?: Redis;
   private readonly jobRooms = new Map<string, JobBinding>();
 
@@ -79,7 +82,7 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
     try {
       event = JSON.parse(message) as AiStreamEvent;
     } catch {
-      this.logger.warn(`unparsable ai-stream message on ${channel}`);
+      this.plog.warn({ jobId, channel }, "unparsable ai-stream message");
       return;
     }
     this.gateway.send(binding.clientId, event); // 只轉發、不刪綁定（F1）

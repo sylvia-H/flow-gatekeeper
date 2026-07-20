@@ -1,4 +1,4 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import type { OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import type { Server as HttpServer } from "node:http";
@@ -13,6 +13,7 @@ import { AppConfigService } from "../config/config.service.js";
 import { MockTelemetryService } from "../telemetry/mock-telemetry.service.js";
 import { HistoryService } from "../history/history.service.js";
 import { filterPointsForSubscription } from "../../lib/subscription-filter.js";
+import { getAppLogger } from "../../logging/app-logger.js";
 
 type ClientId = string;
 
@@ -28,7 +29,9 @@ type ClientId = string;
  */
 @Injectable()
 export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger(MonitoringGateway.name);
+  // 連線相關事件需要 clientId 為獨立結構化欄位（FR-002），Nest Logger 的 API 只能帶字串
+  // context，故此類事件改走底層 pino child logger 直接呼叫（contracts/log-fields.md §2）。
+  private readonly plog = getAppLogger().child({ context: MonitoringGateway.name });
   private wss?: WebSocketServer;
   private producerTimer?: ReturnType<typeof setInterval>;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
@@ -78,7 +81,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     this.subscriptions.set(clientId, new Set());
     this.alive.set(clientId, true);
     this.send(clientId, { type: "system/connected", clientId } satisfies SystemConnected);
-    this.logger.log(`client connected: ${clientId}`);
+    this.plog.info({ clientId }, "client connected");
 
     socket.on("message", (raw) => this.handleMessage(clientId, raw.toString()));
     // protocol-level pong（回應伺服器的 ping()）→ 標記存活。
@@ -103,7 +106,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
         const secret = this.config.wsAuthSecret;
         if (secret && msg.token !== secret) {
           // 無效授權：回 system/unauthorized 且不建立/變更訂閱（FR-003/SC-006）。
-          this.logger.warn(`unauthorized subscribe from ${clientId}`);
+          this.plog.warn({ clientId }, "unauthorized subscribe");
           this.send(clientId, { type: "system/unauthorized" } satisfies SystemUnauthorized);
           return;
         }
@@ -145,7 +148,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   private sweepDeadConnections(): void {
     for (const [clientId, socket] of this.clients) {
       if (this.alive.get(clientId) === false) {
-        this.logger.warn(`heartbeat timeout, terminating ${clientId}`);
+        this.plog.warn({ clientId }, "heartbeat timeout, terminating");
         socket.terminate();
         this.cleanup(clientId, "heartbeat-timeout");
         continue;
@@ -160,7 +163,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     this.clients.delete(clientId);
     this.subscriptions.delete(clientId);
     this.alive.delete(clientId);
-    this.logger.log(`client disconnected (${reason}): ${clientId}`);
+    this.plog.info({ clientId, reason }, "client disconnected");
   }
 
   /** 對單一連線推送任意 payload——003 AI relay / job status relay 的銜接點（FR-015）。 */
