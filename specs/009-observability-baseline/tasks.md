@@ -53,13 +53,13 @@ pnpm monorepo：`apps/{api,worker,web}` + `packages/{contracts,shared}`（見 pl
 
 **⚠️ CRITICAL**: 本 phase 未完成前，任何 User Story 不得開始。
 
-- [ ] T007 在 `packages/shared/src/logging/level.ts` 實作純函式 `resolveLogLevel(env)`（未設定回 `info`、無法辨識的值回退 `info` 並回報需記警告，FR-003）、`resolvePretty(env)`（由 `NODE_ENV` 推導，`LOG_PRETTY` 可顯式覆寫）、`resolveMetricsLogLevel(env)`（預設 `info`，獨立於 `LOG_LEVEL`）
-- [ ] T008 [P] 在 `packages/shared/src/logging/level.test.ts` 撰寫單測：預設值、非法值回退、`LOG_PRETTY` 由 `NODE_ENV` 推導與顯式覆寫（research R9）
-- [ ] T009 [P] 在 `packages/shared/src/logging/interval.ts` 實作純函式 `resolveMetricsInterval(env)`：預設 60000ms，**下限 5000ms**，低於下限的設定值 MUST **回退至預設 60000ms**（而非 clamp 到 5000），確保與 FR-009 相容（FR-008／research R11）
-- [ ] T010 [P] 在 `packages/shared/src/logging/interval.test.ts` 撰寫單測：未設定回 60000、`4999` 回退 60000、`5000` 原樣通過（邊界）、非數值／負數回退、合法值原樣通過
-- [ ] T011 在 `packages/shared/src/logging/index.ts` 實作 `createLogger(service)` 工廠：根 logger 綁定 `service` 欄位與 `LOG_LEVEL`、pretty 模式**動態載入** `pino-pretty`、提供 `child(context)` 與**專屬 metrics child logger**（level 由 `METRICS_LOG_LEVEL` 獨立釘定，不受 `LOG_LEVEL` 影響，SC-005／contracts/log-fields.md §5）
-- [ ] T011a 在 `createLogger` 內落地 FR-003 的警告**輸出**（不只回報）：當 `resolveLogLevel` 判定收到非法 `LOG_LEVEL` 值時，MUST 於 logger 建立後立即輸出一則 `warn`，載明收到的非法值與實際採用的等級；MUST NOT 拋錯或中止行程。**警告職責邊界（analyze E3）**：`createLogger` **只負責 `LOG_LEVEL` 這一則**，MUST NOT 讀取或警告 `METRICS_INTERVAL_MS`——該變數與日誌無關，其下限回退警告歸屬各自的呼叫端（api → T048、worker → T042），避免同一判定散在兩處而重複輸出或雙方互推致漏輸出
-- [ ] T012 在 `packages/shared/src/index.ts` 加入明確註解：**MUST NOT** `export * from "./logging/*"`，理由為 `apps/web` 相依本 package，根 export 會把 pino 拉進瀏覽器 bundle（research R10）
+- [X] T007 在 `packages/shared/src/logging/level.ts` 實作純函式 `resolveLogLevel(env)`（未設定回 `info`、無法辨識的值回退 `info` 並回報需記警告，FR-003）、`resolvePretty(env)`（由 `NODE_ENV` 推導，`LOG_PRETTY` 可顯式覆寫）、`resolveMetricsLogLevel(env)`（預設 `info`，獨立於 `LOG_LEVEL`）
+- [X] T008 [P] 在 `packages/shared/src/logging/level.test.ts` 撰寫單測：預設值、非法值回退、`LOG_PRETTY` 由 `NODE_ENV` 推導與顯式覆寫（research R9）
+- [X] T009 [P] 在 `packages/shared/src/logging/interval.ts` 實作純函式 `resolveMetricsInterval(env)`：預設 60000ms，**下限 5000ms**，低於下限的設定值 MUST **回退至預設 60000ms**（而非 clamp 到 5000），確保與 FR-009 相容（FR-008／research R11）
+- [X] T010 [P] 在 `packages/shared/src/logging/interval.test.ts` 撰寫單測：未設定回 60000、`4999` 回退 60000、`5000` 原樣通過（邊界）、非數值／負數回退、合法值原樣通過
+- [X] T011 在 `packages/shared/src/logging/index.ts` 實作 `createLogger(service)` 工廠：根 logger 綁定 `service` 欄位與 `LOG_LEVEL`、pretty 模式**動態載入** `pino-pretty`、提供 `child(context)` 與**專屬 metrics child logger**（level 由 `METRICS_LOG_LEVEL` 獨立釘定，不受 `LOG_LEVEL` 影響，SC-005／contracts/log-fields.md §5）
+- [X] T011a 在 `createLogger` 內落地 FR-003 的警告**輸出**（不只回報）：當 `resolveLogLevel` 判定收到非法 `LOG_LEVEL` 值時，MUST 於 logger 建立後立即輸出一則 `warn`，載明收到的非法值與實際採用的等級；MUST NOT 拋錯或中止行程。**警告職責邊界（analyze E3）**：`createLogger` **只負責 `LOG_LEVEL` 這一則**，MUST NOT 讀取或警告 `METRICS_INTERVAL_MS`——該變數與日誌無關，其下限回退警告歸屬各自的呼叫端（api → T048、worker → T042），避免同一判定散在兩處而重複輸出或雙方互推致漏輸出
+- [X] T012 在 `packages/shared/src/index.ts` 加入明確註解：**MUST NOT** `export * from "./logging/*"`，理由為 `apps/web` 相依本 package，根 export 會把 pino 拉進瀏覽器 bundle（research R10）
 
 **Checkpoint**: 日誌欄位約定有單一來源，US1 可開始。
 
