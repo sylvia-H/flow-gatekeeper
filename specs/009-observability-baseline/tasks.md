@@ -35,13 +35,13 @@ pnpm monorepo：`apps/{api,worker,web}` + `packages/{contracts,shared}`（見 pl
 
 **Purpose**: 相依、子路徑 export 與環境變數登錄——所有後續 phase 的前置。
 
-- [ ] T001 在 `packages/shared/package.json` 新增 `pino` 為 dependency、`pino-pretty` 為 devDependency（pino-pretty MUST NOT 進 production image，見 research R3）
-- [ ] T002 在 `packages/shared/package.json` 的 `exports` 新增子路徑 `"./logging"`（指向 `./dist/logging/index.js` 與對應 `.d.ts`），並確認 `packages/shared/tsconfig.json` 的輸出結構可產生該路徑
-- [ ] T003 執行 `pnpm install` 產生 lockfile，並驗證 `@flow-gatekeeper/shared/logging` 可自 `apps/api` 與 `apps/worker` 解析
-- [ ] T004 [P] 在根目錄 `.env.example` 登錄六個新環境變數與預設值：`LOG_LEVEL`(info)、`LOG_PRETTY`(由 NODE_ENV 推導)、`METRICS_INTERVAL_MS`(60000，**下限 5000，低於下限回退預設**)、`METRICS_LOG_LEVEL`(info，獨立於 LOG_LEVEL)、`HEALTH_PROBE_TIMEOUT_MS`(2000)、`VITE_METRICS_PANEL`(dev true / prod false)（FR-016）。**`VITE_METRICS_PANEL` 在此僅為全案設定形狀的總覽登錄——`apps/web/vite.config.ts` 未設 `envDir`，Vite 的 env 根目錄是 `apps/web/`，故根檔的 `VITE_` 變數不會被實際讀取**，實際生效來源見 T004a，此處 MUST 加註指向之
-- [ ] T004a [P] **新增** `apps/web/.env.example` 並登錄 `VITE_METRICS_PANEL`(dev `true` / prod `false`) 及其用途註解——這是 web 端唯一**實際生效**的登錄位置（Vite 以 `apps/web/` 為 env 根目錄）。與既有 `apps/api/.env.example`／`apps/worker/.env.example` 的每-app 慣例一致；`vite.config.ts` **MUST NOT** 改設 `envDir`（避免兩個生效來源）。此為全案第一個 `VITE_` 變數，無既有先例可循（FR-016／analyze E1）
-- [ ] T005 [P] 在 `apps/api/.env.example` 登錄 api 適用的五個變數（除 `VITE_METRICS_PANEL`）及其用途註解（FR-016）
-- [ ] T006 [P] 在 `apps/worker/.env.example` 登錄 worker 適用的四個變數（`LOG_LEVEL`、`LOG_PRETTY`、`METRICS_INTERVAL_MS`、`METRICS_LOG_LEVEL`）及其用途註解（FR-016）
+- [X] T001 在 `packages/shared/package.json` 新增 `pino` 為 dependency、`pino-pretty` 為 devDependency（pino-pretty MUST NOT 進 production image，見 research R3）
+- [X] T002 在 `packages/shared/package.json` 的 `exports` 新增子路徑 `"./logging"`（指向 `./dist/logging/index.js` 與對應 `.d.ts`），並確認 `packages/shared/tsconfig.json` 的輸出結構可產生該路徑
+- [X] T003 執行 `pnpm install` 產生 lockfile，並驗證 `@flow-gatekeeper/shared/logging` 可自 `apps/api` 與 `apps/worker` 解析
+- [X] T004 [P] 在根目錄 `.env.example` 登錄六個新環境變數與預設值：`LOG_LEVEL`(info)、`LOG_PRETTY`(由 NODE_ENV 推導)、`METRICS_INTERVAL_MS`(60000，**下限 5000，低於下限回退預設**)、`METRICS_LOG_LEVEL`(info，獨立於 LOG_LEVEL)、`HEALTH_PROBE_TIMEOUT_MS`(2000)、`VITE_METRICS_PANEL`(dev true / prod false)（FR-016）。**`VITE_METRICS_PANEL` 在此僅為全案設定形狀的總覽登錄——`apps/web/vite.config.ts` 未設 `envDir`，Vite 的 env 根目錄是 `apps/web/`，故根檔的 `VITE_` 變數不會被實際讀取**，實際生效來源見 T004a，此處 MUST 加註指向之
+- [X] T004a [P] **新增** `apps/web/.env.example` 並登錄 `VITE_METRICS_PANEL`(dev `true` / prod `false`) 及其用途註解——這是 web 端唯一**實際生效**的登錄位置（Vite 以 `apps/web/` 為 env 根目錄）。與既有 `apps/api/.env.example`／`apps/worker/.env.example` 的每-app 慣例一致；`vite.config.ts` **MUST NOT** 改設 `envDir`（避免兩個生效來源）。此為全案第一個 `VITE_` 變數，無既有先例可循（FR-016／analyze E1）
+- [X] T005 [P] 在 `apps/api/.env.example` 登錄 api 適用的五個變數（除 `VITE_METRICS_PANEL`）及其用途註解（FR-016）
+- [X] T006 [P] 在 `apps/worker/.env.example` 登錄 worker 適用的四個變數（`LOG_LEVEL`、`LOG_PRETTY`、`METRICS_INTERVAL_MS`、`METRICS_LOG_LEVEL`）及其用途註解（FR-016）
 
 **Checkpoint**: 相依就緒、子路徑可解析、設定形狀已記錄。
 
