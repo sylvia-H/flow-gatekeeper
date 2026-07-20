@@ -97,16 +97,16 @@ pnpm monorepo：`apps/{api,worker,web}` + `packages/{contracts,shared}`（見 pl
 
 ### Implementation for User Story 2
 
-- [ ] T024 [P] [US2] 在 `apps/api/src/lib/health-aggregate.ts` 實作純函式 `aggregateHealth(probes)`：全 `up` → `healthy`、任一 `down` → `unhealthy`；並保證不變量「`unhealthy` 時 body 至少有一個 `down`」（data-model E2）
-- [ ] T025 [P] [US2] 在 `apps/api/src/lib/health-aggregate.test.ts` 撰寫單測：全 up、單一 down、**多重 down 須全部列出**、不變量檢核（research R9）
-- [ ] T026 [US2] 在 `apps/api/src/modules/config/config.service.ts` 新增 `HEALTH_PROBE_TIMEOUT_MS` 讀取（預設 2000）
-- [ ] T027 [US2] 在 `apps/api/src/modules/history/history.service.ts` 新增 `ping()` 方法暴露 Mongo 探測能力（`db.command({ ping: 1 })`）；`db` 未就緒時回 `down` 而非拋錯——此即 spec Edge Case「api 啟動中、依賴尚未就緒」的落地
-- [ ] T028 [US2] 在 `apps/api/src/modules/health/health.service.ts` 實作探測：Redis `PING` 使用**專屬 ioredis 連線**（憲章 IV 連線分離，MUST NOT 借用 relay 的 subscriber）、Mongo 複用 `HistoryService.ping()`；兩者 `Promise.all` 併行、各自以 `Promise.race` 套用逾時；**逾時或任何例外一律轉為 `{ status: "down", error }`，MUST NOT 向上拋錯**（FR-007／contracts/health-endpoint.md §4）
-- [ ] T029 [US2] 在 `apps/api/src/modules/health/health.controller.ts` 實作 `GET /healthz`：**免認證**、`Cache-Control: no-store`、每次請求即時探測不快取、healthy 回 200／unhealthy 回 503，body 依 contracts/health-endpoint.md §3 形狀
-- [ ] T030 [US2] 建立 `apps/api/src/modules/health/health.module.ts` 並在 `apps/api/src/app.module.ts` 掛載，與既有 `config`／`history`／`jobs`／`websocket` 同層同構
-- [ ] T031 [US2] 改寫 `apps/api/src/healthcheck.ts`：由現行「連 `ws://127.0.0.1:${API_PORT}/ws` 等 `system/connected`」改為「`GET http://127.0.0.1:${API_PORT}/healthz`，200 → `exit 0`、其餘／錯誤／逾時 → `exit 1`」；沿用既有的 `API_PORT`（預設 3000）讀取，**MUST 只用 node 內建 `http`**（不引入 wget／curl）、自我逾時維持 4000ms；`docker-compose.yml` 的 `test` 指令**不需變更**（仍為 `["CMD","node","dist/healthcheck.js"]`）。**MUST 一併改寫該檔的 doc 註解**——現有理由「api 無任何 GET 路由，探 HTTP 必得 404」在 `/healthz` 落地後即不成立，須改為「009 起以 `/healthz` 取代握手探活，涵蓋 Redis／Mongo 連通深度」，MUST NOT 留下自相矛盾的敘述（FR-006a／research R4a／contracts/health-endpoint.md §6）
-- [ ] T032 [P] [US2] 在 `apps/api/src/lib/health-probe.ts` 檔頭加註「008 `/ws` 探活方式的歷史產物，009 起 healthcheck 改走 `/healthz`」；**保留該檔與其既有測試**（純函式、無副作用，移除只會一併刪掉既有測試，收益為零）
-- [ ] T033 [US2] 執行 `pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`，並依 quickstart 場景 3 手動驗證停／啟 Redis 與 Mongo 的雙向轉換與回應不阻塞
+- [X] T024 [P] [US2] 在 `apps/api/src/lib/health-aggregate.ts` 實作純函式 `aggregateHealth(probes)`：全 `up` → `healthy`、任一 `down` → `unhealthy`；並保證不變量「`unhealthy` 時 body 至少有一個 `down`」（data-model E2）
+- [X] T025 [P] [US2] 在 `apps/api/src/lib/health-aggregate.test.ts` 撰寫單測：全 up、單一 down、**多重 down 須全部列出**、不變量檢核（research R9）
+- [X] T026 [US2] 在 `apps/api/src/modules/config/config.service.ts` 新增 `HEALTH_PROBE_TIMEOUT_MS` 讀取（預設 2000）
+- [X] T027 [US2] 在 `apps/api/src/modules/history/history.service.ts` 新增 `ping()` 方法暴露 Mongo 探測能力（`db.command({ ping: 1 })`）；`db` 未就緒時回 `down` 而非拋錯——此即 spec Edge Case「api 啟動中、依賴尚未就緒」的落地
+- [X] T028 [US2] 在 `apps/api/src/modules/health/health.service.ts` 實作探測：Redis `PING` 使用**專屬 ioredis 連線**（憲章 IV 連線分離，MUST NOT 借用 relay 的 subscriber）、Mongo 複用 `HistoryService.ping()`；兩者 `Promise.all` 併行、各自以 `Promise.race` 套用逾時；**逾時或任何例外一律轉為 `{ status: "down", error }`，MUST NOT 向上拋錯**（FR-007／contracts/health-endpoint.md §4）
+- [X] T029 [US2] 在 `apps/api/src/modules/health/health.controller.ts` 實作 `GET /healthz`：**免認證**、`Cache-Control: no-store`、每次請求即時探測不快取、healthy 回 200／unhealthy 回 503，body 依 contracts/health-endpoint.md §3 形狀
+- [X] T030 [US2] 建立 `apps/api/src/modules/health/health.module.ts` 並在 `apps/api/src/app.module.ts` 掛載，與既有 `config`／`history`／`jobs`／`websocket` 同層同構
+- [X] T031 [US2] 改寫 `apps/api/src/healthcheck.ts`：由現行「連 `ws://127.0.0.1:${API_PORT}/ws` 等 `system/connected`」改為「`GET http://127.0.0.1:${API_PORT}/healthz`，200 → `exit 0`、其餘／錯誤／逾時 → `exit 1`」；沿用既有的 `API_PORT`（預設 3000）讀取，**MUST 只用 node 內建 `http`**（不引入 wget／curl）、自我逾時維持 4000ms；`docker-compose.yml` 的 `test` 指令**不需變更**（仍為 `["CMD","node","dist/healthcheck.js"]`）。**MUST 一併改寫該檔的 doc 註解**——現有理由「api 無任何 GET 路由，探 HTTP 必得 404」在 `/healthz` 落地後即不成立，須改為「009 起以 `/healthz` 取代握手探活，涵蓋 Redis／Mongo 連通深度」，MUST NOT 留下自相矛盾的敘述（FR-006a／research R4a／contracts/health-endpoint.md §6）
+- [X] T032 [P] [US2] 在 `apps/api/src/lib/health-probe.ts` 檔頭加註「008 `/ws` 探活方式的歷史產物，009 起 healthcheck 改走 `/healthz`」；**保留該檔與其既有測試**（純函式、無副作用，移除只會一併刪掉既有測試，收益為零）
+- [X] T033 [US2] 執行 `pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`，並依 quickstart 場景 3 手動驗證停／啟 Redis 與 Mongo 的雙向轉換與回應不阻塞
 
 **Checkpoint**: US1 + US2 皆可獨立運作；容器就緒判定已具備依賴深度。
 
