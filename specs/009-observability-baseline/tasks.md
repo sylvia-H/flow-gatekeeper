@@ -73,17 +73,17 @@ pnpm monorepo：`apps/{api,worker,web}` + `packages/{contracts,shared}`（見 pl
 
 ### Implementation for User Story 1
 
-- [ ] T013 [US1] 在 `apps/api/src/logging/pino-logger.service.ts` 實作 Nest `LoggerService` adapter：把 Nest 的 `log/error/warn/debug/verbose` 映射到 pino 對應等級，並將 Nest 的 context 參數原樣帶入 `context` 欄位（contracts/log-fields.md §3）
-- [ ] T014 [US1] 在 `apps/api/src/main.ts` 以 `app.useLogger(...)` 注入 T013 的 adapter——api 現況已全面使用 Nest 內建 `Logger`（6 處），**不逐檔改呼叫點**即整批轉為結構化輸出（research R1）
-- [ ] T015 [US1] 在 `apps/api/src/modules/config/config.service.ts` 新增 `LOG_LEVEL`／`LOG_PRETTY` 的讀取，沿用既有設定讀取慣例
-- [ ] T016 [US1] 在 `apps/worker/src/main.ts` 以 `createLogger("worker")` 取代手寫的 `log(level, msg)` helper，移除該 helper 本體
-- [ ] T017 [US1] 將 `apps/worker/src/main.ts` 約 20 個呼叫點改為結構化形式 `logger.info({ jobId, machineId }, "…")`，長流程以 `logger.child({ jobId })` 綁定；**MUST 移除訊息字串中內嵌的關聯鍵**（如 `` `job active: ${jobId}` `` → `{ jobId }` + `"job active"`，contracts/log-fields.md §2 規則 2）
-- [ ] T018 [P] [US1] 在 `apps/api/src/modules/websocket/monitoring.gateway.ts` 為連線相關事件補上 `clientId` 關聯鍵欄位，機台相關事件補 `machineId`
-- [ ] T019 [P] [US1] 在 `apps/api/src/modules/jobs/jobs.service.ts`、`apps/api/src/modules/websocket/job-status-relay.service.ts`、`apps/api/src/modules/websocket/ai-stream-relay.service.ts` 為診斷相關事件補上 `jobId` 關聯鍵欄位（使 SC-002 的跨行程串接成立）
-- [ ] T020 [P] [US1] 在 `apps/worker/src/lib/fatal.ts` 加一行註解，指向 `specs/009-observability-baseline/contracts/log-fields.md §7`，說明此處**刻意**維持同步純文字 stderr 寫出、是 FR-004 的唯一例外，MUST NOT 被後續 review 當作漏改而修正（**行為不變，只加註解**）
-- [ ] T021 [P] [US1] 在 `apps/api/src/scripts/seed.ts` 與 `apps/worker/src/ai/smoke-gemini.ts` 各加一行註解，說明其為一次性 CLI 工具、依 FR-004／SC-001 的範圍界定維持人類可讀輸出（**不改為結構化**）
-- [ ] T022 [US1] 檢視 `apps/api/src/modules/websocket/monitoring.gateway.ts` 的 `publishTelemetry` 與 `apps/api/src/modules/history/history.service.ts` 的 `persistBatch`，確認**正常路徑零日誌**（僅錯誤路徑可記 `error`），滿足 FR-009 的可驗證門檻
-- [ ] T023 [US1] 執行 `pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`，並手動確認 dev 為 pretty、`NODE_ENV=production` 為逐行合法 JSON（FR-001 判準）
+- [X] T013 [US1] 在 `apps/api/src/logging/pino-logger.service.ts` 實作 Nest `LoggerService` adapter：把 Nest 的 `log/error/warn/debug/verbose` 映射到 pino 對應等級，並將 Nest 的 context 參數原樣帶入 `context` 欄位（contracts/log-fields.md §3）
+- [X] T014 [US1] 在 `apps/api/src/main.ts` 以 `app.useLogger(...)` 注入 T013 的 adapter——api 現況已全面使用 Nest 內建 `Logger`（6 處），**不逐檔改呼叫點**即整批轉為結構化輸出（research R1）
+- [X] T015 [US1] 在 `apps/api/src/modules/config/config.service.ts` 新增 `LOG_LEVEL`／`LOG_PRETTY` 的讀取，沿用既有設定讀取慣例
+- [X] T016 [US1] 在 `apps/worker/src/main.ts` 以 `createLogger("worker")` 取代手寫的 `log(level, msg)` helper，移除該 helper 本體
+- [X] T017 [US1] 將 `apps/worker/src/main.ts` 約 20 個呼叫點改為結構化形式 `logger.info({ jobId, machineId }, "…")`，長流程以 `logger.child({ jobId })` 綁定；**MUST 移除訊息字串中內嵌的關聯鍵**（如 `` `job active: ${jobId}` `` → `{ jobId }` + `"job active"`，contracts/log-fields.md §2 規則 2）
+- [X] T018 [P] [US1] 在 `apps/api/src/modules/websocket/monitoring.gateway.ts` 為連線相關事件補上 `clientId` 關聯鍵欄位，機台相關事件補 `machineId`
+- [X] T019 [P] [US1] 在 `apps/api/src/modules/jobs/jobs.service.ts`、`apps/api/src/modules/websocket/job-status-relay.service.ts`、`apps/api/src/modules/websocket/ai-stream-relay.service.ts` 為診斷相關事件補上 `jobId` 關聯鍵欄位（使 SC-002 的跨行程串接成立）
+- [X] T020 [P] [US1] 在 `apps/worker/src/lib/fatal.ts` 加一行註解，指向 `specs/009-observability-baseline/contracts/log-fields.md §7`，說明此處**刻意**維持同步純文字 stderr 寫出、是 FR-004 的唯一例外，MUST NOT 被後續 review 當作漏改而修正（**行為不變，只加註解**）
+- [X] T021 [P] [US1] 在 `apps/api/src/scripts/seed.ts` 與 `apps/worker/src/ai/smoke-gemini.ts` 各加一行註解，說明其為一次性 CLI 工具、依 FR-004／SC-001 的範圍界定維持人類可讀輸出（**不改為結構化**）
+- [X] T022 [US1] 檢視 `apps/api/src/modules/websocket/monitoring.gateway.ts` 的 `publishTelemetry` 與 `apps/api/src/modules/history/history.service.ts` 的 `persistBatch`，確認**正常路徑零日誌**（僅錯誤路徑可記 `error`），滿足 FR-009 的可驗證門檻
+- [X] T023 [US1] 執行 `pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`，並手動確認 dev 為 pretty、`NODE_ENV=production` 為逐行合法 JSON（FR-001 判準）
 
 **Checkpoint**: US1 可獨立驗收——quickstart 場景 1、2 應全數通過。**此即 MVP。**
 
