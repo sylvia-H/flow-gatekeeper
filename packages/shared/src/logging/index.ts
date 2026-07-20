@@ -13,6 +13,14 @@ export type FlowLogger = pino.Logger & {
 };
 
 /**
+ * 一般（非根）logger 的型別——`FlowLogger.child(...)` 或其子代的回傳型別。呼叫端（api/worker）
+ * 若要把 context-bound logger 當參數傳遞（如 worker 的 `processorLogger`／`jl`），MUST 用此型別
+ * 而非 `FlowLogger`——後者要求 `.metrics`，只有根 logger 才有。export 出來是為了讓 apps/worker
+ * 不需直接依賴 `pino`（架構上僅透過本 package 存取，見 research R10 的子路徑隔離精神）。
+ */
+export type ChildLogger = pino.Logger;
+
+/**
  * 建立本 feature 的結構化 logger（contracts/log-fields.md 為單一來源，FR-001/FR-002）。
  *
  * pretty 模式僅在 `pretty === true`（dev 預設）時才把 `pino-pretty` 交給 pino 的 transport
@@ -31,6 +39,9 @@ export function createLogger(
   const logger = pino({
     level,
     base: { service },
+    // `err` 欄位採 pino 標準序列化（type/message/stack，data-model E1）：Error 物件的
+    // message/stack 非可列舉屬性，不設此 serializer 會被預設 JSON 化成空物件 `{}`。
+    serializers: { err: pino.stdSerializers.err },
     ...(pretty
       ? {
           transport: {

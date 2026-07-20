@@ -5,6 +5,8 @@ import { config as loadEnv } from "dotenv";
 import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module.js";
+import { getAppLogger } from "./logging/app-logger.js";
+import { PinoLoggerService } from "./logging/pino-logger.service.js";
 import { MonitoringGateway } from "./modules/websocket/monitoring.gateway.js";
 
 // 明確載入本套件的 .env（apps/api/.env），不依賴 cwd——避免從別處啟動時 WS_AUTH_SECRET
@@ -19,7 +21,12 @@ loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") });
  * （斷言可乾淨 import 且匯出 bootstrap）仍通過。
  */
 export async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  // 於 create() 期間即傳入自訂 logger（而非事後 app.useLogger）：Nest 在 create() 一開始
+  // 就呼叫 registerLoggerConfiguration() 覆寫 Logger.staticInstanceRef，早於任何框架自身的
+  // 啟動訊息輸出，因此連框架內部日誌也一併轉為結構化（FR-001、research R1）。
+  const app = await NestFactory.create(AppModule, {
+    logger: new PinoLoggerService(getAppLogger()),
+  });
   const port = Number(process.env.API_PORT ?? 3000);
   await app.listen(port);
   app.get(MonitoringGateway).attach(app.getHttpServer());
