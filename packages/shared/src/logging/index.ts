@@ -63,7 +63,9 @@ export function createLogger(
   // 警告歸屬各自呼叫端（api → config.service、worker → metrics-collector），不在此重複判斷，
   // 避免同一類判定散在兩處而重複輸出或雙方互推致漏輸出。
   if (invalidValue !== null) {
-    logger.warn(
+    // 走 child logger 綁 `context`：data-model E1 要求每筆日誌都有 `context` 欄位，
+    // 此警告發生在任何呼叫端 child logger 建立之前，故在此自帶一個。
+    logger.child({ context: "logger" }).warn(
       { invalidLogLevel: invalidValue, fallbackLevel: level },
       `LOG_LEVEL="${invalidValue}" 無法辨識，已回退至 "${level}"`,
     );
