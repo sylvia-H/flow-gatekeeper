@@ -39,6 +39,7 @@
 - [測試與品質門檻](#測試與品質門檻)
 - [開發方法論：Spec-Driven Development](#開發方法論spec-driven-development)
 - [關鍵架構決策（ADR）](#關鍵架構決策adr)
+- [已宣告的取捨](#已宣告的取捨)
 - [已知限制](#已知限制)
 
 ---
@@ -563,6 +564,23 @@ specify → clarify → plan → checklist → tasks → analyze → implement �
 ## 關鍵架構決策（ADR）
 
 - **[ADR-001：即時通道採用原生 WebSocket，而非 Socket.IO](docs/adr-001-native-websocket.md)** — 為什麼刻意放棄 Socket.IO 的自動重連／心跳／rooms／Redis adapter，換取 wire format 的完全掌控，好讓「rAF 背壓由誰負責」說得清楚、效能可歸因。內含 demo 時可直接講的 60–90 秒取捨說明。
+
+---
+
+## 已宣告的取捨
+
+**有損是可以的，未宣告的有損才是問題。** 以下兩項寫入語意是**刻意**的工程取捨，出處為
+**[ADR-002 §6.4](docs/adr-002-productionization-scope.md)**；程式碼註解、本節與該 ADR
+三處指向同一份事實，不各自表述。
+
+| 取捨 | 現況行為 | 為何接受 |
+| --- | --- | --- |
+| **telemetry 持久化為 fire-and-forget** | Gateway 以 `void persistBatch(...)` 落地、**不 await**，因此 **API 崩潰時 in-flight batch 直接丟失**——可丟失最後數秒的遙測（丟失量隨 `MOCK_TELEMETRY_INTERVAL_MS` 的推送節拍而定） | 不 await 才能讓推送 cadence 不被資料庫延遲牽制（背壓賣點的前提）；demo 情境下「最後數秒遙測」的價值遠低於即時性 |
+| **errorlog 去重狀態存於行程內記憶體** | 去重靠行程內 `lastState` Map、不持久化，因此 **api 重啟後仍處於異常狀態的機台會重複寫入首筆 errorlog**；多實例部署下每個實例各持一份 Map，判斷會錯 | errorlog 是給人看的異常軌跡，重啟邊界多一筆重複不影響判讀；單實例假設見 ADR-002 §6 |
+
+**升級路徑**（若未來需要「不可丟失」語意）：**寫入前先進佇列**（BullMQ 或 Redis Stream）
+**再批次落庫**——推送路徑仍不被資料庫延遲牽制，但寫入具備重試與重啟續傳能力。此路徑
+明確**不在目前範圍**內。
 
 ---
 

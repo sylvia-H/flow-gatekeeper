@@ -165,10 +165,10 @@ pnpm monorepo：`apps/{api,worker,web}` + `packages/{contracts,shared}`（見 pl
 
 **⚠️ 本 phase MUST NOT 改動任何程式行為——只加註解與文件。**
 
-- [ ] T054 [P] [US4] 在 `apps/api/src/modules/history/history.service.ts` 的 `persistBatch` 既有註解上**補上後果**：「API 崩潰時 in-flight batch 直接丟失（可丟失最後數秒 telemetry），此為 `ADR-002 §6.4` 明文接受的取捨」（research R8）
-- [ ] T055 [P] [US4] 在 `apps/api/src/lib/errorlog-transition.ts` 的 `lastState` 去重邏輯補註解：「去重狀態存於行程內 Map，**重啟後首筆會重複寫入**；多實例下判斷會錯。見 `ADR-002 §6.4`」（research R8）
-- [ ] T056 [US4] 在 `README.md` 新增「已宣告的取捨」小節，載明兩項有損語意與升級路徑（寫入前先進佇列再批次落庫），並引用 `ADR-002 §6.4`；三處敘述 MUST 指向同一份事實、不得各自表述（FR-011／SC-006）
-- [ ] T057 [US4] 以 `git diff` 確認本 phase 僅見註解與文件變更、**無任何程式行為改動**（quickstart 場景 7 最後一項判準）
+- [X] T054 [P] [US4] 在 `apps/api/src/modules/history/history.service.ts` 的 `persistBatch` 既有註解上**補上後果**：「API 崩潰時 in-flight batch 直接丟失（可丟失最後數秒 telemetry），此為 `ADR-002 §6.4` 明文接受的取捨」（research R8）
+- [X] T055 [P] [US4] 在 `apps/api/src/lib/errorlog-transition.ts` 的 `lastState` 去重邏輯補註解：「去重狀態存於行程內 Map，**重啟後首筆會重複寫入**；多實例下判斷會錯。見 `ADR-002 §6.4`」（research R8）
+- [X] T056 [US4] 在 `README.md` 新增「已宣告的取捨」小節，載明兩項有損語意與升級路徑（寫入前先進佇列再批次落庫），並引用 `ADR-002 §6.4`；三處敘述 MUST 指向同一份事實、不得各自表述（FR-011／SC-006）
+- [X] T057 [US4] 以 `git diff` 確認本 phase 僅見註解與文件變更、**無任何程式行為改動**（quickstart 場景 7 最後一項判準）
 
 **Checkpoint**: 四個 User Story 全數完成。
 
