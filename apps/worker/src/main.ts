@@ -19,6 +19,8 @@ import { buildDiagnosisSignature } from "./cache/signature.js";
 import { armChaos, parseChaosConfig } from "./lib/chaos.js";
 import { fatal } from "./lib/fatal.js";
 import { startHeartbeat, stopHeartbeat } from "./lib/heartbeat.js";
+import { createMetricsCollector } from "./lib/metrics-collector.js";
+import type { MetricsCollector } from "./lib/metrics-collector.js";
 import { parseResult } from "./lib/parse-result.js";
 
 /**
@@ -64,8 +66,15 @@ async function writeTrigger(
     .insertOne({ machineId, jobId, requestedBy, cached, createdAt: new Date() });
 }
 
-/** 建立 job processor（閉包持有 db／pub／cache／ai／logger 與可調參數）。 */
-function createProcessor(db: Db, pub: Redis, cache: Redis, ai: AiProvider, processorLogger: ChildLogger) {
+/** 建立 job processor（閉包持有 db／pub／cache／ai／logger／metrics 與可調參數）。 */
+function createProcessor(
+  db: Db,
+  pub: Redis,
+  cache: Redis,
+  ai: AiProvider,
+  processorLogger: ChildLogger,
+  metrics: MetricsCollector,
+) {
   const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
   const cacheTtl = Number(process.env.AI_CACHE_TTL_SECONDS ?? 600);
   const lockTtl = Number(process.env.AI_DEDUPE_LOCK_SECONDS ?? 45);
@@ -97,6 +106,11 @@ function createProcessor(db: Db, pub: Redis, cache: Redis, ai: AiProvider, proce
     const replyCached = async (): Promise<boolean> => {
       const raw = await cache.get(cacheKey);
       if (!raw) return false;
+      // 009 US3 指標（純觀測，不改控制流）：命中在此計、**未命中改在取鎖後的計算路徑計**
+      // ——`replyCached()` 在 dedupe 等待迴圈中每 300ms 就被呼叫一次，於此處計未命中會讓
+      // 一次等待灌入數十筆 miss、hitRate 失真。以「每個 job 恰好一筆」為準：被快取服務者
+      // （含等待後才命中）算命中，真正走到 LLM 者算未命中。
+      metrics.recordCacheHit();
       const result = JSON.parse(raw) as DiagnosisResult;
       publish(pub, jobId, { type: "ai/done", jobId, cached: true, result }, jl);
       await writeTrigger(db, machineId, jobId, requestedBy, true);
@@ -120,6 +134,11 @@ function createProcessor(db: Db, pub: Redis, cache: Redis, ai: AiProvider, proce
           // 確保 60 先於 80 落定（避免 fire-and-forget 與 await 80 交錯導致進度倒退）。
           let firstTokenProgress: Promise<void> = Promise.resolve();
           jl.info({ sig }, "LLM call");
+          // 009 US3 指標：走到這裡代表本次診斷未由快取服務（每個 job 恰好一筆，見 replyCached）。
+          metrics.recordCacheMiss();
+          // LLM 延遲以 streamDiagnosis 的**呼叫外圍**計時：涵蓋首 token 前的等待與整段串流，
+          // 即使用者實際感受到的等待。純觀測——失敗路徑不記樣本（拋錯直接離開這段）。
+          const llmStartedAt = Date.now();
           const fullText = await ai.streamDiagnosis(
             buildPrompt({ machineId, context }),
             (text) => {
@@ -128,6 +147,7 @@ function createProcessor(db: Db, pub: Redis, cache: Redis, ai: AiProvider, proce
               if (s === 0) firstTokenProgress = job.updateProgress(60).catch(() => {}); // 首個 token：真實進入串流
             },
           );
+          metrics.recordLatency(Date.now() - llmStartedAt);
 
           let result: DiagnosisResult;
           try {
@@ -203,9 +223,16 @@ export async function bootstrap(): Promise<void> {
     Number(process.env.AI_TIMEOUT_MS ?? 30000),
   );
 
+  // 009 US3 指標收集器：累加於記憶體，每 METRICS_INTERVAL_MS 結算一次——寫 Redis 快照
+  // `metrics:worker`（供 api 合併廣播）並記一則 worker 自身的 metrics 摘要。摘要走
+  // `logger.metrics`（level 由 METRICS_LOG_LEVEL 獨立釘定），LOG_LEVEL=warn 時不會被濾掉
+  // （SC-005）。掛既有 cache 連線；與 007 的 worker:heartbeat 各自獨立、互不干涉（FR-010）。
+  const metrics = createMetricsCollector({ redis: cache, logger: logger.metrics });
+  metrics.start();
+
   const worker = new Worker<DiagnosisJobPayload>(
     DIAGNOSIS_QUEUE,
-    createProcessor(db, pub, cache, ai, processorLogger),
+    createProcessor(db, pub, cache, ai, processorLogger, metrics),
     {
       connection: redisConnectionOptions(),
       concurrency: 2,
@@ -266,6 +293,9 @@ export async function bootstrap(): Promise<void> {
       // 致命路徑不走這裡、不清 timer，key 靠 TTL 過期（data-model E2）。
       await worker.close();
       stopHeartbeat();
+      // 指標 timer 與心跳同時停：關閉時**不輸出未滿一窗的殘窗摘要**——優雅關閉的日誌尾端
+      // 出現一則低值摘要會被誤讀為系統異常（data-model E3）。
+      metrics.stop();
       await mongoClient.close();
       await pub.quit();
       await cache.quit();
