@@ -42,6 +42,8 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
   private redis?: Redis;
   private timer?: ReturnType<typeof setInterval>;
   private sources?: MetricsSources;
+  /** 重入防護：上一輪結算仍在途時跳過本輪（理由見 settle）。 */
+  private settling = false;
 
   constructor(private readonly config: AppConfigService) {}
 
@@ -73,11 +75,24 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
   /**
    * 單次結算。**MUST NOT 拋錯、MUST NOT 影響主流程**——本方法由 timer 以
    * fire-and-forget 呼叫，任何逸出的 rejection 都會變成浮空 rejection。
+   *
+   * **重入防護**：Redis 中斷期間 `queueCounts()`（BullMQ → Redis）會**掛住**而非立刻失敗
+   * （連線設 `maxRetriesPerRequest: null`，指令會排隊等重連）。沒有防護時，中斷每過一個間隔
+   * 就多堆一輪在途結算，恢復當下全部同時完成——實測會看到同一毫秒連續兩則摘要，違反
+   * 「每 `METRICS_INTERVAL_MS` 一則」。跳過的那一輪不補發（本訊息本就是 at-most-once）。
    */
   private async settle(): Promise<void> {
     const sources = this.sources;
-    if (!sources) return;
+    if (!sources || this.settling) return;
+    this.settling = true;
+    try {
+      await this.collectAndEmit(sources);
+    } finally {
+      this.settling = false;
+    }
+  }
 
+  private async collectAndEmit(sources: MetricsSources): Promise<void> {
     let queue: { waiting: number; active: number; failed: number };
     try {
       queue = await sources.queueCounts();
