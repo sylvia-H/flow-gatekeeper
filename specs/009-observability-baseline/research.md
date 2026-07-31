@@ -303,8 +303,13 @@ analyze 發現 FR-008 的「間隔下限」與 FR-008a 的「合理週期數」�
 
 **前端如何取得該間隔值**（2026-07-20 analyze 第二輪，E5）：`METRICS_INTERVAL_MS` 是後端環境變數，
 前端讀不到，故門檻一律由**最近一則 payload 的 `windowMs`** 推導（data-model E3 已有此欄位），
-MUST NOT 在前端硬編 60000。**收到第一則快照之前**沒有 `collectedAt` 也沒有 `windowMs`，
+MUST NOT 在前端硬編 60000。**收到第一則快照之前**沒有收訊時刻也沒有 `windowMs`，
 面板狀態為 `empty`（尚無資料），MUST NOT 判為過期。
+
+**age 以哪個時鐘量測**（2026-07-31 code review 後修訂）：原實作以 payload 的 `collectedAt`
+（api 時鐘）減前端的「現在」（瀏覽器時鐘），會把兩機的時鐘偏差灌進 age——用戶端時鐘快超過
+門檻時面板永久顯示過期。現改為**距本地收訊時刻**（`receivedAt`）計算，全程單一時鐘；門檻的
+來源（payload `windowMs`）與 2× 倍數不變。詳見 contracts/metrics-summary.md §2.1。
 
 ---
 

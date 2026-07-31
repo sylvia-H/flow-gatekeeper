@@ -5,6 +5,7 @@ import {
   resolveMetricsLogLevel,
   resolvePretty,
 } from "@flow-gatekeeper/shared/logging";
+import { resolveHealthProbeTimeout } from "../../lib/health-probe-timeout.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 
 /**
@@ -27,8 +28,10 @@ export class AppConfigService {
   // 設定內省，複用同一組純函式避免解析邏輯重複，FR-003/research R3）。
   readonly logLevel = resolveLogLevel(process.env).level;
   readonly logPretty = resolvePretty(process.env);
-  // 009 US2：健康端點對每個依賴探測的獨立逾時（FR-007）。
-  readonly healthProbeTimeoutMs = Number(process.env.HEALTH_PROBE_TIMEOUT_MS ?? 2000);
+  // 009 US2：健康端點對每個依賴探測的獨立逾時（FR-007）。留空或非數值一律回退預設 2000ms
+  // ——裸 `Number()` 會把 `HEALTH_PROBE_TIMEOUT_MS=`（空字串，`??` 不生效）解成 0、非數值解成
+  // NaN，兩者都讓逾時 promise 立刻 reject → 依賴恆判 down → /healthz 恆 503（見 lib 的說明）。
+  readonly healthProbeTimeoutMs = resolveHealthProbeTimeout(process.env).timeoutMs;
   // 009 US3：指標結算間隔（預設 60000ms、下限 5000ms，低於下限一律回退預設而非 clamp）。
   readonly metricsIntervalMs = resolveMetricsInterval(process.env).intervalMs;
   // 指標摘要 child logger 的等級——**獨立於 LOG_LEVEL**，使 LOG_LEVEL=warn 時摘要仍輸出（SC-005）。
@@ -45,6 +48,21 @@ export class AppConfigService {
         .warn(
           { invalidMetricsInterval: interval.rawValue, fallbackIntervalMs: interval.intervalMs },
           `METRICS_INTERVAL_MS="${interval.rawValue ?? ""}" 不合法或低於下限，已回退至 ${interval.intervalMs}ms`,
+        );
+    }
+
+    // 同理（見 healthProbeTimeoutMs 的說明）：逾時設錯只會表現為「健康端點永遠說 unhealthy」，
+    // 症狀與真的依賴掛掉一模一樣，故在啟動當下就明說是設定值被回退，而非等人去追 503。
+    const probeTimeout = resolveHealthProbeTimeout(process.env);
+    if (probeTimeout.fellBackToDefault) {
+      getAppLogger()
+        .child({ context: AppConfigService.name })
+        .warn(
+          {
+            invalidHealthProbeTimeout: probeTimeout.rawValue,
+            fallbackTimeoutMs: probeTimeout.timeoutMs,
+          },
+          `HEALTH_PROBE_TIMEOUT_MS="${probeTimeout.rawValue ?? ""}" 不是正數，已回退至 ${probeTimeout.timeoutMs}ms`,
         );
     }
   }

@@ -111,7 +111,7 @@ const hitRateText = computed(() => {
   return rate === null || rate === undefined ? "—" : `${Math.round(rate * 100)}%`;
 });
 
-/** 快照年齡（秒）——以 payload 的 collectedAt 為基準，非收訊時間。 */
+/** 快照年齡（秒）——距上次收訊多久（單一本地時鐘，見 metrics.store 的說明）。 */
 const ageText = computed(() =>
   metrics.ageMs === null ? "—" : `${Math.max(0, Math.round(metrics.ageMs / 1000))}s ago`,
 );

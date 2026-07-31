@@ -86,6 +86,11 @@ function createProcessor(
     // 內所有事件皆帶 jobId／machineId 結構化欄位，SC-002 的跨行程串接不需訊息字串子字串比對。
     const jl = processorLogger.child({ jobId, machineId });
     jl.info("job active");
+    // 009 US3 指標：快取命中／未命中**只在第一次嘗試計**。BullMQ 的 attempts（jobs.service.ts
+    // 設為 3）會讓同一個 job 重跑整段 processor——不設此閘門，一次 LLM 逾時的診斷會記 3 筆
+    // 未命中，在 LLM 不穩期間系統性壓低回報的 hitRate，也破壞「每個 job 恰好一筆」的不變量。
+    // `attemptsMade` 於 job 結束（完成／失敗）時才遞增，故處理第 N 次嘗試時其值為 N-1。
+    const isFirstAttempt = job.attemptsMade === 0;
     // FR-018 進度里程碑綁真實階段：0=job active、20=context 返回、40=取鎖將呼叫 LLM、
     // 60=首個 token、80=parseResult 成功、100=寫庫/快取（cached 直接 100）。
     await job.updateProgress(0);
@@ -109,8 +114,8 @@ function createProcessor(
       // 009 US3 指標（純觀測，不改控制流）：命中在此計、**未命中改在取鎖後的計算路徑計**
       // ——`replyCached()` 在 dedupe 等待迴圈中每 300ms 就被呼叫一次，於此處計未命中會讓
       // 一次等待灌入數十筆 miss、hitRate 失真。以「每個 job 恰好一筆」為準：被快取服務者
-      // （含等待後才命中）算命中，真正走到 LLM 者算未命中。
-      metrics.recordCacheHit();
+      // （含等待後才命中）算命中，真正走到 LLM 者算未命中；重試不重複計（見 isFirstAttempt）。
+      if (isFirstAttempt) metrics.recordCacheHit();
       const result = JSON.parse(raw) as DiagnosisResult;
       publish(pub, jobId, { type: "ai/done", jobId, cached: true, result }, jl);
       await writeTrigger(db, machineId, jobId, requestedBy, true);
@@ -134,10 +139,13 @@ function createProcessor(
           // 確保 60 先於 80 落定（避免 fire-and-forget 與 await 80 交錯導致進度倒退）。
           let firstTokenProgress: Promise<void> = Promise.resolve();
           jl.info({ sig }, "LLM call");
-          // 009 US3 指標：走到這裡代表本次診斷未由快取服務（每個 job 恰好一筆，見 replyCached）。
-          metrics.recordCacheMiss();
+          // 009 US3 指標：走到這裡代表本次診斷未由快取服務（每個 job 至多一筆，見 replyCached
+          // 與 isFirstAttempt——重試會重跑整段 processor，僅第一次嘗試計入）。
+          if (isFirstAttempt) metrics.recordCacheMiss();
           // LLM 延遲以 streamDiagnosis 的**呼叫外圍**計時：涵蓋首 token 前的等待與整段串流，
           // 即使用者實際感受到的等待。純觀測——失敗路徑不記樣本（拋錯直接離開這段）。
+          // 與 cache 計數不同，延遲**不設 isFirstAttempt 閘門**：樣本的單位是「一次成功的 LLM
+          // 呼叫」而非「一個 job」，重試後成功的那次呼叫本來就該進樣本。
           const llmStartedAt = Date.now();
           const fullText = await ai.streamDiagnosis(
             buildPrompt({ machineId, context }),

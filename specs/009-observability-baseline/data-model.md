@@ -87,14 +87,18 @@ pino 的 NDJSON 輸出。每行一個 JSON 物件。
 | `llmLatency.avgMs` | number \| null | 平均；`count === 0` 時為 `null`。 |
 | `llmLatency.p95Ms` | number \| null | 95 百分位；`count === 0` 時為 `null`。 |
 | `llmLatency.maxMs` | number \| null | 最大值；`count === 0` 時為 `null`。 |
-| `cache.hits` | number | 窗內快取命中數。 |
-| `cache.misses` | number | 窗內未命中數。 |
+| `cache.hits` | number | 窗內快取命中數。計數單位為 **job**（每個 job 至多一筆）。 |
+| `cache.misses` | number | 窗內未命中數。同上以 job 為單位。 |
 | `cache.hitRate` | number \| null | `hits / (hits + misses)`；分母為 0 時為 `null`（**不是 0**）。 |
 
 **Validation rules（不變量）**：
 - 所有計數欄位為窗內**增量**，每週期結算後歸零——`collectedAt` 之間的值互不累加。
 - `wsConnections` 是**例外**：它是瞬時值（gauge），不歸零。
 - `cache.hitRate === null` ⟺ `hits + misses === 0`。`0` 與 `null` 語意不同，MUST NOT 混用。
+- `cache.hits`／`cache.misses` 以 **job** 為計數單位：BullMQ 重試會重跑整段 processor，
+  故 MUST 只在**第一次嘗試**計入（2026-07-31 code review 後釘定），否則一次 LLM 逾時的診斷
+  會灌入多筆 miss，在 LLM 不穩期間系統性壓低 `hitRate`。`llmLatency` 則相反——樣本單位是
+  「一次成功的 LLM 呼叫」，重試後成功的那次照樣進樣本。
 - `llmLatency.*Ms === null` ⟺ `count === 0`。
 - `worker === null` 時，api 側四項中的兩項仍 MUST 正常輸出（摘要不因 worker 缺席而中止）。
 

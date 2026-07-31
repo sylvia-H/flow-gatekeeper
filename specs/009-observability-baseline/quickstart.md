@@ -225,7 +225,7 @@ pnpm --filter @flow-gatekeeper/web dev
 
 **(a) `empty`**：面板開啟後、收到第一則快照之前（最長一個週期）
 
-- [x] 呈現「尚無資料」，**不是**過期樣態（此時無 `collectedAt`／`windowMs` 可算門檻）。
+- [x] 呈現「尚無資料」，**不是**過期樣態（此時無收訊時刻／`windowMs` 可算門檻）。
 
 **(b) `live` → `stale`**：ws 保持連線，只讓後端停止廣播
 

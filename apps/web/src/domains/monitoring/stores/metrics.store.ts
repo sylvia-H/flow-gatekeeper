@@ -19,15 +19,21 @@ export const STALE_WINDOW_MULTIPLIER = 2;
  * **低頻（預設 60s 一則）**：直接寫入 reactive state，不進 `machine/data` 的 rAF buffer
  * （憲章 IV 的邊界，見 `ws-message.ts` 的分派註解）。
  *
- * 新鮮度一律以 payload 的 `collectedAt`（api 結算時間）為基準、門檻由 payload 的 `windowMs`
- * 推導——`METRICS_INTERVAL_MS` 是後端環境變數，前端無從讀取，**MUST NOT 硬編 60000**。
+ * 新鮮度一律以**本地收訊時刻 `receivedAt`** 為基準、門檻由 payload 的 `windowMs` 推導——
+ * `METRICS_INTERVAL_MS` 是後端環境變數，前端無從讀取，**MUST NOT 硬編 60000**。
  * 這與 `metrics:worker` 的 3× TTL 是**不同層**的問題（那是後端快照存活期，決定 `worker`
  * 是否降級為 null），MUST NOT 互相對齊。
+ *
+ * **為何不用 payload 的 `collectedAt`（api 結算時間）**：那會拿瀏覽器時鐘去減伺服器時鐘，
+ * 兩者的偏差直接灌進 age。用戶端時鐘快超過 2 × `windowMs`（預設 120 秒）時，即使每一則
+ * 廣播都準時收到，面板仍永久顯示過期——而使用者時鐘不準是常態、非例外。本面板要回答的
+ * 問題是「**距上次收到快照多久**」（後端是否還在廣播），單一時鐘即可精確作答；
+ * api 結算到送達之間的延遲屬於毫秒量級，對 120 秒門檻無影響。
  */
 export const useMetricsStore = defineStore("metrics", () => {
   /** 最新一則快照；null＝尚未收到任何一則。 */
   const snapshot = ref<SystemMetrics | null>(null);
-  /** 本地收訊時刻（僅供除錯顯示；新鮮度判定一律用 payload 的 collectedAt）。 */
+  /** 本地收訊時刻——新鮮度判定的唯一基準（見上方說明：不混用伺服器時鐘）。 */
   const receivedAt = ref<number | null>(null);
 
   // 時鐘與連線狀態複用 monitoring store：`now` 已由 App 每秒 tick 一次（低頻，足夠驅動
@@ -35,23 +41,23 @@ export const useMetricsStore = defineStore("metrics", () => {
   // MUST NOT 在此另立平行狀態。
   const monitoring = useMonitoringStore();
 
-  /** 距 `collectedAt` 的毫秒數；無快照或時間戳無法解析時為 null。 */
+  /** 距上次收訊的毫秒數；尚未收到任何快照時為 null。`now` 與 `receivedAt` 同為本地時鐘。 */
   const ageMs = computed<number | null>(() => {
-    if (snapshot.value === null) return null;
-    const collectedAt = Date.parse(snapshot.value.collectedAt);
-    if (!Number.isFinite(collectedAt)) return null;
-    return monitoring.now - collectedAt;
+    if (snapshot.value === null || receivedAt.value === null) return null;
+    // 夾在 0：`now` 由每秒 tick 驅動，剛收到的快照可能讓 now 略早於 receivedAt（負值）。
+    return Math.max(0, monitoring.now - receivedAt.value);
   });
 
   /**
-   * 四態判定。`empty` 優先於一切——尚未收到任何快照時既沒有 `collectedAt` 也沒有
-   * `windowMs`，無從計算門檻，**MUST NOT 判為過期**。
+   * 四態判定。`empty` 優先於一切——尚未收到任何快照時既沒有收訊時刻也沒有 `windowMs`，
+   * 無從計算門檻，**MUST NOT 判為過期**。
    */
   const status = computed<MetricsStatus>(() => {
     const snap = snapshot.value;
     if (snap === null) return "empty";
     if (monitoring.connectionStatus !== "connected") return "disconnected";
-    // 時間戳無法解析＝無法證明新鮮 → 一律當作過期，不謊報即時。
+    // 有快照卻算不出 age（理論上不會發生：applyMetrics 一律同時寫兩者）＝無法證明新鮮
+    // → 一律當作過期，不謊報即時。
     if (ageMs.value === null) return "stale";
     return ageMs.value > STALE_WINDOW_MULTIPLIER * snap.windowMs ? "stale" : "live";
   });
