@@ -1,42 +1,36 @@
-import { WebSocket } from "ws";
-import { isConnectedMessage } from "./lib/health-probe.js";
+import { request } from "node:http";
 
 /**
- * api 健康探針（映像第二進入點 → dist/healthcheck.js；FR-011、008 research D6、contracts §5）。
+ * api 健康探針（映像第二進入點 → dist/healthcheck.js；FR-006a、009 research R4a、
+ * contracts/health-endpoint.md §6）。
  *
- * 以原生 ws 連 `/ws`，收到 Gateway 無條件送出的 `system/connected` 即 exit 0（healthy），
- * 逾時／連線錯誤 exit 1（unhealthy）。探 HTTP 埠只能證明「行程在聽」，證明不了 Gateway 已
- * attach（api 無任何 GET 路由，探 HTTP 必得 404）——握手證明的才是 demo 所需的真實能力。
+ * **009 起改走 `GET /healthz`**，取代 008 的 `/ws` 握手式探活——舊版只證明「HTTP server
+ * 在聽且 Gateway 已 attach」，不涵蓋 Redis／Mongo 連通性；`/healthz` 補上這層深度
+ * （008 clarify 已明文把此端點劃歸 009）。HTTP 200 → exit 0（healthy）；其餘狀態碼／連線
+ * 錯誤／逾時 → exit 1（unhealthy）。
  *
- * 不需持有 token：`system/connected` 於連線當下無條件送出，WS_AUTH_SECRET 只在 machine/subscribe
- * 時檢查（health-probe.ts 的 rationale）。以 127.0.0.1 連自身容器，compose healthcheck 的
- * timeout 5s 為外層上限，本檔另設較短的自我逾時避免 socket 懸置。
+ * MUST 只用 node 內建 `http`（維持 008「healthcheck 去外部工具依賴」的收斂結論，不引入
+ * wget／curl）。以 127.0.0.1 連自身容器，compose healthcheck 的 timeout 5s 為外層上限，
+ * 本檔另設較短的自我逾時避免 socket 懸置。`docker-compose.yml` 的 `test` 指令不需變更
+ * （仍為 `["CMD","node","dist/healthcheck.js"]`），只有本檔內容改寫。
  */
 const port = Number(process.env.API_PORT ?? 3000);
-const url = `ws://127.0.0.1:${port}/ws`;
 const SELF_TIMEOUT_MS = 4000;
 
-const socket = new WebSocket(url);
+const req = request(
+  { host: "127.0.0.1", port, path: "/healthz", method: "GET", timeout: SELF_TIMEOUT_MS },
+  (res) => {
+    res.resume(); // 消耗 body、釋放連線；狀態碼即判準，不需解析內容
+    process.exit(res.statusCode === 200 ? 0 : 1);
+  },
+);
 
-const done = (code: number): void => {
-  try {
-    socket.terminate();
-  } catch {
-    // 關閉本就要退出的探針 socket 若拋錯，無關健康判定
-  }
-  process.exit(code);
-};
-
-const timer = setTimeout(() => done(1), SELF_TIMEOUT_MS);
-timer.unref?.();
-
-socket.on("message", (raw: Buffer) => {
-  if (isConnectedMessage(raw.toString())) {
-    clearTimeout(timer);
-    done(0);
-  }
+req.on("timeout", () => {
+  req.destroy();
+  process.exit(1);
 });
-socket.on("error", () => {
-  clearTimeout(timer);
-  done(1);
+req.on("error", () => {
+  process.exit(1);
 });
+
+req.end();

@@ -1,10 +1,11 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Queue } from "bullmq";
 import { randomUUID } from "node:crypto";
 import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
 import type { DiagnosisJobPayload } from "@flow-gatekeeper/contracts";
 import { AiStreamRelayService } from "../websocket/ai-stream-relay.service.js";
+import { getAppLogger } from "../../logging/app-logger.js";
 
 /** POST /diagnoses 的回應（初始狀態）。 */
 export type CreateDiagnosisResult = { jobId: string; machineId: string; status: "waiting" };
@@ -15,7 +16,8 @@ export type CreateDiagnosisResult = { jobId: string; machineId: string; status: 
  */
 @Injectable()
 export class JobsService {
-  private readonly logger = new Logger(JobsService.name);
+  // jobId 為 SC-002 跨行程串接的關聯鍵，MUST 為獨立結構化欄位（FR-002）。
+  private readonly plog = getAppLogger().child({ context: JobsService.name });
 
   constructor(
     @InjectQueue(DIAGNOSIS_QUEUE) private readonly queue: Queue<DiagnosisJobPayload>,
@@ -47,7 +49,21 @@ export class JobsService {
       removeOnFail: { age: 86400, count: 5000 },
     });
 
-    this.logger.log(`diagnosis job created: ${jobId} machine=${machineId} by=${payload.requestedBy}`);
+    this.plog.info({ jobId, machineId, requestedBy: payload.requestedBy }, "diagnosis job created");
     return { jobId, machineId, status: "waiting" };
+  }
+
+  /**
+   * 佇列深度的**瞬時值**（009 US3 指標來源，contracts/metrics-summary.md §6）——gauge，
+   * 不隨週期歸零。由 MetricsService 每 `METRICS_INTERVAL_MS` 讀一次；此處只讀不改，
+   * MUST NOT 影響任何入列行為（FR-012 零回歸）。
+   */
+  async getQueueCounts(): Promise<{ waiting: number; active: number; failed: number }> {
+    const counts = await this.queue.getJobCounts("waiting", "active", "failed");
+    return {
+      waiting: counts.waiting ?? 0,
+      active: counts.active ?? 0,
+      failed: counts.failed ?? 0,
+    };
   }
 }

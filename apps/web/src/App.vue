@@ -8,8 +8,10 @@ import FleetHealth from "./domains/monitoring/components/FleetHealth.vue";
 import EventStrip from "./domains/monitoring/components/EventStrip.vue";
 import CopilotDrawer from "./domains/ai-copilot/components/CopilotDrawer.vue";
 import { useMonitoringStore } from "./domains/monitoring/stores/monitoring.store.js";
+import { useMetricsStore } from "./domains/monitoring/stores/metrics.store.js";
 import { useCopilotStore } from "./domains/ai-copilot/stores/copilot.store.js";
 import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFrequencyWs.js";
+import { useResizeDrag } from "./shared/composables/useResizeDrag.js";
 import { KNOWN_MACHINE_IDS, machineLabel } from "./domains/monitoring/lib/machine-labels.js";
 import { MACHINE_GROUPS, machineGroup } from "./domains/monitoring/lib/machine-groups.js";
 import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.js";
@@ -20,6 +22,18 @@ import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.j
  */
 const store = useMonitoringStore();
 const copilot = useCopilotStore();
+// 009 US3：`system/metrics` 的唯一消費者（dev 面板）。低頻，直接寫入不進 rAF buffer。
+const metrics = useMetricsStore();
+
+/** Event Stream 面板高度可拖曳調整（把手在面板上緣，往上拖增高，故 direction: -1）。 */
+const { size: eventStripHeight, startDrag: onEventStripHandleDown } = useResizeDrag({
+  axis: "y",
+  min: 100,
+  max: 360,
+  initial: 150,
+  storageKey: "flow-gatekeeper:event-strip-height",
+  direction: -1,
+});
 
 // 手機 bottom-sheet 開關。桌機（md+）改為「可折疊常駐」：desktopPanelOpen 控制是否顯示，
 // 收合後中間欄拿回面板寬度、右側改露出可展開的細把手（修正：小螢幕中欄被壓、Diagnose 被裁）。
@@ -133,6 +147,8 @@ const handle = useHighFrequencyWs({
   onLatency: store.setLatency,
   // 診斷事件分流交 copilot.store（憲章 IV／FR-017：不進遙測 buffer）。
   onDiagnosisEvent: copilot.applyEvent,
+  // 009：指標摘要（低頻）直接交 metrics.store，同樣不進遙測 buffer。
+  onMetrics: metrics.applyMetrics,
   // 每次（重）連線都會觸發：保存 clientId（供 005）並用單一名冊訂閱 5 台（dev 送空 token）。
   onConnected: (clientId: string) => {
     store.setClientId(clientId);
@@ -214,9 +230,17 @@ const handle = useHighFrequencyWs({
         <div class="min-h-0 flex-1">
           <TopologyCanvas />
         </div>
+        <!-- Event Stream 高度拖曳把手：疊在 border-t 上，抓取熱區比 1px 邊線寬 -->
+        <div
+          class="z-10 h-1.5 shrink-0 -translate-y-px cursor-row-resize touch-none hover:bg-accent/60"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="調整 Event Stream 面板高度"
+          @pointerdown="onEventStripHandleDown"
+        />
         <!-- Event Stream（design-spec §7.8，main 底部）：前端衍生最近事件 -->
         <div class="shrink-0 border-t border-subtle">
-          <EventStrip :events="store.events" />
+          <EventStrip :events="store.events" :height="eventStripHeight" />
         </div>
       </div>
     </template>

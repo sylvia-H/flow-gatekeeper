@@ -41,6 +41,12 @@ services:
     environment:
       REDIS_HOST: redis
       MONGO_URL: mongodb://mongo:27017/flow-gatekeeper
+      # 容器內一律純 JSON（environment 優先於 env_file，任何 .env 寫法都蓋不掉）：pretty 模式
+      # 需要 pino-pretty，而它是 packages/shared 的 devDependency、已被映像的 pnpm deploy --prod
+      # 裁掉。worker 吃的是「開發者本機那一份」apps/worker/.env，若其中留著 LOG_PRETTY=true
+      # （.env.example 明示可覆寫），bootstrap 會因找不到該模組而失敗 → restart:on-failure:5
+      # 崩潰迴圈。api 用隔離的 .env.demo（無此變數）故無此風險。
+      LOG_PRETTY: "false"
     # 健康判定（FR-007，僅示警、不自動重啟）：讀 Redis heartbeat key（10s 週期／TTL 30s），
     # 連續 3 次失敗轉 unhealthy——補「行程活著但卡住」的偵測盲點（contracts §3–§4）
     healthcheck:
@@ -83,8 +89,10 @@ services:
       API_PORT: "3000"
       REDIS_HOST: redis
       MONGO_URL: mongodb://mongo:27017/flow-gatekeeper
-    # 健康判定（FR-011）：/ws 握手收到 system/connected 才算 healthy——證明 Gateway 已 attach，
-    # 非只證明行程在聽（api 無 GET 路由，探 HTTP 必得 404）。探針不需 token（research D6）。
+    # 健康判定：009 起改為 GET /healthz（009 FR-005／FR-006a），涵蓋 Redis／Mongo 連通性——
+    # 依賴任一 down 即回 503 → exit 1 → unhealthy。008 原以 /ws 握手收到 system/connected 為準
+    # （證明 Gateway 已 attach），該做法只驗行程與通道、驗不到依賴，008 clarify 已把此端點劃歸 009。
+    # test 指令不變（映像的第二進入點 dist/healthcheck.js），只有該檔內容改走 HTTP。
     healthcheck:
       test: ["CMD", "node", "dist/healthcheck.js"]
       interval: 30s

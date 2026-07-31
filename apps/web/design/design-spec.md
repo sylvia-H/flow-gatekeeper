@@ -310,11 +310,11 @@ export default {
 | 區域 | 尺寸 | 內容 | 注意事項 |
 | --- | --- | --- | --- |
 | App shell | `100vw x 100vh` | 整體背景 `bg-base` | 不讓 body scroll；內部區域各自 scroll。 |
-| Left sidebar | `240px` wide | product name、environment、machine groups、nav icons | 可縮到 72px collapsed。 |
+| Left sidebar | 預設 `240px` wide，可拖曳調整 `200-420px`（偏好存 localStorage） | product name、environment、machine groups、nav icons | 可縮到 72px collapsed。 |
 | Top bar | `56px` high | search、connection status、mock frequency、backpressure meter、diagnose action | control 高度固定 32-36px。 |
 | Main topology | fill remaining | node grid / topology canvas | 背景 `bg-inset`，可用細 grid。 |
 | Right drawer | `380-440px` wide | Copilot | 開啟時 main area 重新排版，不遮住主要狀態。 |
-| Bottom event strip | `120-160px` high，可選 | recent error logs | 若資訊太擠，可改為 drawer 內 tab。 |
+| Bottom event strip | 預設 `150px` high，可拖曳調整 `100-360px`（偏好存 localStorage），可選 | recent error logs | 若資訊太擠，可改為 drawer 內 tab。 |
 
 ### 6.2 Mobile Layout
 
@@ -586,7 +586,7 @@ Suggested actions：
 
 規格：
 
-- 高度 `120-160px`。
+- 高度預設 `150px`，上緣拖曳把手可調整範圍 `100-360px`，偏好存 localStorage。
 - row height `32-40px`。
 - timestamp 使用 mono。
 

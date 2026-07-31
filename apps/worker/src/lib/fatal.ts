@@ -16,6 +16,10 @@ import { writeSync } from "node:fs";
  * stderr 是非同步的（Docker 內 container stderr 即 pipe），`console.error` 之後緊接
  * `process.exit(1)` 會在緩衝區 flush 前中止行程、丟失致命日誌——而這正是 §5 觀測契約與
  * quickstart 崩潰演練唯一要看到的那一行。`writeSync` 保證退出前落地。
+ *
+ * **本檔案刻意 MUST NOT 改走 pino 結構化 logger**——是 Feature 009 FR-004「統一結構化格式」
+ * 的唯一例外，理由與落地要求見 `specs/009-observability-baseline/contracts/log-fields.md §7`。
+ * pino 的寫入同樣是非同步的，改用它會直接破壞上述保證；MUST NOT 被後續 review 當作漏改而修正。
  */
 
 export type FatalKind = "uncaughtException" | "unhandledRejection";

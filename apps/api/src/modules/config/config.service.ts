@@ -1,4 +1,12 @@
 import { Injectable } from "@nestjs/common";
+import {
+  resolveLogLevel,
+  resolveMetricsInterval,
+  resolveMetricsLogLevel,
+  resolvePretty,
+} from "@flow-gatekeeper/shared/logging";
+import { resolveHealthProbeTimeout } from "../../lib/health-probe-timeout.js";
+import { getAppLogger } from "../../logging/app-logger.js";
 
 /**
  * 集中、型別化讀取環境設定（dotenv 由 main.ts 於啟動前載入）。
@@ -16,4 +24,46 @@ export class AppConfigService {
   // 003：jobs module（BullMQ producer）與 AI/job-status relay 連線用（憲章 IV 連線分離）。
   readonly redisHost = process.env.REDIS_HOST ?? "127.0.0.1";
   readonly redisPort = Number(process.env.REDIS_PORT ?? 6379);
+  // 009：日誌等級與呈現模式（實際 pino 實例已於 main.ts 用 createLogger() 建立；此處僅供
+  // 設定內省，複用同一組純函式避免解析邏輯重複，FR-003/research R3）。
+  readonly logLevel = resolveLogLevel(process.env).level;
+  readonly logPretty = resolvePretty(process.env);
+  // 009 US2：健康端點對每個依賴探測的獨立逾時（FR-007）。留空或非數值一律回退預設 2000ms
+  // ——裸 `Number()` 會把 `HEALTH_PROBE_TIMEOUT_MS=`（空字串，`??` 不生效）解成 0、非數值解成
+  // NaN，兩者都讓逾時 promise 立刻 reject → 依賴恆判 down → /healthz 恆 503（見 lib 的說明）。
+  readonly healthProbeTimeoutMs = resolveHealthProbeTimeout(process.env).timeoutMs;
+  // 009 US3：指標結算間隔（預設 60000ms、下限 5000ms，低於下限一律回退預設而非 clamp）。
+  readonly metricsIntervalMs = resolveMetricsInterval(process.env).intervalMs;
+  // 指標摘要 child logger 的等級——**獨立於 LOG_LEVEL**，使 LOG_LEVEL=warn 時摘要仍輸出（SC-005）。
+  readonly metricsLogLevel = resolveMetricsLogLevel(process.env);
+
+  constructor() {
+    // FR-008 下限回退警告由呼叫端輸出（職責邊界見 tasks T011a／analyze E3：`createLogger`
+    // 只負責 LOG_LEVEL 那一則，METRICS_INTERVAL_MS 與日誌無關，由各自的消費者負責）。
+    // 在建構當下就記，讓設定錯誤在啟動時即可見，而非等到第一次結算。
+    const interval = resolveMetricsInterval(process.env);
+    if (interval.fellBackToDefault) {
+      getAppLogger()
+        .child({ context: AppConfigService.name })
+        .warn(
+          { invalidMetricsInterval: interval.rawValue, fallbackIntervalMs: interval.intervalMs },
+          `METRICS_INTERVAL_MS="${interval.rawValue ?? ""}" 不合法或低於下限，已回退至 ${interval.intervalMs}ms`,
+        );
+    }
+
+    // 同理（見 healthProbeTimeoutMs 的說明）：逾時設錯只會表現為「健康端點永遠說 unhealthy」，
+    // 症狀與真的依賴掛掉一模一樣，故在啟動當下就明說是設定值被回退，而非等人去追 503。
+    const probeTimeout = resolveHealthProbeTimeout(process.env);
+    if (probeTimeout.fellBackToDefault) {
+      getAppLogger()
+        .child({ context: AppConfigService.name })
+        .warn(
+          {
+            invalidHealthProbeTimeout: probeTimeout.rawValue,
+            fallbackTimeoutMs: probeTimeout.timeoutMs,
+          },
+          `HEALTH_PROBE_TIMEOUT_MS="${probeTimeout.rawValue ?? ""}" 不是正數，已回退至 ${probeTimeout.timeoutMs}ms`,
+        );
+    }
+  }
 }

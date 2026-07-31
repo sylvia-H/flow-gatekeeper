@@ -110,6 +110,17 @@ channels:
       message:
         $ref: "#/components/messages/SystemUnauthorized"
 
+  system/metrics:
+    subscribe:
+      operationId: systemMetrics
+      summary: Server broadcasts a periodic operational metrics summary.
+      description: >-
+        Emitted every METRICS_INTERVAL_MS (default 60000, floor 5000) to every connected client,
+        independent of machine subscriptions. Delivery is at-most-once; a missed summary is never
+        resent. The worker half is null when the worker snapshot is absent, expired, or malformed.
+      message:
+        $ref: "#/components/messages/SystemMetrics"
+
 components:
   messages:
     MachineSubscribe:
@@ -242,7 +253,72 @@ components:
           type:
             const: system/unauthorized
 
+    SystemMetrics:
+      payload:
+        type: object
+        required: [type, windowMs, collectedAt, queue, wsConnections, worker]
+        properties:
+          type:
+            const: system/metrics
+          windowMs:
+            type: integer
+            description: Window covered by this summary (equals METRICS_INTERVAL_MS). Clients derive the staleness threshold (2x) from this field and MUST NOT hardcode it.
+          collectedAt:
+            type: string
+            format: date-time
+            description: API-side settlement time; freshness is judged against this, not client receive time.
+          queue:
+            type: object
+            required: [waiting, active, failed]
+            properties:
+              waiting:
+                type: integer
+              active:
+                type: integer
+              failed:
+                type: integer
+          wsConnections:
+            type: integer
+            description: Instantaneous gauge; not a windowed average.
+          worker:
+            oneOf:
+              - $ref: "#/components/schemas/WorkerMetrics"
+              - type: "null"
+            description: Null when the worker snapshot is absent, expired, or malformed (degraded output).
+
   schemas:
+    WorkerMetrics:
+      type: object
+      required: [snapshotAt, llmLatency, cache]
+      properties:
+        snapshotAt:
+          type: string
+          format: date-time
+        llmLatency:
+          type: object
+          required: [count, avgMs, p95Ms, maxMs]
+          properties:
+            count:
+              type: integer
+            avgMs:
+              type: [number, "null"]
+            p95Ms:
+              type: [number, "null"]
+            maxMs:
+              type: [number, "null"]
+          description: avgMs/p95Ms/maxMs are null (not 0) when count is 0.
+        cache:
+          type: object
+          required: [hits, misses, hitRate]
+          properties:
+            hits:
+              type: integer
+            misses:
+              type: integer
+            hitRate:
+              type: [number, "null"]
+          description: hitRate is hits / (hits + misses); null (not 0) when the denominator is 0.
+
     TelemetryPoint:
       type: object
       required: [type, machineId, timestamp, telemetry, state]

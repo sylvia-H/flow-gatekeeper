@@ -6,6 +6,7 @@ import type { JobStatus } from "@flow-gatekeeper/contracts";
 import { AppConfigService } from "../config/config.service.js";
 import { MonitoringGateway } from "./monitoring.gateway.js";
 import { AiStreamRelayService } from "./ai-stream-relay.service.js";
+import { getAppLogger } from "../../logging/app-logger.js";
 
 /** 孤兒綁定回收安全期（QueueEvents 異常時避免 Map 洩漏，FR-002）。 */
 const ORPHAN_TTL_MS = 10 * 60_000;
@@ -20,6 +21,8 @@ const ORPHAN_TTL_MS = 10 * 60_000;
 @Injectable()
 export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(JobStatusRelayService.name);
+  // jobId 為 SC-002 跨行程串接的關聯鍵，MUST 為獨立結構化欄位（FR-002）。
+  private readonly plog = getAppLogger().child({ context: JobStatusRelayService.name });
   private queueEvents?: QueueEvents;
   private sweepTimer?: ReturnType<typeof setInterval>;
 
@@ -80,7 +83,7 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
     for (const [jobId, binding] of this.relay.bindings) {
       if (now - binding.boundAt > ORPHAN_TTL_MS) {
         this.relay.deleteBinding(jobId);
-        this.logger.warn(`swept orphan job binding: ${jobId}`);
+        this.plog.warn({ jobId }, "swept orphan job binding");
       }
     }
   }

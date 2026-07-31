@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted } from "vue";
 import { PanelRightOpen } from "lucide-vue-next";
 import type { ConnectionStatus } from "../../domains/monitoring/stores/monitoring.store.js";
+import { useResizeDrag } from "../composables/useResizeDrag.js";
 
 /**
  * 監控台外殼（design-spec §6/§7.1）：sidebar / top bar / main / drawer slot。
@@ -32,17 +33,36 @@ function onKeydown(event: KeyboardEvent): void {
 }
 onMounted(() => window.addEventListener("keydown", onKeydown));
 onUnmounted(() => window.removeEventListener("keydown", onKeydown));
+
+/** 側欄寬度可拖曳調整（預設 240px＝原 w-60），偏好存 localStorage。 */
+const { size: sidebarWidth, startDrag: onSidebarHandleDown } = useResizeDrag({
+  axis: "x",
+  min: 200,
+  max: 420,
+  initial: 240,
+  storageKey: "flow-gatekeeper:sidebar-width",
+});
 </script>
 
 <template>
   <!-- App shell：不讓 body scroll，內部各區自行 scroll（design-spec §6.1） -->
   <div class="flex h-screen w-screen overflow-hidden bg-base font-sans text-fg">
-    <!-- Left sidebar（240px，mobile 收起交給 Polish 處理） -->
+    <!-- Left sidebar（預設 240px，可拖曳調整寬度；mobile 收起交給 Polish 處理） -->
     <aside
-      class="hidden w-60 shrink-0 flex-col border-r border-subtle bg-surface md:flex"
+      class="hidden shrink-0 flex-col border-r border-subtle bg-surface md:flex"
+      :style="{ width: `${sidebarWidth}px` }"
     >
       <slot name="sidebar" />
     </aside>
+
+    <!-- 側欄寬度拖曳把手（僅桌機；疊在 border-r 上，抓取熱區比 1px 邊線寬） -->
+    <div
+      class="z-10 hidden w-1.5 shrink-0 -translate-x-px cursor-col-resize touch-none hover:bg-accent/60 md:block"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="調整側欄寬度"
+      @pointerdown="onSidebarHandleDown"
+    />
 
     <!-- Main column：top bar（56px）+ main（fill） -->
     <div class="flex min-w-0 flex-1 flex-col">

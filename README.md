@@ -22,8 +22,35 @@
 
 ---
 
+## 端到端操作 Demo（實機錄影）
+
+> 不想自己 `docker compose up` 也能感受這個系統跑起來的樣子——以下是**對正在跑的一鍵 demo 容器**（`docker compose --profile demo up -d --build` → `http://localhost:8080`）用 Playwright 腳本化操作、原始無剪接錄下的 22 秒全程，**非後製動畫**：
+
+<div align="center">
+
+<video src="docs/demo/flow-gatekeeper-demo.mp4" controls muted playsinline poster="docs/demo/flow-gatekeeper-demo-poster.jpg" width="100%">
+  你的檢視器不支援內嵌影片播放，可直接開啟
+  <a href="docs/demo/flow-gatekeeper-demo.mp4">docs/demo/flow-gatekeeper-demo.mp4</a>。
+</video>
+
+</div>
+
+| 時間 | 畫面 |
+| --- | --- |
+| 0:00 | 監控台全景：5 台機台即時遙測、`BackpressureBadge` 比值持續累積 |
+| 0:05 | TopBar search 即時過濾 sidebar 與卡片 |
+| 0:07 | 點選 `press-02`（此刻已轉 critical）→ 按 **Diagnose** |
+| 0:08–0:15 | Copilot drawer 進入 **Active**：任務 meta、處理步驟清單、AI 回覆**逐字串流**（畫面凍結於 68% 時可見 JSON 逐段浮現） |
+| 0:16 | **Completed**：結構化結果（Summary／Likely Causes／Evidence），此次**非快取**——真的呼叫了一次 Gemini |
+| 0:19–0:22 | 對同一台再按一次 Diagnose → 秒回並標示 **Cached**（cache-aside + dedupe lock 的可視化證據） |
+
+> 錄製方式：本機清空 `ai-cache:*`／`ai-lock:*` 後，用 Playwright 對著跑在容器裡的真實全棧（api／worker／web／Redis／MongoDB，AI 由 Gemini 2.5 Flash 即時回覆）做一次腳本化操作並錄影，全程無手動剪輯或字卡。想自己重現，見下方「[快速開始](#快速開始)」。
+
+---
+
 ## 目錄
 
+- [端到端操作 Demo（實機錄影）](#端到端操作-demo實機錄影)
 - [專案概述](#專案概述)
 - [專案亮點](#專案亮點)
 - [功能逐項展示（實機截圖）](#功能逐項展示實機截圖)
@@ -39,6 +66,7 @@
 - [測試與品質門檻](#測試與品質門檻)
 - [開發方法論：Spec-Driven Development](#開發方法論spec-driven-development)
 - [關鍵架構決策（ADR）](#關鍵架構決策adr)
+- [已宣告的取捨](#已宣告的取捨)
 - [已知限制](#已知限制)
 
 ---
@@ -67,6 +95,8 @@
 | ✅ **Schema 驗證的 AI 輸出** | AI 回傳必經 `DiagnosisResultSchema.parse()`，失敗走 `ai/error`，不把未驗證物件當結果 | Zod 為單一真實來源，型別由 `z.infer` 推導 |
 | 📐 **契約優先的全棧型別安全** | web／api／worker 三端共用 `packages/contracts` 同一份事件／結果型別 | strict TypeScript、`asyncapi.yaml` 契約 lint |
 | 🤖 **每機台狀態機的 Copilot Drawer** | `Map<machineId, CopilotJobState>`：多台可並存診斷，切換選取即還原各自呈現 | idle／active／streaming／completed／failed 五態 |
+| 📦 **一鍵全棧容器化** | `docker compose --profile demo up -d --build` 起 api／worker／web 三端受監督容器，瀏覽器只面對單一入口 | nginx 同源反代 `/ws`、`/diagnoses`；`restart: on-failure` 內建崩潰迴圈防護（連續 5 次後停止） |
+| 🩺 **let it crash + 可觀測性基線** | worker／api 崩潰語意從「log + 續跑」翻成 `exit(1)` 交監督者重啟；三端補齊結構化日誌、`/healthz`、關鍵指標入 log | 「這個專案本身是監控台，但它自己也該可被監控」——見 [ADR-002](docs/adr-002-productionization-scope.md) |
 
 ---
 
@@ -76,13 +106,13 @@
 
 ### 1. 即時 fleet 監控台全景 + 背壓量化
 
-打開應用**第一屏即是可操作的監控台**（非 landing page），自動連上 `/ws` 並訂閱 5 台示範機台。整個監控台一次到位：左側 sidebar 依機台群組分區（**Prep／Forming & Baking／Fulfilment**）並在左下以 **Fleet Health** 面板把全隊狀態聚合成 healthy／warning／critical／stale 計數與比例條；主區頂部是「**Fleet monitor · N machines**」標題列，其下為機台卡片（狀態文字徽章、帶單位的遙測、`updated Ns ago` 相對時間戳）；主區底部是 **Event Stream**，記錄最近的門檻跨越／錯誤事件。頂部工具列的 **BackpressureBadge** 即時顯示 `收到訊息數 · 渲染批次數 · 比值`（此例約 `2,525 msgs · 263 frames · 10:1`，節拍越快比值越高）——把「收很多、只批次渲染少數幾次」的削峰效果直接畫在畫面上，不用開 DevTools；一旁還有 pause／resume、connection chip（含延遲毫秒）與 search。右側為桌機常駐的 AI Copilot 面板（未選機台時為空狀態提示）。
+打開應用**第一屏即是可操作的監控台**（非 landing page），自動連上 `/ws` 並訂閱 5 台示範機台。整個監控台一次到位：左側 sidebar 依機台群組分區（**Prep／Forming & Baking／Fulfilment**）並在左下以 **Fleet Health** 面板把全隊狀態聚合成 healthy／warning／critical／stale 計數與比例條；主區頂部是「**Fleet monitor · N machines**」標題列，其下為機台卡片（狀態文字徽章、帶單位的遙測、`updated Ns ago` 相對時間戳）；主區底部是 **Event Stream**，記錄最近的門檻跨越／錯誤事件。頂部工具列的 **BackpressureBadge** 即時顯示 `收到訊息數 · 渲染批次數 · 比值`（此例約 `505 msgs · 101 frames · 5:1`，節拍越快比值越高）——把「收很多、只批次渲染少數幾次」的削峰效果直接畫在畫面上，不用開 DevTools；一旁還有 pause／resume、connection chip（含延遲毫秒）與 search。右側為桌機常駐的 AI Copilot 面板（未選機台時為空狀態提示）。
 
 ![即時 fleet 監控台全景：分組 sidebar、Fleet Health、Event Stream 與背壓比值](docs/screenshots/monitoring-live.png)
 
 ### 2. 機台狀態呈現：healthy / warning / critical
 
-每張卡片固定 footprint，狀態切換只改**狀態文字徽章**（HEALTHY／WARNING／CRITICAL）、狀態燈與遙測顏色，**不造成 layout shift**；狀態**不只靠顏色**（徽章帶文字、狀態燈帶 `aria-label`）。下圖三態同屏：`press-02` 進入 critical（紅色徽章、紅色卡片 tint、越界的 Temp `99.6°C`／Vibration `2.03 mm/s`／Errors `16.0%` 一併轉紅），`oven-04` 為 warning（**越界數值本身染 amber**，如 Vibration `1.47 mm/s`、Errors `6.0%`，而卡片**邊框維持 subtle**、不額外加粗），其餘維持 healthy。左下 Fleet Health 同步反映 `Healthy 3 / Warning 1 / Critical 1`（比例條按佔比著色），Event Stream 也各記一筆狀態轉換。遙測由 mock producer 以決定性規律產生，內含週期性 warning／critical 尖峰，確保 demo 可重播。
+每張卡片固定 footprint，狀態切換只改**狀態文字徽章**（HEALTHY／WARNING／CRITICAL）、狀態燈與遙測顏色，**不造成 layout shift**；狀態**不只靠顏色**（徽章帶文字、狀態燈帶 `aria-label`）。下圖三態同屏：`press-02` 進入 critical（紅色徽章、紅色卡片 tint、越界的 Temp `92.1°C`／Vibration `2.50 mm/s`／Errors `16.0%` 一併轉紅），`oven-04` 為 warning（**越界數值本身染 amber**，如 Vibration `1.13 mm/s`、Errors `6.0%`，而卡片**邊框維持 subtle**、不額外加粗），其餘維持 healthy。左下 Fleet Health 同步反映 `Healthy 3 / Warning 1 / Critical 1`（比例條按佔比著色），Event Stream 也各記一筆狀態轉換。遙測由 mock producer 以決定性規律產生，內含週期性 warning／critical 尖峰，確保 demo 可重播。
 
 ![機台 healthy／warning／critical 三態同屏，Fleet Health 同步聚合](docs/screenshots/monitoring-states.png)
 
@@ -106,9 +136,9 @@ sidebar 依前端**靜態對照**把機台分成 **Prep／Forming & Baking／Ful
 
 ### 6. 機台選取（驅動診斷對象）
 
-點選卡片或左側清單即設定 `selectedMachineId`（同時至多一台），以 accent 高亮呈現選取；這個選取就是 Diagnose 的作用對象。下圖選取了 `Mixer 01`（清單項與卡片皆高亮），右側 Copilot 面板隨即帶出該台的即時摘要（State／Temp／Vibration／Errors）與 **Run diagnosis** 按鈕。
+點選卡片或左側清單即設定 `selectedMachineId`（同時至多一台），以 accent 高亮呈現選取；這個選取就是 Diagnose 的作用對象。下圖選取了正處於 critical 的 `Press 02`（清單項與卡片皆高亮，紅色 tint 一併呈現於選取態），右側 Copilot 面板隨即帶出該台的即時摘要（State／Temp／Vibration／Errors）與 **Run diagnosis** 按鈕。
 
-![選取 Mixer 01，Copilot 帶出該台摘要與 Run diagnosis](docs/screenshots/monitoring-selected.png)
+![選取 Press 02，Copilot 帶出該台摘要與 Run diagnosis](docs/screenshots/monitoring-selected.png)
 
 ### 7. 斷線自動重連 + stale 標示
 
@@ -118,7 +148,7 @@ sidebar 依前端**靜態對照**把機台分成 **Prep／Forming & Baking／Ful
 
 ### 8. 觸發診斷 + 逐字串流
 
-對選取機台按 **Diagnose**：前端帶著目前的 `socketId`（即 WS `clientId`）呼叫 `POST /diagnoses`，drawer **立即進入 active**（不等任何 AI 內容）。active 呈現忠實對映後端佇列設定——上方顯示任務 meta（Queue `diagnosis`、Concurrency `2`、Attempts `3`）與一份**處理步驟清單**（任務啟動 → 組建診斷 context → 取得去重鎖 → 接收首個 token → 解析結果成功 → 寫入並完成，依 `job/status` 進度里程碑 0/20/40/60/80/100 由待辦→進行中→已完成推進）；接著 worker 的 AI 推理 **逐段 append 出現並帶串流游標**，不必等整段生成完。此時右側 Copilot 面板明確標示對應機台（`mixer-01`）與任務短碼。
+對選取機台按 **Diagnose**：前端帶著目前的 `socketId`（即 WS `clientId`）呼叫 `POST /diagnoses`，drawer **立即進入 active**（不等任何 AI 內容）。active 呈現忠實對映後端佇列設定——上方顯示任務 meta（Queue `diagnosis`、Concurrency `2`、Attempts `3`）與一份**處理步驟清單**（任務啟動 → 組建診斷 context → 取得去重鎖 → 接收首個 token → 解析結果成功 → 寫入並完成，依 `job/status` 進度里程碑 0/20/40/60/80/100 由待辦→進行中→已完成推進）；接著 worker 的 AI 推理 **逐段 append 出現並帶串流游標**，不必等整段生成完。此時右側 Copilot 面板明確標示對應機台（`press-02`）與任務短碼。
 
 ![Copilot drawer 進入 active：任務 meta、處理步驟清單與逐字串流](docs/screenshots/copilot-streaming.png)
 
@@ -142,7 +172,7 @@ sidebar 依前端**靜態對照**把機台分成 **Prep／Forming & Baking／Ful
 
 ### 12. 響應式 / 手機 bottom-sheet
 
-四個基準 viewport（1366×768／1440×900／768×1024／390×844）皆不溢出、不重疊、不遮住頂部狀態列。手機尺寸下卡片退化為**單欄清單**，Copilot 由右側常駐面板改為**底部 bottom-sheet**（選台即開啟、可上滑展開、可關閉、含 Escape）；下圖 bottom-sheet 內即為一份完整的結構化診斷（Summary + 嚴重度徽章、Likely Causes、Evidence、含 priority／command 的 Suggested Actions），在窄螢幕下仍欄位一致、可捲動閱讀。
+四個基準 viewport（1366×768／1440×900／768×1024／390×844）皆不溢出、不重疊、不遮住頂部狀態列。手機尺寸下卡片退化為**單欄清單**，Copilot 由右側常駐面板改為**底部 bottom-sheet**（選台即開啟、可上滑展開、可關閉、含 Escape）；下圖 bottom-sheet 內即為一份完整的結構化診斷（Summary + 嚴重度徽章、Likely Causes、Evidence、帶 priority 標籤的 Suggested Actions；`command` 為可選欄位，視 AI 回覆內容而定，桌機版 [copilot-completed.png](docs/screenshots/copilot-completed.png) 可見帶 command 的範例），在窄螢幕下仍欄位一致、可捲動閱讀。
 
 ![手機 390×844 bottom-sheet Copilot：窄螢幕下的完整結構化診斷](docs/screenshots/responsive-mobile.png)
 
@@ -341,6 +371,9 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | **004** | [前端高頻 WebSocket 監控台](specs/004-frontend-ws-gatekeeper/spec.md) | monitoring domain、`useHighFrequencyWs`（buffer + rAF 批次）、BackpressureBadge、機台卡片六態、指數退避重連、stale 標示、`selectedMachineId`、四 viewport 響應式 |
 | **005** | [AI Copilot Drawer](specs/005-ai-copilot-drawer/spec.md) | `ai-copilot` domain、`Map<machineId>` 狀態機、逐段串流 + 游標、結構化結果五區塊、`Cached` badge、同機台去重、Retry、桌機常駐 / 手機 bottom-sheet、worker 進度里程碑細化 |
 | **006** | [監控台前端保真補完（Monitoring Console Fidelity）](specs/006-monitoring-console-fidelity/spec.md) | 對齊 design-spec／`refs` 把 004／005 漏做或未對齊的前端項補齊（**全前端-only、不動契約與後端**）：卡片保真（狀態文字徽章、warning 越界值染 amber 而邊框維持 subtle、遙測單位、`Ns ago` 相對時間戳）、**Fleet Health** 聚合面板（healthy／warning／critical／stale 計數 + 比例條）、**Event Stream** 狀態轉換事件列（去重、上限 50、前端衍生）、**TopBar**（pause／resume、connection 延遲 ms、search 實際過濾）、主區「Fleet monitor · N machines」標題列、sidebar 機台分組、Drawer active 任務 meta + 處理步驟清單 |
+| **007** | [Worker 生產化與 process 監督](specs/007-worker-process-supervision/spec.md) | worker 容器化（多階段 Dockerfile）、崩潰語意由「log + 續跑」翻轉為 **let it crash**（`exit(1)`）交給 Docker `restart: on-failure` 監督重啟、Redis heartbeat key 偵測「活著但卡住」、可決定性重現的故障注入旗標、崩潰迴圈防護（連續 5 次失敗即停止重啟，避免熱迴圈打爆 LLM 額度） |
+| **008** | [整棧容器化與一鍵 Demo](specs/008-fullstack-containerization/spec.md) | api／web 比照 007 容器化並收進 `demo` compose profile，nginx 反向代理 `/ws`、`/diagnoses` 至 api，瀏覽器**單一入口** `http://localhost:8080`；`seed` 一次性服務備妥示範資料；開發模式（host 直跑）零影響；乾淨收場（`down -v` 可重播） |
+| **009** | [可觀測性基線](specs/009-observability-baseline/spec.md) | 三端補齊「監控台自己也該可被監控」的基線：pino 結構化 JSON 日誌（含關聯鍵）、`GET /healthz` 依賴狀態探針（Redis／Mongo 二態回應）、queue 深度／WS 連線數／LLM latency／cache 命中率等關鍵指標週期入 log、dev-only **Metrics Panel**（`VITE_METRICS_PANEL`，唯讀、預設收合，production build 預設關閉）、有損寫入語意明文化（見下方「[已宣告的取捨](#已宣告的取捨)」） |
 
 ---
 
@@ -394,9 +427,11 @@ pnpm install
 # 2) 準備環境變數 —— env 是「每個 app 各一份」，不是根目錄一份（根 .env 不會被讀取）
 Copy-Item apps/api/.env.example    apps/api/.env
 Copy-Item apps/worker/.env.example apps/worker/.env
+Copy-Item apps/web/.env.example    apps/web/.env   # 選用：只含 VITE_METRICS_PANEL 開關
 #   → 編輯 apps/worker/.env，填入 GEMINI_API_KEY（僅 worker 需要；api/web 不需要）
 #   → 本機 live 驗收把 apps/api/.env 的 WS_AUTH_SECRET 留空，前端才能以空 token 訂閱
-#   → apps/web 不需要 .env（走 vite dev proxy，前端不持有祕密）
+#   → apps/web/.env 只有 dev 指標面板開關（VITE_METRICS_PANEL），前端仍不持有任何祕密；
+#     不建也行——dev 模式下面板預設就是開的
 
 # 3) 起本機 infra（Redis + MongoDB）
 docker compose up -d
@@ -510,7 +545,7 @@ api 或 worker 連續快速失敗（如設定錯誤導致啟動即崩潰）時�
 
 ## 環境變數
 
-env **分散在各 app**（執行期不讀根目錄 `.env`）：`apps/api/.env` 由 `apps/api/src/main.ts` 明確載入本層檔、`apps/worker/.env` 由 worker 以 `dotenv/config`（cwd）載入本層檔、`apps/web` 不需 env。各處以其 `.env.example` 為準：
+env **分散在各 app**（執行期不讀根目錄 `.env`）：`apps/api/.env` 由 `apps/api/src/main.ts` 明確載入本層檔、`apps/worker/.env` 由 worker 以 `dotenv/config`（cwd）載入本層檔、`apps/web/.env` 由 Vite 以 `apps/web/` 為 env 根目錄載入（**僅** `VITE_METRICS_PANEL` 這一個開關，前端仍不持有任何祕密）。各處以其 `.env.example` 為準：
 
 | 變數 | 所在 app | 預設 | 說明 |
 | --- | --- | --- | --- |
@@ -526,6 +561,16 @@ env **分散在各 app**（執行期不讀根目錄 `.env`）：`apps/api/.env` 
 | `AI_CACHE_TTL_SECONDS` | worker | `600` | 診斷快取有效期 |
 | `AI_DEDUPE_LOCK_SECONDS` | worker | `45` | 同簽章去重鎖有效期 |
 | `AI_TIMEOUT_MS` | worker | `30000` | 單次 AI streaming 應用層逾時 |
+| `LOG_LEVEL` | api · worker | `info` | 結構化日誌等級（`trace`/`debug`/`info`/`warn`/`error`/`fatal`）；**無法辨識的值回退 `info` 並記一則警告**，不中止行程 |
+| `LOG_PRETTY` | api · worker | 由 `NODE_ENV` 推導 | 人類可讀輸出；dev 預設開、`NODE_ENV=production` 預設關（逐行 JSON）。設 `true`/`false` 可顯式覆寫——但**容器內無效**：`pino-pretty` 不隨映像部署，故 compose 於 worker 釘死 `LOG_PRETTY=false`，api 的 `.env.demo` 亦不帶此變數 |
+| `METRICS_INTERVAL_MS` | api · worker | `60000` | 指標摘要結算間隔；**下限 5000**，低於下限或非數值一律**回退預設 60000** 並記一則警告（不 clamp 到下限） |
+| `METRICS_LOG_LEVEL` | api · worker | `info` | 指標摘要專屬等級，**獨立於 `LOG_LEVEL`**——`LOG_LEVEL=warn` 時摘要仍會輸出 |
+| `HEALTH_PROBE_TIMEOUT_MS` | api | `2000` | `GET /healthz` 對**每個**依賴探測的獨立逾時；逾時即判該依賴 `down`（不拋錯）。留空、非數值或非正數一律**回退預設 2000** 並記一則警告（否則逾時為 0／NaN 會讓依賴恆判 `down`、端點恆 503） |
+| `VITE_METRICS_PANEL` | **web** | dev `true` / production build `false` | dev 指標面板開關（唯讀、預設收合）。⚠️ **MUST 放 `apps/web/.env`（非 repo 根 `.env`）**——`apps/web/vite.config.ts` 未設 `envDir`，Vite 的 env 根目錄是 `apps/web/`，放根目錄讀不到 |
+
+> **`/healthz`**：`GET http://localhost:3000/healthz` 免認證、不快取，二態回應——全部依賴連通回
+> **200 `healthy`**，Redis 或 Mongo 任一失聯回 **503 `unhealthy`** 且 body 逐依賴列出 `status`／
+> `latencyMs`／`error`。容器 healthcheck 即由它判定就緒。
 
 > **祕密衛生**（憲章硬規則 #7）：只提交各處的 `.env.example`；`.env`、API key、token **絕不**進版控（`.gitignore` 已忽略所有 `.env`、放行 `.env.example`）。`GEMINI_API_KEY` 只存在於 `apps/worker/.env`。
 
@@ -563,6 +608,24 @@ specify → clarify → plan → checklist → tasks → analyze → implement �
 ## 關鍵架構決策（ADR）
 
 - **[ADR-001：即時通道採用原生 WebSocket，而非 Socket.IO](docs/adr-001-native-websocket.md)** — 為什麼刻意放棄 Socket.IO 的自動重連／心跳／rooms／Redis adapter，換取 wire format 的完全掌控，好讓「rAF 背壓由誰負責」說得清楚、效能可歸因。內含 demo 時可直接講的 60–90 秒取捨說明。
+- **[ADR-002：生產化範圍邊界——監督者選型、整棧容器化路線與運維層取捨](docs/adr-002-productionization-scope.md)** — 為什麼監督者選容器化（Docker restart policy）而非 pm2／systemd；為什麼生產化拆成 007（worker 監督）→ 008（整棧容器化）→ 009（可觀測性基線）三個漸進 feature 而非一次做完；哪些生產差距（Gateway 水平擴展、Pub/Sub at-most-once、認證升級、有損寫入）刻意只文件化不實作，以及為什麼 Kubernetes／Kafka／OIDC／Redis HA 等路線被明確拒絕。同樣內含 60–90 秒的 demo 取捨說明。
+
+---
+
+## 已宣告的取捨
+
+**有損是可以的，未宣告的有損才是問題。** 以下兩項寫入語意是**刻意**的工程取捨，出處為
+**[ADR-002 §6.4](docs/adr-002-productionization-scope.md)**；程式碼註解、本節與該 ADR
+三處指向同一份事實，不各自表述。
+
+| 取捨 | 現況行為 | 為何接受 |
+| --- | --- | --- |
+| **telemetry 持久化為 fire-and-forget** | Gateway 以 `void persistBatch(...)` 落地、**不 await**，因此 **API 崩潰時 in-flight batch 直接丟失**——可丟失最後數秒的遙測（丟失量隨 `MOCK_TELEMETRY_INTERVAL_MS` 的推送節拍而定） | 不 await 才能讓推送 cadence 不被資料庫延遲牽制（背壓賣點的前提）；demo 情境下「最後數秒遙測」的價值遠低於即時性 |
+| **errorlog 去重狀態存於行程內記憶體** | 去重靠行程內 `lastState` Map、不持久化，因此 **api 重啟後仍處於異常狀態的機台會重複寫入首筆 errorlog**；多實例部署下每個實例各持一份 Map，判斷會錯 | errorlog 是給人看的異常軌跡，重啟邊界多一筆重複不影響判讀；單實例假設見 ADR-002 §6 |
+
+**升級路徑**（若未來需要「不可丟失」語意）：**寫入前先進佇列**（BullMQ 或 Redis Stream）
+**再批次落庫**——推送路徑仍不被資料庫延遲牽制，但寫入具備重試與重啟續傳能力。此路徑
+明確**不在目前範圍**內。
 
 ---
 

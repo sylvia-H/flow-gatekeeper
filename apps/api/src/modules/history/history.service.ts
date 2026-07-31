@@ -34,6 +34,20 @@ export class HistoryService implements OnModuleInit, OnModuleDestroy {
     await this.client?.close();
   }
 
+  /**
+   * Mongo 連通探測（009 US2，contracts/health-endpoint.md §4）：複用既有 `Db`，不另開連線。
+   * `db` 未就緒（啟動中）或指令本身失敗一律 **reject**——這正是 spec Edge Case「api 啟動中、
+   * 依賴尚未就緒」的落地：兩種情形對呼叫端而言是同一種「探測不到」，故用同一條錯誤路徑，
+   * 不需在此另外分岔。呼叫端（health.service）MUST 統一把任何拋出轉為 `{ status: "down" }`
+   * （FR-007），本方法不做這層轉換。
+   */
+  async ping(): Promise<void> {
+    if (!this.db) {
+      throw new Error("mongo not ready");
+    }
+    await this.db.command({ ping: 1 });
+  }
+
   private async ensureCollections(db: Db): Promise<void> {
     try {
       await db.createCollection("telemetry", {
@@ -52,6 +66,13 @@ export class HistoryService implements OnModuleInit, OnModuleDestroy {
    * 一個 tick 的**全部機台**一起寫（FR-009 全量、與訂閱無關）。
    * 呼叫端 void fire-and-forget，不 await 阻塞推送 cadence（FR-010）；
    * 落地錯誤在此 catch + log，不向上拋（FR-010/FR-017）。
+   *
+   * **有損寫入語意（009 FR-011，明文宣告）**：正因為是 fire-and-forget，**API 崩潰時
+   * in-flight batch 直接丟失**——可丟失最後數秒的 telemetry，且丟失量隨推送 cadence
+   * （預設 50ms／批）而定。這不是疏漏，是 `ADR-002 §6.4` **明文接受的取捨**：不 await
+   * 才能讓推送 cadence 不被資料庫延遲牽制，而 demo 情境下「最後數秒遙測」的價值遠低於
+   * 即時性。有損是可以的，未宣告的有損才是問題。
+   * 升級路徑（若未來轉為不可丟失）：寫入前先進佇列（BullMQ 或 Redis Stream）再批次落庫。
    */
   async persistBatch(points: readonly TelemetryPoint[]): Promise<void> {
     const db = this.db;
