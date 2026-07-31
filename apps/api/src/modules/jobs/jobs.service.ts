@@ -52,4 +52,18 @@ export class JobsService {
     this.plog.info({ jobId, machineId, requestedBy: payload.requestedBy }, "diagnosis job created");
     return { jobId, machineId, status: "waiting" };
   }
+
+  /**
+   * 佇列深度的**瞬時值**（009 US3 指標來源，contracts/metrics-summary.md §6）——gauge，
+   * 不隨週期歸零。由 MetricsService 每 `METRICS_INTERVAL_MS` 讀一次；此處只讀不改，
+   * MUST NOT 影響任何入列行為（FR-012 零回歸）。
+   */
+  async getQueueCounts(): Promise<{ waiting: number; active: number; failed: number }> {
+    const counts = await this.queue.getJobCounts("waiting", "active", "failed");
+    return {
+      waiting: counts.waiting ?? 0,
+      active: counts.active ?? 0,
+      failed: counts.failed ?? 0,
+    };
+  }
 }

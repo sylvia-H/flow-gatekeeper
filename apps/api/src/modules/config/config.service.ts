@@ -1,5 +1,11 @@
 import { Injectable } from "@nestjs/common";
-import { resolveLogLevel, resolvePretty } from "@flow-gatekeeper/shared/logging";
+import {
+  resolveLogLevel,
+  resolveMetricsInterval,
+  resolveMetricsLogLevel,
+  resolvePretty,
+} from "@flow-gatekeeper/shared/logging";
+import { getAppLogger } from "../../logging/app-logger.js";
 
 /**
  * 集中、型別化讀取環境設定（dotenv 由 main.ts 於啟動前載入）。
@@ -23,4 +29,23 @@ export class AppConfigService {
   readonly logPretty = resolvePretty(process.env);
   // 009 US2：健康端點對每個依賴探測的獨立逾時（FR-007）。
   readonly healthProbeTimeoutMs = Number(process.env.HEALTH_PROBE_TIMEOUT_MS ?? 2000);
+  // 009 US3：指標結算間隔（預設 60000ms、下限 5000ms，低於下限一律回退預設而非 clamp）。
+  readonly metricsIntervalMs = resolveMetricsInterval(process.env).intervalMs;
+  // 指標摘要 child logger 的等級——**獨立於 LOG_LEVEL**，使 LOG_LEVEL=warn 時摘要仍輸出（SC-005）。
+  readonly metricsLogLevel = resolveMetricsLogLevel(process.env);
+
+  constructor() {
+    // FR-008 下限回退警告由呼叫端輸出（職責邊界見 tasks T011a／analyze E3：`createLogger`
+    // 只負責 LOG_LEVEL 那一則，METRICS_INTERVAL_MS 與日誌無關，由各自的消費者負責）。
+    // 在建構當下就記，讓設定錯誤在啟動時即可見，而非等到第一次結算。
+    const interval = resolveMetricsInterval(process.env);
+    if (interval.fellBackToDefault) {
+      getAppLogger()
+        .child({ context: AppConfigService.name })
+        .warn(
+          { invalidMetricsInterval: interval.rawValue, fallbackIntervalMs: interval.intervalMs },
+          `METRICS_INTERVAL_MS="${interval.rawValue ?? ""}" 不合法或低於下限，已回退至 ${interval.intervalMs}ms`,
+        );
+    }
+  }
 }

@@ -8,6 +8,8 @@ import { AppModule } from "./app.module.js";
 import { getAppLogger } from "./logging/app-logger.js";
 import { PinoLoggerService } from "./logging/pino-logger.service.js";
 import { MonitoringGateway } from "./modules/websocket/monitoring.gateway.js";
+import { JobsService } from "./modules/jobs/jobs.service.js";
+import { MetricsService } from "./modules/metrics/metrics.service.js";
 
 // 明確載入本套件的 .env（apps/api/.env），不依賴 cwd——避免從別處啟動時 WS_AUTH_SECRET
 // 等設定靜默落空（例如授權被意外停用）。
@@ -29,7 +31,19 @@ export async function bootstrap(): Promise<void> {
   });
   const port = Number(process.env.API_PORT ?? 3000);
   await app.listen(port);
-  app.get(MonitoringGateway).attach(app.getHttpServer());
+  const gateway = app.get(MonitoringGateway);
+  gateway.attach(app.getHttpServer());
+
+  // 009 US3：於組合根把指標來源與出口接給 MetricsService 並啟動週期結算——`JobsService`
+  // 與 `MonitoringGateway` 是 AppModule 層的 provider，對 MetricsModule 不可見，故沿用本檔
+  // 既有的組合根接線慣例（同上一行的 gateway.attach）。純觀測接線，不改任何既有控制流。
+  const jobs = app.get(JobsService);
+  app.get(MetricsService).bind({
+    queueCounts: () => jobs.getQueueCounts(),
+    wsConnections: () => gateway.connectionCount,
+    broadcast: (payload) => gateway.broadcastMetrics(payload),
+  });
+
   const logger = new Logger("api");
   logger.log(`flow-gatekeeper api listening on :${port} (ws path /ws)`);
 

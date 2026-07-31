@@ -7,6 +7,7 @@ import type {
   MachineSubscribed,
   Pong,
   SystemConnected,
+  SystemMetrics,
   SystemUnauthorized,
 } from "@flow-gatekeeper/contracts";
 import { AppConfigService } from "../config/config.service.js";
@@ -164,6 +165,24 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     this.subscriptions.delete(clientId);
     this.alive.delete(clientId);
     this.plog.info({ clientId, reason }, "client disconnected");
+  }
+
+  /** 當前 ws 連線數（瞬時值 gauge，非窗內平均）——009 US3 指標來源。 */
+  get connectionCount(): number {
+    return this.clients.size;
+  }
+
+  /**
+   * 廣播 `system/metrics` 給**所有已連線 client**（009 FR-008a）。
+   *
+   * 與 `machine/subscribe` 訂閱狀態**無關**：指標是系統級資訊、不隸屬任何機台，用機台訂閱
+   * 過濾它在語意上不成立（contracts/metrics-summary.md §2）。至多送一次——漏送一則即等
+   * 下一週期，不重送、不補發。
+   */
+  broadcastMetrics(payload: SystemMetrics): void {
+    for (const clientId of this.clients.keys()) {
+      this.send(clientId, payload);
+    }
   }
 
   /** 對單一連線推送任意 payload——003 AI relay / job status relay 的銜接點（FR-015）。 */
