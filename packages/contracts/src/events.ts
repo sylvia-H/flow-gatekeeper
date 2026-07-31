@@ -87,6 +87,44 @@ export type Pong = { type: "pong"; ts: number };
 /** system/unauthorized：訂閱授權失敗。 */
 export type SystemUnauthorized = { type: "system/unauthorized" };
 
+/**
+ * worker 回報的指標（api 自 Redis 快照 `metrics:worker` 讀入）；worker 缺席、快照過期或
+ * 畸形時整體為 `null`（009 FR-008 降級輸出）。
+ */
+export type WorkerMetrics = {
+  /** worker 端結算時間（ISO-8601），供判讀快照新鮮度。 */
+  snapshotAt: string;
+  llmLatency: {
+    /** 窗內 LLM 呼叫樣本數。 */
+    count: number;
+    /** 以下三項於 `count === 0` 時為 `null`（**不是 0**）。 */
+    avgMs: number | null;
+    p95Ms: number | null;
+    maxMs: number | null;
+  };
+  cache: {
+    hits: number;
+    misses: number;
+    /** `hits / (hits + misses)`；分母為 0 時為 `null`（**不是 0**）。 */
+    hitRate: number | null;
+  };
+};
+
+/**
+ * system/metrics：伺服器週期廣播的營運指標摘要（009 FR-008a）。
+ * 廣播給**所有已連線 client**，與 `machine/subscribe` 訂閱狀態無關。
+ */
+export type SystemMetrics = {
+  type: "system/metrics";
+  /** 本則摘要涵蓋的時間窗（＝`METRICS_INTERVAL_MS`）；前端過期門檻由此推導，不得硬編。 */
+  windowMs: number;
+  /** api 結算時間（ISO-8601）——前端新鮮度判定以此為基準，非收訊時間。 */
+  collectedAt: string;
+  queue: { waiting: number; active: number; failed: number };
+  wsConnections: number;
+  worker: WorkerMetrics | null;
+};
+
 /** 客戶端→伺服器的控制訊息聯集（供 Gateway narrow）。 */
 export type ClientControlMessage = Ping | MachineSubscribe;
 
@@ -95,4 +133,5 @@ export type ServerControlMessage =
   | SystemConnected
   | MachineSubscribed
   | Pong
-  | SystemUnauthorized;
+  | SystemUnauthorized
+  | SystemMetrics;
