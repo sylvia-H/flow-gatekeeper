@@ -211,8 +211,10 @@ pnpm --filter @flow-gatekeeper/web dev
 - [x] 面板數值與同一時刻的 api 日誌摘要**一致**（ws payload 與日誌行同源、逐欄位比對已於
       自動化演練驗證；面板即渲染該 payload，畫面數值 `queue 0/0/0`／`wsConnections 1` 相符）。
 - [x] 面板為**唯讀**——無任何可觸發後端動作的控制項。
-- [ ] `VITE_METRICS_PANEL` 未設或為 `false` 時（production build 預設），面板**不渲染**，
-      首屏與改動前逐項一致。
+- [x] `VITE_METRICS_PANEL` 未設或為 `false` 時（production build 預設），面板**不渲染**，
+      首屏與改動前逐項一致（以 `pnpm --filter @flow-gatekeeper/web exec vite preview` 驗證；
+      判別關鍵：Mock Hz 與背壓 badge **仍在**、只有 Metrics 入口消失，證明是旗標關閉而非
+      TopBar 容器查詢隱藏次要項）。
 - [x] **憲章 IV 邊界**：`system/metrics` 未進 rAF buffer——面板依 `windowMs` 自成節奏更新，
       且 `BackpressureBadge` 的背壓比值全程維持 11–13:1、與改動前同量級（未被污染）。
 
@@ -244,7 +246,7 @@ pnpm --filter @flow-gatekeeper/web dev
 - [x] 面板轉為 **`disconnected`**，且**文案／視覺與 `stale` 明顯不同**——紅色 `Offline` +
       「即時通道未連線——顯示的是最後已知數值，與後端是否仍在產指標無關」，TopBar 同步轉為
       Reconnecting 並顯示橫幅；與上一節的黃色 `Stale`（TopBar 仍綠）不會混淆。
-- [ ] api 重啟、ws 重連並收到下一則廣播後，面板轉回 `live`。
+- [x] api 重啟、ws 重連並收到下一則廣播後，面板轉回 `live`。
 
 ### 6.1 pino 未進入瀏覽器 bundle（research R10）
 
@@ -325,24 +327,35 @@ pnpm -r test
 
 ## 驗收總表
 
-**演練日期**：2026-07-31（`/speckit-implement` 收尾）。除註記者外皆已實跑通過。
+**演練日期**：2026-07-31（`/speckit-implement` 收尾）。**全部場景皆已實跑通過**——
+後端與傳輸層以自動化演練驗證，瀏覽器畫面判準以實機逐項確認並截圖存證。
 
 | SC | 場景 | 狀態 |
 | --- | --- | --- |
 | SC-001 | 1、1.1、3.5 | ☑ |
 | SC-002 | 2 | ☑ |
 | SC-003 | 3、3.5 | ☑ |
-| SC-004 | 4、4.1、6、6.2 | ☑ 後端與傳輸層／☐ **面板呈現待瀏覽器人工確認** |
+| SC-004 | 4、4.1、6、6.2 | ☑ |
 | SC-005 | 1、5 | ☑ |
 | SC-006 | 7 | ☑ |
-| SC-007 | 8（8.1–8.9） | ☑ 8.1／8.2 畫面層外皆通過（見場景 8 判準） |
+| SC-007 | 8（8.1–8.9） | ☑ |
 
-**待人工於瀏覽器確認的項目**（其餘皆已自動化實跑）：
+**演練中修出的四項缺失**（皆已各自 commit，非 spec 變更）：
 
-1. 場景 6 的面板呈現四項判準（入口／預設收合／數值與日誌一致／唯讀／旗標關閉不渲染）。
-2. 場景 6.2 的四態視覺（`empty`／`live` → `stale`／`disconnected`，且 `stale` 與
-   `disconnected` 文案視覺可區分）。
-3. 場景 8.1／8.2 的畫面層（卡片更新流暢度、`BackpressureBadge` 顯示的比值量級）。
+1. `LOG_LEVEL` 回退警告缺 `context` 欄位（違反 data-model E1）。
+2. 依賴中斷恢復時指標結算堆疊，出現同毫秒重複摘要——加重入防護。
+3. 面板展開層被 AppLayout 的 `h-14 + overflow-hidden` header 裁掉、點了像沒反應——改
+   `Teleport` 到 body（`position: fixed` 無效，因 `.tb-bar` 的 `container-type` 會成為
+   fixed 子孫的 containing block）。
+4. `empty` 狀態提示寫死「預設 60 秒」，非預設間隔下與實際不符——移除該數字。
 
-上述三項的**後端與傳輸層**已驗證：`system/metrics` 每週期廣播給所有連線、payload 形狀與
-日誌摘要一致、且為獨立訊息未混入遙測陣列（不進 rAF buffer）。
+**實機演練的兩個實務要點**（後續 feature 若要重跑本檔，先看這裡）：
+
+- 把 `METRICS_INTERVAL_MS` 設為下限 `5000` 可把等待從 2 分鐘壓到 10 秒，且走的是同一條
+  程式路徑（面板門檻由 payload 的 `windowMs` 推導）。**api 與 worker 兩邊都要設**，
+  否則 worker 要滿一個預設週期才寫出第一份快照，面板會先顯示 `worker: null`。
+- 驗 `stale` 用 `docker compose stop redis`（api 的 queue 讀取掛住 → 結算跳過），**ws 全程
+  不斷線**；比「調大間隔後重啟 api」乾淨，後者會順帶斷 ws 而混淆兩態。
+- 驗「旗標關閉不渲染」時 **TopBar 必須夠寬**：窄於 820px 時 Mock Hz／背壓 badge／Metrics
+  會一起被容器查詢隱藏，會把「被隱藏」誤判為「旗標關閉」。判準是**前兩者仍在、只有
+  Metrics 消失**。

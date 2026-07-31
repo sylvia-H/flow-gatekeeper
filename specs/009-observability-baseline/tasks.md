@@ -189,12 +189,14 @@ pnpm monorepo：`apps/{api,worker,web}` + `packages/{contracts,shared}`（見 pl
 
 ### 驗收（quickstart 逐項）
 
-> **2026-07-31 實跑結果**：場景 1–5、7–9 與場景 3.5／6 的傳輸層全數通過（含容器內三端 JSON
-> 日誌、healthcheck 停 Redis 約 60s 翻 `unhealthy`／恢復約 25s 轉回、`WORKER_CHAOS` 致命語意
-> 未被 pino 破壞、兩個 Redis key 共存）。**唯一未自動化的是需要瀏覽器的畫面判準**——場景 6
-> 的面板呈現、6.2 的四態視覺、8.1／8.2 的畫面層，清單見 `quickstart.md` 驗收總表下方。
-> 實跑另修出兩項缺失，已各自 commit：`LOG_LEVEL` 回退警告缺 `context`、依賴中斷恢復時
-> 指標結算堆疊。
+> **2026-07-31 實跑結果：場景 1–9 全數通過，SC-001 ~ SC-007 全部 ☑**。後端與傳輸層以自動化
+> 演練驗證（含容器內三端 JSON 日誌、healthcheck 停 Redis 約 60s 翻 `unhealthy`／恢復約 25s
+> 轉回、`WORKER_CHAOS` 致命語意未被 pino 破壞、兩個 Redis key 共存）；瀏覽器畫面判準以實機
+> 逐項確認並截圖存證（面板四態 `empty`／`live`／`stale`／`disconnected` 可區分、旗標關閉
+> 不渲染、背壓比值全程 11–13:1 未被污染）。
+> 實跑共修出**四項**缺失、皆已各自 commit：`LOG_LEVEL` 回退警告缺 `context`、依賴中斷恢復時
+> 指標結算堆疊、面板展開層被 header 裁掉（改 `Teleport`）、`empty` 提示寫死秒數。
+> 重跑本檔的實務要點見 `quickstart.md` 驗收總表下方。
 
 - [X] T062 執行 quickstart 場景 1–7 並逐項勾選。**前置**（quickstart §0 既知陷阱，analyze E9）：跑場景 6 前 MUST 先確認 `apps/api/.env` 的 `WS_AUTH_SECRET` 為空或前端帶對 token，否則 ws 訂閱會被拒、面板永遠收不到快照；場景 6 另需 `apps/web/.env` 設 `VITE_METRICS_PANEL=true`（T004a）。逐項判準：結構化日誌與 `LOG_LEVEL`（SC-001、SC-005）、非法 `LOG_LEVEL` 的回退警告（FR-003／T011a）、jobId 串接（SC-002）、健康端點雙向轉換與容器 healthcheck 切換（SC-003）、**容器內三端日誌為合法 JSON——即證明 `pino` 已隨 `packages/shared` 進入 production image**（場景 3.5）、指標摘要與 worker 缺席降級（SC-004）、摘要不被 `LOG_LEVEL` 濾掉（SC-005）、dev 面板含**過期樣態且與斷線樣態可區分**（SC-004 後半／FR-008a／analyze E4）、有損語意明文化（SC-006）
 - [X] T063 執行 quickstart **場景 8 零回歸對照 8.1–8.9**（SC-007）：遙測推送 cadence、背壓比值、streaming token 順序與里程碑、快取命中、訂閱與授權、優雅關閉、**worker 致命語意（`WORKER_CHAOS` 演練，確認致命訊息仍為純文字同步寫出、exit 1、監督者重啟）**、持久化文件形狀、**007 `worker:heartbeat` key／TTL／消費者未被影響（FR-010）**。**8.7 是最容易誤傷之處，MUST 特別確認**
