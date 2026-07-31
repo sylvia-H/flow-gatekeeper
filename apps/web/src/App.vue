@@ -8,6 +8,7 @@ import FleetHealth from "./domains/monitoring/components/FleetHealth.vue";
 import EventStrip from "./domains/monitoring/components/EventStrip.vue";
 import CopilotDrawer from "./domains/ai-copilot/components/CopilotDrawer.vue";
 import { useMonitoringStore } from "./domains/monitoring/stores/monitoring.store.js";
+import { useMetricsStore } from "./domains/monitoring/stores/metrics.store.js";
 import { useCopilotStore } from "./domains/ai-copilot/stores/copilot.store.js";
 import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFrequencyWs.js";
 import { KNOWN_MACHINE_IDS, machineLabel } from "./domains/monitoring/lib/machine-labels.js";
@@ -20,6 +21,8 @@ import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.j
  */
 const store = useMonitoringStore();
 const copilot = useCopilotStore();
+// 009 US3：`system/metrics` 的唯一消費者（dev 面板）。低頻，直接寫入不進 rAF buffer。
+const metrics = useMetricsStore();
 
 // 手機 bottom-sheet 開關。桌機（md+）改為「可折疊常駐」：desktopPanelOpen 控制是否顯示，
 // 收合後中間欄拿回面板寬度、右側改露出可展開的細把手（修正：小螢幕中欄被壓、Diagnose 被裁）。
@@ -133,6 +136,8 @@ const handle = useHighFrequencyWs({
   onLatency: store.setLatency,
   // 診斷事件分流交 copilot.store（憲章 IV／FR-017：不進遙測 buffer）。
   onDiagnosisEvent: copilot.applyEvent,
+  // 009：指標摘要（低頻）直接交 metrics.store，同樣不進遙測 buffer。
+  onMetrics: metrics.applyMetrics,
   // 每次（重）連線都會觸發：保存 clientId（供 005）並用單一名冊訂閱 5 台（dev 送空 token）。
   onConnected: (clientId: string) => {
     store.setClientId(clientId);

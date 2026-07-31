@@ -1,5 +1,9 @@
 import { onUnmounted, ref, type Ref } from "vue";
-import type { ClientControlMessage, TelemetryPoint } from "@flow-gatekeeper/contracts";
+import type {
+  ClientControlMessage,
+  SystemMetrics,
+  TelemetryPoint,
+} from "@flow-gatekeeper/contracts";
 import type { ConnectionStatus } from "../stores/monitoring.store.js";
 import { nextBackoffDelay } from "../lib/backoff.js";
 import { classifyWsMessage, type DiagnosisEvent } from "../lib/ws-message.js";
@@ -30,6 +34,11 @@ export interface UseHighFrequencyWsOptions {
    * 憲章 IV／FR-017：診斷事件 MUST NOT 進遙測 buffer，直接分流不破壞遙測 rAF 批次。
    */
   onDiagnosisEvent?: (event: DiagnosisEvent) => void;
+  /**
+   * 選用（009 US3）：收到 `system/metrics` 時直接交 metrics store。低頻（預設 60s 一則），
+   * MUST NOT 進遙測 buffer——否則會延遲顯示並污染背壓比值量測（見 ws-message.ts 分派註解）。
+   */
+  onMetrics?: (metrics: SystemMetrics) => void;
   /** 選用（US4）：pong 到達時回報 ping→pong RTT（ms）→ store.setLatency。 */
   onLatency?: (ms: number) => void;
   /**
@@ -154,6 +163,10 @@ export function useHighFrequencyWs(
       case "diagnosis":
         // 診斷事件（005）：分流交 copilot.store，MUST NOT 進遙測 buffer（憲章 IV／FR-017）。
         onDiagnosisEvent?.(routed.event);
+        return;
+      case "metrics":
+        // 指標摘要（009）：低頻控制訊息，直接交 metrics store，同樣不進遙測 buffer。
+        options.onMetrics?.(routed.metrics);
         return;
       case "control":
         handleControlMessage(routed.message);

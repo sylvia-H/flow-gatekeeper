@@ -120,38 +120,38 @@ pnpm monorepo：`apps/{api,worker,web}` + `packages/{contracts,shared}`（見 pl
 
 ### 契約先行（憲章 II／III：先改契約，再改三端）
 
-- [ ] T034 [US3] 在 `packages/contracts/src/events.ts` 新增 `WorkerMetrics` 與 `SystemMetrics` 型別，並納入 `ServerControlMessage` 聯集；依「型別來源分層」**以 TS 型別定義、不引入 Zod**（與既有 `system/connected`／`job/status` 一致，contracts/metrics-summary.md §1）
-- [ ] T035 [US3] 在根目錄 `asyncapi.yaml` 新增 `system/metrics` 訊息定義，與 T034 的型別逐欄位一致（FR-008a／憲章 II）
+- [X] T034 [US3] 在 `packages/contracts/src/events.ts` 新增 `WorkerMetrics` 與 `SystemMetrics` 型別，並納入 `ServerControlMessage` 聯集；依「型別來源分層」**以 TS 型別定義、不引入 Zod**（與既有 `system/connected`／`job/status` 一致，contracts/metrics-summary.md §1）
+- [X] T035 [US3] 在根目錄 `asyncapi.yaml` 新增 `system/metrics` 訊息定義，與 T034 的型別逐欄位一致（FR-008a／憲章 II）
 
 ### 純函式與單測（可平行）
 
-- [ ] T036 [P] [US3] 在 `apps/worker/src/lib/latency.ts` 實作 `summarizeLatency(samples)`：回傳 `{ count, avgMs, p95Ms, maxMs }`；**空樣本時各統計值回 `null`（不是 0）**（data-model E3 不變量）
-- [ ] T037 [P] [US3] 在 `apps/worker/src/lib/latency.test.ts` 撰寫單測：空樣本回 null、單一樣本、p95 邊界（research R9）
-- [ ] T038 [P] [US3] 在 `apps/worker/src/lib/hit-rate.ts` 實作 `hitRate(hits, misses)`：`hits / (hits + misses)`；**分母為 0 時回 `null`（不是 0）**（FR-008／data-model E3）
-- [ ] T039 [P] [US3] 在 `apps/worker/src/lib/hit-rate.test.ts` 撰寫單測：分母為 0 回 null、比值正確、窗內計數不受累計污染（research R9）
-- [ ] T040 [P] [US3] 在 `apps/api/src/lib/metrics-merge.ts` 實作 `mergeMetrics(apiPart, workerRaw)`：對 key 不存在、`JSON.parse` 失敗、欄位缺漏、型別不符**一律降級為 `worker: null` 並照常回傳完整結構，MUST NOT 拋錯**（FR-008 降級輸出／spec Edge Case「指標蒐集自身失敗」）
-- [ ] T041 [P] [US3] 在 `apps/api/src/lib/metrics-merge.test.ts` 撰寫單測：worker 快照缺席／過期／畸形 JSON／欄位型別不符時，皆回完整結構且 `worker` 為 `null`，api 那兩項指標不受影響（research R9）
+- [X] T036 [P] [US3] 在 `apps/worker/src/lib/latency.ts` 實作 `summarizeLatency(samples)`：回傳 `{ count, avgMs, p95Ms, maxMs }`；**空樣本時各統計值回 `null`（不是 0）**（data-model E3 不變量）
+- [X] T037 [P] [US3] 在 `apps/worker/src/lib/latency.test.ts` 撰寫單測：空樣本回 null、單一樣本、p95 邊界（research R9）
+- [X] T038 [P] [US3] 在 `apps/worker/src/lib/hit-rate.ts` 實作 `hitRate(hits, misses)`：`hits / (hits + misses)`；**分母為 0 時回 `null`（不是 0）**（FR-008／data-model E3）
+- [X] T039 [P] [US3] 在 `apps/worker/src/lib/hit-rate.test.ts` 撰寫單測：分母為 0 回 null、比值正確、窗內計數不受累計污染（research R9）
+- [X] T040 [P] [US3] 在 `apps/api/src/lib/metrics-merge.ts` 實作 `mergeMetrics(apiPart, workerRaw)`：對 key 不存在、`JSON.parse` 失敗、欄位缺漏、型別不符**一律降級為 `worker: null` 並照常回傳完整結構，MUST NOT 拋錯**（FR-008 降級輸出／spec Edge Case「指標蒐集自身失敗」）
+- [X] T041 [P] [US3] 在 `apps/api/src/lib/metrics-merge.test.ts` 撰寫單測：worker 快照缺席／過期／畸形 JSON／欄位型別不符時，皆回完整結構且 `worker` 為 `null`，api 那兩項指標不受影響（research R9）
 
 ### worker 側
 
-- [ ] T042 [US3] 在 `apps/worker/src/lib/metrics-collector.ts` 實作累加器與週期結算：`latencySamples` 為**固定上限 1000 的環形緩衝**、`cacheHits`／`cacheMisses` 窗內計數；每 `METRICS_INTERVAL_MS` 結算後 `SET metrics:worker <json> EX <3×間隔秒數>`、同時記入 worker 自身日誌，並將累加器歸零（data-model E4／E5、research R5）。worker 側摘要 MUST 使用 `createLogger` 提供的**專屬 metrics child logger**（`context: "metrics"`，level 由 `METRICS_LOG_LEVEL` 獨立釘定），**MUST NOT 用一般 logger**——否則 `LOG_LEVEL=warn` 時 worker 摘要會被濾掉，SC-005 在 worker 側不成立（contracts/log-fields.md §3／§5／analyze E2）。間隔值 MUST 經 T009 的 `resolveMetricsInterval` 取得；**低於下限而回退時，由本處輸出一則 `warn`**（職責歸屬見 T011a／analyze E3）。**MUST NOT 讀寫、覆寫或改動 007 的 `worker:heartbeat` key**——兩者各自獨立、不同命名空間、不同 TTL、不同消費者（FR-010／data-model E4）
-- [ ] T043 [US3] 在 `apps/worker/src/main.ts` 接線：於 `ai.streamDiagnosis` 呼叫**外圍**加計時、於 `replyCached()` 加命中／未命中計數、於 `bootstrap()` 啟動 collector 並於關閉路徑清除 timer（**關閉時不輸出未滿一窗的殘窗摘要**，data-model E3）；**MUST 為純觀測，不改任何控制流**（憲章 V）
+- [X] T042 [US3] 在 `apps/worker/src/lib/metrics-collector.ts` 實作累加器與週期結算：`latencySamples` 為**固定上限 1000 的環形緩衝**、`cacheHits`／`cacheMisses` 窗內計數；每 `METRICS_INTERVAL_MS` 結算後 `SET metrics:worker <json> EX <3×間隔秒數>`、同時記入 worker 自身日誌，並將累加器歸零（data-model E4／E5、research R5）。worker 側摘要 MUST 使用 `createLogger` 提供的**專屬 metrics child logger**（`context: "metrics"`，level 由 `METRICS_LOG_LEVEL` 獨立釘定），**MUST NOT 用一般 logger**——否則 `LOG_LEVEL=warn` 時 worker 摘要會被濾掉，SC-005 在 worker 側不成立（contracts/log-fields.md §3／§5／analyze E2）。間隔值 MUST 經 T009 的 `resolveMetricsInterval` 取得；**低於下限而回退時，由本處輸出一則 `warn`**（職責歸屬見 T011a／analyze E3）。**MUST NOT 讀寫、覆寫或改動 007 的 `worker:heartbeat` key**——兩者各自獨立、不同命名空間、不同 TTL、不同消費者（FR-010／data-model E4）
+- [X] T043 [US3] 在 `apps/worker/src/main.ts` 接線：於 `ai.streamDiagnosis` 呼叫**外圍**加計時、於 `replyCached()` 加命中／未命中計數、於 `bootstrap()` 啟動 collector 並於關閉路徑清除 timer（**關閉時不輸出未滿一窗的殘窗摘要**，data-model E3）；**MUST 為純觀測，不改任何控制流**（憲章 V）
 
 ### api 側
 
-- [ ] T044 [US3] 在 `apps/api/src/modules/jobs/jobs.service.ts` 暴露 `queue.getJobCounts()` 的讀取方法，供指標收集器取得 `waiting`／`active`／`failed` **瞬時值**
-- [ ] T045 [US3] 在 `apps/api/src/modules/websocket/monitoring.gateway.ts` 暴露當前連線數（瞬時值）與一個 `broadcastMetrics(payload)` 方法，廣播給**所有已連線 client**（與 `machine/subscribe` 訂閱狀態無關，contracts/metrics-summary.md §2）
-- [ ] T046 [US3] 在 `apps/api/src/modules/metrics/metrics.service.ts` 實作週期結算：取 queue counts + ws 連線數、`GET metrics:worker`（非破壞性，不 `DEL`）、呼叫 `mergeMetrics` 合併，以**專屬 metrics child logger** 輸出一則摘要並經 T045 廣播；蒐集失敗時該項標記不可用、**MUST NOT 中斷摘要或影響主流程**
-- [ ] T047 [US3] 建立 `apps/api/src/modules/metrics/metrics.module.ts` 並在 `apps/api/src/app.module.ts` 掛載；於 `onModuleDestroy` 清除 timer
-- [ ] T048 [US3] 在 `apps/api/src/modules/config/config.service.ts` 新增 `METRICS_INTERVAL_MS`（經 T009 的 `resolveMetricsInterval` 套用下限）與 `METRICS_LOG_LEVEL` 讀取；**低於下限而回退時，由本處輸出一則 `warn`**，載明收到的值與實際採用的 60000ms（quickstart 場景 1.1 判準；職責歸屬見 T011a／analyze E3）
+- [X] T044 [US3] 在 `apps/api/src/modules/jobs/jobs.service.ts` 暴露 `queue.getJobCounts()` 的讀取方法，供指標收集器取得 `waiting`／`active`／`failed` **瞬時值**
+- [X] T045 [US3] 在 `apps/api/src/modules/websocket/monitoring.gateway.ts` 暴露當前連線數（瞬時值）與一個 `broadcastMetrics(payload)` 方法，廣播給**所有已連線 client**（與 `machine/subscribe` 訂閱狀態無關，contracts/metrics-summary.md §2）
+- [X] T046 [US3] 在 `apps/api/src/modules/metrics/metrics.service.ts` 實作週期結算：取 queue counts + ws 連線數、`GET metrics:worker`（非破壞性，不 `DEL`）、呼叫 `mergeMetrics` 合併，以**專屬 metrics child logger** 輸出一則摘要並經 T045 廣播；蒐集失敗時該項標記不可用、**MUST NOT 中斷摘要或影響主流程**
+- [X] T047 [US3] 建立 `apps/api/src/modules/metrics/metrics.module.ts` 並在 `apps/api/src/app.module.ts` 掛載；於 `onModuleDestroy` 清除 timer
+- [X] T048 [US3] 在 `apps/api/src/modules/config/config.service.ts` 新增 `METRICS_INTERVAL_MS`（經 T009 的 `resolveMetricsInterval` 套用下限）與 `METRICS_LOG_LEVEL` 讀取；**低於下限而回退時，由本處輸出一則 `warn`**，載明收到的值與實際採用的 60000ms（quickstart 場景 1.1 判準；職責歸屬見 T011a／analyze E3）
 
 ### web 側
 
-- [ ] T049 [P] [US3] 在 `apps/web/src/domains/monitoring/stores/metrics.store.ts` 建立 Pinia store 保存最新快照與其 `collectedAt`，並提供新鮮度判斷：**以 payload 的 `collectedAt` 為基準，超過 2 × 間隔（預設 120 秒）未更新即視為過期**（FR-008a／contracts/metrics-summary.md §2.1）。**間隔值 MUST 取自最近一則 payload 的 `windowMs` 欄位**（data-model E3）——`METRICS_INTERVAL_MS` 是後端環境變數，前端無從讀取，MUST NOT 在前端硬編 60000。**尚未收到任何快照時 store 狀態為 `empty`（尚無資料），MUST NOT 判為過期**（analyze E5）。此外 MUST 提供**與過期分離的連線狀態**：ws 斷線時為 `disconnected`，ws 連著但逾門檻未收到新快照時才是 `stale`（analyze E4）；**MUST NOT 與 `metrics:worker` 的 3× TTL 對齊**（不同層問題，research R11）
-- [ ] T050 [US3] 在 `apps/web/src/domains/monitoring/lib/ws-message.ts` 新增 `system/metrics` 分派：**直接寫入 metrics store**；並在該處加註解說明——此為 60s 一則的低頻控制訊息，**MUST NOT 進入 `machine/data` 的 rAF buffer 路徑**，否則會延遲顯示並污染背壓比值量測（憲章 IV 邊界，contracts/metrics-summary.md §3）
-- [ ] T051 [P] [US3] 在 `apps/web/src/shared/components/MetricsPanel.vue` 建立**唯讀** dev 面板：**預設收合**、展開後顯示四項指標與快照新鮮度。面板 MUST 依 T049 的狀態呈現**四種可區分樣態**（analyze E4）：`live`（正常）、`stale`（ws 連著但逾 2× `windowMs` 未收到新快照，數值可留但 MUST NOT 看起來像即時值）、`disconnected`（ws 斷線，MUST 與 `stale` 在文案／視覺上可區分，讀者能看出是「沒連上」而非「後端停更」）、`empty`（尚未收到任何快照）；顏色／圓角／間距一律用 `design-spec.md` 具名 token、沿用 `BackpressureBadge.vue` 的視覺語彙，**MUST NOT 散落 hex**；**MUST NOT 提供任何觸發後端動作的控制項**（FR-008a／憲章 II）
-- [ ] T052 [US3] 在 `apps/web/src/shared/components/TopBar.vue` 依 `VITE_METRICS_PANEL` 旗標掛載面板（dev 預設開、production build 預設關）；旗標關閉時 MUST NOT 渲染，使首屏與改動前逐項一致
-- [ ] T053 [US3] 執行 `pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`；並執行 `pnpm --filter @flow-gatekeeper/web build` 後以 `Select-String -Path apps/web/dist/assets/*.js -Pattern "pino" -SimpleMatch` 確認**無任何命中**（research R10／quickstart 6.1）
+- [X] T049 [P] [US3] 在 `apps/web/src/domains/monitoring/stores/metrics.store.ts` 建立 Pinia store 保存最新快照與其 `collectedAt`，並提供新鮮度判斷：**以 payload 的 `collectedAt` 為基準，超過 2 × 間隔（預設 120 秒）未更新即視為過期**（FR-008a／contracts/metrics-summary.md §2.1）。**間隔值 MUST 取自最近一則 payload 的 `windowMs` 欄位**（data-model E3）——`METRICS_INTERVAL_MS` 是後端環境變數，前端無從讀取，MUST NOT 在前端硬編 60000。**尚未收到任何快照時 store 狀態為 `empty`（尚無資料），MUST NOT 判為過期**（analyze E5）。此外 MUST 提供**與過期分離的連線狀態**：ws 斷線時為 `disconnected`，ws 連著但逾門檻未收到新快照時才是 `stale`（analyze E4）；**MUST NOT 與 `metrics:worker` 的 3× TTL 對齊**（不同層問題，research R11）
+- [X] T050 [US3] 在 `apps/web/src/domains/monitoring/lib/ws-message.ts` 新增 `system/metrics` 分派：**直接寫入 metrics store**；並在該處加註解說明——此為 60s 一則的低頻控制訊息，**MUST NOT 進入 `machine/data` 的 rAF buffer 路徑**，否則會延遲顯示並污染背壓比值量測（憲章 IV 邊界，contracts/metrics-summary.md §3）
+- [X] T051 [P] [US3] 在 `apps/web/src/shared/components/MetricsPanel.vue` 建立**唯讀** dev 面板：**預設收合**、展開後顯示四項指標與快照新鮮度。面板 MUST 依 T049 的狀態呈現**四種可區分樣態**（analyze E4）：`live`（正常）、`stale`（ws 連著但逾 2× `windowMs` 未收到新快照，數值可留但 MUST NOT 看起來像即時值）、`disconnected`（ws 斷線，MUST 與 `stale` 在文案／視覺上可區分，讀者能看出是「沒連上」而非「後端停更」）、`empty`（尚未收到任何快照）；顏色／圓角／間距一律用 `design-spec.md` 具名 token、沿用 `BackpressureBadge.vue` 的視覺語彙，**MUST NOT 散落 hex**；**MUST NOT 提供任何觸發後端動作的控制項**（FR-008a／憲章 II）
+- [X] T052 [US3] 在 `apps/web/src/shared/components/TopBar.vue` 依 `VITE_METRICS_PANEL` 旗標掛載面板（dev 預設開、production build 預設關）；旗標關閉時 MUST NOT 渲染，使首屏與改動前逐項一致
+- [X] T053 [US3] 執行 `pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test`；並執行 `pnpm --filter @flow-gatekeeper/web build` 後以 `Select-String -Path apps/web/dist/assets/*.js -Pattern "pino" -SimpleMatch` 確認**無任何命中**（research R10／quickstart 6.1）
 
 **Checkpoint**: US1–US3 皆可獨立運作；指標可從日誌與面板兩處判讀。
 

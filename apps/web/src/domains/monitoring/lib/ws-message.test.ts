@@ -23,6 +23,13 @@ describe("classifyWsMessage — WS 分流分類（憲章 IV／FR-017）", () => 
     }
   });
 
+  it("system/metrics → metrics，且**永不**歸為 telemetry（009：不進 rAF buffer）", () => {
+    const r = classifyWsMessage({ type: "system/metrics", windowMs: 60_000 });
+    expect(r.kind).toBe("metrics");
+    expect(r.kind).not.toBe("telemetry");
+    if (r.kind === "metrics") expect(r.metrics.windowMs).toBe(60_000);
+  });
+
   it("未知 type 與非物件 → ignore", () => {
     expect(classifyWsMessage({ type: "unknown/thing" }).kind).toBe("ignore");
     expect(classifyWsMessage("not-json-object").kind).toBe("ignore");

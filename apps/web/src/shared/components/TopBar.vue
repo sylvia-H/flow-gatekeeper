@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import { Search, Stethoscope, Gauge, Pause, Play } from "lucide-vue-next";
 import BackpressureBadge from "./BackpressureBadge.vue";
+import MetricsPanel from "./MetricsPanel.vue";
 import {
   useMonitoringStore,
   type ConnectionStatus,
@@ -48,6 +49,15 @@ const latencyText = computed(() => {
   if (store.connectionStatus !== "connected") return null;
   return store.latencyMs !== null ? `${store.latencyMs}ms` : "—";
 });
+
+/**
+ * 009 US3：dev 指標面板旗標（`VITE_METRICS_PANEL`，dev 預設開、production build 預設關）。
+ * 旗標關閉時整個面板 MUST NOT 渲染，使首屏與改動前逐項一致（FR-012 零回歸）。
+ * 生效來源是 `apps/web/.env`（Vite 以 `apps/web/` 為 env 根目錄，未設 `envDir`），
+ * 放 repo 根的 `.env` 讀不到。未設定時取 `import.meta.env.DEV` 作為預設。
+ */
+const showMetricsPanel =
+  (import.meta.env.VITE_METRICS_PANEL ?? String(import.meta.env.DEV)) === "true";
 
 /** US4 search：綁定 store.searchQuery（sidebar 清單與主區卡片共用）。 */
 function onSearchInput(event: Event): void {
@@ -101,6 +111,11 @@ function onSearchInput(event: Event): void {
         <Gauge class="h-4 w-4" aria-hidden="true" />
         <span class="hidden md:inline">Mock Hz</span>
       </button>
+
+      <!-- 009 dev 指標面板（唯讀、預設收合）：次要項，與背壓計量同層讓位 -->
+      <div v-if="showMetricsPanel" class="tb-optional">
+        <MetricsPanel />
+      </div>
 
       <!-- 背壓計量：次要項，工具列變窄時先讓位（寬螢幕/收合面板時仍完整呈現） -->
       <div class="tb-optional">
