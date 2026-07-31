@@ -130,7 +130,7 @@ dev 期間 worker 保留 `tsx watch`（熱重載價值 > 監督價值，且人�
 
 - **現況**：telemetry 持久化是 fire-and-forget（`void persistBatch(...)`，刻意不 await 以免卡住推送 cadence）；API 崩潰時 in-flight batch 直接丟。errorlog 去重靠行程內 `lastState` Map，重啟後會重寫一筆、多實例下判斷會錯。
 - **決策**：**明文接受**「可丟失最後數秒 telemetry、errorlog 在重啟邊界可能重複」。有損是可以的，未宣告的有損才是問題。
-- **落地**：Feature 009 把這個語意寫進 `persistBatch` 的註解與 README，並引用本節。若未來轉為不可丟失，路徑是寫入前先進佇列（BullMQ 或 Redis Stream）再批次落庫。
+- **落地（✅ 已完成，Feature 009）**：語意已明文於三處且指向同一份事實——`persistBatch` 與 `detectErrorTransitions` 的程式註解、README 的「已宣告的取捨」小節，兩者皆引用本節。若未來轉為不可丟失，路徑是寫入前先進佇列（BullMQ 或 Redis Stream）再批次落庫；該路徑仍**不在範圍內**。
 
 ---
 

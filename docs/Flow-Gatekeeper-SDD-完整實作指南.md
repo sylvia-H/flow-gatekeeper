@@ -2903,8 +2903,12 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
   ——瀏覽器只面對 web 的單一入口，`/ws`／`/diagnoses` 由 nginx 同源反代至 `api:3000`（起草時寫「port 映射」
   已被 clarify 的單一入口拓樸取代，見 FR-006）。並補上優雅關閉處理（顯式 SIGTERM/SIGINT handler →
   `app.close()`；Gateway 的 `onModuleDestroy` 於收尾釋放 ws 連線並關 ws server，否則活躍連線會使關閉掛住，
-  FR-004）與 `/ws` 握手健康探針（FR-011）。收尾 code-review 移除了原併用的 `enableShutdownHooks()`（會另掛
+  FR-004）與健康探針（FR-011）。收尾 code-review 移除了原併用的 `enableShutdownHooks()`（會另掛
   一組訊號監聽器與顯式 handler 競態、重複觸發 `app.close()`），現況與由來見 008 research D5。
+  **健康探針已變更**：008 當時 api 沒有任何 GET 路由（探 HTTP 必得 404），故探針以「連 `ws://…/ws`
+  等 `system/connected`」實作；**Feature 009 落地 `GET /healthz` 後已改走該端點**（涵蓋 Redis／Mongo
+  連通深度，二態 200／503），`apps/api/src/healthcheck.ts` 已改寫、compose 的 `test` 指令不變
+  （仍為 `node dist/healthcheck.js`）。現況見 `specs/009-observability-baseline/contracts/health-endpoint.md §6`。
 - **web 容器化**：多階段建置（`pnpm --filter web build`）→ runtime 用 **`nginx:alpine`**（起草時列為 14.3
   clarify，已定案）同時提供靜態產物與 `/ws`、`/diagnoses` 的同源反向代理。
 - **compose profiles 切分執行模式**：`docker compose up -d` 維持只起 infra（dev 迴圈不變，app 仍用
@@ -2943,9 +2947,10 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
 
 ## 15. Feature 009：可觀測性基線（Observability Baseline）
 
-> **狀態：方向藍圖（尚未 `/speckit.specify`）**。正式流程仍走完整 SDD；本節為起草。
+> **狀態：已落地**——本 feature 已走完正式 SDD（`specs/009-observability-baseline/`）並實作驗收通過。
+> 以下「要做／待 clarify」等段落保留起草時的規劃敘述作為由來，現況以各子節的「✅ 已落地」標註為準。
 >
-> **前置**：Feature 007 已併回 `develop`（延續其 heartbeat 探針）；可與 008 並行或先後。
+> **前置**：Feature 007 已併回 `develop`（延續其 heartbeat 探針）；008 亦已落地。
 > 決策脈絡見 ADR-002 §5.3：範圍刻意壓在「基線」，Prometheus/Grafana/OTel 明確不做。
 
 ### 15.1 為什麼要有這個 feature（背景）
@@ -2957,14 +2962,22 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
 
 ### 15.2 範圍：要做什麼 vs 明確不做
 
-**要做**：
+**要做**（✅ 皆已落地，現況以此處為準）：
 
 - **結構化日誌（api/worker）**：以 pino 取代手寫 `log()`／`console.log`，統一 JSON 格式與欄位約定
-  （level、time、context、jobId/machineId 等關聯鍵），支援 `LOG_LEVEL` 環境變數。
-- **api `/healthz`**：回報自身與依賴狀態（Redis ping、Mongo ping、WS server 連線數概況），供 compose
-  healthcheck 與人工檢查使用。
-- **關鍵指標入 log（週期性摘要）**：queue 深度與 active/failed 計數、WS 連線數、LLM 呼叫延遲、cache
-  命中率。呈現方式見 15.3 clarify。
+  （level、time、context、jobId/machineId 等關聯鍵），支援 `LOG_LEVEL` 環境變數。**唯一例外**是
+  worker 的致命路徑 `apps/worker/src/lib/fatal.ts`——維持同步純文字 stderr 寫出（pino 的寫入是非同步的，
+  改用它會在 `process.exit(1)` 前丟失致命日誌），理由見 `specs/009-observability-baseline/contracts/log-fields.md §7`。
+  一次性 CLI 腳本（`seed.ts`、`smoke-gemini.ts`）同樣維持人類可讀輸出。
+- **api `/healthz`**：**二態**（`healthy` → 200 / `unhealthy` → 503）回報 api 與 Redis／Mongo 的**即時**
+  連通狀態（每次請求即時探測、不快取，免認證、`Cache-Control: no-store`）。008 的 api 容器 healthcheck
+  已改由它消費（見 §14.2）。起草時寫的「WS server 連線數概況」未納入 body——連線數屬指標而非健康判準，
+  改由下一項的週期摘要承接。
+- **關鍵指標入 log（週期性摘要）+ web dev 面板**：queue 深度與 active/failed 計數、WS 連線數、LLM 呼叫
+  延遲、cache 命中率，每 `METRICS_INTERVAL_MS`（預設 60000，下限 5000）合併為一則摘要入日誌，並經**新增
+  的 `system/metrics` ws 訊息**廣播到 web 的**唯讀 dev 面板**（15.3 Q2 定案為「入 log + dev 面板」兩者
+  兼具，見下節）。worker 側指標經 Redis `metrics:worker` 快照交 api 合併——**worker MUST NOT 直接 emit ws**
+  （憲章 IV）。
 - **有損寫入語意明文化**：把「可丟失最後數秒 telemetry、errorlog 在重啟邊界可能重複」寫進
   `persistBatch` 註解與 README，引用 ADR-002 §6.4——有損是可以的，未宣告的有損才是問題。
 
@@ -2972,24 +2985,45 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
 
 - Prometheus／Grafana、`/metrics` exporter、OTel tracing、告警系統、log 聚合服務（ADR-002 §7 的邊界：
   這些不會讓三個核心賣點更亮）。
-- web 端的 log 蒐集／上報（瀏覽器 console 即可）。
+- web 端的 log 蒐集／上報（瀏覽器 console 即可）。**注意界線**：009 新增的 web dev 面板是**唯讀展示**
+  後端送來的指標，方向是 server → client；「web 端 log 上報」（client → server）仍明確不做。
 - 修改任何寫入語意（fire-and-forget 維持，只是明文化）。
 
-### 15.3 待 `/speckit.clarify` 決定的關鍵問題
+### 15.3 待 `/speckit.clarify` 決定的關鍵問題（✅ 四題皆已定案）
 
-1. **日誌欄位約定**：關聯鍵（jobId、machineId、clientId）如何統一命名？pretty-print 只在 dev 開啟？
-2. **指標呈現**：只入 log（最省）vs 簡易 `/stats` endpoint vs 前端 TopBar 加 dev 面板（既有
-   BackpressureBadge 已是一例）？
-3. **healthz 判準**：依賴失聯多久算 degraded/unhealthy？回應格式（HTTP status vs body 細節）？
-4. **與 007 heartbeat 的整合**：worker 的心跳與 api 的 healthz 是否共用格式／key 命名空間？
+1. **日誌欄位約定** → **定案**：關聯鍵一律 camelCase、與 `packages/contracts` 逐字一致
+   （`jobId`／`machineId`／`clientId`），且 **MUST NOT 再把關聯鍵內嵌進訊息字串**（同一筆事件只能有一個
+   來源）。每筆固定帶 `service`（api／worker）與 `context`。pretty-print 由 `NODE_ENV` 推導（dev 開、
+   production 關），`LOG_PRETTY` 可顯式覆寫；`pino-pretty` 只留 devDependency，不進 production image。
+   欄位契約見 `specs/009-observability-baseline/contracts/log-fields.md`。
+2. **指標呈現** → **定案：入 log + 前端 dev 面板兩者兼具**（`/stats` endpoint 淘汰——那是機器可抓取的
+   匯出端點，落在 ADR-002 §7 明確拒絕的範圍）。面板為**唯讀**、預設收合，由 `VITE_METRICS_PANEL` 控制
+   （dev 預設開、production build 預設關），資料來自新增的 `system/metrics` ws 廣播。**面板 MUST 呈現
+   四種可區分樣態**：`live`／`stale`（連著但後端停更）／`disconnected`（前端沒連上）／`empty`（尚無資料）
+   ——`stale` 與 `disconnected` 的排查方向相反，混為一態面板就沒有判讀價值。
+3. **healthz 判準** → **定案：二態，無 degraded 中間態**。全部依賴 `up` → `healthy` + HTTP 200；
+   任一 `down` → `unhealthy` + HTTP **503**，body 逐依賴列出 `status`／`latencyMs`／`error`。
+   「失聯多久」不設遲滯：每次請求即時探測，單一依賴探測逾時（`HEALTH_PROBE_TIMEOUT_MS`，預設 2000ms）
+   即判 `down`——探測**永不拋錯**，逾時與例外一律轉為 `down`。契約見 `contracts/health-endpoint.md`。
+4. **與 007 heartbeat 的整合** → **定案：不整合，兩者各自獨立**。`worker:heartbeat`（TTL 30s）是 007 的
+   存活探針、由 compose healthcheck 消費；`metrics:worker`（TTL 3 × 間隔）是 009 的指標快照、由 api 的
+   收集器消費。命名空間不同、TTL 不同、消費者不同，**MUST NOT 互相取代或合併**——共用會讓兩種失效模式
+   （行程死了 vs 指標停更）擠在同一個訊號上，兩邊都變得不可判讀。
 
-### 15.4 驗收（初步）
+### 15.4 驗收（✅ 已通過，判準以 spec SC-001–SC-007 為準）
 
-- api/worker 的所有 log 輸出為結構化 JSON，含 level 與 context，`LOG_LEVEL` 可調。
-- `GET /healthz` 正確反映依賴狀態：手動停掉 Redis 或 Mongo，healthz 轉為非 healthy 並含原因。
-- 從 log 可直接讀出關鍵指標的週期摘要（queue 深度、WS 連線數、LLM 延遲、cache 命中率）。
-- `persistBatch` 的有損語意已明文（註解 + README + ADR-002 引用），與程式行為一致。
-- 三端行為無回歸：telemetry、診斷、streaming 全流程與改動前一致。
+- api/worker 的所有 log 輸出為結構化 JSON，含 level 與 context，`LOG_LEVEL` 可調（`fatal.ts` 與一次性
+  CLI 腳本為明文豁免）。同一次診斷可只用 `jobId` 串起 api → worker → 結果回傳。
+- `GET /healthz` 正確反映依賴狀態：手動停掉 Redis 或 Mongo，**數秒內轉為 `unhealthy` + HTTP 503** 且
+  body 指名失聯依賴；恢復後轉回 200。容器 healthcheck 已改由它消費（不再是 `/ws` 握手）。
+- 從 log 可直接讀出關鍵指標的週期摘要（queue 深度、WS 連線數、LLM 延遲、cache 命中率），且 worker
+  缺席時降級為 `worker: null`、api 側兩項照常輸出。摘要**不被 `LOG_LEVEL=warn` 濾掉**（等級由
+  `METRICS_LOG_LEVEL` 獨立釘定）。
+- **web dev 面板**顯示同一組指標的最新快照且與日誌一致，四種樣態（`live`／`stale`／`disconnected`／
+  `empty`）可區分；`VITE_METRICS_PANEL` 關閉時完全不渲染。
+- `persistBatch` 的有損語意已明文（註解 + README「已宣告的取捨」+ ADR-002 §6.4 引用），與程式行為一致。
+- 三端行為無回歸：telemetry、診斷、streaming 全流程與改動前一致（含 007 的致命語意與 `worker:heartbeat`
+  未被影響）。
 
 ### 15.5 007–009 之後的候選方向（未排程，刻意不併入三部曲）
 
@@ -2999,8 +3033,9 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 - **效能證據自動化**（強化賣點一）：把 ADR-001 §8 的背壓比值（收 N 筆訊息、只觸發 M 次渲染批次）
   做成可重跑的 benchmark 場景（不同 mock 頻率下的比值、幀率），數字與圖表固化進 README，
   取代「demo 時現場手動演」。不併入的理由：它是 **web 端**的量測工作——007 聚焦 worker、
-  008 明文「無行為變更」、009 明文排除 web 端，塞進任何一個都稀釋該 feature 的驗收。
-  與 009 的 15.3 Q2（前端 dev 面板）相鄰但不同件事：那是 runtime 觀測，這是離線量測證據。
+  008 明文「無行為變更」，而 009 的 web 觸及面僅止於**唯讀展示後端指標的 dev 面板**（15.3 Q2 定案），
+  不含任何前端量測基礎建設，塞進任何一個都稀釋該 feature 的驗收。
+  與 009 的 dev 面板相鄰但不同件事：那是 runtime 觀測，這是離線量測證據。
 - **Redis Streams token 回放**（強化賣點三）：斷線重連後 streaming 續傳，是 ADR-002 §6 四項
   「只文件化」差距中唯一會讓賣點更亮的（升級路徑見 ADR-002 §6.2）。不併入的理由：這是
   **streaming 行為變更**，直接牴觸 008「純打包」與 009「不修改任何寫入語意」的邊界；若立案，
