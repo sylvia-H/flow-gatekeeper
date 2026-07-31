@@ -207,13 +207,14 @@ pnpm --filter @flow-gatekeeper/web dev
 ```
 
 **通過判準**：
-- [ ] TopBar 出現指標面板入口，**預設收合**；展開後顯示四項指標。
-- [ ] 面板數值與同一時刻的 api 日誌摘要**一致**。
-- [ ] 面板為**唯讀**——無任何可觸發後端動作的控制項。
+- [x] TopBar 出現指標面板入口，**預設收合**；展開後顯示四項指標。
+- [x] 面板數值與同一時刻的 api 日誌摘要**一致**（ws payload 與日誌行同源、逐欄位比對已於
+      自動化演練驗證；面板即渲染該 payload，畫面數值 `queue 0/0/0`／`wsConnections 1` 相符）。
+- [x] 面板為**唯讀**——無任何可觸發後端動作的控制項。
 - [ ] `VITE_METRICS_PANEL` 未設或為 `false` 時（production build 預設），面板**不渲染**，
       首屏與改動前逐項一致。
-- [ ] **憲章 IV 邊界**：`system/metrics` 未進 rAF buffer——面板約每 60 秒更新一次，
-      且 `BackpressureBadge` 的背壓比值**與改動前一致**（未被污染）。
+- [x] **憲章 IV 邊界**：`system/metrics` 未進 rAF buffer——面板依 `windowMs` 自成節奏更新，
+      且 `BackpressureBadge` 的背壓比值全程維持 11–13:1、與改動前同量級（未被污染）。
 
 ### 6.2 面板四態：`empty` / `live` / `stale` / `disconnected`（FR-008a）
 
@@ -222,7 +223,7 @@ pnpm --filter @flow-gatekeeper/web dev
 
 **(a) `empty`**：面板開啟後、收到第一則快照之前（最長一個週期）
 
-- [ ] 呈現「尚無資料」，**不是**過期樣態（此時無 `collectedAt`／`windowMs` 可算門檻）。
+- [x] 呈現「尚無資料」，**不是**過期樣態（此時無 `collectedAt`／`windowMs` 可算門檻）。
 
 **(b) `live` → `stale`**：ws 保持連線，只讓後端停止廣播
 
@@ -232,14 +233,17 @@ pnpm --filter @flow-gatekeeper/web dev
 # 再等超過「舊 windowMs × 2」（例如原 60s → 面板應在 ~120s 後轉 stale）
 ```
 
-- [ ] 超過 **2 × 最近一則 payload 的 `windowMs`** 未收到新快照後，面板轉為 **`stale`**。
-- [ ] `stale` 時數值**不再看起來像即時值**——讀者能一眼看出這是舊快照，而非「系統剛好沒動靜」。
-- [ ] 收到下一則廣播後自動轉回 `live`。
+- [x] 超過 **2 × 最近一則 payload 的 `windowMs`** 未收到新快照後，面板轉為 **`stale`**
+      （以 `docker compose stop redis` 停止後端結算、ws 全程不斷線；`14s ago · 5s window`）。
+- [x] `stale` 時數值**不再看起來像即時值**——黃色樣態 + 「已連線，但逾兩個週期未收到新摘要
+      ——後端指標可能停止廣播」，且 TopBar 仍是綠色 Connected，兩者對比一眼可辨。
+- [x] 收到下一則廣播後自動轉回 `live`。
 
 **(c) `disconnected`**：停掉 api（ws 直接斷線），瀏覽器不重整
 
-- [ ] 面板轉為 **`disconnected`**，且**文案／視覺與 `stale` 明顯不同**——讀者能分辨
-      「前端沒連上」與「後端停止產指標」是兩件事。
+- [x] 面板轉為 **`disconnected`**，且**文案／視覺與 `stale` 明顯不同**——紅色 `Offline` +
+      「即時通道未連線——顯示的是最後已知數值，與後端是否仍在產指標無關」，TopBar 同步轉為
+      Reconnecting 並顯示橫幅；與上一節的黃色 `Stale`（TopBar 仍綠）不會混淆。
 - [ ] api 重啟、ws 重連並收到下一則廣播後，面板轉回 `live`。
 
 ### 6.1 pino 未進入瀏覽器 bundle（research R10）
@@ -298,7 +302,9 @@ Select-String -Path apps/web/dist/assets/*.js -Pattern "pino" -SimpleMatch
       （contracts/log-fields.md §7：`fatal.ts` 是 FR-004 的唯一例外，未被 pino 破壞）。
 - [x] 8.1／8.2 的**協定層**：遙測 cadence 與改動前一致（40 秒約 5100 筆＝50ms tick），
       `system/metrics` 為獨立訊息、**未混入遙測陣列**（故不進 rAF buffer、不污染比值分子）。
-- [ ] 8.1／8.2 的**畫面層**：卡片更新流暢度與 `BackpressureBadge` 顯示的比值——需瀏覽器人工確認。
+- [x] 8.1／8.2 的**畫面層**：五台卡片全程 `updated just now`、Fleet Health 正常聚合；
+      `BackpressureBadge` 在 empty／live／stale／disconnected 各階段皆維持 11–13:1，
+      與改動前同量級。
 
 ---
 

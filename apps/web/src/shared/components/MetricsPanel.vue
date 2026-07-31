@@ -91,7 +91,8 @@ const STATUS_META: Record<MetricsStatus, { label: string; dot: string; text: str
     label: "No data",
     dot: "bg-fg-subtle",
     text: "text-fg-subtle",
-    hint: "尚未收到任何指標摘要（每個週期一則，預設 60 秒）",
+    // 不寫死秒數：此時還沒有 payload，`windowMs` 無從得知，寫「預設 60 秒」在非預設間隔下會誤導。
+    hint: "尚未收到任何指標摘要（每個週期一則）",
   },
 };
 
