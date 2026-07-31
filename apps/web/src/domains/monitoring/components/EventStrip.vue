@@ -5,9 +5,9 @@ import { STATE_STYLE } from "../../../shared/lib/state-style.js";
 /**
  * US3 Event Stream（design-spec §7.8 `EventStrip`）：列出最近門檻跨越/錯誤事件。
  * 純呈現，資料由 `store.events`（前端衍生、最近 50 筆）餵入（FR-009）。
- * 高度 120–160px、row 32–40px、timestamp 用 mono（design-spec §7.8）。
+ * row 32–40px、timestamp 用 mono（design-spec §7.8）；高度由外層拖曳把手調整（預設 150px）。
  */
-defineProps<{ events: DerivedEvent[] }>();
+defineProps<{ events: DerivedEvent[]; height: number }>();
 
 // 顏色 token 取自共用 STATE_STYLE；僅縮寫 label 為呈現層自理。
 const SEVERITY: Record<DerivedEvent["severity"], { label: string; cls: string; dot: string }> = {
@@ -21,7 +21,7 @@ function clockLabel(ts: number): string {
 </script>
 
 <template>
-  <section class="flex h-[150px] flex-col bg-surface" aria-label="Event stream">
+  <section class="flex flex-col bg-surface" :style="{ height: `${height}px` }" aria-label="Event stream">
     <div class="flex shrink-0 items-center justify-between border-b border-subtle px-4 py-1.5">
       <span class="text-xs font-medium uppercase tracking-wide text-fg-subtle">Event Stream</span>
       <span class="font-mono text-[10px] text-fg-subtle">{{ events.length }}/50</span>
