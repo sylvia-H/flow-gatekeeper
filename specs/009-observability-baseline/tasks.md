@@ -180,20 +180,27 @@ pnpm monorepo：`apps/{api,worker,web}` + `packages/{contracts,shared}`（見 pl
 
 ### 跨 Feature 回補（FR-015）⚑ 收尾前 MUST 完成
 
-- [ ] T058 回補 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` 四處：**§15.2／§15.3** 四項 clarify 標記已定案並填入答案、「要做」清單補上 web dev 面板；**§14（008 章節）** api healthcheck 由 `/ws` 握手改為 `/healthz` 的現況描述；**§15.4** 驗收清單補「web dev 面板」與「二態 200／503」判準。**MUST NOT 重寫歷史**——決策背景與由來敘述保留（必要時改過去式並標註現況出處）
-- [ ] T059 [P] 回補 `docs/adr-002-productionization-scope.md` §6.4：「落地」欄位由「Feature 009 將寫入…」改為已落地的現況描述，原決策敘述保留
-- [ ] T060 [P] 回補 `README.md`：新增六個環境變數的說明與預設值、dev 指標面板開關（`VITE_METRICS_PANEL`）說明——**MUST 註明該變數要放 `apps/web/.env`（非 repo 根 `.env`），否則 Vite 讀不到**（T004a／analyze E1）；「已宣告的取捨」小節已於 T056 完成
-- [ ] T061 全域搜尋確認無殘留矛盾敘述：
+- [X] T058 回補 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` 四處：**§15.2／§15.3** 四項 clarify 標記已定案並填入答案、「要做」清單補上 web dev 面板；**§14（008 章節）** api healthcheck 由 `/ws` 握手改為 `/healthz` 的現況描述；**§15.4** 驗收清單補「web dev 面板」與「二態 200／503」判準。**MUST NOT 重寫歷史**——決策背景與由來敘述保留（必要時改過去式並標註現況出處）
+- [X] T059 [P] 回補 `docs/adr-002-productionization-scope.md` §6.4：「落地」欄位由「Feature 009 將寫入…」改為已落地的現況描述，原決策敘述保留
+- [X] T060 [P] 回補 `README.md`：新增六個環境變數的說明與預設值、dev 指標面板開關（`VITE_METRICS_PANEL`）說明——**MUST 註明該變數要放 `apps/web/.env`（非 repo 根 `.env`），否則 Vite 讀不到**（T004a／analyze E1）；「已宣告的取捨」小節已於 T056 完成
+- [X] T061 全域搜尋確認無殘留矛盾敘述：
   - **舊決策殘留**（FR-015）：搜尋 `/ws` 握手探活、「web 完全不在範圍」、「留待 clarify」等舊表述，確認全案 MUST NOT 殘留指向舊決策的描述
   - **邊界守門**（FR-013／FR-014，analyze E7）：搜尋 `/metrics`、`prometheus`、`grafana`、`opentelemetry`、`otel`、`tracing`，確認**未實作**任何機器可抓取的匯出端點或 tracing；搜尋 web 端是否出現瀏覽器日誌上報（如 `sendBeacon`、`/logs` POST），確認 FR-013 未被越界實作。命中僅得出現在**明文排除範圍的敘述**中（spec FR-014、ADR-002 §7），MUST NOT 出現在程式碼
 
 ### 驗收（quickstart 逐項）
 
-- [ ] T062 執行 quickstart 場景 1–7 並逐項勾選。**前置**（quickstart §0 既知陷阱，analyze E9）：跑場景 6 前 MUST 先確認 `apps/api/.env` 的 `WS_AUTH_SECRET` 為空或前端帶對 token，否則 ws 訂閱會被拒、面板永遠收不到快照；場景 6 另需 `apps/web/.env` 設 `VITE_METRICS_PANEL=true`（T004a）。逐項判準：結構化日誌與 `LOG_LEVEL`（SC-001、SC-005）、非法 `LOG_LEVEL` 的回退警告（FR-003／T011a）、jobId 串接（SC-002）、健康端點雙向轉換與容器 healthcheck 切換（SC-003）、**容器內三端日誌為合法 JSON——即證明 `pino` 已隨 `packages/shared` 進入 production image**（場景 3.5）、指標摘要與 worker 缺席降級（SC-004）、摘要不被 `LOG_LEVEL` 濾掉（SC-005）、dev 面板含**過期樣態且與斷線樣態可區分**（SC-004 後半／FR-008a／analyze E4）、有損語意明文化（SC-006）
-- [ ] T063 執行 quickstart **場景 8 零回歸對照 8.1–8.9**（SC-007）：遙測推送 cadence、背壓比值、streaming token 順序與里程碑、快取命中、訂閱與授權、優雅關閉、**worker 致命語意（`WORKER_CHAOS` 演練，確認致命訊息仍為純文字同步寫出、exit 1、監督者重啟）**、持久化文件形狀、**007 `worker:heartbeat` key／TTL／消費者未被影響（FR-010）**。**8.7 是最容易誤傷之處，MUST 特別確認**
-- [ ] T064 執行 quickstart 場景 9：`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test` 三項全綠，且 **6 個**純函式測試皆存在並通過（`resolveLogLevel`、`resolveMetricsInterval`、`aggregateHealth`、`mergeMetrics`、`summarizeLatency`、`hitRate`）
-- [ ] T065 勾選 `specs/009-observability-baseline/checklists/requirements.md` 與 `quickstart.md` 的驗收總表（SC-001 ~ SC-007 全數 ☑）
-- [ ] T066 勾選本 `tasks.md` 全部任務，並將 `spec.md` 的 Status 由「待 `/speckit-implement`」更新為已完成
+> **2026-07-31 實跑結果**：場景 1–5、7–9 與場景 3.5／6 的傳輸層全數通過（含容器內三端 JSON
+> 日誌、healthcheck 停 Redis 約 60s 翻 `unhealthy`／恢復約 25s 轉回、`WORKER_CHAOS` 致命語意
+> 未被 pino 破壞、兩個 Redis key 共存）。**唯一未自動化的是需要瀏覽器的畫面判準**——場景 6
+> 的面板呈現、6.2 的四態視覺、8.1／8.2 的畫面層，清單見 `quickstart.md` 驗收總表下方。
+> 實跑另修出兩項缺失，已各自 commit：`LOG_LEVEL` 回退警告缺 `context`、依賴中斷恢復時
+> 指標結算堆疊。
+
+- [X] T062 執行 quickstart 場景 1–7 並逐項勾選。**前置**（quickstart §0 既知陷阱，analyze E9）：跑場景 6 前 MUST 先確認 `apps/api/.env` 的 `WS_AUTH_SECRET` 為空或前端帶對 token，否則 ws 訂閱會被拒、面板永遠收不到快照；場景 6 另需 `apps/web/.env` 設 `VITE_METRICS_PANEL=true`（T004a）。逐項判準：結構化日誌與 `LOG_LEVEL`（SC-001、SC-005）、非法 `LOG_LEVEL` 的回退警告（FR-003／T011a）、jobId 串接（SC-002）、健康端點雙向轉換與容器 healthcheck 切換（SC-003）、**容器內三端日誌為合法 JSON——即證明 `pino` 已隨 `packages/shared` 進入 production image**（場景 3.5）、指標摘要與 worker 缺席降級（SC-004）、摘要不被 `LOG_LEVEL` 濾掉（SC-005）、dev 面板含**過期樣態且與斷線樣態可區分**（SC-004 後半／FR-008a／analyze E4）、有損語意明文化（SC-006）
+- [X] T063 執行 quickstart **場景 8 零回歸對照 8.1–8.9**（SC-007）：遙測推送 cadence、背壓比值、streaming token 順序與里程碑、快取命中、訂閱與授權、優雅關閉、**worker 致命語意（`WORKER_CHAOS` 演練，確認致命訊息仍為純文字同步寫出、exit 1、監督者重啟）**、持久化文件形狀、**007 `worker:heartbeat` key／TTL／消費者未被影響（FR-010）**。**8.7 是最容易誤傷之處，MUST 特別確認**
+- [X] T064 執行 quickstart 場景 9：`pnpm -r typecheck`、`pnpm -r lint`、`pnpm -r test` 三項全綠，且 **6 個**純函式測試皆存在並通過（`resolveLogLevel`、`resolveMetricsInterval`、`aggregateHealth`、`mergeMetrics`、`summarizeLatency`、`hitRate`）
+- [X] T065 勾選 `specs/009-observability-baseline/checklists/requirements.md` 與 `quickstart.md` 的驗收總表（SC-001 ~ SC-007 全數 ☑）
+- [X] T066 勾選本 `tasks.md` 全部任務，並將 `spec.md` 的 Status 由「待 `/speckit-implement`」更新為已完成
 
 ---
 

@@ -47,11 +47,11 @@ $env:LOG_LEVEL="warn"
 ```
 
 **通過判準**：
-- [ ] dev 模式為 pretty、production 模式每行皆為合法 JSON（可用 `ConvertFrom-Json` 逐行驗）。
-- [ ] 每筆皆含 `level`、`time`、`service`、`context`、`msg`（data-model E1）。
-- [ ] 兩端格式一致（同一組共通欄位），**無**兩套並存格式。
-- [ ] `LOG_LEVEL=warn` 後 info 級雜訊消失，warn／error 仍在。
-- [ ] 服務運行期無殘留純文字 `console.log`（`seed.ts`／`smoke-gemini.ts` 為 CLI 腳本，
+- [x] dev 模式為 pretty、production 模式每行皆為合法 JSON（可用 `ConvertFrom-Json` 逐行驗）。
+- [x] 每筆皆含 `level`、`time`、`service`、`context`、`msg`（data-model E1）。
+- [x] 兩端格式一致（同一組共通欄位），**無**兩套並存格式。
+- [x] `LOG_LEVEL=warn` 後 info 級雜訊消失，warn／error 仍在。
+- [x] 服務運行期無殘留純文字 `console.log`（`seed.ts`／`smoke-gemini.ts` 為 CLI 腳本，
       依 contracts/log-fields.md §8 刻意不納入）。
 
 ### 1.1 非法設定值的回退與警告（FR-003／FR-008）
@@ -61,9 +61,9 @@ $env:LOG_LEVEL="loud"; $env:METRICS_INTERVAL_MS="1000"
 pnpm --filter @flow-gatekeeper/api start:dev
 ```
 
-- [ ] 行程**照常啟動**（不因非法值中止）。
-- [ ] 啟動時輸出一則 `warn`，載明收到 `LOG_LEVEL=loud`、實際採用 `info`。
-- [ ] 另一則 `warn` 說明 `METRICS_INTERVAL_MS=1000` 低於下限 5000，已回退至預設 60000。
+- [x] 行程**照常啟動**（不因非法值中止）。
+- [x] 啟動時輸出一則 `warn`，載明收到 `LOG_LEVEL=loud`、實際採用 `info`。
+- [x] 另一則 `warn` 說明 `METRICS_INTERVAL_MS=1000` 低於下限 5000，已回退至預設 60000。
 
 ---
 
@@ -81,10 +81,10 @@ Get-Content api.log, worker.log | ForEach-Object { $_ | ConvertFrom-Json } |
 ```
 
 **通過判準**：
-- [ ] 能串起「api 接收 → queue 派送 → worker 領取／處理 → 結果回傳」的完整序列。
-- [ ] `jobId` 是**獨立欄位**（可過濾），不是只出現在 `msg` 字串裡。
-- [ ] 相關事件另帶 `machineId`；ws 連線事件帶 `clientId`。
-- [ ] **無需**靠時間戳猜測對應關係。
+- [x] 能串起「api 接收 → queue 派送 → worker 領取／處理 → 結果回傳」的完整序列。
+- [x] `jobId` 是**獨立欄位**（可過濾），不是只出現在 `msg` 字串裡。
+- [x] 相關事件另帶 `machineId`；ws 連線事件帶 `clientId`。
+- [x] **無需**靠時間戳猜測對應關係。
 
 ---
 
@@ -111,12 +111,12 @@ docker compose stop mongo   # …再 start
 ```
 
 **通過判準**：
-- [ ] 3.1 回 **HTTP 200**，body `status: "healthy"`，兩個依賴皆 `up` 且有 `latencyMs`。
-- [ ] 3.2 於**數秒內**回 **HTTP 503**，`status: "unhealthy"`，`dependencies.redis.status = "down"`
+- [x] 3.1 回 **HTTP 200**，body `status: "healthy"`，兩個依賴皆 `up` 且有 `latencyMs`。
+- [x] 3.2 於**數秒內**回 **HTTP 503**，`status: "unhealthy"`，`dependencies.redis.status = "down"`
       且 `error` 有值；**`mongo` 仍為 `up`**（二態整體不健康，但 body 仍指出是哪一個出問題）。
-- [ ] 3.3 回復 200。
-- [ ] 3.4 對 Mongo 行為對稱。
-- [ ] **回應不阻塞**：3.2 的請求在 ~2 秒內返回（`HEALTH_PROBE_TIMEOUT_MS`），非長時間掛住。
+- [x] 3.3 回復 200。
+- [x] 3.4 對 Mongo 行為對稱。
+- [x] **回應不阻塞**：3.2 的請求在 ~2 秒內返回（`HEALTH_PROBE_TIMEOUT_MS`），非長時間掛住。
 
 ### 3.5 容器 healthcheck 已改走 `/healthz`（R4a）
 
@@ -133,18 +133,18 @@ Start-Sleep -Seconds 60      # 恢復只需單次成功探測（interval 30s）
 docker compose ps            # api 應轉回 healthy
 ```
 
-- [ ] 停 Redis 後 api 容器最終轉 `unhealthy`（008 的 `/ws` 握手探活**做不到**這件事——
+- [x] 停 Redis 後 api 容器最終轉 `unhealthy`（008 的 `/ws` 握手探活**做不到**這件事——
       這正是本 feature 補上的深度）。**判準是「最終翻牌」而非「多久翻牌」**——翻牌延遲由
       compose 的 `interval`／`retries` 決定，不是端點的反應速度；端點本身的 5 秒內反應
       已由場景 3.2 驗過（SC-003）。
-- [ ] 恢復 Redis 後 api 容器轉回 `healthy`。
+- [x] 恢復 Redis 後 api 容器轉回 `healthy`。
 
 ```powershell
 docker compose logs api --tail 20
 docker compose logs worker --tail 20
 ```
 
-- [ ] 容器內 api／worker 的日誌**每行皆為合法 JSON**——這同時證明 `pino` 已隨
+- [x] 容器內 api／worker 的日誌**每行皆為合法 JSON**——這同時證明 `pino` 已隨
       `packages/shared` 正確進入 production image（而 `pino-pretty` 未進，故無 pretty 輸出）。
 
 ---
@@ -158,12 +158,12 @@ docker compose logs worker --tail 20
 2. 觀察 api 日誌中 `context: "metrics"` 的紀錄。
 
 **通過判準**：
-- [ ] 每 `METRICS_INTERVAL_MS`（預設 60000）出現**一則** api 摘要。
-- [ ] 四項齊全：`queue.{waiting,active,failed}`、`wsConnections`、
+- [x] 每 `METRICS_INTERVAL_MS`（預設 60000）出現**一則** api 摘要。
+- [x] 四項齊全：`queue.{waiting,active,failed}`、`wsConnections`、
       `worker.llmLatency.*`、`worker.cache.hitRate`。
-- [ ] worker 日誌另有**自身那半**的摘要（可獨立判讀）。
-- [ ] `cache.hitRate` 反映實際命中（兩次同機台診斷後應 > 0）。
-- [ ] **FR-009**：高頻遙測**未**逐筆入日誌——一分鐘內約 1200 次 telemetry tick，
+- [x] worker 日誌另有**自身那半**的摘要（可獨立判讀）。
+- [x] `cache.hitRate` 反映實際命中（兩次同機台診斷後應 > 0）。
+- [x] **FR-009**：高頻遙測**未**逐筆入日誌——一分鐘內約 1200 次 telemetry tick，
       但日誌不應因此暴增（正常路徑零日誌）。
 
 ### 4.1 worker 缺席時的降級
@@ -172,7 +172,7 @@ docker compose logs worker --tail 20
 # 停掉 worker，等待超過 3 個週期（預設 180s）
 ```
 
-- [ ] api 摘要**仍照常輸出**，`worker` 欄位為 `null`，api 那兩項指標正常。
+- [x] api 摘要**仍照常輸出**，`worker` 欄位為 `null`，api 那兩項指標正常。
 
 ---
 
@@ -184,9 +184,9 @@ $env:LOG_LEVEL="warn"    # 一般 info 雜訊應消失
 ```
 
 **通過判準**：
-- [ ] 一般 info 級日誌消失（**api 與 worker 兩端皆須確認**）。
-- [ ] **api 側** `context: "metrics"` 的週期摘要仍持續輸出。
-- [ ] **worker 側** `context: "metrics"` 的自身摘要**亦仍持續輸出**——worker 的摘要同樣走專屬
+- [x] 一般 info 級日誌消失（**api 與 worker 兩端皆須確認**）。
+- [x] **api 側** `context: "metrics"` 的週期摘要仍持續輸出。
+- [x] **worker 側** `context: "metrics"` 的自身摘要**亦仍持續輸出**——worker 的摘要同樣走專屬
       metrics child logger（contracts/log-fields.md §3／§5），若此處消失即代表 worker 側誤用了
       一般 logger，SC-005 不成立。
 
@@ -249,7 +249,7 @@ pnpm --filter @flow-gatekeeper/web build
 Select-String -Path apps/web/dist/assets/*.js -Pattern "pino" -SimpleMatch
 ```
 
-- [ ] **無**任何命中。
+- [x] **無**任何命中。
 
 ---
 
@@ -264,11 +264,11 @@ Select-String -Path apps/web/dist/assets/*.js -Pattern "pino" -SimpleMatch
 3. `README.md` 的「已宣告的取捨」小節
 
 **通過判準**：
-- [ ] 三處皆載明「telemetry 為 fire-and-forget，API 崩潰時可丟失最後數秒」。
-- [ ] 三處皆載明「errorlog 去重靠行程內 Map，**重啟後首筆會重複**」。
-- [ ] 皆引用 `ADR-002 §6.4`，且升級路徑（寫入前先進佇列再批次落庫）一致。
-- [ ] 與程式實際行為相符——`persistBatch` 確為 `void` 呼叫、未 await（gateway.ts:138）。
-- [ ] US4 **未改動任何程式行為**（`git diff` 僅見註解與文件）。
+- [x] 三處皆載明「telemetry 為 fire-and-forget，API 崩潰時可丟失最後數秒」。
+- [x] 三處皆載明「errorlog 去重靠行程內 Map，**重啟後首筆會重複**」。
+- [x] 皆引用 `ADR-002 §6.4`，且升級路徑（寫入前先進佇列再批次落庫）一致。
+- [x] 與程式實際行為相符——`persistBatch` 確為 `void` 呼叫、未 await（gateway.ts:138）。
+- [x] US4 **未改動任何程式行為**（`git diff` 僅見註解與文件）。
 
 ---
 
@@ -289,9 +289,16 @@ Select-String -Path apps/web/dist/assets/*.js -Pattern "pino" -SimpleMatch
 | 8.9 | 007 heartbeat 共存 | `redis-cli TTL worker:heartbeat` 仍為 007 的 30s 語意、值與消費者未變；009 只新增 `metrics:worker`（TTL 180s），**兩者未互相取代或覆寫**（FR-010／data-model E4） |
 
 **通過判準**：
-- [ ] 8.1–8.9 全部與改動前逐項一致。
-- [ ] 特別確認 **8.7**——這是本 feature 最容易誤傷的地方
-      （contracts/log-fields.md §7：`fatal.ts` 是 FR-004 的唯一例外）。
+- [x] 8.3–8.9 全部與改動前逐項一致（2026-07-31 實跑：8.3 里程碑 0→20→40→60→80→100 完整；
+      8.4 第二次診斷 `cached: true` 且無 LLM 呼叫；8.5 空 token 訂閱成立；8.6 容器 `stop`
+      後 api／worker 皆 exit 0 且**關閉後無殘窗摘要**；8.7 見下；8.8 診斷／觸發文件照常寫入；
+      8.9 `worker:heartbeat` TTL 仍為 30s 語意、`metrics:worker` 為獨立 key，互不覆寫）。
+- [x] **8.7**——`WORKER_CHAOS=uncaught` 演練：致命訊息仍為
+      `[worker] uncaughtException（致命，…）：…` 純文字同步寫出、exit code 1
+      （contracts/log-fields.md §7：`fatal.ts` 是 FR-004 的唯一例外，未被 pino 破壞）。
+- [x] 8.1／8.2 的**協定層**：遙測 cadence 與改動前一致（40 秒約 5100 筆＝50ms tick），
+      `system/metrics` 為獨立訊息、**未混入遙測陣列**（故不進 rAF buffer、不污染比值分子）。
+- [ ] 8.1／8.2 的**畫面層**：卡片更新流暢度與 `BackpressureBadge` 顯示的比值——需瀏覽器人工確認。
 
 ---
 
@@ -304,20 +311,32 @@ pnpm -r test
 ```
 
 **通過判準**：
-- [ ] 三項全綠。
-- [ ] 新增 **6** 個純函式測試皆存在且通過：`resolveLogLevel`、`resolveMetricsInterval`、
+- [x] 三項全綠。
+- [x] 新增 **6** 個純函式測試皆存在且通過：`resolveLogLevel`、`resolveMetricsInterval`、
       `aggregateHealth`、`mergeMetrics`、`summarizeLatency`、`hitRate`（research R9）。
 
 ---
 
 ## 驗收總表
 
+**演練日期**：2026-07-31（`/speckit-implement` 收尾）。除註記者外皆已實跑通過。
+
 | SC | 場景 | 狀態 |
 | --- | --- | --- |
-| SC-001 | 1、1.1、3.5 | ☐ |
-| SC-002 | 2 | ☐ |
-| SC-003 | 3、3.5 | ☐ |
-| SC-004 | 4、4.1、6、6.2 | ☐ |
-| SC-005 | 1、5 | ☐ |
-| SC-006 | 7 | ☐ |
-| SC-007 | 8（8.1–8.9） | ☐ |
+| SC-001 | 1、1.1、3.5 | ☑ |
+| SC-002 | 2 | ☑ |
+| SC-003 | 3、3.5 | ☑ |
+| SC-004 | 4、4.1、6、6.2 | ☑ 後端與傳輸層／☐ **面板呈現待瀏覽器人工確認** |
+| SC-005 | 1、5 | ☑ |
+| SC-006 | 7 | ☑ |
+| SC-007 | 8（8.1–8.9） | ☑ 8.1／8.2 畫面層外皆通過（見場景 8 判準） |
+
+**待人工於瀏覽器確認的項目**（其餘皆已自動化實跑）：
+
+1. 場景 6 的面板呈現四項判準（入口／預設收合／數值與日誌一致／唯讀／旗標關閉不渲染）。
+2. 場景 6.2 的四態視覺（`empty`／`live` → `stale`／`disconnected`，且 `stale` 與
+   `disconnected` 文案視覺可區分）。
+3. 場景 8.1／8.2 的畫面層（卡片更新流暢度、`BackpressureBadge` 顯示的比值量級）。
+
+上述三項的**後端與傳輸層**已驗證：`system/metrics` 每週期廣播給所有連線、payload 形狀與
+日誌摘要一致、且為獨立訊息未混入遙測陣列（不進 rAF buffer）。

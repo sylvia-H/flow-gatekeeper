@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-17
 
-**Status**: 已收斂（clarify／plan／checklist／tasks／analyze 完成，analyze 兩輪修補皆回補於 2026-07-20；第二輪 E1–E9 見 tasks.md §Notes），待 `/speckit-implement`
+**Status**: **已實作完成**（`/speckit-implement` 於 2026-07-31 走完 Phase 1–7；clarify／plan／checklist／tasks／analyze 兩輪修補皆回補於 2026-07-20，第二輪 E1–E9 見 tasks.md §Notes）。驗收：quickstart 場景 1–5、7–9 與場景 3.5／6 的傳輸層皆已實跑通過；**場景 6／6.2 的瀏覽器面板呈現（四態視覺）待人工於瀏覽器逐項確認**，見 quickstart.md 驗收總表
 
 **Input**: User description: "009-Observability Baseline"（依 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15 方向藍圖與 `docs/adr-002-productionization-scope.md` §5.3／§6.4 既定決策起草）
 
