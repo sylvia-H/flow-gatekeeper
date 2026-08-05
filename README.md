@@ -31,10 +31,9 @@
 
 <div align="center">
 
-<video src="docs/demo/flow-gatekeeper-demo.mp4" controls muted playsinline poster="docs/demo/flow-gatekeeper-demo-poster.jpg" width="100%">
-  你的檢視器不支援內嵌影片播放，可直接開啟
-  <a href="docs/demo/flow-gatekeeper-demo.mp4">docs/demo/flow-gatekeeper-demo.mp4</a>。
-</video>
+![Demo 海報](https://github.com/sylvia-H/flow-gatekeeper/raw/main/docs/demo/flow-gatekeeper-demo-poster.jpg)
+
+## 🎬 [下載完整 Demo（22 秒）](https://github.com/sylvia-H/flow-gatekeeper/releases/download/v1.0.0/flow-gatekeeper-demo.mp4)
 
 </div>
 
