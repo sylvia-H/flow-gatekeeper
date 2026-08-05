@@ -5,7 +5,8 @@
 **即時流程監控 × 串流式 AI 診斷面板 — 一個致敬 Argo CD 的高頻 WebSocket 工程展示**
 
 以 buffer + `requestAnimationFrame` 每幀批次提交壓制高頻遙測、以獨立 worker + BullMQ + Redis 削峰 AI 診斷，
-並把「背壓比值」與「逐字串流的 AI 推理」直接畫在同一個畫面上。
+並把「背壓比值」與「逐字串流的 AI 推理」直接畫在同一個畫面上——
+再把整套系統做進**受監督的容器**、補齊**崩潰自癒**與**可觀測性基線**，讓它不只是能跑，而是禁得起斷線、崩潰與被監控。
 
 <br/>
 
@@ -17,6 +18,8 @@
 ![MongoDB 7](https://img.shields.io/badge/MongoDB-7%20time--series-47a248?logo=mongodb&logoColor=white)
 ![Zod contracts](https://img.shields.io/badge/contracts-Zod%20single%20source-3e67b1)
 ![pnpm workspace](https://img.shields.io/badge/monorepo-pnpm%20workspace-f69220?logo=pnpm&logoColor=white)
+![Docker Compose](https://img.shields.io/badge/deploy-Docker%20Compose%20supervised-2496ed?logo=docker&logoColor=white)
+![Observability baseline](https://img.shields.io/badge/observability-pino%20%2B%20healthz%20%2B%20metrics-6b7280)
 
 </div>
 
@@ -75,9 +78,14 @@
 
 **flow-gatekeeper** 是一個模擬工廠機台艦隊（fleet）的即時監控台：5 台示範機台以 10–50ms 的節拍持續吐出遙測（溫度、振動、吞吐、錯誤率），前端即時渲染每台的健康狀態；當某台轉為 warning／critical 時，操作者可以**就地對那台機台觸發一次 AI 診斷**，並在同一畫面的 Copilot 面板中，看著 AI 的推理**逐字串流**出現，最後收斂成一份結構化診斷（嚴重度、可能原因、佐證、建議動作）。
 
-它的定位不是「把即時通訊接起來」而已，而是刻意親手實作即時／分散式系統裡**較難、較有展示價值的那幾塊**：前端高頻背壓、跨進程串流 relay、佇列削峰、cache-aside 去重、契約優先的全棧型別安全。整個專案以 [GitHub Spec Kit](https://github.com/github/spec-kit)（Spec-Driven Development）逐 feature 開發，工程原則以 `.specify/memory/constitution.md`（專案憲章）為準。
+它的定位不是「把即時通訊接起來」而已，而是刻意親手實作即時／分散式系統裡**較難、較有展示價值的那幾塊**，並把整個系統一路做到「能被單一指令跑起來、崩潰能自癒、自己也能被監控」的程度：
 
-**一分鐘看懂資料怎麼流**：前端面對 10–50ms 級的 WebSocket telemetry，不逐筆寫 reactive state，而是先進 buffer、再以 `requestAnimationFrame` 每幀批次提交，藉此穩住畫面；後端以 NestJS Gateway 承接 WebSocket，並把耗時的 AI 診斷交給 BullMQ 丟進獨立 worker，避免阻塞主服務。worker 本身沒有前端連線，AI token 因此改走 Redis Pub/Sub 回到 Gateway、再轉送前端；資料層由 MongoDB 保存 telemetry、errorlogs、maintenanceRecords 與 diagnoses，Redis 則負責 queue、cache、Pub/Sub 與 dedupe lock。整個開發流程以 Spec Kit 的 constitution / spec / plan / tasks / implement 管理，每條 feature 都帶可驗收條件。
+- **資料面**：前端高頻背壓、跨進程串流 relay、佇列削峰、cache-aside 去重、契約優先的全棧型別安全（Feature 001–006）。
+- **運維面**：worker/api/web 的 process 監督與 let-it-crash 崩潰語意、整棧一鍵容器化、結構化日誌與健康探針／關鍵指標的可觀測性基線（Feature 007–009）。
+
+前半段回答「這個系統怎麼把資料正確、即時地流過去」，後半段回答「這個系統怎麼在無人值守時活下來、又怎麼讓人看見它活得好不好」——兩段合起來才是完整的工程紀律展示，而不只是一個能連線的 demo。整個專案以 [GitHub Spec Kit](https://github.com/github/spec-kit)（Spec-Driven Development）逐 feature 開發，工程原則以 `.specify/memory/constitution.md`（專案憲章）為準；重大跨 feature 的技術取捨另記錄於 `docs/adr-*.md`（見下方「[關鍵架構決策（ADR）](#關鍵架構決策adr)」）。
+
+**一分鐘看懂資料怎麼流**：前端面對 10–50ms 級的 WebSocket telemetry，不逐筆寫 reactive state，而是先進 buffer、再以 `requestAnimationFrame` 每幀批次提交，藉此穩住畫面；後端以 NestJS Gateway 承接 WebSocket，並把耗時的 AI 診斷交給 BullMQ 丟進獨立 worker，避免阻塞主服務。worker 本身沒有前端連線，AI token 因此改走 Redis Pub/Sub 回到 Gateway、再轉送前端；資料層由 MongoDB 保存 telemetry、errorlogs、maintenanceRecords 與 diagnoses，Redis 則負責 queue、cache、Pub/Sub 與 dedupe lock。這一整套資料流本身跑在**三個受監督的容器**裡（api／worker／web，`docker compose --profile demo`），任一行程非預期崩潰即由 restart policy 拉起乾淨行程；三端同時把結構化日誌、健康探針與關鍵指標（queue 深度、WS 連線數、LLM latency、cache 命中率）往外送，讓「這套系統本身是否健康」也是一個**畫得出來、查得到**的問題，而不必登進容器看 stdout 猜測。整個開發流程以 Spec Kit 的 constitution / spec / plan / tasks / implement 管理，每條 feature 都帶可驗收條件。
 
 > 本專案重點在於**工程紀律的可驗證性**——每個賣點都有對應的量化驗收（SC）與可重播 demo。
 
@@ -95,8 +103,9 @@
 | ✅ **Schema 驗證的 AI 輸出** | AI 回傳必經 `DiagnosisResultSchema.parse()`，失敗走 `ai/error`，不把未驗證物件當結果 | Zod 為單一真實來源，型別由 `z.infer` 推導 |
 | 📐 **契約優先的全棧型別安全** | web／api／worker 三端共用 `packages/contracts` 同一份事件／結果型別 | strict TypeScript、`asyncapi.yaml` 契約 lint |
 | 🤖 **每機台狀態機的 Copilot Drawer** | `Map<machineId, CopilotJobState>`：多台可並存診斷，切換選取即還原各自呈現 | idle／active／streaming／completed／failed 五態 |
-| 📦 **一鍵全棧容器化** | `docker compose --profile demo up -d --build` 起 api／worker／web 三端受監督容器，瀏覽器只面對單一入口 | nginx 同源反代 `/ws`、`/diagnoses`；`restart: on-failure` 內建崩潰迴圈防護（連續 5 次後停止） |
-| 🩺 **let it crash + 可觀測性基線** | worker／api 崩潰語意從「log + 續跑」翻成 `exit(1)` 交監督者重啟；三端補齊結構化日誌、`/healthz`、關鍵指標入 log | 「這個專案本身是監控台，但它自己也該可被監控」——見 [ADR-002](docs/adr-002-productionization-scope.md) |
+| 🩺 **let it crash + process 監督** | worker／api 崩潰語意從「log + 續跑」翻成 `exit(1)` 交監督者以乾淨行程重啟，不再帶著未定義狀態硬撐 | Redis heartbeat key 偵測「活著但卡住」；連續失敗 5 次即停止重啟，防崩潰迴圈打爆 LLM 額度——見 [ADR-002](docs/adr-002-productionization-scope.md) |
+| 📦 **整棧容器化 + 單一入口** | `docker compose --profile demo up -d --build` 起 api／worker／web 三端受監督容器，瀏覽器只面對單一入口 | nginx 同源反代 `/ws`、`/diagnoses`；`down -v` 可乾淨重設、劇本可重播 |
+| 🔭 **可觀測性基線** | 三端補齊結構化 JSON 日誌（pino）、`GET /healthz` 依賴探針、queue 深度／WS 連線數／LLM latency／cache 命中率週期入 log 並廣播 `system/metrics` | 「這個專案本身是監控台，但它自己也該可被監控」——dev-only Metrics Panel 即時顯示這些數字 |
 
 ---
 
@@ -249,6 +258,35 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 - 進度**純事件驅動**：progress 完全以 `job/status` 攜帶值為準（前端不合成假值），未帶值時 indeterminate。worker 把里程碑綁**真實處理階段**：`0` job active → `20` 組完 context → `40` 取鎖即將呼叫 LLM → `60` 首個 token → `80` 串流結束且 schema 解析成功 → `100` 寫庫/快取並發 `ai/done`。這些里程碑在 006 進一步於 active drawer 呈現為可見的**處理步驟清單**（待辦／進行中／已完成），旁列忠實對映佇列設定的任務 meta（`queue` / `concurrency` / `attempts`，皆自契約常數與 003 設定衍生、非動態合成）。
 - 重連（新 `clientId`）即把該台進行中任務**標中斷 + 提供 Retry**（不用逾時偵測）；過期／亂序的舊 job 串流片段一律忽略，不覆蓋目前任務。
 
+### 🩺 9. let it crash + process 監督（007）
+
+在 Feature 007 之前，`api`／`worker` 都是 host 上直開的 PowerShell 視窗跑 `tsx watch`，`uncaughtException`／`unhandledRejection` 只是 log 完繼續跑——Node 官方明言這時行程狀態已 not safe to resume，「log + 續跑」等於帶著未定義狀態硬撐。007 把這個語意整個翻轉：
+
+- worker／api 對兩個致命事件掛全域 handler，記一則明確標示「致命」的訊息（含 stack）後**立即 `process.exit(1)`**、不嘗試優雅收尾——重建交給監督者，不靠行程自己「修復」。
+- 監督者選擇**容器化**而非 pm2／systemd：dev 是 Windows，systemd 直接出局；pm2 只給 restart 卻不給環境隔離與可攜性，而 compose 裡本來就有 Redis／Mongo，worker 加入後整個系統收斂成一份 `docker-compose.yml`，Docker 內建的重啟指數退避即可當 crash-loop 防護，完整取捨見 [ADR-002](docs/adr-002-productionization-scope.md)。
+- `restart: on-failure:5`：非零退出才重啟（`exit(0)` 優雅關閉不觸發），**連續失敗 5 次即停止**，避免熱迴圈打爆 LLM 額度與資料庫連線；`stop_grace_period` 依行程收尾需求分別設定（worker 45s 涵蓋 `AI_TIMEOUT_MS`、api 15s 只需關連線）。
+- `restart: on-failure` 只能偵測「行程死亡」，補不到「活著但卡住」——worker 因此每 10 秒寫一次 `worker:heartbeat`（TTL 30 秒），容器 healthcheck 讀這把 key 判定 unhealthy（僅示警不重啟）；watchdog 逾時亦會令 healthcheck 自身 `exit(1)`，避免探針卡死。
+- 崩潰情境**可決定性重現**：worker 內建故障注入旗標，可在指定條件下觸發真實的 `unhandledRejection`／`uncaughtException` 路徑，用於驗收與 demo「崩潰自癒」——演練時 MUST 用 in-process kill（`docker exec <容器> pkill -KILL -f dist/main.js`），`docker kill` 是 daemon 端手動停止，會被 Docker 判定為非 failure 而**不**觸發 restart policy。
+
+### 📦 10. 整棧容器化 + 單一入口（008）
+
+008 把「只監督 worker」擴大成「三端都有部署形態」：api（Gateway）崩潰的後果其實更嚴重——所有 WebSocket 連線、訂閱表、`jobId` 路由同時蒸發，只監督 worker 等於保護了錯誤後果較輕的那一端。
+
+- api／web 比照 007 容器化，收進同一份 `docker-compose.yml` 的 `demo` profile；`seed` 一次性服務先備妥示範資料、成功完成才啟動 api（`depends_on: condition: service_completed_successfully`），示範資料與服務啟動順序因此有保證。
+- **瀏覽器只面對單一入口** `http://localhost:8080`：nginx 同時提供 web 靜態產物、並把 `/ws`、`/diagnoses` 同源反向代理至 `api:3000`——api **不對外暴露連接埠**，拓樸關鍵值（`API_PORT`、`REDIS_HOST`、`MONGO_URL`）一律由 compose `environment` 釘死，不受各 app `.env` 檔漂移影響。
+- 開發模式（host 直跑，`dev-up.ps1`）與 demo 容器模式共用**同一份** `docker-compose.yml`，只以 profile 分組切換，不是兩份平行設定；兩者刻意不同時啟動（`redis`／`mongo` 為共用資料層，混跑會互相干擾）。
+- `docker compose --profile demo down -v` 連同 volume 清除，重新 `up` 即回到初始狀態——demo 劇本因此**可重播**，不必擔心殘留狀態污染下一次展示。
+
+### 🔭 11. 可觀測性基線（009）
+
+「這個專案本身是監控台，但它自己目前不可被監控」——009 把這句話收掉，範圍刻意壓在**基線**（結構化日誌 + 健康探針 + 指標入 log），不做 Prometheus／Grafana／OTel（理由見 [ADR-002 §7](docs/adr-002-productionization-scope.md)）。
+
+- **結構化日誌**：api／worker／web 三端統一用 pino 輸出逐行 JSON（`LOG_LEVEL` 可調、`LOG_PRETTY` 於 dev 預設開、容器內一律釘 `false`），關鍵路徑帶關聯鍵（`jobId`／`machineId`）方便串接查詢；高頻路徑（`publishTelemetry`／`persistBatch`）刻意**不**逐筆記錄，只在週期結算時輸出一則摘要，避免日誌本身變成新的高頻背壓源。
+- **`GET /healthz`**：免認證、不快取、每次請求即時探測（MUST NOT 回傳快取結果），二態回應——Redis 與 Mongo 皆連通回 `200 healthy`，任一失聯回 `503 unhealthy`，body 逐依賴列出 `status`／`latencyMs`／`error`；容器 healthcheck 即由它判定 api 是否就緒，各依賴探測獨立設逾時（`HEALTH_PROBE_TIMEOUT_MS`）避免一個依賴卡死拖垮整個探針。
+- **關鍵指標週期入 log + 廣播**：api 每 `METRICS_INTERVAL_MS`（預設 60s）結算一次 queue 深度（waiting／active／failed）、WS 連線數，並讀取 worker 寫進 Redis 的快照（`metrics:worker`：LLM latency 的 count／avg／p95/max、cache 命中率）合併成一份摘要，用**專屬 metrics logger**（`METRICS_LOG_LEVEL` 獨立於 `LOG_LEVEL`）輸出一則，同時以新事件 `system/metrics` 廣播給所有已連線 client——摘要本身是 **at-most-once**（單輪結算失敗即略過、下一輪恢復，不重送不補發），worker 缺席或快照過期則整體降級為 `worker: null`，不讓「讀不到」被誤讀成「等於 0」。
+- **dev-only Metrics Panel**：web 端以 `VITE_METRICS_PANEL` 開關（dev 預設開、production build 預設關）呈現上述指標，唯讀、預設收合，訂閱同一條 `/ws` 連線收 `system/metrics`——不新增任何額外連線或輪詢。
+- **有損寫入語意明文化**：順帶把兩項既有的「有損」設計決策寫清楚（telemetry fire-and-forget 持久化、errorlog 去重僅存於行程內記憶體），程式碼註解、README「[已宣告的取捨](#已宣告的取捨)」與 ADR-002 §6.4 三處指向同一份事實，不各自表述——這也是本專案「有損可以，未宣告的有損才是問題」原則的具體落地。
+
 ---
 
 ## 系統架構與資料流
@@ -313,8 +351,45 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | `ai/error` | api → web | AI 供應商／worker 錯誤（`code` + 可讀 `message`） |
 | `ping` / `pong` | 雙向 | 應用層心跳；`pong` 逾時即 close 觸發重連，並由 RTT 導出延遲 ms |
 | `system/connected` | api → web | 連線確認並派發 `clientId`（重連即換新，用於收尾中斷任務） |
+| `system/unauthorized` | api → web | 訂閱授權失敗（`WS_AUTH_SECRET` 不符） |
+| `system/metrics` | api → web | **009**：週期廣播的營運指標摘要（queue 深度、WS 連線數、worker 端 LLM latency／cache 命中率），廣播給所有已連線 client、與訂閱狀態無關；供 dev-only Metrics Panel 消費 |
 
 > 純做分派的控制訊息（`ping`／`pong`／`system/*`）以 TS 型別定義，需 runtime 驗證的 payload（如 `DiagnosisResult`）才用 Zod——兩者仍同以 `packages/contracts` 為單一來源（憲章 Principle III）。契約全貌另見 [`asyncapi.yaml`](asyncapi.yaml)。
+
+### 部署與監督拓撲（demo 容器模式，007–009）
+
+上面兩張圖是「資料怎麼流」；這張圖是「這些行程實際跑在哪裡、崩潰了誰來救、健康狀態誰來看」——`docker compose --profile demo up -d --build` 起完之後的樣子：
+
+```
+瀏覽器（僅此一個對外入口）
+        │  http://localhost:8080
+        ▼
+┌─────────────────────── web 容器（nginx，供 restart:on-failure:5 監督）───────────────────────┐
+│  靜態產物（Vue build）＋ 同源反向代理：/ws、/diagnoses ──────────────────────┐               │
+└────────────────────────────────────────────────────────────────────────────┼───────────────┘
+                                                                               ▼  api:3000（不對外開埠）
+┌──────────────────────── api 容器（NestJS，restart:on-failure:5，stop_grace 15s）─────────────┐
+│  MonitoringGateway／DiagnosesController／AiStreamRelay              GET /healthz ◀── compose  │
+│                                                                      healthcheck（30s 週期）   │
+│  MetricsService：每 METRICS_INTERVAL_MS 讀 queue/ws/worker 快照      pino JSON 日誌 ──▶ stdout │
+│  → 專屬 metrics logger 一則摘要 + 廣播 system/metrics                （容器 log driver 收集）  │
+└───────────────┬───────────────────────────────────────────────────────────────────────────────┘
+                 │ depends_on: seed 完成才啟動
+    ┌────────────┴────────────┐         ┌──────────────────── worker 容器 ─────────────────────┐
+    │ seed 一次性服務           │         │ (restart:on-failure:5，stop_grace 45s 涵蓋 AI 收尾)  │
+    │ restart:"no"，備妥示範資料│         │ 每 10s 寫 worker:heartbeat（TTL 30s）──▶ Redis        │
+    └────────────┬─────────────┘         │ healthcheck 讀 heartbeat 判定 unhealthy（僅示警）     │
+                 │                       │ uncaughtException/unhandledRejection → log「致命」  │
+                 ▼                       │  訊息 + exit(1)，重建交監督者（let it crash）         │
+        ┌── Redis 7 ──┬── MongoDB 7 ──┐  │ pino JSON 日誌 ──▶ stdout                            │
+        │ (共用資料層) │ (共用資料層)  │◀─┴────────────────────────────────────────────────────┘
+        └─────────────┴───────────────┘
+```
+
+- **監督層**：三個長跑服務皆 `restart: on-failure:5`——Docker 內建指數退避重啟乾淨行程，連續失敗 5 次即停止（crash-loop 防護）；`docker kill` 屬 daemon 手動停止不觸發重啟，只有行程自身非零退出才算 failure，這是刻意的區分（演練「崩潰自癒」須用 in-process kill）。
+- **健康層**：api 靠 `GET /healthz`（探 Redis／Mongo 連通性）、worker 靠 Redis heartbeat key、web 靠入口位址是否有回應——三種判準對應三種「活著」的定義，`docker compose ps -a` 需四項（含一次性的 `seed`）全部就緒才算可 demo。
+- **可觀測層**：三端統一 pino JSON 落 stdout（由容器 log driver 收集，`docker compose logs` 可查），api 另外每個結算週期把 queue／連線數／worker 指標**廣播回前端**，是唯一會回流到瀏覽器的可觀測性訊號（其餘留在日誌層，供人工或未來的日誌集中系統查閱）。
+- 開發模式（host 直跑，見下方「[快速開始](#快速開始)」）沒有這層監督與容器 healthcheck——行程崩潰後停在等待檔案變更，這是文件化的已知差異，不是 bug。
 
 ---
 
@@ -329,8 +404,10 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | **佇列 / 快取** | Redis 7（BullMQ queue、cache-aside、dedupe lock、Pub/Sub） |
 | **資料庫** | MongoDB 7（telemetry time-series + TTL、errorlogs、maintenanceRecords、diagnoses） |
 | **契約** | `packages/contracts`（Zod 單一來源，`z.infer` 推導型別）+ `asyncapi.yaml` |
+| **可觀測性** | pino（結構化 JSON 日誌 + 專屬 metrics child logger）、`GET /healthz` 依賴探針、`system/metrics` 廣播 |
+| **部署 / 監督** | Docker 多階段建置（`pnpm deploy --prod` 裁剪 workspace 依賴）、`restart: on-failure:5`、Redis heartbeat 存活探針、nginx（web 容器內同源反代 `/ws`、`/diagnoses`） |
 | **語言 / 工具鏈** | strict TypeScript 5.6、pnpm workspace、ESLint 9、Vitest、Spectral（contract lint） |
-| **本機 infra** | Docker Compose（Redis 7 + MongoDB 7） |
+| **本機 infra** | Docker Compose：不帶分組起 Redis 7 + MongoDB 7（開發模式）；`demo` profile 起 api／worker／web／seed 全棧受監督容器 |
 
 ---
 
@@ -382,21 +459,29 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 ```
 flow-gatekeeper/
 ├── apps/
-│   ├── api/           # NestJS：WebSocket Gateway、mock producer、POST /diagnoses、Pub/Sub relay、seed
+│   ├── api/           # NestJS：WebSocket Gateway、mock producer、POST /diagnoses、Pub/Sub relay、
+│   │   │               #   MetricsService、GET /healthz、seed
+│   │   ├── Dockerfile           # ← 多階段建置（008）：pnpm deploy --prod 裁剪 workspace 依賴
 │   │   ├── .env.example        # ← host 直跑（軌道 A）的 env 範本（複製成 apps/api/.env）
 │   │   └── .env.demo.example   # ← demo 容器（軌道 B）的 env 範本（複製成 apps/api/.env.demo）
-│   ├── worker/        # 獨立 process：BullMQ consumer、cache/dedupe、AiProvider(Gemini) streaming
+│   ├── worker/        # 獨立 process：BullMQ consumer、cache/dedupe、AiProvider(Gemini) streaming、
+│   │   │               #   heartbeat、let-it-crash 致命守門
+│   │   ├── Dockerfile           # ← 多階段建置（007）；第二進入點 dist/healthcheck.js 供容器 healthcheck
 │   │   └── .env.example   # ← worker 專屬 env 範本（GEMINI_API_KEY 只在這；複製成 apps/worker/.env）
-│   └── web/           # Vue 3 + Pinia：monitoring / ai-copilot domains、design-spec token（不需 .env）
-│       └── design/    # design-spec.md + refs/*.png（視覺單一來源）
+│   └── web/           # Vue 3 + Pinia：monitoring / ai-copilot domains、design-spec token、
+│       │               #   dev-only MetricsPanel（VITE_METRICS_PANEL）
+│       ├── Dockerfile          # ← 建置靜態產物 + nginx 同源反代 /ws、/diagnoses（008）
+│       ├── design/             # design-spec.md + refs/*.png（視覺單一來源）
+│       └── .env.example        # ← 選用：僅 VITE_METRICS_PANEL 開關（複製成 apps/web/.env）
 ├── packages/
-│   ├── contracts/     # Zod schema 單一來源（events / DiagnosisResult / job payload）→ z.infer 型別
-│   └── shared/        # 跨端共用工具
-├── specs/             # 001–006 每條 feature 的 spec / plan / tasks / checklist
-├── docs/              # ADR、SDD 完整實作指南、design-spec
+│   ├── contracts/     # Zod schema 單一來源（events / DiagnosisResult / job payload / SystemMetrics）
+│   │                   #   → z.infer 型別
+│   └── shared/        # 跨端共用工具（含 pino logger 設定）
+├── specs/             # 001–009 每條 feature 的 spec / plan / tasks / checklist
+├── docs/              # ADR、SDD 完整實作指南、design-spec、demo 影片與截圖
 ├── scripts/           # dev-up.ps1（一鍵起全棧）、demo-reset.ps1（清 AI 快取）
 ├── asyncapi.yaml      # 即時通道契約（Spectral lint）
-├── docker-compose.yml # Redis 7 + MongoDB 7
+├── docker-compose.yml # Redis 7 + MongoDB 7（不帶分組）＋ demo profile：api/worker/web/seed 全棧受監督容器
 ├── .env.example       # 環境設定「總覽指引」（非載入檔；指向各 app 的 .env.example）
 └── .specify/memory/   # 專案憲章 constitution.md（工程原則單一來源）
 ```
@@ -537,7 +622,7 @@ api 或 worker 連續快速失敗（如設定錯誤導致啟動即崩潰）時�
 
 - **兩模式擇一運行、不要混跑**：`redis`／`mongo` 為兩模式共用，同時啟動兩模式會使資料層互相干擾、演練與驗收不可判讀（8080 與 5173 雖不互撞，但那不是安全的理由）。切換時先 `docker compose --profile demo down` 再走另一軌。
 - **連接埠被佔用**：入口 `8080`（或 `6379`／`27017`）已被 host 上其他行程佔用時，compose 會以 **bind 失敗訊息指名該埠**中止——改 `docker-compose.yml` 的 `ports` 一行即可（前端走同源相對路徑，改埠不需重建映像）。
-- **祕密缺漏（`GEMINI_API_KEY` 留空）**：全棧**照常啟動、不擋任何服務**；遙測與背壓比值正常（4 個賣點中的 2 個仍可見），僅 AI 診斷失敗——畫面訊息會**指名金鑰**（「AI 服務金鑰無效或未授權——請確認 `apps/worker/.env` 的 `GEMINI_API_KEY`…」），而非通用失敗語。這是刻意設計，讓沒有 Gemini 帳號的評估者仍看得到系統跑起來。
+- **祕密缺漏（`GEMINI_API_KEY` 留空）**：全棧**照常啟動、不擋任何服務**；遙測、背壓比值、監督與可觀測性都正常，僅 AI 診斷失敗——畫面訊息會**指名金鑰**（「AI 服務金鑰無效或未授權——請確認 `apps/worker/.env` 的 `GEMINI_API_KEY`…」），而非通用失敗語。這是刻意設計，讓沒有 Gemini 帳號的評估者仍看得到系統跑起來。
 - 環境設定於**執行時**由 compose `env_file` 注入，祕密不烘入 image。demo 的 api／seed 讀 **`apps/api/.env.demo`**（與 host 軌道 A 的 `apps/api/.env` 刻意分開，避免 dev 的 `WS_AUTH_SECRET`／`API_PORT` 滲入 demo）；worker 讀 `apps/worker/.env`。拓樸關鍵值 `API_PORT`（釘 3000，與 nginx 反代目標對齊）、`REDIS_HOST`／`MONGO_URL`（容器網路位址）由 compose `environment` 覆蓋釘死、不受 env 檔漂移；host 直跑照舊用 `.env` 的 `127.0.0.1`，兩模式互不干擾。
 - **致命錯誤語意（let it crash）**：行程遇非預期致命錯誤會記錄明確標示「致命」的訊息後**立即結束行程**，由監督者以乾淨行程重啟。開發模式下沒有監督者——行程停在等待檔案變更，需修改檔案或手動重啟；這是文件化的已知差異，不是 bug。
 
@@ -632,9 +717,11 @@ specify → clarify → plan → checklist → tasks → analyze → implement �
 ## 已知限制
 
 - **重連不 rebind**：Gateway 每次連線派新 `clientId`，「任務 → 連線」綁定以記憶體 Map 實作；重連會使進行中任務綁定失效——前端把它收尾為「中斷 + Retry」，不做跨重連續傳（正式做法可改存 Redis）。
-- **單實例**：目前不跨多 server 水平擴展；要擴展時用既有的 Redis Pub/Sub 自行廣播（見 ADR-001 §6）。
-- **REST 診斷入口開發階段免授權**：`POST /diagnoses` 於 dev 開放；即時通道訂閱仍走 `WS_AUTH_SECRET`。正式環境的 REST 認證不在範圍。
+- **單實例**：Gateway 訂閱表與 `jobId` 路由都在行程內記憶體，目前不跨多 server 水平擴展；要擴展時訂閱表需外置 Redis、`psubscribe ai-stream:*` 需改精準 channel subscribe（見 [ADR-002 §6.1](docs/adr-002-productionization-scope.md)、ADR-001 §6）。
+- **AI token 串流為 at-most-once**：Redis Pub/Sub 是 fire-and-forget，Gateway 重啟或前端斷線期間的 token 會永久丟失（**最終診斷結果不受影響**——已落 MongoDB 與快取，只是打字機動畫的過場消失）；升級路徑為 Redis Streams + consumer group 續傳，見 [ADR-002 §6.2](docs/adr-002-productionization-scope.md)。
+- **REST 診斷入口開發階段免授權**：`POST /diagnoses` 於 dev 開放；即時通道訂閱仍走 `WS_AUTH_SECRET`（本身也只是靜態共享字串，非正式 JWT/OIDC）。正式環境的 REST 認證與握手階段驗證升級不在範圍，見 [ADR-002 §6.3](docs/adr-002-productionization-scope.md)。
 - **示範機台固定為 5 台**：`mixer-01`、`press-02`、`pack-03`、`oven-04`、`sorter-05`；遙測由 mock producer 以決定性規律產生（含週期性 warning/critical 尖峰），以滿足可重播驗收。
+- **可觀測性僅止於基線**：只有結構化日誌 + `/healthz` + 指標入 log／廣播，沒有 Prometheus/Grafana 儀表板、沒有 tracing、沒有告警規則——這些刻意不做，理由見 [ADR-002 §7](docs/adr-002-productionization-scope.md)。
 
 ---
 
