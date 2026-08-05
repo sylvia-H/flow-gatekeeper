@@ -1,0 +1,24 @@
+name: ci
+
+# CI 暫停自動觸發（私有 repo 期間節省 Actions 分鐘數）。
+# 開發完畢、clone 到正式私有庫後，解開下面 push / pull_request 兩行即可恢復自動 CI。
+on:
+  workflow_dispatch: # 僅保留手動觸發（Actions 頁可手動 Run workflow）
+  # push:
+  # pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm contract:lint
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test

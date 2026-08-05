@@ -1,0 +1,41 @@
+# .dockerignore（build context 為 repo root，見各 app 的 Dockerfile 與 008 research D4）
+#
+# 三個映像（api／worker／web）共用這一份 .dockerignore——context 由 repo root 起算，
+# 每個映像各自以 COPY 挑走自己要的部分。故本檔只排除「三者皆用不到」的內容。
+#
+# 兩個目的：
+# 1. 憲章 VI 守門：任何 .env（祕密）絕不進 build context，映像不可能烘入祕密；
+#    祕密僅於執行時由 compose env_file 注入。
+# 2. 縮小 context：依賴與建置產物容器內重做，文件/規格/工具狀態與三個映像皆無關。
+
+# ---- 祕密：.env 絕不進 image（僅允許 .env.example 記錄形狀）----
+**/.env
+**/.env.*
+!**/.env.example
+
+# ---- 依賴與建置產物（容器內以 frozen lockfile 重新安裝、重新建置）----
+**/node_modules
+**/dist
+coverage
+
+# ---- 版控與本機工具狀態 ----
+.git
+.github
+.codegraph
+.claude
+.specify
+.vscode
+.idea
+
+# ---- 三個映像皆用不到的內容 ----
+# 注意：apps/{api,web,worker}/src 與 apps/web/index.html 一律不排除——
+# 三映像共用同一份 context，排除任何一端的源碼都會讓該端的映像建置失敗，
+# 且錯誤訊息（找不到源碼）不會指向本檔（008 research D4）。
+docs
+specs
+scripts
+*.log
+*.md
+asyncapi.yaml
+.spectral.yaml
+docker-compose.yml

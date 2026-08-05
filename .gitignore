@@ -1,0 +1,32 @@
+# secrets
+.env
+.env.*
+!.env.example
+# demo 專用 env 範本（零祕密，僅記錄形狀）：範本可提交，實體 .env.demo 仍被上面的 .env.* 忽略。
+!.env.demo.example
+
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build outputs
+dist/
+build/
+coverage/
+
+# local logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# .claude
+.claude/settings.json
+
+# local code index
+.codegraph/

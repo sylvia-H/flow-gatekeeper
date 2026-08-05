@@ -1,0 +1,383 @@
+asyncapi: 2.6.0
+info:
+  title: flow-gatekeeper Realtime Events
+  version: 0.1.0
+  description: WebSocket events for telemetry, diagnosis jobs, and AI streaming.
+  contact:
+    name: flow-gatekeeper
+    url: https://github.com/flow-gatekeeper
+    email: dev@flow-gatekeeper.local
+  license:
+    name: MIT
+
+tags:
+  - name: telemetry
+    description: High-frequency machine telemetry channels.
+  - name: diagnosis
+    description: Diagnosis job lifecycle and AI streaming channels.
+
+servers:
+  local:
+    url: ws://localhost:3000/ws
+    protocol: ws
+
+channels:
+  machine/subscribe:
+    publish:
+      operationId: machineSubscribe
+      summary: Client subscribes to machine telemetry.
+      description: Client sends a subscribe control message with auth token and the machine ids it wants telemetry for.
+      message:
+        $ref: "#/components/messages/MachineSubscribe"
+
+  machine/data:
+    subscribe:
+      operationId: machineData
+      summary: Server pushes high-frequency machine telemetry.
+      description: Server streams telemetry points for subscribed machines at high frequency.
+      message:
+        $ref: "#/components/messages/MachineData"
+
+  job/status:
+    subscribe:
+      operationId: jobStatus
+      summary: Server pushes diagnosis job status.
+      description: Server emits lifecycle status updates for a diagnosis job, optionally carrying the final result.
+      message:
+        $ref: "#/components/messages/JobStatus"
+
+  ai/token:
+    subscribe:
+      operationId: aiToken
+      summary: Server pushes streamed AI token chunks.
+      description: Server forwards streamed AI token chunks for an in-progress diagnosis job.
+      message:
+        $ref: "#/components/messages/AiToken"
+
+  ai/done:
+    subscribe:
+      operationId: aiDone
+      summary: Server pushes final AI diagnosis.
+      description: Server emits the validated final diagnosis result for a job, flagging whether it was served from cache.
+      message:
+        $ref: "#/components/messages/AiDone"
+
+  ai/error:
+    subscribe:
+      operationId: aiError
+      summary: Server pushes AI provider or worker errors.
+      description: Server emits an error event when the AI provider or worker fails for a job.
+      message:
+        $ref: "#/components/messages/AiError"
+
+  ping:
+    publish:
+      operationId: ping
+      summary: Client application-level heartbeat request.
+      description: Client sends an application-level heartbeat; server replies with pong.
+      message:
+        $ref: "#/components/messages/Ping"
+
+  system/connected:
+    subscribe:
+      operationId: systemConnected
+      summary: Server confirms the connection and assigns a client id.
+      description: Sent once per connection right after the socket opens.
+      message:
+        $ref: "#/components/messages/SystemConnected"
+
+  machine/subscribed:
+    subscribe:
+      operationId: machineSubscribed
+      summary: Server acknowledges a subscription with the current machine id set.
+      description: Sent after a valid subscribe; the machineIds reflect the new authoritative set.
+      message:
+        $ref: "#/components/messages/MachineSubscribed"
+
+  pong:
+    subscribe:
+      operationId: pong
+      summary: Server reply to an application-level ping.
+      description: Server replies with pong (carrying a timestamp) to a client application-level ping.
+      message:
+        $ref: "#/components/messages/Pong"
+
+  system/unauthorized:
+    subscribe:
+      operationId: systemUnauthorized
+      summary: Server rejects a subscribe request carrying an invalid token.
+      description: Server emits this when a subscribe request fails token authorization; no subscription is created.
+      message:
+        $ref: "#/components/messages/SystemUnauthorized"
+
+  system/metrics:
+    subscribe:
+      operationId: systemMetrics
+      summary: Server broadcasts a periodic operational metrics summary.
+      description: >-
+        Emitted every METRICS_INTERVAL_MS (default 60000, floor 5000) to every connected client,
+        independent of machine subscriptions. Delivery is at-most-once; a missed summary is never
+        resent. The worker half is null when the worker snapshot is absent, expired, or malformed.
+      message:
+        $ref: "#/components/messages/SystemMetrics"
+
+components:
+  messages:
+    MachineSubscribe:
+      payload:
+        type: object
+        required: [type, token, machineIds]
+        properties:
+          type:
+            const: machine/subscribe
+          token:
+            type: string
+          machineIds:
+            type: array
+            items:
+              type: string
+
+    MachineData:
+      payload:
+        $ref: "#/components/schemas/TelemetryPoint"
+
+    JobStatus:
+      payload:
+        type: object
+        required: [type, jobId, machineId, status]
+        properties:
+          type:
+            const: job/status
+          jobId:
+            type: string
+          machineId:
+            type: string
+          status:
+            enum: [waiting, active, completed, failed]
+          progress:
+            type: number
+            minimum: 0
+            maximum: 100
+          result:
+            $ref: "#/components/schemas/DiagnosisResult"
+          error:
+            type: string
+
+    AiToken:
+      payload:
+        type: object
+        required: [type, jobId, seq, text]
+        properties:
+          type:
+            const: ai/token
+          jobId:
+            type: string
+          seq:
+            type: integer
+          text:
+            type: string
+
+    AiDone:
+      payload:
+        type: object
+        required: [type, jobId, cached, result]
+        properties:
+          type:
+            const: ai/done
+          jobId:
+            type: string
+          cached:
+            type: boolean
+          result:
+            $ref: "#/components/schemas/DiagnosisResult"
+
+    AiError:
+      payload:
+        type: object
+        required: [type, jobId, code, message]
+        properties:
+          type:
+            const: ai/error
+          jobId:
+            type: string
+          code:
+            type: string
+          message:
+            type: string
+
+    Ping:
+      payload:
+        type: object
+        required: [type]
+        properties:
+          type:
+            const: ping
+
+    SystemConnected:
+      payload:
+        type: object
+        required: [type, clientId]
+        properties:
+          type:
+            const: system/connected
+          clientId:
+            type: string
+
+    MachineSubscribed:
+      payload:
+        type: object
+        required: [type, machineIds]
+        properties:
+          type:
+            const: machine/subscribed
+          machineIds:
+            type: array
+            items:
+              type: string
+
+    Pong:
+      payload:
+        type: object
+        required: [type, ts]
+        properties:
+          type:
+            const: pong
+          ts:
+            type: integer
+
+    SystemUnauthorized:
+      payload:
+        type: object
+        required: [type]
+        properties:
+          type:
+            const: system/unauthorized
+
+    SystemMetrics:
+      payload:
+        type: object
+        required: [type, windowMs, collectedAt, queue, wsConnections, worker]
+        properties:
+          type:
+            const: system/metrics
+          windowMs:
+            type: integer
+            description: Window covered by this summary (equals METRICS_INTERVAL_MS). Clients derive the staleness threshold (2x) from this field and MUST NOT hardcode it.
+          collectedAt:
+            type: string
+            format: date-time
+            description: API-side settlement time; freshness is judged against this, not client receive time.
+          queue:
+            type: object
+            required: [waiting, active, failed]
+            properties:
+              waiting:
+                type: integer
+              active:
+                type: integer
+              failed:
+                type: integer
+          wsConnections:
+            type: integer
+            description: Instantaneous gauge; not a windowed average.
+          worker:
+            oneOf:
+              - $ref: "#/components/schemas/WorkerMetrics"
+              - type: "null"
+            description: Null when the worker snapshot is absent, expired, or malformed (degraded output).
+
+  schemas:
+    WorkerMetrics:
+      type: object
+      required: [snapshotAt, llmLatency, cache]
+      properties:
+        snapshotAt:
+          type: string
+          format: date-time
+        llmLatency:
+          type: object
+          required: [count, avgMs, p95Ms, maxMs]
+          properties:
+            count:
+              type: integer
+            avgMs:
+              type: [number, "null"]
+            p95Ms:
+              type: [number, "null"]
+            maxMs:
+              type: [number, "null"]
+          description: avgMs/p95Ms/maxMs are null (not 0) when count is 0.
+        cache:
+          type: object
+          required: [hits, misses, hitRate]
+          properties:
+            hits:
+              type: integer
+            misses:
+              type: integer
+            hitRate:
+              type: [number, "null"]
+          description: hitRate is hits / (hits + misses); null (not 0) when the denominator is 0.
+
+    TelemetryPoint:
+      type: object
+      required: [type, machineId, timestamp, telemetry, state]
+      properties:
+        type:
+          const: machine/data
+        machineId:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        telemetry:
+          type: object
+          required: [temperature, vibration, throughput, errorRate]
+          properties:
+            temperature:
+              type: number
+            vibration:
+              type: number
+            throughput:
+              type: number
+            errorRate:
+              type: number
+        state:
+          enum: [healthy, warning, critical]
+
+    DiagnosisResult:
+      type: object
+      required: [summary, severity, likelyCauses, suggestedActions, evidence]
+      properties:
+        summary:
+          type: string
+        severity:
+          enum: [ok, warning, critical]
+        likelyCauses:
+          type: array
+          items:
+            type: string
+        suggestedActions:
+          type: array
+          items:
+            type: object
+            required: [label, priority]
+            properties:
+              label:
+                type: string
+              priority:
+                enum: [low, medium, high]
+              command:
+                type: string
+        evidence:
+          type: array
+          items:
+            type: object
+            required: [source, excerpt]
+            properties:
+              source:
+                enum: [telemetry, errorlog, maintenance]
+              id:
+                type: string
+              excerpt:
+                type: string
