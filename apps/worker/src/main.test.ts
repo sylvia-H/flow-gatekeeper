@@ -27,6 +27,28 @@ describe("apps/worker entry", () => {
     expect(ai.generation).toEqual({ maxOutputTokens: 777, temperature: 1.3 });
   });
 
+  it("selectAiProvider：AI_PROVIDER=fake → FakeAiProvider，段數／延遲取自 env", { timeout: 20_000 }, async () => {
+    const mod = await import("./main.js");
+    const { parseWorkerEnv } = await import("./lib/env-schema.js");
+    const { FakeAiProvider } = await import("./ai/fake-provider.js");
+    const parsed = parseWorkerEnv({ AI_PROVIDER: "fake", FAKE_AI_TOKENS: "7", FAKE_AI_TOKEN_DELAY_MS: "123" });
+    if (!parsed.ok) throw new Error(parsed.error);
+    const ai = mod.selectAiProvider(parsed.env);
+    expect(ai).toBeInstanceOf(FakeAiProvider);
+    expect(ai instanceof FakeAiProvider && ai.options).toEqual({ tokenCount: 7, tokenDelayMs: 123 });
+  });
+
+  it("selectAiProvider：未設 AI_PROVIDER → GeminiProvider（production 預設不變）", { timeout: 20_000 }, async () => {
+    const mod = await import("./main.js");
+    const { parseWorkerEnv } = await import("./lib/env-schema.js");
+    const { GeminiProvider } = await import("./ai/gemini-provider.js");
+    const parsed = parseWorkerEnv({ GEMINI_MODEL: "gemini-2.5-flash-lite" });
+    if (!parsed.ok) throw new Error(parsed.error);
+    const ai = mod.selectAiProvider(parsed.env);
+    expect(ai).toBeInstanceOf(GeminiProvider);
+    expect(ai.model).toBe("gemini-2.5-flash-lite");
+  });
+
   it("bootstrap 失敗：交給 fatal('bootstrap', err)（同步 writeSync 後 exit 1，與 api fatalExit 對齊）", { timeout: 20_000 }, async () => {
     const mod = await import("./main.js");
     const err = new Error("Redis 連線於 10000ms 內未就緒");

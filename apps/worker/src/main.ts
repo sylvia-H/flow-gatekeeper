@@ -9,6 +9,7 @@ import { createLogger, ERROR_LOG_THROTTLE_MS } from "@flow-gatekeeper/shared/log
 import { bullmqConnectionOptions, createCommandConnection, waitForReady } from "./redis.js";
 import type { AiProvider } from "./ai/provider.js";
 import { GeminiProvider } from "./ai/gemini-provider.js";
+import { FakeAiProvider } from "./ai/fake-provider.js";
 import { createRedisStore } from "./cache/redis-store.js";
 import { buildDiagnosisContext } from "./context/context-builder.js";
 import { createMongoDiagnosisRepository, ensureDiagnosisIndexes } from "./diagnosis-repository.js";
@@ -97,7 +98,7 @@ export async function bootstrap(): Promise<void> {
   // healthcheck 以同一套 resolveInstanceId 推導，兩者必須一致。
   const instanceId = resolveInstanceId(env.WORKER_INSTANCE_ID);
 
-  const ai: AiProvider = createAiProvider(env);
+  const ai: AiProvider = selectAiProvider(env);
 
   // 指標收集器：累加於記憶體，每 METRICS_INTERVAL_MS 結算一次——寫 Redis 快照
   // `metrics:worker:<instanceId>`（供 api 掃描合併廣播）並記一則 worker 自身的 metrics 摘要。摘要走
@@ -236,7 +237,20 @@ export async function bootstrap(): Promise<void> {
   );
 }
 
-/** 依 env 建立 LLM provider（抽出供接線測試：生成參數必須來自 env，而非 adapter 預設）。 */
+/**
+ * 依 `AI_PROVIDER` 選 provider：預設 gemini；`fake` 為 e2e／演練用的測試替身（固定假診斷、
+ * 以可設定延遲逐段串流，見 ai/fake-provider.ts）。兩者都經 `AiProvider` interface 注入 processor
+ * （硬規則 4），fake 的輸出同樣經 parseResult／DiagnosisResultSchema 驗證（硬規則 6）。
+ * production 下選 fake 的 warn 由 parseWorkerEnv 產生、於 bootstrap 輸出。
+ */
+export function selectAiProvider(env: WorkerEnv): AiProvider {
+  if (env.AI_PROVIDER === "fake") {
+    return new FakeAiProvider({ tokenDelayMs: env.FAKE_AI_TOKEN_DELAY_MS, tokenCount: env.FAKE_AI_TOKENS });
+  }
+  return createAiProvider(env);
+}
+
+/** 依 env 建立 Gemini provider（抽出供接線測試：生成參數必須來自 env，而非 adapter 預設）。 */
 export function createAiProvider(env: WorkerEnv): GeminiProvider {
   return new GeminiProvider(env.GEMINI_API_KEY ?? "", env.GEMINI_MODEL, {
     maxOutputTokens: env.AI_MAX_OUTPUT_TOKENS,

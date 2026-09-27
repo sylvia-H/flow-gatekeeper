@@ -6,7 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
-    "test:e2e": "vitest run"
+    "test:e2e": "vitest run --mode e2e"
   },
   "dependencies": {
     "@flow-gatekeeper/contracts": "workspace:*"
