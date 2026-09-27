@@ -85,7 +85,7 @@ export interface HighFrequencyWsHandle {
 export function useHighFrequencyWs(
   options: UseHighFrequencyWsOptions,
 ): HighFrequencyWsHandle {
-  const { url, onBatch, onStatus, onConnected, onDiagnosisEvent } = options;
+  const { url, onBatch, onConnected, onDiagnosisEvent } = options;
   const maxBufferSize = options.maxBufferSize ?? 2000;
   const heartbeatMs = options.heartbeatMs ?? 15_000;
   const pongTimeoutMs = options.pongTimeoutMs ?? 5_000;
@@ -99,6 +99,8 @@ export function useHighFrequencyWs(
 
   let manualClose = false;
   let attempt = 0;
+  /** 最近一次回報的連線狀態；`connect()` 據此判斷是否要先補報 reconnecting。 */
+  let lastStatus: ConnectionStatus | null = null;
   let lastPingAt = 0; // 最近一次送 ping 的時刻，供 pong 計 RTT。
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let pongTimer: ReturnType<typeof setTimeout> | null = null;
@@ -108,6 +110,11 @@ export function useHighFrequencyWs(
   // 丟棄筆數的非 reactive 累計；每幀 commitDrops 一次交出（硬規則 1）。
   let pendingOverflow = 0;
   let pendingInvalid = 0;
+
+  function onStatus(status: ConnectionStatus): void {
+    lastStatus = status;
+    options.onStatus(status);
+  }
 
   let batchErrorCount = 0;
   let lastBatchErrorLogAt = Number.NEGATIVE_INFINITY;
@@ -242,7 +249,8 @@ export function useHighFrequencyWs(
     // 遙測批次：逐筆進**非 reactive** buffer（不逐筆寫 reactive state）。
     for (const point of points) buffer.push(point);
     if (buffer.length > maxBufferSize) {
-      // 溢位不截斷最舊：改合併，保住每台最新值與期間的狀態轉換（Event Stream 不斷片）。
+      // 溢位不截斷最舊：改合併，保住每台最新值；轉換點盡量保留，但降到水位時較舊的轉換點
+      // 可能被取樣掉（見 `coalesceTelemetry`），Event Stream 只保證不漏最新狀態。
       const { kept, dropped } = coalesceTelemetry(buffer, maxBufferSize);
       buffer = kept;
       pendingOverflow += dropped;
@@ -280,13 +288,10 @@ export function useHighFrequencyWs(
     }
   }
 
-  /** 控制訊息副作用（system/connected 重訂閱並歸零退避；pong 確認心跳）。 */
+  /** 控制訊息副作用（system/connected 重訂閱；machine/subscribed 歸零退避；pong 確認心跳）。 */
   function handleControlMessage(message: Record<string, unknown>): void {
     switch (message.type) {
       case "system/connected":
-        // 退避在這裡才歸零、而非 `open`：「連上又立刻被伺服器關掉」時 open 仍會觸發，
-        // 若在 open 歸零就會以約 1 秒週期無限重連；收到 system/connected 才算真的連上。
-        attempt = 0;
         if (typeof message.clientId === "string") onConnected(message.clientId);
         break;
       case "pong":
@@ -294,6 +299,10 @@ export function useHighFrequencyWs(
         clearPongTimer(); // 心跳確認
         break;
       case "machine/subscribed":
+        // 退避在這裡才歸零，而非 `open` 或 `system/connected`：伺服器接受連線後仍可能因 token
+        // 錯誤、違規而以 1008 關閉——這類連線 open 與 system/connected 都會到，若在那時歸零，
+        // 會以約 1 秒週期無限重連。訂閱成功才算「真的連上且可用」。
+        attempt = 0;
         options.onAuthResult?.(true);
         break;
       case "system/unauthorized":
@@ -307,6 +316,10 @@ export function useHighFrequencyWs(
 
   function connect(): void {
     clearReconnect();
+    // 舊連線狀態仍停在 connected（例如 `online` 在舊 socket 的 close 事件到達前觸發、
+    // 其 listener 隨即被 abort，close 事件不會再處理）時先補報 reconnecting，讓 store 清掉
+    // 舊連線的 clientId／訂閱狀態，不讓診斷在新連線 open 前拿舊 socketId 送出。
+    if (lastStatus === "connected") onStatus("reconnecting");
     // 舊連線的心跳一併清掉：`online` 快速重連可能發生在舊 socket 的 close 事件到達之前，
     // 舊的 heartbeat／pongTimer 若續跑，會以 `ws?.close()` 把剛建立的新 socket 關掉。
     clearHeartbeat();

@@ -206,7 +206,13 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     connectionStatus.value = status;
   }
 
+  /**
+   * 識別換了＝換了一條連線：舊連線的訂閱授權不延續，須等新連線的 `machine/subscribed`。
+   * 平常離開 connected 時 `setConnectionStatus` 已清掉 subscribed；這裡補上「狀態未經過
+   * reconnecting 就換到新 clientId」的路徑，不讓 isLive 以新 id 搭配舊連線的授權。
+   */
   function setClientId(id: string): void {
+    if (clientId.value !== id) subscribed.value = false;
     clientId.value = id;
     everConnected.value = true;
   }

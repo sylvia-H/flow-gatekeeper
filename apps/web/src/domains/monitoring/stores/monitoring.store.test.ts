@@ -335,6 +335,20 @@ describe("monitoring store — 連線真的活著（WEB-3）與授權錯誤（AR
     expect(store.clientId).toBe("c2");
   });
 
+  it("未經 reconnecting 就換到新 clientId → subscribed 清空，isLive 須等新連線訂閱", () => {
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.setClientId("c1");
+    store.setAuthorized(true);
+    store.setClientId("c1"); // 同一 id 重複派發不影響
+    expect(store.isLive).toBe(true);
+    store.setClientId("c2");
+    expect(store.subscribed).toBe(false);
+    expect(store.isLive).toBe(false);
+    store.setAuthorized(true);
+    expect(store.isLive).toBe(true);
+  });
+
   it("setAuthorized(false) 記錄可顯示的授權錯誤；setAuthorized(true) 清除", () => {
     const store = useMonitoringStore();
     expect(store.authError).toBeNull();

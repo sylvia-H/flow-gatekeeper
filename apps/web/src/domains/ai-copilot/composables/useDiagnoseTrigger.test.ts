@@ -79,6 +79,30 @@ describe("useDiagnoseTrigger — 可否診斷看「連線活著且已授權」�
     expect(useCopilotStore().stateFor("mixer-01").status).toBe("idle");
   });
 
+  it("system/connected 後、machine/subscribed 前按卡片 icon（diagnose）→ 不送 POST，但仍選台", () => {
+    const fetchSpy = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetchSpy);
+    const { monitoring, trigger } = setup();
+    monitoring.setConnectionStatus("connected");
+    monitoring.setClientId("c1");
+    trigger.diagnose("mixer-02");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(monitoring.selectedMachineId).toBe("mixer-02");
+    expect(useCopilotStore().stateFor("mixer-02").status).toBe("idle");
+  });
+
+  it("system/unauthorized 期間 diagnose／retry 都不送 POST（clientId 仍在也一樣）", () => {
+    const fetchSpy = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetchSpy);
+    const { monitoring, trigger } = setup();
+    goLive(monitoring, "c1");
+    monitoring.setAuthorized(false);
+    expect(monitoring.clientId).toBe("c1");
+    trigger.diagnose("mixer-01");
+    trigger.retry("mixer-01");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("POST 往返中收到 system/unauthorized、後端回 409 → 顯示未授權句而非「等待重連」", async () => {
     let resolveFetch: (res: Response) => void = () => undefined;
     vi.stubGlobal(

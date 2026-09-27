@@ -46,13 +46,21 @@ export function useDiagnoseTrigger(): DiagnoseTrigger {
     copilot.canDiagnose(monitoring.selectedMachineId, hasClient.value),
   );
 
+  /**
+   * 送出用的 socketId 一律經同一道閘門：連線未活著或未授權時給 null，copilot store 即不送 POST。
+   * 不能直接交 `monitoring.clientId`——它在 `system/connected` 後、`machine/subscribed` 前，
+   * 以及 `system/unauthorized` 期間都仍有值，卡片 icon 這類不看 `canDiagnoseSelected` 的入口會照送而必得 409。
+   */
+  const socketId = (): string | null => (hasClient.value ? monitoring.clientId : null);
+
   function diagnose(machineId: string): void {
+    // 仍先選台：被閘門擋下時 drawer 會顯示該台與停用原因。
     monitoring.selectMachine(machineId);
-    void copilot.diagnose(machineId, monitoring.clientId, options);
+    void copilot.diagnose(machineId, socketId(), options);
   }
 
   function retry(machineId: string): void {
-    void copilot.retry(machineId, monitoring.clientId, options);
+    void copilot.retry(machineId, socketId(), options);
   }
 
   return { hasClient, connectionBlockedReason, canDiagnoseSelected, diagnose, retry };

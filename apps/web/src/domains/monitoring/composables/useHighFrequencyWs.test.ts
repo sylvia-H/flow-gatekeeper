@@ -468,7 +468,7 @@ describe("useHighFrequencyWs — 心跳與重連", () => {
     expect(FakeWebSocket.instances).toHaveLength(3);
   });
 
-  it("收到 system/connected 才把退避歸零：之後斷線回到 1 秒重連（TQ-3）", () => {
+  it("收到 machine/subscribed 才把退避歸零：之後斷線回到 1 秒重連（TQ-3）", () => {
     mount();
     // 連兩次失敗把退避推到 attempt 2（下一次 4 秒）
     FakeWebSocket.latest().close(); // attempt 0 → 1s
@@ -480,12 +480,54 @@ describe("useHighFrequencyWs — 心跳與重連", () => {
     const third = FakeWebSocket.latest();
     third.serverOpen();
     third.serverSend({ type: "system/connected", clientId: "c3" });
-    third.close(); // 已真正連上過 → attempt 0 → 1s（未歸零則為 4s）
+    third.serverSend({ type: "machine/subscribed", machineIds: [] });
+    third.close(); // 已訂閱成功過 → attempt 0 → 1s（未歸零則為 4s）
 
     vi.advanceTimersByTime(999);
     expect(FakeWebSocket.instances).toHaveLength(3);
     vi.advanceTimersByTime(1);
     expect(FakeWebSocket.instances).toHaveLength(4);
+  });
+
+  it("token 錯誤：每次都收到 system/connected 但被 1008 關閉 → 退避不歸零、持續增長", () => {
+    const onAuthResult = vi.fn();
+    mount({ onAuthResult });
+    const delays = [1_000, 2_000, 4_000];
+    for (const [i, delay] of delays.entries()) {
+      const socket = FakeWebSocket.latest();
+      socket.serverOpen();
+      socket.serverSend({ type: "system/connected", clientId: `c${i}` });
+      socket.serverSend({ type: "system/unauthorized" });
+      socket.readyState = FakeWebSocket.CLOSED;
+      socket.dispatchEvent(Object.assign(new Event("close"), { code: 1008 }));
+      vi.advanceTimersByTime(delay - 1);
+      expect(FakeWebSocket.instances).toHaveLength(i + 1);
+      vi.advanceTimersByTime(1);
+      expect(FakeWebSocket.instances).toHaveLength(i + 2);
+    }
+    expect(onAuthResult).not.toHaveBeenCalledWith(true);
+  });
+
+  it("仍回報 connected 時 online 觸發重連 → 先補報 reconnecting，再等新 socket open 才回 connected", () => {
+    const { spies } = mount();
+    const first = FakeWebSocket.latest();
+    first.serverOpen();
+    first.serverSend({ type: "system/connected", clientId: "c1" });
+    // error 後 close() 只進 CLOSING，close 事件尚未到達；狀態仍是 connected
+    first.readyState = FakeWebSocket.CLOSING;
+    expect(spies.onStatus).toHaveBeenLastCalledWith("connected");
+
+    windowTarget.dispatchEvent(new Event("online"));
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(spies.onStatus).toHaveBeenLastCalledWith("reconnecting");
+
+    FakeWebSocket.latest().serverOpen();
+    expect(spies.onStatus).toHaveBeenLastCalledWith("connected");
+  });
+
+  it("首次連線不補報 reconnecting", () => {
+    const { spies } = mount();
+    expect(spies.onStatus).not.toHaveBeenCalled();
   });
 
   it("pong 逾時後、舊 socket 的 close 尚未到達就 online 重連 → 舊心跳不會關掉新 socket", () => {

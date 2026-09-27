@@ -226,6 +226,16 @@ describe("WEB-1：MachineNodeCard 選取態勝過狀態 class", () => {
     expect(vue).not.toMatch(/selected \? '[^']*border-accent/);
   });
 
+  it("tailwind 未開 `future.hoverOnlyWhenSupported`（開了 `hover:` 會被包進 @media，迷你 cascade 忽略它，hover 案例失真）", () => {
+    const future: unknown = config.future;
+    expect(future).not.toBe("all");
+    const flag =
+      typeof future === "object" && future !== null
+        ? (future as Record<string, unknown>)["hoverOnlyWhenSupported"]
+        : undefined;
+    expect(flag).not.toBe(true);
+  });
+
   for (const { state, stale } of CASES) {
     // 點選時按鈕會取得 focus：`focus:outline-none`（outline: 2px solid transparent）與選取規則
     // 同為 (0,2,0)，選取靠輸出順序勝出——focus 路徑必須一併驗。
