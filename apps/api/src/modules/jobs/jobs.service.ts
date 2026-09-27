@@ -17,6 +17,7 @@ import type {
 import { AiStreamRelayService } from "../websocket/ai-stream-relay.service.js";
 import { MonitoringGateway } from "../websocket/monitoring.gateway.js";
 import { LogThrottle } from "../../lib/telemetry-buffer.js";
+import { throttledFields } from "../../lib/throttled-log.js";
 import { CONNECTION_ERROR_LOG_THROTTLE_MS } from "../../lib/connection-error-throttle.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 
@@ -101,13 +102,8 @@ export class JobsService {
     // 限制：檢查的是「本次請求」的 socketId；冪等命中時仍保留第一次綁定的舊 clientId（不改綁），
     // 故 409 檢查不保證既有綁定仍有效（原連線可能已斷）。web 每次發起都用新 jobId，實務上不觸發。
     if (!this.presence.isAuthorized(body.socketId)) {
-      const hit = this.rejectLogThrottle.hit("socket-unauthorized", Date.now());
-      if (hit) {
-        this.plog.warn(
-          hit.suppressed > 0 ? { jobId, machineId, suppressed: hit.suppressed } : { jobId, machineId },
-          "diagnosis rejected: socket offline or unauthorized",
-        );
-      }
+      const fields = throttledFields(this.rejectLogThrottle, "socket-unauthorized", { jobId, machineId });
+      if (fields) this.plog.warn(fields, "diagnosis rejected: socket offline or unauthorized");
       throw new ConflictException({
         statusCode: 409,
         error: "Conflict",

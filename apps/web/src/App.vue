@@ -13,7 +13,8 @@ import { useCopilotStore } from "./domains/ai-copilot/stores/copilot.store.js";
 import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFrequencyWs.js";
 import { useResizeDrag } from "./shared/composables/useResizeDrag.js";
 import { useDiagnoseTrigger } from "./domains/ai-copilot/composables/useDiagnoseTrigger.js";
-import { KNOWN_MACHINE_IDS, machineLabel } from "./domains/monitoring/lib/machine-labels.js";
+import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
+import { machineLabel } from "./domains/monitoring/lib/machine-labels.js";
 import { MACHINE_GROUPS, machineGroup } from "./domains/monitoring/lib/machine-groups.js";
 import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.js";
 
@@ -84,7 +85,7 @@ function onCancel(): void {
 }
 
 // US5 主區標題列機台數（N＝固定名冊長度；不含 Graph/拓樸切換，僅標題）。
-const machineCount = computed(() => KNOWN_MACHINE_IDS.length);
+const machineCount = computed(() => MACHINE_IDS.length);
 
 // US6 sidebar 分組：直接依 MACHINE_GROUPS 順序分區，成員經 search 過濾；過濾後為空的群組略去
 // 標題（FR-017、Edge Cases）。roster 5 台皆已分組（machine-groups 測試保證），故無需 Ungrouped 桶。
@@ -160,7 +161,7 @@ const handle = useHighFrequencyWs({
     handle.send({
       type: "machine/subscribe",
       token: "",
-      machineIds: [...KNOWN_MACHINE_IDS],
+      machineIds: [...MACHINE_IDS],
     });
   },
 });

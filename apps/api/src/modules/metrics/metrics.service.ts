@@ -8,6 +8,7 @@ import { AppConfigService } from "../config/config.service.js";
 import { attachThrottledErrorLog } from "../../lib/connection-error-throttle.js";
 import { mergeMetrics } from "../../lib/metrics-merge.js";
 import { LogThrottle } from "../../lib/telemetry-buffer.js";
+import { throttledFields } from "../../lib/throttled-log.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 import { readWorkerSnapshots } from "./worker-snapshots.js";
 
@@ -176,16 +177,15 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
   private checkContract(payload: SystemMetrics): void {
     const result = SystemMetricsSchema.safeParse(payload);
     if (result.success) return;
-    const pass = this.selfCheckThrottle.hit("system/metrics", Date.now());
-    if (!pass) return;
+    const fields = throttledFields(this.selfCheckThrottle, "system/metrics", {
+      issues: result.error.issues.map((issue) => ({
+        path: issue.path.join(".") || "(root)",
+        code: issue.code,
+      })),
+    });
+    if (!fields) return;
     this.logger.error(
-      {
-        issues: result.error.issues.map((issue) => ({
-          path: issue.path.join(".") || "(root)",
-          code: issue.code,
-        })),
-        suppressed: pass.suppressed,
-      },
+      fields,
       "system/metrics 出口違反契約，前端會整則丟棄（檢查 METRICS_INTERVAL_MS 等設定）",
     );
   }

@@ -1358,7 +1358,7 @@ app.get(MonitoringGateway).attach(app.getHttpServer());
 > - **授權**：有設 `WS_AUTH_SECRET` 時，`ai/*`、`job/status`、`system/metrics` 只送通過 `machine/subscribe` token 的連線；未設時連上即授權。錯誤 token 仍回 `system/unauthorized`。
 > - **違規關閉**：同一連線畸形訊息（無法解析、schema 不符）或錯誤 token 累計 10 次，以 close code `1008` 關閉；有設 `WS_AUTH_SECRET` 時，連線在 `WS_AUTH_GRACE_MS`（預設 10000）內未通過 token 也以 `1008` 關閉（由獨立的授權 sweep 檢查，間隔 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，實際關閉時間 ≤ grace + 該間隔）。
 > - **心跳**：伺服器端探活改為帶 nonce 的協定層 ping，pong 必須原樣帶回才算存活；未經請求或 nonce 不符的 pong 不算（瀏覽器與 `ws` 自動回應）。應用層 `ping`→`pong` 訊息仍保留供前端量 RTT。
-> - **慢 client 與連線上限**：`bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES`（預設 1 MiB）即略過該筆遙測推送（控制／診斷訊息照送），連續 3 個心跳 tick 超標則 terminate；連線數達 `MAX_WS_CONNECTIONS`（預設 500）時 upgrade 回 HTTP 503；有設 `WS_AUTH_SECRET` 時，未授權連線另有子上限 `max(10, floor(20% × MAX_WS_CONNECTIONS))`，達到亦回 503。
+> - **慢 client 與連線上限**：`bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES`（預設 1 MiB）即略過該筆遙測推送（控制／診斷訊息照送），連續 3 個心跳 tick 超標則 terminate；連線數達 `MAX_WS_CONNECTIONS`（預設 500）時 upgrade 回 HTTP 503；有設 `WS_AUTH_SECRET` 時，未授權連線另有子上限 `max(10, floor(20% × MAX_WS_CONNECTIONS))`，達到亦回 503（限制未授權者可佔的總名額，持 token 的新連線池滿時同樣 503）。背壓略過的高頻流除遙測批次外也含 `ai/token`（終態由 `ai/done` 補齊）。
 > - **relay 日誌**：Redis／QueueEvents 錯誤日誌改為轉態節流——轉態（正常↔故障）時各記一則，故障期間每 30 秒至多一則，斷線期間不刷屏。
 > - 見 §15.6「第二輪審查修復」。
 

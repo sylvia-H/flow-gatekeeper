@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { computed, markRaw, ref, shallowRef, triggerRef } from "vue";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { fleetHealthOf, type FleetHealthSummary } from "../lib/fleet-health.js";
-import { KNOWN_MACHINE_IDS } from "../lib/machine-labels.js";
+import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
 import { deriveTransitionEvent, pushCapped, type DerivedEvent } from "../lib/events.js";
 import { filterMachineIds } from "../lib/machine-search.js";
 import { staleClock } from "../lib/stale.js";
@@ -131,12 +131,12 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   );
 
   /**
-   * US2 Fleet Health 四類聚合。委派純函式 `fleetHealthOf`，走固定名冊 KNOWN_MACHINE_IDS
+   * US2 Fleet Health 四類聚合。委派純函式 `fleetHealthOf`，走固定名冊 MACHINE_IDS
    * （total 穩定＝5）。依賴 `machines` 與 `staleNow`（每秒 tick 重算 stale），屬低頻 reactive，
    * 不逐筆 telemetry 觸發（憲章 IV）。
    */
   const fleetHealth = computed<FleetHealthSummary>(() =>
-    fleetHealthOf(machines.value, staleNow.value, KNOWN_MACHINE_IDS),
+    fleetHealthOf(machines.value, staleNow.value, MACHINE_IDS),
   );
 
   /**
@@ -144,7 +144,7 @@ export const useMonitoringStore = defineStore("monitoring", () => {
    * 確保兩處過濾一致。空查詢回全部名冊。
    */
   const visibleMachineIds = computed<string[]>(() =>
-    filterMachineIds(KNOWN_MACHINE_IDS, searchQuery.value),
+    filterMachineIds(MACHINE_IDS, searchQuery.value),
   );
 
   // ── Actions ────────────────────────────────────────────────────────

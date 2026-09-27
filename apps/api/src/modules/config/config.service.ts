@@ -8,6 +8,7 @@ import {
   resolveMetricsLogLevel,
   resolvePretty,
 } from "@flow-gatekeeper/shared/logging";
+import { isProductionEnv } from "@flow-gatekeeper/shared";
 import { resolveHealthProbeTimeout } from "../../lib/health-probe-timeout.js";
 import { parseApiEnv } from "../../lib/env-schema.js";
 import { parseAllowedOrigins } from "../../lib/ws-origin.js";
@@ -41,9 +42,10 @@ export class AppConfigService {
   private readonly env: ApiEnv = parseApiEnv(process.env);
 
   readonly apiPort = this.env.API_PORT;
-  // 執行環境是否為 production（與 shared logging 的 `resolvePretty` 同一判準：精確等於 "production"）。
+  // 執行環境是否為 production：與 shared logging 的 `resolvePretty`、worker 的 chaos 守衛共用同一判準
+  // （`isProductionEnv`：trim + 小寫後比較，`NODE_ENV=Production ` 也算 production）。
   // 集中在此讀，service 不直接碰 process.env.NODE_ENV。
-  readonly isProduction = process.env.NODE_ENV === "production";
+  readonly isProduction = isProductionEnv(process.env.NODE_ENV);
   readonly mockTelemetryIntervalMs = this.env.MOCK_TELEMETRY_INTERVAL_MS;
   readonly wsHeartbeatMs = this.env.WS_HEARTBEAT_MS;
   readonly wsAuthSecret = this.env.WS_AUTH_SECRET ?? "";

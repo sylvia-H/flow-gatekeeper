@@ -24,6 +24,7 @@ import {
   WS_MAX_VIOLATIONS,
   WS_SLOW_CONSUMER_TICKS,
   authGraceSweepIntervalMs,
+  isBackpressureDroppable,
   unauthorizedConnectionCap,
 } from "./monitoring.gateway.js";
 
@@ -149,7 +150,7 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 /** Gateway 內部的單一連線狀態（僅測試用：模擬慢讀者需要改寫 server 端 socket 的 bufferedAmount）。 */
 type GatewayInternals = {
-  clients: Map<string, { socket: WebSocket; alive: boolean; connectedAt: number }>;
+  clients: Map<string, { socket: WebSocket; alive: boolean; connectedAt: number; closeRequestedAt?: number }>;
   sweepDeadConnections(): void;
   sweepAuthGrace(): void;
 };
@@ -774,5 +775,46 @@ describe("MonitoringGateway：出口閘門（背壓、授權、違規、連線�
     for (let i = 0; i < unauthorizedConnectionCap(20) + 2; i += 1) clients.push(await openClient(port));
     expect(gateway.connectionCount).toBe(unauthorizedConnectionCap(20) + 2);
     for (const c of clients) c.ws.close();
+  });
+  it("背壓也略過 ai/token（高頻流）：慢讀者收不到 token，但仍收到 ai/done 終態", async () => {
+    const { port, gateway } = await startGateway({ sendHighWaterBytes: 64 * 1024 });
+    const slow = await openClient(port);
+    Object.defineProperty(serverSocket(gateway, slow.clientId), "bufferedAmount", {
+      get: () => 10 * 1024 * 1024,
+    });
+    const jobId = "0e6c2b7a-1f3d-4d8e-a9b0-c1d2e3f4a5b6";
+    const token = { type: "ai/token", jobId, attempt: 1, seq: 0, text: "hi" } as const;
+    const done: AiDone = {
+      type: "ai/done",
+      jobId,
+      attempt: 1,
+      cached: false,
+      result: { summary: "s", severity: "ok", likelyCauses: [], suggestedActions: [], evidence: [] },
+    };
+    expect(isBackpressureDroppable(token)).toBe(true);
+    expect(isBackpressureDroppable(done)).toBe(false);
+    expect(isBackpressureDroppable([])).toBe(true);
+    gateway.send(slow.clientId, token);
+    gateway.send(slow.clientId, done);
+    expect(await slow.next()).toEqual(done);
+    expect(gateway.droppedSendCount).toBe(1);
+    slow.ws.close();
+  });
+
+  it("授權逾期發出 close 後對端不回 close frame → 再過一個期限即 terminate，不再佔名額", async () => {
+    const { port, gateway } = await startGateway({ secret: "s3cret", authGraceMs: 60_000 });
+    const stubborn = await openClient(port);
+    const socket = serverSocket(gateway, stubborn.clientId);
+    socket.close = () => undefined; // 模擬 close frame 送出後對端不回應：連線停在 OPEN
+    age(gateway, stubborn.clientId, 60_000);
+    internals(gateway).sweepAuthGrace();
+    expect(gateway.connectionCount).toBe(1);
+    const state = internals(gateway).clients.get(stubborn.clientId);
+    if (!state || state.closeRequestedAt === undefined) throw new Error("closeRequestedAt 未設定");
+    state.closeRequestedAt -= 60_000;
+    const closed = waitClose(stubborn.ws);
+    internals(gateway).sweepAuthGrace();
+    expect(gateway.connectionCount).toBe(0);
+    expect(await closed).toBe(1006);
   });
 });

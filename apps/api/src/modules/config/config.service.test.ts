@@ -77,6 +77,7 @@ describe("AppConfigService env 驗證與 WS Origin 白名單", () => {
 describe("AppConfigService.isProduction", () => {
   it.each([
     ["production", true],
+    ["Production ", true],
     ["development", false],
     ["test", false],
     ["", false],

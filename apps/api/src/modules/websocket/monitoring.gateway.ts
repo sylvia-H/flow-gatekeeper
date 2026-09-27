@@ -28,6 +28,7 @@ import {
   DEFAULT_WS_SEND_HIGH_WATER_BYTES,
 } from "../../lib/env-schema.js";
 import { getAppLogger } from "../../logging/app-logger.js";
+import { throttledFields } from "../../lib/throttled-log.js";
 
 type ClientId = string;
 
@@ -68,6 +69,14 @@ export function unauthorizedConnectionCap(maxConnections: number): number {
 }
 
 /** 授權期限掃描的間隔：`min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，實際關閉時間 ≤ 期限 + 此間隔。 */
+/**
+ * 背壓可略過的訊息：遙測批次與 `ai/token`（每筆 LLM token 一則的高頻流）。其餘皆為低頻控制／終態訊息，
+ * 慢讀者仍須收到（漏送終態會讓前端卡在 streaming）。
+ */
+export function isBackpressureDroppable(payload: ServerMessage): boolean {
+  return Array.isArray(payload) || payload.type === "ai/token";
+}
+
 export function authGraceSweepIntervalMs(heartbeatMs: number, authGraceMs: number): number {
   return Math.min(heartbeatMs, authGraceMs);
 }
@@ -101,8 +110,10 @@ type ClientState = {
   /** 連續幾個心跳 tick `bufferedAmount` 超過高水位。 */
   overHighWaterTicks: number;
   violations: number;
-  /** 已因違規發出 close，等待 'close' 事件清理；期間的訊息一律忽略。 */
+  /** 已因違規／授權逾期發出 close，等待 'close' 事件清理；期間的訊息一律忽略。 */
   closing: boolean;
+  /** 發出 close(1008) 的時刻：對端不回 close frame 時，下一輪授權 sweep 直接 terminate，不讓其再佔名額。 */
+  closeRequestedAt?: number;
 };
 
 type ViolationReason = "invalid-json" | "schema" | "unauthorized";
@@ -236,8 +247,9 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
         done(false, 503, "Service Unavailable");
         return;
       }
-      // 有密鑰時，新連線在通過 token 前都算「未授權」：未授權者已達子上限就不再收，保留其餘名額
-      // 給持有 token 的使用者。
+      // 有密鑰時，新連線在通過 token 前都算「未授權」：未授權者已達子上限就不再收。這限制的是未授權者
+      // 可佔的**總名額**（其餘名額只有已授權者能佔住）；持 token 的新連線同樣得先經過未授權池，池被
+      // 佔滿時一樣拿到 503——不保證新授權連線必能進入，只保證已授權者不受未授權洪水影響。
       const unauthorizedCap = unauthorizedConnectionCap(this.maxConnections);
       if (this.config.wsAuthSecret && this.unauthorizedCount >= unauthorizedCap) {
         this.throttledWarn(
@@ -378,6 +390,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     );
     if (state.violations < WS_MAX_VIOLATIONS) return false;
     state.closing = true;
+    state.closeRequestedAt = Date.now();
     this.throttledWarn(
       "violation-close",
       { clientId, violations: state.violations },
@@ -389,9 +402,8 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
 
   /** 同類 warn 每 `CONNECTION_ERROR_LOG_THROTTLE_MS` 至多一則，並帶出期間被壓掉的則數。 */
   private throttledWarn(key: string, fields: Record<string, unknown>, msg: string): void {
-    const hit = this.warnThrottle.hit(key, Date.now());
-    if (!hit) return;
-    this.plog.warn(hit.suppressed > 0 ? { ...fields, suppressed: hit.suppressed } : fields, msg);
+    const out = throttledFields(this.warnThrottle, key, fields);
+    if (out) this.plog.warn(out, msg);
   }
 
   /** 每 tick：只把訂閱機台的 TelemetryPoint[] 推給各訂閱者（FR-004）；全量落地與推送解耦。 */
@@ -452,13 +464,22 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
    * 授權期限掃描（有設密鑰時由 attach 以 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 間隔驅動）：
    * 逾 `WS_AUTH_GRACE_MS` 仍未授權者以 1008 關閉。不另開每連線 timer，故實際關閉時間介於
    * 期限～期限 + 一個掃描間隔，最長約 2 × WS_AUTH_GRACE_MS（與心跳間隔設多大無關）。
+   * 已發出 close 但對端遲不回 close frame 者，再過一個期限即 terminate（否則可多佔 ws closeTimeout 約 30 s）。
    */
   private sweepAuthGrace(): void {
     if (!this.config.wsAuthSecret) return;
     const now = Date.now();
     for (const [clientId, state] of this.clients) {
-      if (state.authorized || state.closing || now - state.connectedAt < this.authGraceMs) continue;
+      if (state.closing) {
+        // 已發出 close 但對端不回 close frame（ws 預設 closeTimeout 約 30 s）：不讓它再佔名額，直接 terminate。
+        if (state.closeRequestedAt !== undefined && now - state.closeRequestedAt >= this.authGraceMs) {
+          this.terminate(clientId, "close-not-honoured");
+        }
+        continue;
+      }
+      if (state.authorized || now - state.connectedAt < this.authGraceMs) continue;
       state.closing = true;
+      state.closeRequestedAt = now;
       this.throttledWarn(
         "auth-grace-expired",
         { clientId, authGraceMs: this.authGraceMs },
@@ -531,16 +552,17 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
    * 所有推送的唯一出口（不檢查授權：`system/connected`／`system/unauthorized` 這類連線層控制
    * 訊息必須送得到未授權連線）。
    *
-   * 背壓只作用於**遙測批次**（`TelemetryPoint[]`）：`bufferedAmount` 已超過高水位時略過該批並
-   * 計數——遙測是每 tick 數十則的高頻流，對端讀不動時繼續 `send()` 只會讓 api 記憶體無上限成長，
-   * 漏掉的批次下一 tick 就有新值補上。控制與診斷訊息（`ai/done`／`ai/error`／`job/status` 終態、
-   * `system/*`、`pong`）一律照送：它們低頻、體積小，且漏送終態會讓前端卡在 streaming 直到
-   * watchdog 逾時。記憶體上限由心跳 sweep 保證——連續 `WS_SLOW_CONSUMER_TICKS` 個 tick 超標即 terminate。
+   * 背壓只作用於**高頻流**——遙測批次（`TelemetryPoint[]`）與 `ai/token`（見 `isBackpressureDroppable`）：
+   * `bufferedAmount` 已超過高水位時略過該則並計數——對端讀不動時繼續 `send()` 只會讓 api 記憶體無上限
+   * 成長；漏掉的遙測下一 tick 就有新值補上，漏掉的 token 由 `ai/done` 帶完整結果收尾。終態與控制訊息
+   * （`ai/done`／`ai/error`／`job/status`、`system/*`、`pong`）一律照送：它們低頻、體積小，且漏送終態會讓
+   * 前端卡在 streaming 直到 watchdog 逾時。記憶體上限由心跳 sweep 保證——連續 `WS_SLOW_CONSUMER_TICKS`
+   * 個 tick 超標即 terminate。
    */
   private deliver(clientId: ClientId, payload: ServerMessage): void {
     const state = this.clients.get(clientId);
     if (state?.socket.readyState !== WebSocket.OPEN) return;
-    if (Array.isArray(payload) && state.socket.bufferedAmount > this.sendHighWaterBytes) {
+    if (isBackpressureDroppable(payload) && state.socket.bufferedAmount > this.sendHighWaterBytes) {
       this.droppedSends += 1;
       this.throttledWarn(
         "backpressure-drop",

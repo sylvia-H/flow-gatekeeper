@@ -28,6 +28,7 @@ describe("resolveLogLevel", () => {
 describe("resolvePretty", () => {
   it("NODE_ENV=production 時預設非 pretty", () => {
     expect(resolvePretty({ NODE_ENV: "production" })).toBe(false);
+    expect(resolvePretty({ NODE_ENV: "Production " })).toBe(false); // 與 isProductionEnv 同一判準（正規化）
   });
 
   it("非 production（含未設定）時預設 pretty", () => {

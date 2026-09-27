@@ -9,6 +9,7 @@
 export const SHARED_PACKAGE = "@flow-gatekeeper/shared" as const;
 
 export * from "./telemetry-thresholds.js";
+export { isProductionEnv } from "./env.js";
 
 // ⚠️ MUST NOT `export * from "./logging/*"` 或直接／間接 re-export ./logging 任何內容。
 // apps/web 相依本 package（telemetry-format.ts 匯入 METRIC_THRESHOLDS）；根 export 一旦

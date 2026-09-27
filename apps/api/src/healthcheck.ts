@@ -1,3 +1,4 @@
+import { writeSync } from "node:fs";
 import { request } from "node:http";
 import { loadApiDotenv } from "./lib/env-file.js";
 import { resolveHealthcheckPort } from "./lib/healthcheck-port.js";
@@ -20,12 +21,18 @@ const SELF_TIMEOUT_MS = 4000;
 
 // port 與 api 本體走同一份 env schema 與同一個 .env 載入點：裸 `Number(process.env.API_PORT ?? 3000)`
 // 在 `API_PORT=`（留空，`??` 不生效）時會連 port 0。env 不合法時 api 本身會拒絕啟動，探針同樣判 unhealthy，
-// 並把原因寫到 stderr（進 `docker inspect` 的 health log），否則只看得到 unhealthy 卻查不出是設定錯。
+// 並把原因同步寫到 stderr（進 `docker inspect` 的 health log），否則只看得到 unhealthy 卻查不出是設定錯。
 function resolvePort(): number {
   loadApiDotenv();
   const result = resolveHealthcheckPort(process.env);
   if (!result.ok) {
-    console.error(result.message);
+    // 與 worker `lib/fatal.ts` 同一做法：stderr 為非同步 pipe 時（Windows／macOS、CI 收集輸出）
+    // `console.error` 尚未 flush 就 exit 會遺失訊息，故用 writeSync；stderr 不可寫也照樣退出。
+    try {
+      writeSync(2, `${result.message}\n`);
+    } catch {
+      // stderr 不可寫（EPIPE／EAGAIN）：原因寫不出去，但仍必須以非零退出讓探針判 unhealthy
+    }
     process.exit(1);
   }
   return result.port;

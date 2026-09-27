@@ -213,7 +213,7 @@ WebSocket.onmessage ──▶ 只 push 進 buffer（不碰 reactive state）
 - **指數退避 + 抖動**重連（非使用者主動關閉才重連）。
 - 應用層 `ping`/`pong` heartbeat：ping 後 5 秒未回 `pong` 即視為斷線（連同 15 秒心跳間隔，最長約 20 秒內偵測），立即顯示 Reconnecting 並退避重連，不等瀏覽器的 close 事件。
 - 伺服器端主動探活，回收「半死」連線（網路硬中斷）：協定層 ping 帶 nonce，pong 必須原樣帶回才算存活（瀏覽器與 `ws` 會自動回；自寫 client 若關閉 autoPong 需自行回），未經請求或 nonce 不符的 pong 不算。
-- **慢 client 背壓**：單一連線 `bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES` 即略過該筆**遙測**推送（`ai/*`、`job/status` 等控制／診斷訊息照送，記憶體由下一句的 terminate 兜底），連續 3 個心跳 tick 仍超標則 terminate；同時連線數達 `MAX_WS_CONNECTIONS` 時 upgrade 直接回 HTTP 503；有設 `WS_AUTH_SECRET` 時，尚未授權的連線另有子上限 `max(10, floor(MAX_WS_CONNECTIONS × 20%))`，達到即回 503，避免未授權連線佔滿全域名額。
+- **慢 client 背壓**：單一連線 `bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES` 即略過該筆**高頻流**推送（遙測批次與 `ai/token`；`ai/done`／`ai/error`／`job/status` 等終態與控制訊息照送，漏掉的 token 由 `ai/done` 補齊，記憶體由下一句的 terminate 兜底），連續 3 個心跳 tick 仍超標則 terminate；同時連線數達 `MAX_WS_CONNECTIONS` 時 upgrade 直接回 HTTP 503；有設 `WS_AUTH_SECRET` 時，尚未授權的連線另有子上限 `max(10, floor(MAX_WS_CONNECTIONS × 20%))`，達到即回 503——這限制的是未授權者可佔的總名額（已授權者不受未授權洪水影響），持 token 的新連線同樣得先經過未授權池，池滿時一樣 503，不保證新授權連線必能進入。
 - **Gateway 輸入加固**：客戶端控制訊息一律以 `ClientControlMessageSchema` `safeParse`（`machineIds` ≤ 50、每個 ≤ 64 字、token ≤ 512 字），`maxPayload` 16 KiB、每條連線掛 `error` listener、`machineIds` 與後端機台名冊取交集；可選 Origin 白名單 `WS_ALLOWED_ORIGINS`。任何畸形輸入只會被拒絕，不會讓 api 崩潰；同一連線累計 10 次違規（無法解析、schema 不符、錯誤 token）即以 close code `1008` 關閉。
 - **授權期限**：有設 `WS_AUTH_SECRET` 時，連線須在 `WS_AUTH_GRACE_MS`（預設 10 秒）內以正確 token 完成 `machine/subscribe`，否則以 `1008` 關閉，避免未授權連線佔住名額。期限由獨立的授權 sweep 檢查（間隔 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`），實際關閉時間 ≤ grace + sweep 間隔（預設約 20 秒內）。
 - **授權語意**：有設 `WS_AUTH_SECRET` 時，`ai/*`、`job/status`、`system/metrics` 只送給通過 `machine/subscribe` token 驗證的連線；未設時連上即視為已授權。
@@ -565,7 +565,7 @@ Demo 前若想「清 AI 快取讓首次診斷看得到逐字串流」，另外�
 
 ### 軌道 B — 一鍵 demo（全棧容器，單一入口）
 
-**前置需求**：**只需**容器執行環境（Docker Desktop，需支援 BuildKit——Docker 23+ 預設開啟）、此 repo、依範本填妥的祕密——**不需**安裝 Node 或 pnpm。
+**前置需求**：**只需**容器執行環境（Docker Desktop，需 Docker Engine 25+／Compose 2.20.2+：BuildKit 預設開啟，且 compose 用到 healthcheck `start_interval`，更舊的 Engine 不認得此鍵）、此 repo、依範本填妥的祕密——**不需**安裝 Node 或 pnpm。
 
 ```powershell
 # 1) 準備設定範本（demo 容器讀 apps/api/.env.demo，與 host 軌道 A 的 apps/api/.env 刻意分開，
@@ -690,7 +690,7 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 | `WS_AUTH_SECRET` | api | *(空)* | 即時通道訂閱授權；有設時 `ai/*`／`job/status`／`system/metrics` 只送通過 `machine/subscribe` token 的連線、`POST /diagnoses` 的 `socketId` 也須是已授權連線；**本機 live 驗收留空** → 連上即授權、前端免 token 訂閱 |
 | `WS_ALLOWED_ORIGINS` | api | *(空)* | WS upgrade 的 Origin 白名單（逗號分隔，**不要寫預設 port**）；留空＝不檢查；無 Origin 的非瀏覽器 client 一律放行，不在清單內的瀏覽器 upgrade 回 403 |
 | `WS_SEND_HIGH_WATER_BYTES` | api | `1048576` | 單一連線送出緩衝高水位（範圍 65536–268435456）；`bufferedAmount` 超過即略過該筆遙測推送（控制／診斷訊息照送），連續 3 個心跳 tick 超標則 terminate 該連線 |
-| `MAX_WS_CONNECTIONS` | api | `500` | 同時 WS 連線數上限（範圍 1–100000）；達上限時 upgrade 回 HTTP 503。有設 `WS_AUTH_SECRET` 時另有未授權連線子上限 = `max(10, floor(20% × MAX_WS_CONNECTIONS))`，達到亦回 503 |
+| `MAX_WS_CONNECTIONS` | api | `500` | 同時 WS 連線數上限（範圍 1–100000）；達上限時 upgrade 回 HTTP 503。有設 `WS_AUTH_SECRET` 時另有未授權連線子上限 = `max(10, floor(20% × MAX_WS_CONNECTIONS))`，達到亦回 503（限制未授權者可佔的總名額；持 token 的新連線池滿時同樣 503） |
 | `WS_AUTH_GRACE_MS` | api | `10000` | 有設 `WS_AUTH_SECRET` 時，連線須在此期限內通過 `machine/subscribe` token，否則以 `1008` 關閉；範圍 1000–60000，超出即拒絕啟動。實際關閉時間 ≤ grace + 授權 sweep 間隔（`min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`）。未設 `WS_AUTH_SECRET` 時不作用 |
 | `WS_HEARTBEAT_MS` | api | `15000` | 伺服器端心跳探活間隔；下限 1000、上限 2147483647，超出即拒絕啟動 |
 | `MOCK_TELEMETRY_INTERVAL_MS` | api | `50` | 遙測產生節拍（拉到 5ms 可把吞吐放大 ~10×；單次量測示例：26 秒收近 1.9 萬筆而僅批次渲染約 1,600 次，實際數字隨機器與幀率而異）；下限 5、上限 2147483647，超出即拒絕啟動 |

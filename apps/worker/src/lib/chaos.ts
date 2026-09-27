@@ -11,6 +11,7 @@
  * 非法值一律 warn 後**視為關閉**——零影響原則優先於 fail-fast：演練工具壞了，
  * 不該把正常啟動變成致命（含 `WORKER_CHAOS_AT` 非法：時點意圖不明時寧可不注入）。
  */
+import { isProductionEnv } from "@flow-gatekeeper/shared";
 
 export type ChaosKind = "uncaught" | "rejection";
 export type ChaosAt = "startup" | "job";
@@ -78,8 +79,9 @@ export function parseChaosAllowInProduction(env: Record<string, string | undefin
 
 /** 是否武裝 chaos：非 production 一律可；production 僅在明確開關放行時可。 */
 export function shouldArmChaos(nodeEnv: string | undefined, allowInProduction: boolean): boolean {
-  // 正規化後比較：`NODE_ENV=Production` 或帶空白（.env 常見）若嚴格比對會被當成非 production 而放行故障注入。
-  return nodeEnv?.trim().toLowerCase() !== "production" || allowInProduction;
+  // 判準與 api（`AppConfigService.isProduction`）、shared logging 共用：正規化後比較，避免
+  // `NODE_ENV=Production` 或帶空白時各端解讀不一致。
+  return !isProductionEnv(nodeEnv) || allowInProduction;
 }
 
 /** startup 時點的延遲：讓 bootstrap 完整走完（連線、ready log）再注入。 */
