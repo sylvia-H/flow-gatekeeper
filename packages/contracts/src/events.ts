@@ -29,7 +29,7 @@ export type MachineState = (typeof MACHINE_STATES)[number];
  * 兩者判定刻意只差一處：守衛不驗 `timestamp` 的 ISO-8601 格式（逐筆跑 date-time regex 不划算，
  * 且畫面不解析它）；其餘正反例判定一致，見 `telemetry-guard.test.ts`。
  */
-export const TelemetryPointSchema = z.object({
+export const TelemetryPointSchema = /* @__PURE__ */ z.object({
   type: z.literal("machine/data"),
   machineId: z.string(),
   /** RFC 3339（對齊 asyncapi `format: date-time`）：須含秒，接受 `Z` 或 `±hh:mm` 時區。 */
@@ -83,32 +83,35 @@ export function isTelemetryBatch(value: unknown): value is TelemetryPoint[] {
  * discriminated union；依憲章 Principle III「型別來源分層」原本 MAY 以 TS 型別直接定義，
  * 升級 Zod 4 時改以 Zod 定義、型別由 `z.infer` 推導——目的是讓 AsyncAPI 漂移測試能做結構
  * 比對（屬加嚴，仍以本套件為單一來源）。客戶端→伺服器方向屬不可信輸入，定義於 `ws-client.ts`。
+ *
+ * 本檔的 schema 建構皆標 `@__PURE__` 註解，讓前端 bundler 能搖掉執行期未用到的 schema
+ * （web 執行期只用 `SystemMetricsSchema`，其餘只取型別或只供漂移測試）。
  */
 
 /** system/connected：連線建立確認，派發 clientId。 */
-export const SystemConnectedSchema = z.object({
+export const SystemConnectedSchema = /* @__PURE__ */ z.object({
   type: z.literal("system/connected"),
   clientId: z.string(),
 });
 
 /** machine/subscribed：訂閱成功回執（回報當前訂閱集合）。 */
-export const MachineSubscribedSchema = z.object({
+export const MachineSubscribedSchema = /* @__PURE__ */ z.object({
   type: z.literal("machine/subscribed"),
   machineIds: z.array(z.string()),
 });
 
 /** pong：伺服器對應用層 ping 的回應（`ts` 為伺服器 `Date.now()`）。 */
-export const PongSchema = z.object({ type: z.literal("pong"), ts: z.number().int() });
+export const PongSchema = /* @__PURE__ */ z.object({ type: z.literal("pong"), ts: z.number().int() });
 
 /** system/unauthorized：訂閱授權失敗。 */
-export const SystemUnauthorizedSchema = z.object({ type: z.literal("system/unauthorized") });
+export const SystemUnauthorizedSchema = /* @__PURE__ */ z.object({ type: z.literal("system/unauthorized") });
 
 /**
  * system/metrics：伺服器週期廣播的營運指標摘要。
  * 廣播給**所有已連線 client**、與 `machine/subscribe` 訂閱狀態無關——這是系統層級的健康訊號，
  * 不屬於任何一台機台，沒訂閱機台的畫面也需要它。
  */
-export const SystemMetricsSchema = z.object({
+export const SystemMetricsSchema = /* @__PURE__ */ z.object({
   type: z.literal("system/metrics"),
   /**
    * 本則摘要涵蓋的時間窗（＝`METRICS_INTERVAL_MS`）；前端過期門檻由此推導，不得硬編。
