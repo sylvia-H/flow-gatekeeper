@@ -3,7 +3,15 @@ import { parse } from "yaml";
 import { z } from "zod";
 import asyncapiRaw from "../../../asyncapi.yaml?raw";
 import { DiagnosisResultSchema } from "./schemas.js";
-import { WS_MESSAGE_TYPES } from "./events.js";
+import {
+  MachineSubscribedSchema,
+  PongSchema,
+  SystemConnectedSchema,
+  SystemMetricsSchema,
+  SystemUnauthorizedSchema,
+  TelemetryPointSchema,
+  WS_MESSAGE_TYPES,
+} from "./events.js";
 import { MachineSubscribeSchema, PingSchema } from "./ws-client.js";
 import { AiDoneSchema, AiErrorSchema, AiTokenSchema } from "./ai-stream.js";
 import { JobStatusSchema } from "./job-status.js";
@@ -34,7 +42,7 @@ function resolveRef(node: unknown): unknown {
   return resolveRef(cur);
 }
 
-/** 會影響「哪些值合法」的數值／長度／樣式限制，兩邊必須一致。 */
+/** 會影響「哪些值合法」的數值／長度／樣式／格式限制，兩邊必須一致。 */
 const CONSTRAINT_KEYS = [
   "minimum",
   "maximum",
@@ -45,13 +53,34 @@ const CONSTRAINT_KEYS = [
   "minItems",
   "maxItems",
   "pattern",
+  "format",
 ] as const;
 
 /**
- * 正規化成只保留「語意」的形狀：型別、enum／const、限制條件、屬性、required、陣列元素、
- * anyOf／oneOf 分支。`$schema`、`additionalProperties`、`description`、`format` 等不影響
- * 資料形狀的差異一律略過；有 enum 或 const 時略過 `type`（zod 會輸出 `type: string`，
- * asyncapi 只寫 enum／const，兩者等價）。
+ * Zod 4 的 `z.number().int()` 即 `z.int()`，隱含 JS 安全整數範圍，`toJSONSchema` 會把它輸出成
+ * `minimum: -2^53+1`／`maximum: 2^53-1`。這是 JS number 的表示極限、不是契約限制，
+ * asyncapi 不必逐欄寫出，比對時略過（只略過恰好等於安全整數邊界的值，其餘上下限照比）。
+ */
+const SAFE_INT_BOUND = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Zod → JSON Schema。target 選 draft-7：AsyncAPI 2.6 的 Schema Object 是 JSON Schema draft-07
+ * 的超集。`io: "input"` 描述「線上可被接受的輸入」：z.object 預設 strip（多餘鍵接受後丟棄），
+ * input 模式不輸出 `additionalProperties`，與 asyncapi 未宣告（＝允許額外鍵）等價；
+ * output 模式會輸出 `additionalProperties: false`，描述的是 parse 後的形狀、不是線上契約。
+ */
+function fromZod(schema: z.ZodType): unknown {
+  return z.toJSONSchema(schema, { target: "draft-7", io: "input" });
+}
+
+/**
+ * 正規化成只保留「語意」的形狀：型別、enum／const、限制條件（含 `format`）、屬性、required、
+ * `additionalProperties`、陣列元素、anyOf／oneOf 分支。略過的只有不影響資料合法性的鍵
+ * （`$schema`、`description` 等）與兩項 Zod 輸出特性：
+ * - 有 `format` 時略過 `pattern`：Zod 會把 format 的內建 regex（如 uuid、date-time）一併輸出成
+ *   pattern，那是 format 的實作細節，asyncapi 只寫 format 即表達同一限制。
+ * - 安全整數邊界（見 `SAFE_INT_BOUND`）。
+ * 有 enum 或 const 時略過 `type`（zod 會輸出 `type: string`，asyncapi 只寫 enum／const，兩者等價）。
  */
 function normalize(node: unknown): unknown {
   const n = resolveRef(node);
@@ -59,9 +88,9 @@ function normalize(node: unknown): unknown {
   const out: Json = {};
   for (const key of CONSTRAINT_KEYS) {
     if (n[key] === undefined) continue;
-    // Zod 4 的 int 隱含 JS 安全整數範圍、toJSONSchema 會輸出成上下限；那是表示極限不是契約限制
-    if (key === "minimum" && n[key] === -Number.MAX_SAFE_INTEGER) continue;
-    if (key === "maximum" && n[key] === Number.MAX_SAFE_INTEGER) continue;
+    if (key === "pattern" && n.format !== undefined) continue;
+    if (key === "minimum" && n[key] === -SAFE_INT_BOUND) continue;
+    if (key === "maximum" && n[key] === SAFE_INT_BOUND) continue;
     out[key] = n[key];
   }
   // anyOf 與 oneOf 在此的用法（nullable 聯集）語意相同，統一成排序後的 anyOf 比對
@@ -85,6 +114,7 @@ function normalize(node: unknown): unknown {
     out.required = Array.isArray(n.required) ? [...(n.required as unknown[])].map(String).sort() : [];
     out.type = "object";
   }
+  if (n.additionalProperties !== undefined) out.additionalProperties = normalize(n.additionalProperties);
   if (n.items !== undefined) out.items = normalize(n.items);
   return out;
 }
@@ -98,25 +128,59 @@ function messageTypeConst(message: Json): unknown {
   return isObject(typeProp) ? typeProp.const : undefined;
 }
 
+/**
+ * asyncapi 每一則 message 的 payload 對應的 Zod schema。machine/data 傳輸時為無 envelope 的陣列，
+ * 以 `z.array(TelemetryPointSchema)` 表達。新增 message 而漏列在此，下方覆蓋率測試會紅。
+ */
+const MESSAGE_SCHEMAS: Record<string, z.ZodType> = {
+  MachineSubscribe: MachineSubscribeSchema,
+  MachineData: z.array(TelemetryPointSchema),
+  JobStatus: JobStatusSchema,
+  AiToken: AiTokenSchema,
+  AiDone: AiDoneSchema,
+  AiError: AiErrorSchema,
+  Ping: PingSchema,
+  SystemConnected: SystemConnectedSchema,
+  MachineSubscribed: MachineSubscribedSchema,
+  Pong: PongSchema,
+  SystemUnauthorized: SystemUnauthorizedSchema,
+  SystemMetrics: SystemMetricsSchema,
+};
+
 describe("asyncapi.yaml 與 Zod 契約同步", () => {
-  it("components.schemas.DiagnosisResult 與 DiagnosisResultSchema 語意等價", () => {
-    const fromZod = z.toJSONSchema(DiagnosisResultSchema, { target: "draft-7", io: "input" });
-    expect(normalize(components.schemas.DiagnosisResult)).toEqual(normalize(fromZod));
+  it.each<[string, z.ZodType]>([
+    ["DiagnosisResult", DiagnosisResultSchema],
+    ["WorkerMetrics", WorkerMetricsSchema],
+    ["TelemetryPoint", TelemetryPointSchema],
+  ])("components.schemas.%s 與對應 Zod schema 語意等價", (name, schema) => {
+    const documented = components.schemas[name];
+    expect(documented).toBeDefined();
+    expect(normalize(documented)).toEqual(normalize(fromZod(schema)));
   });
 
-  it.each<[string, () => unknown, z.ZodType]>([
-    ["messages.Ping", () => components.messages.Ping?.payload, PingSchema],
-    ["messages.MachineSubscribe", () => components.messages.MachineSubscribe?.payload, MachineSubscribeSchema],
-    ["messages.JobStatus", () => components.messages.JobStatus?.payload, JobStatusSchema],
-    ["messages.AiToken", () => components.messages.AiToken?.payload, AiTokenSchema],
-    ["messages.AiDone", () => components.messages.AiDone?.payload, AiDoneSchema],
-    ["messages.AiError", () => components.messages.AiError?.payload, AiErrorSchema],
-    ["schemas.WorkerMetrics", () => components.schemas.WorkerMetrics, WorkerMetricsSchema],
-  ])("%s 與對應 Zod schema 語意等價", (_name, pick, schema) => {
-    const documented = pick();
+  it.each(Object.entries(MESSAGE_SCHEMAS))("messages.%s 的 payload 與對應 Zod schema 語意等價", (name, schema) => {
+    const documented = components.messages[name]?.payload;
     expect(documented).toBeDefined();
-    const fromZod = z.toJSONSchema(schema, { target: "draft-7", io: "input" });
-    expect(normalize(documented)).toEqual(normalize(fromZod));
+    expect(normalize(documented)).toEqual(normalize(fromZod(schema)));
+  });
+
+  it("asyncapi 的每一則 message 都有結構比對（不只驗 type const）", () => {
+    expect(new Set(Object.keys(MESSAGE_SCHEMAS))).toEqual(new Set(Object.keys(components.messages)));
+  });
+
+  it("normalize 不再略過 format：uuid 與無 format 的字串視為不等價", () => {
+    expect(normalize(fromZod(z.object({ id: z.uuid() })))).not.toEqual(
+      normalize({ type: "object", required: ["id"], properties: { id: { type: "string" } } }),
+    );
+    expect(normalize(fromZod(z.object({ id: z.uuid() })))).toEqual(
+      normalize({ type: "object", required: ["id"], properties: { id: { type: "string", format: "uuid" } } }),
+    );
+  });
+
+  it("normalize 會比對 additionalProperties：strict 物件與未宣告者不等價", () => {
+    const open = { type: "object", required: ["a"], properties: { a: { type: "string" } } };
+    expect(normalize(fromZod(z.object({ a: z.string() })))).toEqual(normalize(open));
+    expect(normalize(fromZod(z.strictObject({ a: z.string() })))).not.toEqual(normalize(open));
   });
 
   it("WS_MESSAGE_TYPES 與 asyncapi 各 message 的 type const 集合相等", () => {

@@ -8,8 +8,11 @@ import { z } from "zod";
  * api 就不必在 contracts 之外另寫一份平行的手工驗證。
  */
 export const WorkerMetricsSchema = z.object({
-  /** worker 端結算時間（ISO-8601），供判讀快照新鮮度。 */
-  snapshotAt: z.string(),
+  /**
+   * worker 端結算時間（ISO-8601，`toISOString()` 產生），供判讀快照新鮮度。以 `z.iso.datetime()`
+   * 驗證以對齊 asyncapi 的 `format: date-time`；無法解析的時間戳在入口即視為畸形快照。
+   */
+  snapshotAt: z.iso.datetime(),
   llmLatency: z.object({
     /** 窗內 LLM 呼叫樣本數。 */
     count: z.number().int().nonnegative(),

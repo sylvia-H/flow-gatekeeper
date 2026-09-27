@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isTelemetryBatch, isTelemetryPoint } from "./events.js";
+import { isTelemetryBatch, isTelemetryPoint, TelemetryPointSchema } from "./events.js";
 
 describe("isTelemetryPoint", () => {
   const valid = {
@@ -14,7 +14,7 @@ describe("isTelemetryPoint", () => {
     expect(isTelemetryPoint(valid)).toBe(true);
   });
 
-  it.each([
+  const malformed: [string, unknown][] = [
     ["null", null],
     ["數字", 42],
     ["陣列", [valid]],
@@ -30,8 +30,26 @@ describe("isTelemetryPoint", () => {
       { ...valid, telemetry: { ...valid.telemetry, throughput: Number.POSITIVE_INFINITY } },
     ],
     ["缺數值欄位", { ...valid, telemetry: { temperature: 1, vibration: 1, throughput: 1 } }],
-  ])("拒絕畸形資料：%s", (_label, value) => {
+  ];
+
+  it.each(malformed)("拒絕畸形資料：%s", (_label, value) => {
     expect(isTelemetryPoint(value)).toBe(false);
+  });
+
+  // 高頻路徑只用手寫守衛、不逐筆 safeParse（硬規則 1）；schema 只供漂移測試與低頻用途。
+  // 兩者對同一組正反例必須判定一致，守衛才稱得上是 schema 的等價快速版。
+  it.each<[string, unknown]>([
+    ["合法資料點", valid],
+    ["帶額外欄位（兩者皆接受）", { ...valid, extra: 1 }],
+    ...malformed,
+  ])("isTelemetryPoint 與 TelemetryPointSchema.safeParse 判定一致：%s", (_label, value) => {
+    expect(isTelemetryPoint(value)).toBe(TelemetryPointSchema.safeParse(value).success);
+  });
+
+  it("唯一刻意的差異：守衛不驗 timestamp 的 ISO-8601 格式，schema 會驗", () => {
+    const loose = { ...valid, timestamp: "not-a-date" };
+    expect(isTelemetryPoint(loose)).toBe(true);
+    expect(TelemetryPointSchema.safeParse(loose).success).toBe(false);
   });
 
   it("isTelemetryBatch 要求陣列且每筆皆合法", () => {
