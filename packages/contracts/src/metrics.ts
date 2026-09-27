@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * worker 回報的指標（api 自 Redis 快照 `metrics:worker` 讀入）。worker 缺席、快照過期或
+ * worker 回報的指標（每個 worker 實例寫一把 `metrics:worker:<instanceId>`，api 掃描後合併）。worker 缺席、快照過期或
  * 畸形時整體為 `null`：api 仍照常廣播自己那一半的指標，讓 worker 掛掉時營運面板降級而非整塊消失。
  *
  * 以 Zod 定義是因為快照跨 process 經 Redis 傳遞，api 讀回時必須驗證；有了 schema，

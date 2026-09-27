@@ -18,6 +18,7 @@ import { fatal } from "./lib/fatal.js";
 import { startHeartbeat, stopHeartbeat } from "./lib/heartbeat.js";
 import { createLivenessTracker } from "./lib/liveness.js";
 import { createMetricsCollector } from "./lib/metrics-collector.js";
+import { heartbeatKey, resolveInstanceId, workerMetricsKey } from "./lib/redis-keys.js";
 import { createProcessor, isTerminalFailure } from "./processor.js";
 
 /**
@@ -81,13 +82,21 @@ export async function bootstrap(): Promise<void> {
   cache.on("error", (err: Error) => redisLogger.warn({ err, conn: "cache" }, "Redis 連線錯誤"));
   await Promise.all([waitForReady(pub, REDIS_READY_TIMEOUT_MS), waitForReady(cache, REDIS_READY_TIMEOUT_MS)]);
 
+  // 實例識別：heartbeat／metrics 快照都寫帶此後綴的 key，水平擴展時各副本互不掩蓋、互不覆寫。
+  // healthcheck 以同一套 resolveInstanceId 推導，兩者必須一致。
+  const instanceId = resolveInstanceId(env.WORKER_INSTANCE_ID);
+
   const ai: AiProvider = new GeminiProvider(env.GEMINI_API_KEY ?? "", env.GEMINI_MODEL);
 
   // 指標收集器：累加於記憶體，每 METRICS_INTERVAL_MS 結算一次——寫 Redis 快照
-  // `metrics:worker`（供 api 合併廣播）並記一則 worker 自身的 metrics 摘要。摘要走
+  // `metrics:worker:<instanceId>`（供 api 掃描合併廣播）並記一則 worker 自身的 metrics 摘要。摘要走
   // `logger.metrics`（level 由 METRICS_LOG_LEVEL 獨立釘定），LOG_LEVEL=warn 時不會被濾掉
-  // （運維調低日誌等級時仍看得到指標）。掛既有 cache 連線；與 worker:heartbeat 各自獨立、互不干涉。
-  const metrics = createMetricsCollector({ redis: cache, logger: logger.metrics });
+  // （運維調低日誌等級時仍看得到指標）。掛既有 cache 連線；與 worker:heartbeat:<instanceId> 各自獨立、互不干涉。
+  const metrics = createMetricsCollector({
+    redis: cache,
+    key: workerMetricsKey(instanceId),
+    logger: logger.metrics,
+  });
   metrics.start();
 
   // 處理槽活性：一次正常 job 的最長無進度區間約為「首 token 前的 LLM 等待（≤ AI_TIMEOUT_MS）」
@@ -130,11 +139,11 @@ export async function bootstrap(): Promise<void> {
 
   worker.on("ready", () => {
     bootLogger.info({ queue: DIAGNOSIS_QUEUE }, "worker ready");
-    // 存活訊號（供 compose healthcheck）：ready 後每 10s 寫 worker:heartbeat（TTL 30s，掛既有 cache 連線）。
+    // 存活訊號（供 compose healthcheck）：ready 後每 10s 寫 worker:heartbeat:<instanceId>（TTL 30s，掛既有 cache 連線）。
     // 事件迴圈被卡死時 timer 停擺、key 過期；所有處理槽都長時間無進度時也停止刷新
     // （liveness）→ compose healthcheck 轉 unhealthy（僅示警）。
     // ready 於連線重建時會重複觸發——startHeartbeat 冪等，重入只重設 timer。
-    startHeartbeat(cache, (msg) => heartbeatLogger.warn(msg), () => liveness.isAlive());
+    startHeartbeat(cache, heartbeatKey(instanceId), (msg) => heartbeatLogger.warn(msg), () => liveness.isAlive());
   });
 
   // 故障注入旗標：未設定＝關閉、零程式路徑差異；非法值 warn 後視為關閉。
@@ -186,6 +195,12 @@ export async function bootstrap(): Promise<void> {
       // 指標 timer 與心跳同時停：關閉時**不輸出未滿一窗的殘窗摘要**——優雅關閉的日誌尾端
       // 出現一則低值摘要會被誤讀為系統異常（data-model E3）。
       metrics.stop();
+      // 主動刪掉本實例的 key：優雅縮減副本時，healthcheck／api 不必再等 TTL 才發現這個實例已離開，
+      // 殘留快照也不會被 api 加總。失敗只記 warn、不中斷後續收尾；崩潰路徑刪不到，由 TTL 與
+      // api 端的過期快照過濾兜底。
+      await cache
+        .del(heartbeatKey(instanceId), workerMetricsKey(instanceId))
+        .catch((err: unknown) => shutdownLogger.warn({ err }, "刪除本實例 heartbeat／metrics key 失敗"));
       await mongoClient.close();
       await pub.quit();
       await cache.quit();

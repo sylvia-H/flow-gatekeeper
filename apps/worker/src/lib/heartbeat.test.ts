@@ -32,8 +32,9 @@ describe("startHeartbeat 的 isAlive 閘門", () => {
     const set = vi.fn().mockResolvedValue("OK");
     const warn = vi.fn();
     let alive = true;
-    startHeartbeat({ set }, warn, () => alive);
+    startHeartbeat({ set }, "worker:heartbeat:w1", warn, () => alive);
     expect(set).toHaveBeenCalledTimes(1);
+    expect(set).toHaveBeenLastCalledWith("worker:heartbeat:w1", expect.any(String), "EX", 30);
 
     alive = false;
     vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS * 3);

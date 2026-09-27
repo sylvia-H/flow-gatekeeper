@@ -6,9 +6,7 @@ import type { SystemMetrics } from "@flow-gatekeeper/contracts";
 import { AppConfigService } from "../config/config.service.js";
 import { mergeMetrics } from "../../lib/metrics-merge.js";
 import { getAppLogger } from "../../logging/app-logger.js";
-
-/** worker 側指標快照的 Redis key（contracts/metrics-summary.md §5）。 */
-export const WORKER_METRICS_KEY = "metrics:worker";
+import { readWorkerSnapshots } from "./worker-snapshots.js";
 
 /**
  * 指標來源與出口——由組合根（`main.ts`）於 `app.listen()` 後綁定。
@@ -27,8 +25,8 @@ export type MetricsSources = {
 /**
  * 週期指標結算（009 US3；FR-008／FR-008a、contracts/metrics-summary.md §4）。
  *
- * 每 `METRICS_INTERVAL_MS`：讀 queue counts + ws 連線數 → `GET metrics:worker`（非破壞性，
- * 不 `DEL`）→ `mergeMetrics` 合併 → 以**專屬 metrics child logger** 輸出一則摘要 → 廣播
+ * 每 `METRICS_INTERVAL_MS`：讀 queue counts + ws 連線數 → `SCAN metrics:worker:*` + `MGET`
+ * 讀回各 worker 實例快照（非破壞性，不 `DEL`）→ `mergeMetrics` 合併 → 以**專屬 metrics child logger** 輸出一則摘要 → 廣播
  * `system/metrics` 給所有連線。
  *
  * **FR-009**：本服務不在任何高頻路徑（`publishTelemetry`／`persistBatch`）記錄任何東西，
@@ -49,7 +47,7 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     // 專屬連線（憲章 IV 連線分離）：與 BullMQ producer／QueueEvents／ai-stream subscriber／
-    // health 探測皆分開，僅供本服務讀取 worker 快照使用。`command` 設定：Redis 不通時 GET
+    // health 探測皆分開，僅供本服務讀取 worker 快照使用。`command` 設定：Redis 不通時 SCAN／MGET
     // 立刻失敗、本則以 `worker: null` 降級，而不是排隊到重連。
     this.redis = new IORedis(this.config.redisOptions("command"));
     this.redis.on("error", (err) => this.logger.warn({ err }, "metrics redis connection error"));
@@ -103,11 +101,12 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    // worker 快照：key 不存在／過期／畸形一律由 mergeMetrics 降級為 `worker: null`，
-    // 摘要照常輸出（FR-008）。讀取本身失敗（Redis 不通）也一律當作缺席，不中斷。
-    let workerRaw: string | null = null;
+    // worker 快照：每個實例一把 key，逐筆驗證後合併；過期／畸形者由 mergeMetrics 略過，
+    // 一筆有效的都沒有時降級為 `worker: null`，摘要照常輸出。讀取本身失敗（Redis 不通）也一律
+    // 當作全數缺席，不中斷。
+    let workerRaws: (string | null)[] = [];
     try {
-      workerRaw = (await this.redis?.get(WORKER_METRICS_KEY)) ?? null;
+      workerRaws = this.redis ? await readWorkerSnapshots(this.redis) : [];
     } catch (err) {
       this.logger.warn({ err }, "worker 指標快照讀取失敗，本則以 worker: null 降級輸出");
     }
@@ -119,7 +118,7 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
         queue,
         wsConnections: sources.wsConnections(),
       },
-      workerRaw,
+      workerRaws,
     );
 
     this.logger.info(

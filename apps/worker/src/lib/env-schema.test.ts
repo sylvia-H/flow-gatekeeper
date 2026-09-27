@@ -61,3 +61,23 @@ describe("parseRedisEnv", () => {
     expect(parseRedisEnv({ REDIS_HOST: "redis", AI_TIMEOUT_MS: "-1" }).REDIS_HOST).toBe("redis");
   });
 });
+
+describe("WORKER_INSTANCE_ID", () => {
+  it("未設定或留空 → undefined（由 redis-keys 退回 hostname）", () => {
+    expect(parseRedisEnv({}).WORKER_INSTANCE_ID).toBeUndefined();
+    expect(parseRedisEnv({ WORKER_INSTANCE_ID: " " }).WORKER_INSTANCE_ID).toBeUndefined();
+  });
+
+  it("合法值於完整 schema 與 Redis 子集都讀得到（探針與主行程推導同一 id）", () => {
+    const r = parseWorkerEnv({ WORKER_INSTANCE_ID: "worker-a.1_x" });
+    expect(r.ok && r.env.WORKER_INSTANCE_ID).toBe("worker-a.1_x");
+    expect(parseRedisEnv({ WORKER_INSTANCE_ID: "worker-a.1_x" }).WORKER_INSTANCE_ID).toBe("worker-a.1_x");
+  });
+
+  it.each([["has space"], ["a:b"], ["w*"], ["x".repeat(129)]])("不合法 %s → 失敗", (v) => {
+    const r = parseWorkerEnv({ WORKER_INSTANCE_ID: v });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("WORKER_INSTANCE_ID");
+  });
+});

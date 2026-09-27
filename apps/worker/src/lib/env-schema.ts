@@ -30,6 +30,21 @@ export const RedisEnvSchema = z.object({
   REDIS_PASSWORD: optionalString,
   /** cache／pub 一般指令的逾時；斷線時命令必須在這個時間內 reject，processor 才走得到錯誤路徑。 */
   REDIS_COMMAND_TIMEOUT_MS: positiveInt(5000),
+  /**
+   * 本實例的識別，組成 `worker:heartbeat:<id>`／`metrics:worker:<id>`（見 `lib/redis-keys.ts`）。
+   * 放在 Redis 子集而非完整 schema：healthcheck 探針只 parse 這個子集，卻必須推導出與主行程
+   * 相同的 id 才讀得到自己的心跳。留空 → 退回 hostname（容器內即 container id）。
+   * 限制字元集：id 會直接拼進 key，含空白或 glob 字元（`*`、`?`、`[`）會讓 api 的 SCAN MATCH
+   * 與人工排查都變得難以預期。
+   */
+  WORKER_INSTANCE_ID: z.preprocess(
+    emptyToUndefined,
+    z
+      .string()
+      .max(128)
+      .regex(/^[A-Za-z0-9._-]+$/, "只允許英數字與 . _ -")
+      .optional(),
+  ),
 });
 
 export const WorkerEnvSchema = RedisEnvSchema.extend({
