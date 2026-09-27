@@ -407,7 +407,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 
 | 層 | 選型 |
 | --- | --- |
-| **前端** | Vue 3.5（SFC, `<script setup>`）、Pinia、Tailwind CSS 3、lucide-vue-next、Vite 5 |
+| **前端** | Vue 3.5（SFC, `<script setup>`）、Pinia、Tailwind CSS 3、lucide-vue-next、Vite 7 |
 | **API / Gateway** | NestJS 11（Express 5）、原生 `ws`（掛 HTTP server，path `/ws`）、`@nestjs/bullmq` |
 | **Worker** | 獨立 Node ESM process、BullMQ、`@google/genai`（Gemini，包在 `AiProvider` 後；原生 structured output） |
 | **即時通道** | 原生 WebSocket（前後端）+ Redis Pub/Sub 跨進程 relay |
@@ -416,7 +416,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | **契約** | `packages/contracts`（Zod 單一來源，`z.infer` 推導型別）+ `asyncapi.yaml` |
 | **可觀測性** | pino（結構化 JSON 日誌 + 專屬 metrics child logger）、`GET /healthz` 依賴探針、`system/metrics` 廣播 |
 | **部署 / 監督** | Docker 多階段建置（BuildKit cache mount、`pnpm fetch`＋`install --offline`、`pnpm deploy --prod` 裁剪 workspace 依賴；base image tag＋digest 雙釘）、`restart: on-failure:5`、redis／mongo healthcheck＋`service_healthy`、資源上限與 log 輪替、Redis heartbeat 存活探針（每實例一把）、`nginx-unprivileged`（web 容器內同源反代 `/ws`、`/diagnoses`，安全 header＋gzip） |
-| **語言 / 工具鏈** | Node 22（`.nvmrc`，`engines >=22`）、strict TypeScript 5.6、pnpm workspace、ESLint 9、Vitest、Spectral（contract lint） |
+| **語言 / 工具鏈** | Node 22（`.nvmrc`，`engines >=22.12`，Vite 7 需求）、strict TypeScript 5.6、pnpm workspace、ESLint 9、Vitest、Spectral（contract lint） |
 | **本機 infra** | Docker Compose：不帶分組起 Redis 7 + MongoDB 7（開發模式）；`demo` profile 起 api／worker／web／seed 全棧受監督容器 |
 
 ---
@@ -519,7 +519,7 @@ flow-gatekeeper/
 
 ### 軌道 A — 開發模式（日常開發，熱重載）
 
-**前置需求**：Node.js 22（版本以 repo 根的 `.nvmrc` 為準，root `engines` 要求 `>=22`；用 nvm／fnm 可直接讀它）、pnpm 10（`packageManager` 釘選 `pnpm@10.34.5`）、Docker Desktop（跑 Redis 7 + MongoDB 7）、一組 Gemini API key（選用，僅診斷會用到；留空也能跑，見「[注意事項](#注意事項)」）。
+**前置需求**：Node.js 22（版本以 repo 根的 `.nvmrc` 為準，root `engines` 要求 `>=22.12`（Vite 7 的最低需求）；用 nvm／fnm 可直接讀它）、pnpm 10（`packageManager` 釘選 `pnpm@10.34.5`）、Docker Desktop（跑 Redis 7 + MongoDB 7）、一組 Gemini API key（選用，僅診斷會用到；留空也能跑，見「[注意事項](#注意事項)」）。
 
 > PATH 上沒有 `pnpm` 時，先執行一次 `corepack enable`（Node 內建，依 root `package.json` 的 `packageManager` 取得對應 pnpm），或以 `corepack pnpm <指令>` 代替 `pnpm <指令>`。
 

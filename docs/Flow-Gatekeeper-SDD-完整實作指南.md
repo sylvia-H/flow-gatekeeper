@@ -246,7 +246,7 @@ flow-gatekeeper/
 | 工具 | 建議版本 | 用途 | 確認指令 |
 | --- | --- | --- | --- |
 | Git | 最新穩定版 | branch、commit、Spec Kit feature flow | `git -v` |
-| Node.js | 22（以 repo 根 `.nvmrc` 為準；root `engines` 要求 `>=22`，CI 與 Dockerfile 同源） | web/api/worker runtime | `node -v` |
+| Node.js | 22（以 repo 根 `.nvmrc` 為準；root `engines` 要求 `>=22.12`（Vite 7／plugin-vue 6 的最低需求），CI 與 Dockerfile 同源） | web/api/worker runtime | `node -v` |
 | pnpm | 9+ | monorepo workspace | `pnpm -v` |
 | Docker Desktop | 最新穩定版 | Redis + MongoDB | `docker -v` |
 | uv | 最新穩定版 | 安裝 Spec Kit CLI | `uv --version` |
