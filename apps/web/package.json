@@ -14,8 +14,8 @@
     "@flow-gatekeeper/contracts": "workspace:*",
     "@flow-gatekeeper/shared": "workspace:*",
     "lucide-vue-next": "^0.454.0",
-    "pinia": "^2.2.0",
-    "vue": "^3.5.0"
+    "pinia": "^3.0.4",
+    "vue": "~3.5.43"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.9",

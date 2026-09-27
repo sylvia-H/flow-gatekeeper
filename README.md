@@ -407,7 +407,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 
 | 層 | 選型 |
 | --- | --- |
-| **前端** | Vue 3.5（SFC, `<script setup>`）、Pinia、Tailwind CSS 3、lucide-vue-next、Vite 7 |
+| **前端** | Vue 3.5（SFC, `<script setup>`）、Pinia 3、Tailwind CSS 3、lucide-vue-next、Vite 7 |
 | **API / Gateway** | NestJS 11（Express 5）、原生 `ws`（掛 HTTP server，path `/ws`）、`@nestjs/bullmq` |
 | **Worker** | 獨立 Node ESM process、BullMQ、`@google/genai`（Gemini，包在 `AiProvider` 後；原生 structured output） |
 | **即時通道** | 原生 WebSocket（前後端）+ Redis Pub/Sub 跨進程 relay |
