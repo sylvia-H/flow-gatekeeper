@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { zodToJsonSchema } from "zod-to-json-schema";
+import { z } from "zod";
 import asyncapiRaw from "../../../asyncapi.yaml?raw";
-import type { ZodTypeAny } from "zod";
 import { DiagnosisResultSchema } from "./schemas.js";
 import { WS_MESSAGE_TYPES } from "./events.js";
 import { MachineSubscribeSchema, PingSchema } from "./ws-client.js";
@@ -59,7 +58,11 @@ function normalize(node: unknown): unknown {
   if (!isObject(n)) return n;
   const out: Json = {};
   for (const key of CONSTRAINT_KEYS) {
-    if (n[key] !== undefined) out[key] = n[key];
+    if (n[key] === undefined) continue;
+    // Zod 4 的 int 隱含 JS 安全整數範圍、toJSONSchema 會輸出成上下限；那是表示極限不是契約限制
+    if (key === "minimum" && n[key] === -Number.MAX_SAFE_INTEGER) continue;
+    if (key === "maximum" && n[key] === Number.MAX_SAFE_INTEGER) continue;
+    out[key] = n[key];
   }
   // anyOf 與 oneOf 在此的用法（nullable 聯集）語意相同，統一成排序後的 anyOf 比對
   const branches = [n.anyOf, n.oneOf].find(Array.isArray) as unknown[] | undefined;
@@ -97,11 +100,11 @@ function messageTypeConst(message: Json): unknown {
 
 describe("asyncapi.yaml 與 Zod 契約同步", () => {
   it("components.schemas.DiagnosisResult 與 DiagnosisResultSchema 語意等價", () => {
-    const fromZod = zodToJsonSchema(DiagnosisResultSchema, { $refStrategy: "none" });
+    const fromZod = z.toJSONSchema(DiagnosisResultSchema, { target: "draft-7", io: "input" });
     expect(normalize(components.schemas.DiagnosisResult)).toEqual(normalize(fromZod));
   });
 
-  it.each<[string, () => unknown, ZodTypeAny]>([
+  it.each<[string, () => unknown, z.ZodType]>([
     ["messages.Ping", () => components.messages.Ping?.payload, PingSchema],
     ["messages.MachineSubscribe", () => components.messages.MachineSubscribe?.payload, MachineSubscribeSchema],
     ["messages.JobStatus", () => components.messages.JobStatus?.payload, JobStatusSchema],
@@ -112,7 +115,7 @@ describe("asyncapi.yaml 與 Zod 契約同步", () => {
   ])("%s 與對應 Zod schema 語意等價", (_name, pick, schema) => {
     const documented = pick();
     expect(documented).toBeDefined();
-    const fromZod = zodToJsonSchema(schema, { $refStrategy: "none" });
+    const fromZod = z.toJSONSchema(schema, { target: "draft-7", io: "input" });
     expect(normalize(documented)).toEqual(normalize(fromZod));
   });
 

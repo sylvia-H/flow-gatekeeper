@@ -67,7 +67,7 @@ export const WorkerEnvSchema = RedisEnvSchema.extend({
   // 去重直接失效。compare-and-del 只能保證「不刪別人的鎖」，擋不住這種重複呼叫。
   if (env.AI_DEDUPE_LOCK_SECONDS * 1000 < env.AI_TIMEOUT_MS) {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ["AI_DEDUPE_LOCK_SECONDS"],
       message: `AI_DEDUPE_LOCK_SECONDS（${env.AI_DEDUPE_LOCK_SECONDS}s）× 1000 必須 ≥ AI_TIMEOUT_MS（${env.AI_TIMEOUT_MS}ms）`,
     });

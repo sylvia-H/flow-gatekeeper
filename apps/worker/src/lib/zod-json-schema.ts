@@ -1,62 +1,85 @@
-import type { z } from "zod";
+import { z } from "zod";
 import { DiagnosisResultSchema } from "@flow-gatekeeper/contracts";
 
 /**
- * 從 Zod schema 推導 JSON Schema（最小子集），讓 provider 的原生 structured output 與 prompt
- * 內的結構說明都出自 `DiagnosisResultSchema` 這個單一來源，而不是再手寫一份平行定義。
+ * 從 Zod schema 推導 Gemini `responseJsonSchema` 可接受的 JSON Schema，讓 provider 的原生
+ * structured output 與 prompt 內的結構說明都出自 `DiagnosisResultSchema` 這個單一來源，
+ * 而不是再手寫一份平行定義。
  *
- * 為什麼不用 `zod-to-json-schema`：它只裝在 contracts 的 devDependencies，worker 執行期拿不到；
- * 而 DiagnosisResultSchema 只用到 object／string／enum／array／optional 這幾種型別，
- * 手寫轉換足夠且沒有額外相依。遇到未支援的型別直接 throw——契約若加了新型別，模組載入
- * 當下（及單元測試）就會失敗，不會靜默送出錯的 schema。
- *
- * 以 `_def.typeName` 判斷而非 `instanceof`：避免 worker 與 contracts 解析到不同 zod 實例時誤判。
+ * 轉換本身交給 Zod 4 內建的 `z.toJSONSchema()`（升級前是手寫的 `_def.typeName` 分派），這裡只做
+ * Gemini 端的整形：
+ * - `io: "input"`：描述 `DiagnosisResultSchema.parse()` 會接受的形狀（模型輸出正是 parse 的輸入）；
+ *   z.object 預設 strip，input 模式不輸出 `additionalProperties`。
+ * - 移除 `$schema`（Gemini 不接受）。
+ * - 每個物件補上非標準的 `propertyOrdering`：Gemini 依此順序產生欄位，讓串流中的 JSON
+ *   可讀性穩定（summary 先出現）。
+ * - 只允許 `@google/genai` 2.24 `GenerateContentConfig.responseJsonSchema` 型別註解列出的鍵；
+ *   契約若加了 Gemini 不支援的限制（如 `pattern`、`minLength`、`const`），模組載入當下
+ *   （及單元測試）就 throw，不會靜默送出會被 API 拒絕或被忽略的 schema。
  */
 type JsonSchema = Record<string, unknown>;
 
-interface ZodDefLike {
-  typeName?: string;
+/** `@google/genai` 2.24 `responseJsonSchema` 文件列出的支援鍵（外加非標準的 `propertyOrdering`）。 */
+const GEMINI_SUPPORTED_KEYS: ReadonlySet<string> = new Set([
+  "$id",
+  "$defs",
+  "$ref",
+  "$anchor",
+  "type",
+  "format",
+  "title",
+  "description",
+  "enum",
+  "items",
+  "prefixItems",
+  "minItems",
+  "maxItems",
+  "minimum",
+  "maximum",
+  "anyOf",
+  "oneOf",
+  "properties",
+  "additionalProperties",
+  "required",
+  "propertyOrdering",
+]);
+
+function isObject(value: unknown): value is JsonSchema {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function zodToJsonSchema(schema: z.ZodTypeAny): JsonSchema {
-  const def = schema._def as ZodDefLike;
-  switch (def.typeName) {
-    case "ZodString":
-      return { type: "string" };
-    case "ZodNumber":
-      return { type: "number" };
-    case "ZodBoolean":
-      return { type: "boolean" };
-    case "ZodEnum":
-      return { type: "string", enum: [...(schema as z.ZodEnum<[string, ...string[]]>).options] };
-    case "ZodArray":
-      return { type: "array", items: zodToJsonSchema((schema as z.ZodArray<z.ZodTypeAny>).element) };
-    case "ZodObject": {
-      const shape = (schema as z.ZodObject<z.ZodRawShape>).shape;
-      const properties: Record<string, JsonSchema> = {};
-      const required: string[] = [];
-      for (const [key, value] of Object.entries(shape)) {
-        const field = value;
-        const fieldDef = field._def as ZodDefLike;
-        if (fieldDef.typeName === "ZodOptional") {
-          properties[key] = zodToJsonSchema((field as z.ZodOptional<z.ZodTypeAny>).unwrap());
-        } else {
-          properties[key] = zodToJsonSchema(field);
-          required.push(key);
-        }
-      }
-      return {
-        type: "object",
-        properties,
-        required,
-        // Gemini 依此順序產生欄位，讓串流中的 JSON 可讀性穩定（summary 先出現）。
-        propertyOrdering: Object.keys(shape),
-      };
+/** 遞迴整形：驗證鍵皆受支援、為物件補 `propertyOrdering`。 */
+function toGeminiNode(node: unknown, path: string): unknown {
+  if (Array.isArray(node)) return node.map((item, i) => toGeminiNode(item, `${path}[${i}]`));
+  if (!isObject(node)) return node;
+  const out: JsonSchema = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (!GEMINI_SUPPORTED_KEYS.has(key)) {
+      throw new Error(`toGeminiJsonSchema: Gemini responseJsonSchema 不支援 ${path}.${key}`);
     }
-    default:
-      throw new Error(`zodToJsonSchema: 未支援的 Zod 型別 ${def.typeName ?? "(unknown)"}`);
+    if ((key === "properties" || key === "$defs") && isObject(value)) {
+      const props: JsonSchema = {};
+      for (const [name, sub] of Object.entries(value)) {
+        props[name] = toGeminiNode(sub, `${path}.${key}.${name}`);
+      }
+      out[key] = props;
+    } else if (key === "enum" || key === "required" || key === "propertyOrdering") {
+      out[key] = value;
+    } else {
+      out[key] = toGeminiNode(value, `${path}.${key}`);
+    }
   }
+  if (isObject(out.properties) && out.propertyOrdering === undefined) {
+    out.propertyOrdering = Object.keys(out.properties);
+  }
+  return out;
+}
+
+export function toGeminiJsonSchema(schema: z.ZodType): JsonSchema {
+  const raw = z.toJSONSchema(schema, { io: "input", unrepresentable: "throw", cycles: "throw" }) as JsonSchema;
+  const { $schema: _ignored, ...rest } = raw;
+  return toGeminiNode(rest, "$") as JsonSchema;
 }
 
 /** 診斷結果的 JSON Schema（模組載入時產生一次）。 */
-export const DIAGNOSIS_RESULT_JSON_SCHEMA: JsonSchema = zodToJsonSchema(DiagnosisResultSchema);
+export const DIAGNOSIS_RESULT_JSON_SCHEMA: JsonSchema = toGeminiJsonSchema(DiagnosisResultSchema);
