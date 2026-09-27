@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MIN_OUTPUT_TOKENS_WITH_THINKING, thinkingCapability } from "./model-capabilities.js";
 
 /**
  * worker 環境變數的單一來源（Zod，bootstrap 最前面 parse，失敗 fail-fast）。
@@ -117,6 +118,18 @@ export function parseWorkerEnv(raw: Record<string, string | undefined>): WorkerE
     // 任何環境都允許留空：沒有 Gemini 帳號的評估者仍能看到遙測與背壓兩個賣點。缺金鑰不會
     // 拖到重試用盡——provider 會丟不可重試錯誤，每筆診斷立即以友善的金鑰訊息失敗。
     warnings.push("GEMINI_API_KEY 未設定：每筆 AI 診斷將立即以 provider_error 失敗（不重試）");
+  }
+  const { GEMINI_MODEL, AI_MAX_OUTPUT_TOKENS } = parsed.data;
+  if (
+    thinkingCapability(GEMINI_MODEL) === "always-on" &&
+    AI_MAX_OUTPUT_TOKENS < MIN_OUTPUT_TOKENS_WITH_THINKING
+  ) {
+    // thinking token 計入 maxOutputTokens：不能關 thinking 的模型配 2048 這類上限，常在 JSON 還沒
+    // 寫完就被 max_tokens 截斷，而 max_tokens 是不可重試的失敗——每筆診斷都失敗且不會自行恢復。
+    warnings.push(
+      `GEMINI_MODEL=${GEMINI_MODEL} 無法關閉 thinking，且 thinking token 計入 AI_MAX_OUTPUT_TOKENS（目前 ${AI_MAX_OUTPUT_TOKENS}）：` +
+        `建議調高至 ≥ ${MIN_OUTPUT_TOKENS_WITH_THINKING}，否則診斷容易因 max_tokens 截斷而失敗（不重試）`,
+    );
   }
   return { ok: true, env: parsed.data, warnings };
 }

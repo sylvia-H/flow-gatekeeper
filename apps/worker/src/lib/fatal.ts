@@ -41,6 +41,12 @@ export function formatFatal(kind: FatalKind, value: unknown): string {
 /** 記錄致命訊息後立即以非零碼結束行程，交由監督者重啟。 */
 export function fatal(kind: FatalKind, value: unknown): never {
   // 同步寫 stderr（fd 2）：保證致命日誌在 process.exit 前落地，不被非同步 pipe 緩衝丟失。
-  writeSync(2, `[worker] ${formatFatal(kind, value)}\n`);
+  // 寫入本身也可能失敗（stderr 已關閉、EPIPE、EAGAIN）：日誌丟了也必須 exit(1)——否則錯誤會從
+  // 致命處理器內再拋出，行程停在未定義狀態，監督者也拿不到非零退出碼。
+  try {
+    writeSync(2, `[worker] ${formatFatal(kind, value)}\n`);
+  } catch {
+    // 無處可記；照常以非零碼結束。
+  }
   process.exit(1);
 }

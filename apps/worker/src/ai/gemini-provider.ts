@@ -1,6 +1,7 @@
 import { ApiError, FinishReason, GoogleGenAI } from "@google/genai";
 import type { GenerateContentConfig, ThinkingConfig } from "@google/genai";
 import { DEFAULT_AI_MAX_OUTPUT_TOKENS, DEFAULT_AI_TEMPERATURE } from "../lib/env-schema.js";
+import { canDisableThinking } from "../lib/model-capabilities.js";
 import { AiProviderError } from "./provider.js";
 import type { AiFinishReason, AiProvider, AiStreamRequest, AiStreamResult, AiUsage } from "./provider.js";
 
@@ -127,12 +128,11 @@ export function buildGenerateConfig(args: {
  * - `gemini-2.5-flash`、`gemini-2.5-flash-lite`（含其 preview 變體）：接受 0＝關閉 → 送。
  * - `gemini-2.5-pro`：thinking 不可關閉，送 0 會被拒 → 不送（沿用模型預設）。
  * - 2.0 以前的模型沒有 thinking；3.x 以後改用 `thinkingLevel` 語意 → 都不送，避免送出模型
- *   不認得的設定而整批 400。要調整新系列時，在這裡依名稱加分支。
+ *   不認得的設定而整批 400。
+ * 判準集中在 `lib/model-capabilities.ts`（env 啟動警告共用）；要調整新系列時改那裡。
  */
 export function thinkingConfigFor(model: string): ThinkingConfig | undefined {
-  const name = model.replace(/^models\//, "");
-  if (/^gemini-2\.5-flash(?:$|-)/.test(name)) return { thinkingBudget: 0 };
-  return undefined;
+  return canDisableThinking(model) ? { thinkingBudget: 0 } : undefined;
 }
 
 function mapFinishReason(reason: FinishReason): AiFinishReason {

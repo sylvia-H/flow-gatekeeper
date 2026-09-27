@@ -41,6 +41,9 @@ export class AppConfigService {
   private readonly env: ApiEnv = parseApiEnv(process.env);
 
   readonly apiPort = this.env.API_PORT;
+  // 執行環境是否為 production（與 shared logging 的 `resolvePretty` 同一判準：精確等於 "production"）。
+  // 集中在此讀，service 不直接碰 process.env.NODE_ENV。
+  readonly isProduction = process.env.NODE_ENV === "production";
   readonly mockTelemetryIntervalMs = this.env.MOCK_TELEMETRY_INTERVAL_MS;
   readonly wsHeartbeatMs = this.env.WS_HEARTBEAT_MS;
   readonly wsAuthSecret = this.env.WS_AUTH_SECRET ?? "";

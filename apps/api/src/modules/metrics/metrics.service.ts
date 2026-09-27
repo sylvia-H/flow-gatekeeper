@@ -52,12 +52,6 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
   private sources?: MetricsSources;
   /** 重入防護：上一輪結算仍在途時跳過本輪（理由見 settle）。 */
   private settling = false;
-  /**
-   * 非 production 時以契約自檢出口 payload：違約的 `system/metrics` 會被前端整則丟棄、面板永遠
-   * `empty`，而 api 端毫無徵兆（例如 `windowMs` 非整數）。production 不做——出口形狀由型別與測試
-   * 保證，不在每週期多付一次驗證。
-   */
-  private readonly selfCheck = process.env.NODE_ENV !== "production";
   private readonly selfCheckThrottle = new LogThrottle(SELF_CHECK_LOG_THROTTLE_MS);
 
   constructor(private readonly config: AppConfigService) {}
@@ -153,7 +147,7 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
       },
       workerRaws,
     );
-    if (this.selfCheck) this.checkContract(payload);
+    if (!this.config.isProduction) this.checkContract(payload);
 
     this.logger.info(
       {
@@ -174,7 +168,11 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** 出口契約自檢（僅非 production）。違約只記 error（節流），照常廣播——不改變出口行為。 */
+  /**
+   * 出口契約自檢（僅非 production，判準為 `AppConfigService.isProduction`）。違約的 `system/metrics`
+   * 會被前端整則丟棄、面板永遠 `empty`，而 api 端毫無徵兆（例如 `windowMs` 非整數）；production 不做——
+   * 出口形狀由型別與測試保證，不在每週期多付一次驗證。違約只記 error（節流），照常廣播——不改變出口行為。
+   */
   private checkContract(payload: SystemMetrics): void {
     const result = SystemMetricsSchema.safeParse(payload);
     if (result.success) return;

@@ -78,7 +78,8 @@ export function parseChaosAllowInProduction(env: Record<string, string | undefin
 
 /** 是否武裝 chaos：非 production 一律可；production 僅在明確開關放行時可。 */
 export function shouldArmChaos(nodeEnv: string | undefined, allowInProduction: boolean): boolean {
-  return nodeEnv !== "production" || allowInProduction;
+  // 正規化後比較：`NODE_ENV=Production` 或帶空白（.env 常見）若嚴格比對會被當成非 production 而放行故障注入。
+  return nodeEnv?.trim().toLowerCase() !== "production" || allowInProduction;
 }
 
 /** startup 時點的延遲：讓 bootstrap 完整走完（連線、ready log）再注入。 */

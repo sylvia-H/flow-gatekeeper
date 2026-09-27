@@ -3,8 +3,10 @@
  *
  * 存在理由：Redis 不可達或認證失敗時，ioredis 每 100–270 ms 重連一次、每條連線各自 emit
  * `error`；不節流就是每秒數行 warn，把 docker json-file log 與日誌收集端灌爆，真正的其他訊息
- * 反而被淹沒。語意與 api 的 `LogThrottle`（`apps/api/src/lib/telemetry-buffer.ts`）一致：
- * 同一個 key 在 `intervalMs` 內只放行一則，其餘累計次數，下一則放行時一併回報。
+ * 反而被淹沒。同一個 key 在 `intervalMs` 內只放行一則，其餘累計次數，下一則放行時一併回報。
+ * 整體（含下述「轉態」）的語意對應 api 的 `ConnectionErrorThrottle`
+ * （`apps/api/src/lib/connection-error-throttle.ts`）：健康→故障的第一則立即放行、故障中每窗一則、
+ * 恢復時回報被壓次數並重置。
  *
  * 「轉態」：`reset(key)` 供連線恢復（`ready`）時呼叫——清掉該 key 的節流狀態並回報期間被壓掉
  * 的次數，讓「故障 → 恢復」各留一行；恢復後若再次故障，第一則會立刻放行。

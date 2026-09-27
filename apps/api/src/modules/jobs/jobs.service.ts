@@ -8,15 +8,16 @@ import {
 import { InjectQueue } from "@nestjs/bullmq";
 import { Queue } from "bullmq";
 import { randomUUID } from "node:crypto";
-import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
+import { DIAGNOSIS_QUEUE, MACHINE_IDS } from "@flow-gatekeeper/contracts";
 import type {
   CreateDiagnosisBody,
   CreateDiagnosisResponse,
   DiagnosisJobPayload,
 } from "@flow-gatekeeper/contracts";
-import { MACHINE_IDS } from "../telemetry/mock-telemetry.service.js";
 import { AiStreamRelayService } from "../websocket/ai-stream-relay.service.js";
 import { MonitoringGateway } from "../websocket/monitoring.gateway.js";
+import { LogThrottle } from "../../lib/telemetry-buffer.js";
+import { CONNECTION_ERROR_LOG_THROTTLE_MS } from "../../lib/connection-error-throttle.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 
 /**
@@ -32,7 +33,7 @@ export type JobBindingStore = Pick<AiStreamRelayService, "bindJobToClient" | "ge
 export type ClientPresence = Pick<MonitoringGateway, "isAuthorized">;
 
 /**
- * api 手上的機台名冊（與 Gateway 過濾訂閱共用 `MACHINE_IDS` 單一來源）。
+ * 機台名冊（與 Gateway 過濾訂閱、web 渲染共用 `@flow-gatekeeper/contracts` 的 `MACHINE_IDS` 單一來源）。
  * 不在名冊的 machineId 不入列：否則每個亂數 id 必然 cache miss、真的打一次 LLM，且沒有任何
  * telemetry／errorlog／維修紀錄可供診斷。
  */
@@ -67,6 +68,11 @@ export class JobsService {
   // jobId 為 SC-002 跨行程串接的關聯鍵，MUST 為獨立結構化欄位（FR-002）。
   private readonly plog = getAppLogger().child({ context: JobsService.name });
   /**
+   * 409（socket 未授權／離線）warn 的全域節流：每 30 秒至多一則並附 `suppressed`。此路徑可由
+   * 任何人以亂數 socketId 反覆觸發，逐則記錄等於讓外部請求直接放大日誌量。
+   */
+  private readonly rejectLogThrottle = new LogThrottle(CONNECTION_ERROR_LOG_THROTTLE_MS);
+  /**
    * 進行中的入列（jobId → 結果）。併發重送命中既有綁定時要等首發的入列結果：首發之後可能逾時或
    * 409 而刪掉綁定並回錯誤，此時重送方若已先回 200，拿到的就是一個不存在的 job。
    */
@@ -87,7 +93,7 @@ export class JobsService {
       throw new NotFoundException({
         statusCode: 404,
         error: "Not Found",
-        message: "machineId 不在機台名冊中",
+        message: "此機台不在名冊中",
       });
     }
 
@@ -95,7 +101,13 @@ export class JobsService {
     // 限制：檢查的是「本次請求」的 socketId；冪等命中時仍保留第一次綁定的舊 clientId（不改綁），
     // 故 409 檢查不保證既有綁定仍有效（原連線可能已斷）。web 每次發起都用新 jobId，實務上不觸發。
     if (!this.presence.isAuthorized(body.socketId)) {
-      this.plog.warn({ jobId, machineId }, "diagnosis rejected: socket offline or unauthorized");
+      const hit = this.rejectLogThrottle.hit("socket-unauthorized", Date.now());
+      if (hit) {
+        this.plog.warn(
+          hit.suppressed > 0 ? { jobId, machineId, suppressed: hit.suppressed } : { jobId, machineId },
+          "diagnosis rejected: socket offline or unauthorized",
+        );
+      }
       throw new ConflictException({
         statusCode: 409,
         error: "Conflict",

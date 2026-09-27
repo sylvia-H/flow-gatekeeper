@@ -153,8 +153,9 @@ export async function bootstrap(): Promise<void> {
 
   // BullMQ 內部錯誤（連線中斷、腳本失敗）預設完全靜默；記下來才查得到「佇列為何不動」。
   // 與 pub／cache 共用轉態節流：Redis 斷線時 BullMQ 的重連錯誤同樣會洗版。
+  // 錯誤與恢復走同一個 redisLogger（conn: "bullmq"），故障→恢復在同一 context 下可成對查到。
   worker.on("error", (err) =>
-    connErrors.error("bullmq", err, (suppressed) => bootLogger.error({ err, suppressed }, "BullMQ worker error")),
+    connErrors.error("bullmq", err, (suppressed) => redisLogger.error({ err, conn: "bullmq", suppressed }, "BullMQ worker error")),
   );
 
   worker.on("ready", () => {

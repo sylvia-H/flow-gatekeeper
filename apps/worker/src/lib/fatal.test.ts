@@ -62,4 +62,17 @@ describe("fatal", () => {
     expect(writeSyncMock).toHaveBeenCalledWith(2, expect.stringMatching(/^\[worker\] bootstrap（致命.*mongo down/s));
     expect(exit).toHaveBeenCalledWith(1);
   });
+
+  it("writeSync 丟錯（stderr 不可寫）：仍 exit(1)，不讓錯誤從致命處理器拋出", () => {
+    writeSyncMock.mockImplementation(() => {
+      throw Object.assign(new Error("EPIPE: broken pipe, write"), { code: "EPIPE" });
+    });
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("exit called");
+    });
+
+    expect(() => fatal("uncaughtException", new Error("boom"))).toThrow("exit called");
+    expect(writeSyncMock).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
 });

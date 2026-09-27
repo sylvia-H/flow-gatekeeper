@@ -73,3 +73,15 @@ describe("AppConfigService env 驗證與 WS Origin 白名單", () => {
     expect(() => new AppConfigService()).toThrow(/MAX_WS_CONNECTIONS/);
   });
 });
+
+describe("AppConfigService.isProduction", () => {
+  it.each([
+    ["production", true],
+    ["development", false],
+    ["test", false],
+    ["", false],
+  ])("NODE_ENV=%j → %s", (value, expected) => {
+    vi.stubEnv("NODE_ENV", value);
+    expect(new AppConfigService().isProduction).toBe(expected);
+  });
+});

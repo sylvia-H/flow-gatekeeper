@@ -8,6 +8,7 @@ import type { AiProvider, AiStreamRequest, AiStreamResult } from "./ai/provider.
 import type { ProcessorStore } from "./cache/redis-store.js";
 import type { DiagnosisContext } from "./context/context-builder.js";
 import type { DiagnosisRepository } from "./diagnosis-repository.js";
+import type { LivenessTracker } from "./lib/liveness.js";
 import { createProcessor, isTerminalFailure, NO_CONTEXT_CODE, NO_CONTEXT_MESSAGE } from "./processor.js";
 import type { ProcessorConfig, ProcessorJob, ProcessorLogger } from "./processor.js";
 
@@ -166,14 +167,18 @@ const EMPTY_CONTEXT: DiagnosisContext = {
 
 function setup(
   scripts: Script[],
-  overrides: Partial<ProcessorConfig> & { isClosing?: () => boolean; context?: DiagnosisContext } = {},
+  overrides: Partial<ProcessorConfig> & {
+    isClosing?: () => boolean;
+    context?: DiagnosisContext;
+    liveness?: LivenessTracker;
+  } = {},
 ) {
   const store = new FakeStore();
   const publisher = new FakePublisher();
   const repo = new FakeRepo();
   const ai = new FakeAiProvider(scripts);
   const metrics = { recordCacheHit: vi.fn(), recordCacheMiss: vi.fn(), recordLatency: vi.fn() };
-  const { isClosing, context = CONTEXT, ...config } = overrides;
+  const { isClosing, context = CONTEXT, liveness, ...config } = overrides;
   const processor = createProcessor({
     store,
     publisher,
@@ -191,6 +196,7 @@ function setup(
       ...config,
     },
     isClosing,
+    liveness,
   });
   return { store, publisher, repo, ai, metrics, processor };
 }
@@ -303,22 +309,32 @@ describe("createProcessor：重試語意", () => {
     expect(publisher.ofType("ai/token")).toEqual([]);
   });
 
-  it("finishReason=safety：視為格式失敗且不可重試", async () => {
-    const { publisher, processor } = setup([async () => ({ text: "", finishReason: "safety" })]);
+  it("finishReason=stop 的完整回應：記一筆延遲樣本", async () => {
+    const { processor, metrics } = setup([okScript()]);
+    await processor(makeJob("ok"));
+    expect(metrics.recordLatency).toHaveBeenCalledTimes(1);
+  });
+
+  it("finishReason=safety：視為格式失敗且不可重試，不記延遲樣本", async () => {
+    const { publisher, processor, metrics } = setup([async () => ({ text: "", finishReason: "safety" })]);
     await expect(processor(makeJob("a"))).rejects.toBeInstanceOf(UnrecoverableError);
     expect(publisher.ofType("ai/error")[0]?.code).toBe("schema_invalid");
+    expect(metrics.recordLatency).not.toHaveBeenCalled();
   });
 
   it("finishReason=max_tokens：視為格式失敗且不可重試（第一次嘗試就送 ai/error，不再燒 token 重試）", async () => {
     const text = JSON.stringify(VALID_RESULT);
-    const { publisher, processor, repo, store } = setup([async () => ({ text, finishReason: "max_tokens" })]);
+    const { publisher, processor, repo, store, metrics } = setup([async () => ({ text, finishReason: "max_tokens" })]);
     await expect(processor(makeJob("a", { attemptsMade: 0, attempts: 3 }))).rejects.toBeInstanceOf(UnrecoverableError);
     expect(publisher.ofType("ai/error")).toEqual([
       expect.objectContaining({ code: "schema_invalid", attempt: 1, message: expect.stringContaining("max_tokens") }),
     ]);
-    // 截斷的輸出即使剛好是合法 JSON 也不落地、不進 cache
+    // 截斷的輸出即使剛好是合法 JSON 也不落地、不進 cache、不寫 trigger（終態 trigger 由 failed handler 補寫）
     expect(repo.diagnoses).toEqual([]);
     expect(store.cacheKeys()).toEqual([]);
+    expect(repo.triggers).toEqual([]);
+    // 截斷樣本不進延遲統計（avg／p95 只反映完整回應）
+    expect(metrics.recordLatency).not.toHaveBeenCalled();
   });
 });
 
@@ -350,7 +366,11 @@ describe("createProcessor：ai/token 序號", () => {
 
 describe("createProcessor：空脈絡短路", () => {
   it("無遙測／異常事件／維修紀錄：不查 cache、不取鎖、不打 LLM，第一次嘗試就送不可重試的 ai/error(no_context)", async () => {
-    const { ai, publisher, repo, store, metrics, processor } = setup([okScript()], { context: EMPTY_CONTEXT });
+    const liveness = { begin: vi.fn(), touch: vi.fn(), end: vi.fn(), isAlive: () => true };
+    const { ai, publisher, repo, store, metrics, processor } = setup([okScript()], {
+      context: EMPTY_CONTEXT,
+      liveness,
+    });
     const job = makeJob("ghost", { attemptsMade: 0, attempts: 3 });
     const err = await processor(job).catch((e: unknown) => e);
 
@@ -369,6 +389,10 @@ describe("createProcessor：空脈絡短路", () => {
     expect(metrics.recordCacheHit).not.toHaveBeenCalled();
     expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
     expect(job.progress).toEqual([0, 20]);
+    // 短路路徑同樣成對釋放活性槽：漏 end 會讓槽永遠被佔，最終被判定為卡死
+    expect(liveness.begin).toHaveBeenCalledTimes(1);
+    expect(liveness.end).toHaveBeenCalledTimes(1);
+    expect(liveness.end).toHaveBeenCalledWith(liveness.begin.mock.calls[0]?.[0]);
   });
 
   it.each<[string, Partial<DiagnosisContext>]>([

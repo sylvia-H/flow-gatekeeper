@@ -5,7 +5,7 @@ import type { DiagnosisJobPayload } from "@flow-gatekeeper/contracts";
 import { ENQUEUE_TIMEOUT_MS, JobsService } from "./jobs.service.js";
 import type { ClientPresence, JobBindingStore } from "./jobs.service.js";
 import type { JobBinding } from "../websocket/ai-stream-relay.service.js";
-import { MACHINE_IDS } from "../telemetry/mock-telemetry.service.js";
+import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
 
 const SOCKET_A = "5b1f9c1e-8a53-4c43-9f0e-2d1c3b4a5e6f";
 const SOCKET_B = "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a";
@@ -176,7 +176,7 @@ describe("JobsService.createDiagnosis", () => {
     expect((err as NotFoundException).getResponse()).toEqual({
       statusCode: 404,
       error: "Not Found",
-      message: "machineId 不在機台名冊中",
+      message: "此機台不在名冊中",
     });
     expect(bindings.map.size).toBe(0);
     expect(queue.getJob).not.toHaveBeenCalled();
@@ -229,6 +229,23 @@ describe("JobsService.createDiagnosis", () => {
     ).rejects.toBeInstanceOf(ConflictException);
     expect(queue.add).toHaveBeenCalledTimes(1);
     expect(bindings.map.get(JOB_ID)?.clientId).toBe(SOCKET_A);
+  });
+
+  it("409（未授權）warn 以 30 秒全域節流：窗內只記一則，窗後一則附 suppressed", async () => {
+    vi.useFakeTimers();
+    const { service } = makeService(makeQueue(), makePresence([]));
+    const warn = vi.spyOn((service as unknown as { plog: { warn: (...args: unknown[]) => void } }).plog, "warn");
+    const reject = () =>
+      service.createDiagnosis({ machineId: "mixer-01", socketId: SOCKET_A }).catch((e: unknown) => e);
+
+    for (let i = 0; i < 5; i += 1) expect(await reject()).toBeInstanceOf(ConflictException);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).not.toHaveProperty("suppressed");
+
+    vi.advanceTimersByTime(30_000);
+    await reject();
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[1]?.[0]).toMatchObject({ suppressed: 4 });
   });
 
   it("名冊檢查先於在線檢查：未知機台 + 未授權連線 → 仍是 404", async () => {

@@ -95,6 +95,19 @@ describe("parseWorkerEnv", () => {
     expect(good.ok).toBe(true);
     if (good.ok) expect(good.warnings).toEqual([]);
   });
+
+  it("不能關 thinking 的模型配過低的 AI_MAX_OUTPUT_TOKENS → warning；調高或可關 thinking 的模型則不 warn", () => {
+    const hasThinkingWarning = (raw: Record<string, string>): boolean => {
+      const r = parseWorkerEnv({ GEMINI_API_KEY: "k", ...raw });
+      if (!r.ok) throw new Error(r.error);
+      return r.warnings.some((w) => w.includes("thinking") && w.includes("AI_MAX_OUTPUT_TOKENS"));
+    };
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.5-pro" })).toBe(true);
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-3-pro-preview", AI_MAX_OUTPUT_TOKENS: "4096" })).toBe(true);
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.5-pro", AI_MAX_OUTPUT_TOKENS: "8192" })).toBe(false);
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.5-flash" })).toBe(false);
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.0-flash" })).toBe(false);
+  });
 });
 
 describe("parseRedisEnv", () => {

@@ -7,7 +7,13 @@ import type { AddressInfo, Socket } from "node:net";
 import { WebSocket } from "ws";
 import type { ClientOptions } from "ws";
 import type { Queue } from "bullmq";
-import type { DiagnosisJobPayload, SystemMetrics, TelemetryPoint } from "@flow-gatekeeper/contracts";
+import type {
+  AiDone,
+  AiError,
+  DiagnosisJobPayload,
+  SystemMetrics,
+  TelemetryPoint,
+} from "@flow-gatekeeper/contracts";
 import type { AppConfigService } from "../config/config.service.js";
 import type { HistoryService } from "../history/history.service.js";
 import { MockTelemetryService } from "../telemetry/mock-telemetry.service.js";
@@ -17,6 +23,8 @@ import {
   WS_MAX_PAYLOAD_BYTES,
   WS_MAX_VIOLATIONS,
   WS_SLOW_CONSUMER_TICKS,
+  authGraceSweepIntervalMs,
+  unauthorizedConnectionCap,
 } from "./monitoring.gateway.js";
 
 // Gateway 只需要 config 的三個欄位（下方以 fake 提供）；把真實的 AppConfigService 模組替換掉，
@@ -141,8 +149,9 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 /** Gateway 內部的單一連線狀態（僅測試用：模擬慢讀者需要改寫 server 端 socket 的 bufferedAmount）。 */
 type GatewayInternals = {
-  clients: Map<string, { socket: WebSocket; alive: boolean }>;
+  clients: Map<string, { socket: WebSocket; alive: boolean; connectedAt: number }>;
   sweepDeadConnections(): void;
+  sweepAuthGrace(): void;
 };
 
 function internals(gateway: MonitoringGateway): GatewayInternals {
@@ -628,31 +637,142 @@ describe("MonitoringGateway：出口閘門（背壓、授權、違規、連線�
     c.ws.close();
   });
 
-  it("授權期限：有密鑰時期限內未通過 token → 1008 關閉；期限內通過者存活", async () => {
-    const { port, gateway } = await startGateway({
-      secret: "s3cret",
-      init: true,
-      intervalMs: 1_000,
-      heartbeatMs: 50,
-      authGraceMs: 200,
-    });
-    const idle = await openClient(port);
+  /** 把連線的建立時間往回撥，模擬「已經過了 ms」——授權期限測試據此手動驅動 sweep，不依賴真實計時。 */
+  function age(gateway: MonitoringGateway, clientId: string, ms: number): void {
+    const state = internals(gateway).clients.get(clientId);
+    if (!state) throw new Error(`no state for ${clientId}`);
+    state.connectedAt -= ms;
+  }
+
+  it("授權期限：有密鑰時期限內未通過 token → 1008 關閉；未逾期與已通過者存活（手動驅動 sweep）", async () => {
+    const { port, gateway } = await startGateway({ secret: "s3cret", authGraceMs: 60_000 });
+    const expired = await openClient(port);
+    const fresh = await openClient(port);
     const authed = await openClient(port);
     await subscribe(authed, [], "s3cret");
-    const idleClosed = waitClose(idle.ws);
-    expect(await idleClosed).toBe(1008);
-    await delay(150); // 再經過幾輪 sweep，已授權者不受影響
+    age(gateway, expired.clientId, 60_000);
+    age(gateway, authed.clientId, 60_000);
+
+    const expiredClosed = waitClose(expired.ws);
+    internals(gateway).sweepAuthGrace();
+    expect(await expiredClosed).toBe(1008);
+    internals(gateway).sweepAuthGrace(); // 再掃一輪：已授權與未逾期者不受影響
+    expect(await sendThenProbe(fresh, JSON.stringify({ type: "ping" }))).toEqual([]);
+    expect(fresh.ws.readyState).toBe(WebSocket.OPEN);
     expect(authed.ws.readyState).toBe(WebSocket.OPEN);
     expect(gateway.isAuthorized(authed.clientId)).toBe(true);
-    await vi.waitFor(() => expect(gateway.connectionCount).toBe(1));
+    await vi.waitFor(() => expect(gateway.connectionCount).toBe(2));
+    fresh.ws.close();
     authed.ws.close();
   });
 
   it("授權期限：未設密鑰（連上即授權）時不適用", async () => {
-    const { port } = await startGateway({ init: true, intervalMs: 1_000, heartbeatMs: 50, authGraceMs: 100 });
+    const { port, gateway } = await startGateway({ authGraceMs: 1_000 });
     const client = await openClient(port);
-    await delay(300);
+    age(gateway, client.clientId, 60_000);
+    internals(gateway).sweepAuthGrace();
+    expect(await sendThenProbe(client, JSON.stringify({ type: "ping" }))).toEqual([]);
     expect(client.ws.readyState).toBe(WebSocket.OPEN);
     client.ws.close();
+  });
+
+  it("授權期限由獨立 interval 驅動：心跳間隔設到 2^31-1 仍會在期限後關閉未授權連線", async () => {
+    // 心跳在測試期間永遠不會 tick；只有獨立的授權期限 interval（min(心跳, 期限) = 期限）在跑。
+    const { port } = await startGateway({
+      secret: "s3cret",
+      init: true,
+      intervalMs: 1_000,
+      heartbeatMs: 2 ** 31 - 1,
+      authGraceMs: 200,
+    });
+    const idle = await openClient(port);
+    expect(await waitClose(idle.ws, 3_000)).toBe(1008);
+  });
+
+  it("authGraceSweepIntervalMs：取心跳與期限的較小者", () => {
+    expect(authGraceSweepIntervalMs(15_000, 10_000)).toBe(10_000);
+    expect(authGraceSweepIntervalMs(2 ** 31 - 1, 10_000)).toBe(10_000);
+    expect(authGraceSweepIntervalMs(5_000, 10_000)).toBe(5_000);
+  });
+
+  it("背壓只略過遙測批次：慢讀者仍收到 ai/done、ai/error、job/status 終態與 system/metrics", async () => {
+    const { port, gateway } = await startGateway({ sendHighWaterBytes: 64 * 1024 });
+    const slow = await openClient(port);
+    Object.defineProperty(serverSocket(gateway, slow.clientId), "bufferedAmount", {
+      get: () => 10 * 1024 * 1024,
+    });
+    const jobId = "0e6c2b7a-1f3d-4d8e-a9b0-c1d2e3f4a5b6";
+    const done: AiDone = {
+      type: "ai/done",
+      jobId,
+      attempt: 1,
+      cached: false,
+      result: { summary: "s", severity: "ok", likelyCauses: [], suggestedActions: [], evidence: [] },
+    };
+    const error: AiError = { type: "ai/error", jobId, attempt: 1, code: "provider_error", message: "m" };
+    const status = { type: "job/status", jobId, machineId: "mixer-01", status: "completed" } as const;
+    gateway.send(slow.clientId, done);
+    gateway.send(slow.clientId, error);
+    gateway.send(slow.clientId, status);
+    gateway.broadcastMetrics(metricsPayload);
+
+    expect(await slow.next()).toEqual(done);
+    expect(await slow.next()).toEqual(error);
+    expect(await slow.next()).toEqual(status);
+    expect(await slow.next()).toEqual(metricsPayload);
+    expect(gateway.droppedSendCount).toBe(0);
+    slow.ws.close();
+  });
+
+  it("unauthorizedConnectionCap：max(10, floor(20% × 上限))", () => {
+    expect(unauthorizedConnectionCap(500)).toBe(100);
+    expect(unauthorizedConnectionCap(20)).toBe(10);
+    expect(unauthorizedConnectionCap(1)).toBe(10);
+    expect(unauthorizedConnectionCap(59)).toBe(11);
+  });
+
+  /** 嘗試 upgrade，回傳 HTTP 狀態碼（成功開啟回 101 並立即關閉）。 */
+  function tryUpgrade(port: number): Promise<number> {
+    return new Promise<number>((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      ws.once("unexpected-response", (_req, res) => {
+        resolve(res.statusCode ?? 0);
+        ws.terminate();
+      });
+      ws.once("open", () => {
+        resolve(101);
+        ws.close();
+      });
+      ws.on("error", () => undefined);
+    });
+  }
+
+  it("有密鑰時未授權連線達子上限 → 新 upgrade 回 503；其中一條通過 token 後可再連", async () => {
+    const { port, gateway } = await startGateway({ secret: "s3cret", maxConnections: 20 });
+    const cap = unauthorizedConnectionCap(20);
+    const idle: Client[] = [];
+    for (let i = 0; i < cap; i += 1) idle.push(await openClient(port));
+    expect(gateway.connectionCount).toBe(cap);
+    expect(await tryUpgrade(port)).toBe(503); // 全域上限 20 尚未滿，擋下的是未授權子上限
+
+    const first = idle[0];
+    if (!first) throw new Error("no client");
+    expect(await subscribe(first, [], "s3cret")).toMatchObject({ type: "machine/subscribed" });
+    const extra = await openClient(port);
+    expect(await tryUpgrade(port)).toBe(503); // 新連線又佔回子上限
+
+    // 未授權連線離線後名額釋放。
+    extra.ws.close();
+    await vi.waitFor(() => expect(gateway.connectionCount).toBe(cap));
+    const again = await openClient(port);
+    for (const c of [...idle, again]) c.ws.close();
+  });
+
+  it("未設密鑰時沒有未授權子上限（連上即授權）", async () => {
+    const { port, gateway } = await startGateway({ maxConnections: 20 });
+    const clients: Client[] = [];
+    for (let i = 0; i < unauthorizedConnectionCap(20) + 2; i += 1) clients.push(await openClient(port));
+    expect(gateway.connectionCount).toBe(unauthorizedConnectionCap(20) + 2);
+    for (const c of clients) c.ws.close();
   });
 });

@@ -273,7 +273,7 @@ export function createProcessor(deps: ProcessorDeps) {
           const message = err instanceof Error ? err.message : String(err);
           return fail(pe?.code ?? "provider_error", message, pe?.retryable ?? true, err);
         }
-        metrics.recordLatency(now() - startedAt);
+        const latencyMs = now() - startedAt;
         jl.info({ finishReason: out.finishReason, usage: out.usage }, "LLM stream finished");
 
         // 截斷或安全攔截時輸出多半不是完整 JSON；明確歸類為格式失敗並留下原因，比讓
@@ -286,6 +286,8 @@ export function createProcessor(deps: ProcessorDeps) {
         if (out.finishReason === "max_tokens") {
           return fail("schema_invalid", "AI 回應達輸出上限被截斷（finishReason=max_tokens）", false, null);
         }
+        // 延遲只記完整回應的樣本：截斷／安全攔截的時間長短取決於在哪裡被切，混進來會扭曲 avg／p95。
+        metrics.recordLatency(latencyMs);
 
         let result: DiagnosisResult;
         try {
@@ -308,7 +310,7 @@ export function createProcessor(deps: ProcessorDeps) {
 
       if (await replyCached()) return;
 
-      // 「取鎖或等待」迴圈：lock TTL（≥ AI_TIMEOUT_MS，啟動時驗證）保證進度——持鎖者崩潰時
+      // 「取鎖或等待」迴圈：lock TTL（≥ AI_TIMEOUT_MS + LOCK_TTL_MARGIN_MS，啟動時驗證）保證進度——持鎖者崩潰時
       // 最遲於 TTL 後鎖過期，某個等待者搶到鎖改走計算路徑。
       const deadline = now() + config.aiTimeoutMs + config.lockTtlSeconds * 1000 + 5000;
       for (;;) {

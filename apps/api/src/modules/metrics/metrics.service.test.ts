@@ -9,9 +9,9 @@ import type { MetricsSources, PersistStats } from "./metrics.service.js";
 
 const INTERVAL = 5_000;
 
-function makeService(intervalMs = INTERVAL): MetricsService {
+function makeService(intervalMs = INTERVAL, isProduction = false): MetricsService {
   // 不呼叫 onModuleInit：不建立 Redis 連線，worker 快照走「全數缺席」降級（worker: null）。
-  const config = { metricsIntervalMs: intervalMs } as unknown as AppConfigService;
+  const config = { metricsIntervalMs: intervalMs, isProduction } as unknown as AppConfigService;
   return new MetricsService(config);
 }
 
@@ -86,8 +86,7 @@ describe("MetricsService.persist", () => {
 });
 
 describe("MetricsService 出口契約自檢", () => {
-  it("非 production：違約 payload 記一則 error（節流），照常廣播", async () => {
-    vi.stubEnv("NODE_ENV", "test");
+  it("非 production（config.isProduction=false）：違約 payload 記一則 error（節流），照常廣播", async () => {
     const errorSpy = vi.spyOn(getAppLogger().metrics, "error").mockImplementation(() => undefined);
     // 非整數 windowMs → 違反 `windowMs: int`
     const service = makeService(5_000.5);
@@ -105,7 +104,6 @@ describe("MetricsService 出口契約自檢", () => {
   });
 
   it("合法 payload 不記 error", async () => {
-    vi.stubEnv("NODE_ENV", "test");
     const errorSpy = vi.spyOn(getAppLogger().metrics, "error").mockImplementation(() => undefined);
     const service = makeService();
     service.bind(makeSources().sources);
@@ -114,10 +112,9 @@ describe("MetricsService 出口契約自檢", () => {
     expect(errorSpy).not.toHaveBeenCalled();
   });
 
-  it("production：不做自檢", async () => {
-    vi.stubEnv("NODE_ENV", "production");
+  it("production（config.isProduction）：不做自檢", async () => {
     const errorSpy = vi.spyOn(getAppLogger().metrics, "error").mockImplementation(() => undefined);
-    const service = makeService(5_000.5);
+    const service = makeService(5_000.5, true);
     service.bind(makeSources().sources);
     await tick(5_001);
     service.onModuleDestroy();

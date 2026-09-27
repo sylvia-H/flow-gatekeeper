@@ -1,6 +1,6 @@
 import { request } from "node:http";
 import { loadApiDotenv } from "./lib/env-file.js";
-import { parseApiEnv } from "./lib/env-schema.js";
+import { resolveHealthcheckPort } from "./lib/healthcheck-port.js";
 
 /**
  * api 健康探針（映像第二進入點 → dist/healthcheck.js；FR-006a、009 research R4a、
@@ -19,14 +19,16 @@ import { parseApiEnv } from "./lib/env-schema.js";
 const SELF_TIMEOUT_MS = 4000;
 
 // port 與 api 本體走同一份 env schema 與同一個 .env 載入點：裸 `Number(process.env.API_PORT ?? 3000)`
-// 在 `API_PORT=`（留空，`??` 不生效）時會連 port 0。env 不合法時 api 本身會拒絕啟動，探針同樣判 unhealthy。
+// 在 `API_PORT=`（留空，`??` 不生效）時會連 port 0。env 不合法時 api 本身會拒絕啟動，探針同樣判 unhealthy，
+// 並把原因寫到 stderr（進 `docker inspect` 的 health log），否則只看得到 unhealthy 卻查不出是設定錯。
 function resolvePort(): number {
   loadApiDotenv();
-  try {
-    return parseApiEnv(process.env).API_PORT;
-  } catch {
+  const result = resolveHealthcheckPort(process.env);
+  if (!result.ok) {
+    console.error(result.message);
     process.exit(1);
   }
+  return result.port;
 }
 
 const port = resolvePort();

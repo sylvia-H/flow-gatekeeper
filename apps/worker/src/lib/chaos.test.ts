@@ -74,4 +74,19 @@ describe("parseChaosAllowInProduction／shouldArmChaos（production 守衛獨立
     expect(shouldArmChaos("production", false)).toBe(false);
     expect(shouldArmChaos("production", true)).toBe(true);
   });
+
+  it.each<[string | undefined, boolean, boolean]>([
+    [undefined, false, true],
+    ["", false, true],
+    ["test", false, true],
+    ["production", false, false],
+    ["Production", false, false],
+    ["PRODUCTION", false, false],
+    [" production ", false, false],
+    ["production\n", false, false],
+    ["Production", true, true],
+    ["productions", false, true],
+  ])("真值表：NODE_ENV=%j、allow=%s → %s（production 判斷不分大小寫、忽略前後空白）", (nodeEnv, allow, expected) => {
+    expect(shouldArmChaos(nodeEnv, allow)).toBe(expected);
+  });
 });

@@ -39,7 +39,7 @@ export const WS_MAX_PAYLOAD_BYTES = 16 * 1024;
 
 /**
  * 慢讀者判定：心跳 tick 時 `bufferedAmount` 仍超過高水位的**連續**次數達此值即 terminate。
- * 單一 tick 超標可能只是瞬間網路抖動（期間的推送已被略過、不會繼續堆積）；連續 3 輪
+ * 單一 tick 超標可能只是瞬間網路抖動（期間的遙測批次已被略過、不會繼續堆積）；連續 3 輪
  * （預設約 45 秒）仍消化不掉，代表對端已不在讀，留著只會佔記憶體。
  */
 export const WS_SLOW_CONSUMER_TICKS = 3;
@@ -52,6 +52,25 @@ export const WS_MAX_VIOLATIONS = 10;
 
 /** 心跳 ping 的 nonce 長度；pong 必須原樣帶回才算存活。 */
 const PING_NONCE_BYTES = 8;
+
+/** 未授權連線子上限的下限（見 `unauthorizedConnectionCap`）。 */
+export const MIN_UNAUTHORIZED_CONNECTIONS = 10;
+/** 未授權連線子上限佔總連線上限的比例（見 `unauthorizedConnectionCap`）。 */
+export const UNAUTHORIZED_CONNECTION_RATIO = 0.2;
+
+/**
+ * 有設 `WS_AUTH_SECRET` 時，「尚未通過 token 檢查」的連線同時最多幾條：
+ * `max(10, floor(maxConnections × 0.2))`。沒有子上限時，不知道 token 的一方只要持續開連線
+ * （每條在授權期限內都合法存在）就能佔滿全域名額，讓持有 token 的正常使用者連不進來。
+ */
+export function unauthorizedConnectionCap(maxConnections: number): number {
+  return Math.max(MIN_UNAUTHORIZED_CONNECTIONS, Math.floor(maxConnections * UNAUTHORIZED_CONNECTION_RATIO));
+}
+
+/** 授權期限掃描的間隔：`min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，實際關閉時間 ≤ 期限 + 此間隔。 */
+export function authGraceSweepIntervalMs(heartbeatMs: number, authGraceMs: number): number {
+  return Math.min(heartbeatMs, authGraceMs);
+}
 
 export type GatewayAttachOptions = {
   /** Origin 白名單；未指定時讀 `WS_ALLOWED_ORIGINS`（空＝不檢查）。 */
@@ -101,11 +120,13 @@ type ViolationReason = "invalid-json" | "schema" | "unauthorized";
  *   至多一則並附 `suppressed` 被壓掉的則數），不是逐則記錄；逐連線的斷線／回收仍逐則記錄。
  * - 輸入加固：client 訊息一律視為不可信——Zod safeParse 後才分派、socket/server 皆掛 error
  *   listener、maxPayload 16 KiB、Origin 白名單、連線數上限、授權期限（有密鑰時連線須在
- *   `WS_AUTH_GRACE_MS` 內通過 token，否則 1008——不讓不訂閱的連線佔住名額）、machineIds 與已知機台取交集、
+ *   `WS_AUTH_GRACE_MS` 內通過 token，否則 1008——不讓不訂閱的連線佔住名額；未授權連線另有子上限
+ *   `unauthorizedConnectionCap`）、machineIds 與已知機台取交集、
  *   token 常數時間比較、每連線違規計數（達 `WS_MAX_VIOLATIONS` 以 1008 關閉）。任何畸形輸入
  *   都只影響該則訊息（或該條連線），不得讓行程結束。
- * - 出口閘門：所有推送經 `deliver()` 做背壓（`bufferedAmount` 超過高水位即略過該筆、連續
- *   `WS_SLOW_CONSUMER_TICKS` 個心跳 tick 超標則 terminate）；對外的 `send()` 另只送已授權連線。
+ * - 出口閘門：所有推送經 `deliver()` 做背壓（`bufferedAmount` 超過高水位時只略過遙測批次，
+ *   控制／診斷訊息照送；連續 `WS_SLOW_CONSUMER_TICKS` 個心跳 tick 超標則 terminate）；對外的
+ *   `send()` 另只送已授權連線。
  */
 @Injectable()
 export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
@@ -117,7 +138,10 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   private wss?: WebSocketServer;
   private producerTimer?: ReturnType<typeof setInterval>;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
+  private authGraceTimer?: ReturnType<typeof setInterval>;
   private readonly clients = new Map<ClientId, ClientState>();
+  /** 目前在 `clients` 內、尚未授權的連線數（未設密鑰時恆為 0）；未授權子上限以此判定。 */
+  private unauthorizedCount = 0;
   private sendHighWaterBytes = DEFAULT_WS_SEND_HIGH_WATER_BYTES;
   private maxConnections = DEFAULT_MAX_WS_CONNECTIONS;
   private authGraceMs = DEFAULT_WS_AUTH_GRACE_MS;
@@ -151,6 +175,9 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   onModuleDestroy(): void {
     this.stopProducer();
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = undefined;
+    if (this.authGraceTimer) clearInterval(this.authGraceTimer);
+    this.authGraceTimer = undefined;
     // 優雅關閉（FR-004）：主動 terminate 所有連線並關閉 ws server。升級後的 ws 是「活躍連線」，
     // 不主動釋放的話 app.close() 等待的 http.Server 'close' 永不回呼——關閉會掛到 stop_grace_period
     // 逾時被 SIGKILL（非零退出→被監督者誤判為崩潰而重啟一個正被停止的服務）。terminate 觸發的
@@ -175,6 +202,16 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
       verifyClient: this.upgradeVerifier(allowedOrigins),
     });
     this.wss.on("connection", (socket) => this.handleConnection(socket));
+    // 授權期限另開獨立 interval，不掛在心跳 sweep 上：`WS_HEARTBEAT_MS` 可設到 2^31-1，掛在心跳上
+    // 期限就形同失效。在 attach（而非 onModuleInit）啟動，因為期限值在此才確定；未設密鑰時不需要。
+    if (this.authGraceTimer) clearInterval(this.authGraceTimer);
+    this.authGraceTimer = undefined;
+    if (this.config.wsAuthSecret) {
+      this.authGraceTimer = setInterval(
+        () => this.sweepAuthGrace(),
+        authGraceSweepIntervalMs(this.config.wsHeartbeatMs, this.authGraceMs),
+      );
+    }
     // 掛 server 端 error listener：ws 會把底層 http server 的 error 轉發到 wss，
     // 沒有 listener 時 EventEmitter 直接 throw → uncaughtException → 行程結束。
     this.wss.on("error", (err) => {
@@ -183,9 +220,10 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * upgrade 前的兩道檢查：連線數上限（已達上限回 503，不建立連線）與 Origin 白名單（不在清單
-   * 回 403；清單為空則不檢查）。連線數以「已建立的連線」計：同一瞬間併發的 upgrade 可能略微
-   * 超出上限，屬可接受的誤差（目的是擋住無上限成長，而非精確配額）。
+   * upgrade 前的三道檢查：連線數上限（已達上限回 503，不建立連線）、有密鑰時的未授權連線子上限
+   * （`unauthorizedConnectionCap`，達上限回 503）與 Origin 白名單（不在清單回 403；清單為空則
+   * 不檢查）。連線數以「已建立的連線」計：同一瞬間併發的 upgrade 可能略微超出上限，屬可接受的
+   * 誤差（目的是擋住無上限成長，而非精確配額）。
    */
   private upgradeVerifier(allowedOrigins: readonly string[]): VerifyClientCallbackAsync {
     return (info, done) => {
@@ -194,6 +232,18 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
           "max-connections",
           { connections: this.clients.size, maxConnections: this.maxConnections },
           "websocket upgrade rejected: too many connections",
+        );
+        done(false, 503, "Service Unavailable");
+        return;
+      }
+      // 有密鑰時，新連線在通過 token 前都算「未授權」：未授權者已達子上限就不再收，保留其餘名額
+      // 給持有 token 的使用者。
+      const unauthorizedCap = unauthorizedConnectionCap(this.maxConnections);
+      if (this.config.wsAuthSecret && this.unauthorizedCount >= unauthorizedCap) {
+        this.throttledWarn(
+          "max-unauthorized-connections",
+          { unauthorizedConnections: this.unauthorizedCount, unauthorizedCap },
+          "websocket upgrade rejected: too many unauthorized connections",
         );
         done(false, 503, "Service Unavailable");
         return;
@@ -225,6 +275,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
       closing: false,
     };
     this.clients.set(clientId, state);
+    if (!state.authorized) this.unauthorizedCount += 1;
     this.deliver(clientId, { type: "system/connected", clientId } satisfies SystemConnected);
     this.plog.info({ clientId }, "client connected");
 
@@ -288,7 +339,10 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
             this.deliver(clientId, { type: "system/unauthorized" } satisfies SystemUnauthorized);
             return;
           }
-          state.authorized = true;
+          if (!state.authorized) {
+            state.authorized = true;
+            this.unauthorizedCount -= 1;
+          }
         }
         // 只保留已知機台（去重、保持 client 給的順序）：未知 id 訂閱了也不會有資料，
         // 留著只會讓每次廣播多做無謂比對。
@@ -359,25 +413,12 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 心跳探活掃描：上一輪未回帶正確 nonce 的 pong 者判定失效並回收（涵蓋網路硬中斷的半死連線）；
-   * `bufferedAmount` 連續 `WS_SLOW_CONSUMER_TICKS` 輪超過高水位者視為慢讀者回收；
-   * 有設密鑰且逾 `WS_AUTH_GRACE_MS` 仍未授權者以 1008 關閉（不另開每連線 timer，故實際關閉時間
-   * 約為期限～期限 + 一個心跳間隔）；其餘標記為待驗證並送 `ping(nonce)`。回收上限約
-   * 2 × WS_HEARTBEAT_MS（SC-005）。
+   * `bufferedAmount` 連續 `WS_SLOW_CONSUMER_TICKS` 輪超過高水位者視為慢讀者回收；其餘標記為
+   * 待驗證並送 `ping(nonce)`。回收上限約 2 × WS_HEARTBEAT_MS（SC-005）。授權期限不在此檢查
+   * （見 `sweepAuthGrace`）。
    */
   private sweepDeadConnections(): void {
-    const now = Date.now();
-    const requireAuth = Boolean(this.config.wsAuthSecret);
     for (const [clientId, state] of this.clients) {
-      if (requireAuth && !state.authorized && !state.closing && now - state.connectedAt >= this.authGraceMs) {
-        state.closing = true;
-        this.throttledWarn(
-          "auth-grace-expired",
-          { clientId, authGraceMs: this.authGraceMs },
-          "websocket not authorized within grace period, closing with 1008",
-        );
-        state.socket.close(1008, "authorization timeout");
-        continue;
-      }
       if (!state.alive) {
         this.plog.warn({ clientId }, "heartbeat timeout, terminating");
         this.terminate(clientId, "heartbeat-timeout");
@@ -407,6 +448,26 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * 授權期限掃描（有設密鑰時由 attach 以 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 間隔驅動）：
+   * 逾 `WS_AUTH_GRACE_MS` 仍未授權者以 1008 關閉。不另開每連線 timer，故實際關閉時間介於
+   * 期限～期限 + 一個掃描間隔，最長約 2 × WS_AUTH_GRACE_MS（與心跳間隔設多大無關）。
+   */
+  private sweepAuthGrace(): void {
+    if (!this.config.wsAuthSecret) return;
+    const now = Date.now();
+    for (const [clientId, state] of this.clients) {
+      if (state.authorized || state.closing || now - state.connectedAt < this.authGraceMs) continue;
+      state.closing = true;
+      this.throttledWarn(
+        "auth-grace-expired",
+        { clientId, authGraceMs: this.authGraceMs },
+        "websocket not authorized within grace period, closing with 1008",
+      );
+      state.socket.close(1008, "authorization timeout");
+    }
+  }
+
   private terminate(clientId: ClientId, reason: string): void {
     const state = this.clients.get(clientId);
     if (!state) return;
@@ -415,8 +476,10 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   }
 
   private cleanup(clientId: ClientId, reason: string): void {
-    if (!this.clients.has(clientId)) return; // 冪等：避免 terminate→close 重複清理/記錄
+    const state = this.clients.get(clientId);
+    if (!state) return; // 冪等：避免 terminate→close 重複清理/記錄
     this.clients.delete(clientId);
+    if (!state.authorized) this.unauthorizedCount -= 1;
     this.plog.info({ clientId, reason }, "client disconnected");
   }
 
@@ -425,7 +488,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     return this.clients.size;
   }
 
-  /** 因背壓（`bufferedAmount` 超過高水位）被略過的推送累計則數（counter，不歸零）。 */
+  /** 因背壓（`bufferedAmount` 超過高水位）被略過的遙測批次累計數（counter，不歸零）。 */
   get droppedSendCount(): number {
     return this.droppedSends;
   }
@@ -466,13 +529,18 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 所有推送的唯一出口（不檢查授權：`system/connected`／`system/unauthorized` 這類連線層控制
-   * 訊息必須送得到未授權連線）。背壓：`bufferedAmount` 已超過高水位時略過該筆並計數——對端
-   * 讀不動時繼續 `send()` 只會讓 api 記憶體無上限成長；持續超標由心跳 sweep 回收。
+   * 訊息必須送得到未授權連線）。
+   *
+   * 背壓只作用於**遙測批次**（`TelemetryPoint[]`）：`bufferedAmount` 已超過高水位時略過該批並
+   * 計數——遙測是每 tick 數十則的高頻流，對端讀不動時繼續 `send()` 只會讓 api 記憶體無上限成長，
+   * 漏掉的批次下一 tick 就有新值補上。控制與診斷訊息（`ai/done`／`ai/error`／`job/status` 終態、
+   * `system/*`、`pong`）一律照送：它們低頻、體積小，且漏送終態會讓前端卡在 streaming 直到
+   * watchdog 逾時。記憶體上限由心跳 sweep 保證——連續 `WS_SLOW_CONSUMER_TICKS` 個 tick 超標即 terminate。
    */
   private deliver(clientId: ClientId, payload: ServerMessage): void {
     const state = this.clients.get(clientId);
     if (state?.socket.readyState !== WebSocket.OPEN) return;
-    if (state.socket.bufferedAmount > this.sendHighWaterBytes) {
+    if (Array.isArray(payload) && state.socket.bufferedAmount > this.sendHighWaterBytes) {
       this.droppedSends += 1;
       this.throttledWarn(
         "backpressure-drop",
