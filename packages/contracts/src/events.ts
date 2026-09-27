@@ -110,16 +110,20 @@ export const SystemUnauthorizedSchema = z.object({ type: z.literal("system/unaut
  */
 export const SystemMetricsSchema = z.object({
   type: z.literal("system/metrics"),
-  /** 本則摘要涵蓋的時間窗（＝`METRICS_INTERVAL_MS`）；前端過期門檻由此推導，不得硬編。 */
-  windowMs: z.number().int(),
+  /**
+   * 本則摘要涵蓋的時間窗（＝`METRICS_INTERVAL_MS`）；前端過期門檻由此推導，不得硬編。
+   * 必須 ≥ 1：0 會讓過期門檻歸零、面板永遠判為過期。用 `.min(1)` 而非 `.positive()`：整數下語意相同，
+   * 但前者輸出 JSON Schema 的 `minimum: 1`、與 asyncapi 同形（後者輸出 `exclusiveMinimum: 0`）。
+   */
+  windowMs: z.number().int().min(1),
   /** api 結算時間（RFC 3339，同 `timestamp`）——前端新鮮度判定以此為基準，非收訊時間。 */
   collectedAt: z.iso.datetime({ offset: true }),
   queue: z.object({
-    waiting: z.number().int(),
-    active: z.number().int(),
-    failed: z.number().int(),
+    waiting: z.number().int().nonnegative(),
+    active: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
   }),
-  wsConnections: z.number().int(),
+  wsConnections: z.number().int().nonnegative(),
   /** worker 快照缺席、過期或畸形時為 `null`（降級輸出，api 仍廣播自己那一半）。 */
   worker: WorkerMetricsSchema.nullable(),
 });
