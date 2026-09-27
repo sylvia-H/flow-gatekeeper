@@ -1,4 +1,5 @@
 import "reflect-metadata";
+import type { Server as HttpServer } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
@@ -43,7 +44,8 @@ export async function bootstrap(): Promise<void> {
   await app.listen(port);
   const gateway = app.get(MonitoringGateway);
   // Origin 白名單一樣走 AppConfigService（單一設定來源），Gateway 內不再各自讀 process.env。
-  gateway.attach(app.getHttpServer(), { allowedOrigins: config.wsAllowedOrigins });
+  // Nest 的 getHttpServer() 型別為 any；platform-express 下實際就是 node:http Server。
+  gateway.attach(app.getHttpServer() as HttpServer, { allowedOrigins: config.wsAllowedOrigins });
 
   // 009 US3：於組合根把指標來源與出口接給 MetricsService 並啟動週期結算——`JobsService`
   // 與 `MonitoringGateway` 是 AppModule 層的 provider，對 MetricsModule 不可見，故沿用本檔

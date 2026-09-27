@@ -59,7 +59,7 @@ async function openClient(
   const queue: Msg[] = [];
   const waiters: Array<(m: Msg) => void> = [];
   ws.on("message", (data) => {
-    const m = JSON.parse(data.toString()) as Msg;
+    const m = JSON.parse((data as Buffer).toString()) as Msg;
     const w = waiters.shift();
     if (w) w(m);
     else queue.push(m);

@@ -8,7 +8,7 @@
     "start:dev": "tsx watch --conditions=development src/main.ts",
     "smoke:gemini": "tsx --conditions=development src/ai/smoke-gemini.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src",
+    "lint": "eslint .",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {

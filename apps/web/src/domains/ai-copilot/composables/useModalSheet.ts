@@ -168,7 +168,7 @@ export function useModalSheet(root: Ref<HTMLElement | null>, onClose: () => void
   const sheet = createModalSheet(() => root.value, onClose, {
     matchMedia: typeof window !== "undefined" && window.matchMedia ? (q) => window.matchMedia(q) : undefined,
     IntersectionObserver:
-      typeof IntersectionObserver !== "undefined" ? (IntersectionObserver as unknown as IOCtor) : undefined,
+      typeof IntersectionObserver !== "undefined" ? IntersectionObserver : undefined,
     activeElement: () => (typeof document !== "undefined" ? document.activeElement : null),
     defer: (fn) => void nextTick(fn),
   });

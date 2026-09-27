@@ -20,7 +20,7 @@ interface SentBody {
 
 /** 取 POST body（jobId 由前端產生，後端照原樣回傳）。 */
 function bodyOf(init: RequestInit | undefined): SentBody {
-  return JSON.parse(String(init?.body)) as SentBody;
+  return JSON.parse(init?.body as string) as SentBody;
 }
 
 function okResponse(body: SentBody): Response {

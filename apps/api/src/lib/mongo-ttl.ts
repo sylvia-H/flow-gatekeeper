@@ -93,7 +93,7 @@ const TRANSIENT_ERROR_NAMES = new Set([
 
 function writeErrorList(err: unknown): unknown[] | undefined {
   const we = (err as { writeErrors?: unknown } | null)?.writeErrors;
-  if (Array.isArray(we)) return we;
+  if (Array.isArray(we)) return we as unknown[];
   if (we && typeof we === "object") return [we];
   return undefined;
 }

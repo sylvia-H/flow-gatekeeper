@@ -39,7 +39,9 @@ function serializeError(value: unknown): SerializedError {
       out.issues = issues.slice(0, 20).map((issue) => {
         const i = issue as { path?: unknown; message?: unknown };
         const path = Array.isArray(i.path) && i.path.length > 0 ? i.path.join(".") : "(root)";
-        return `${path}: ${String(i.message ?? "invalid")}`;
+        // ZodError issue 的 message 恆為字串；非字串一律視為缺漏（避免物件被序列化成 "[object Object]"）。
+        const message = typeof i.message === "string" ? i.message : "invalid";
+        return `${path}: ${message}`;
       });
     }
     return out;

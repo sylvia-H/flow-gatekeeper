@@ -137,7 +137,8 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     this.send(clientId, { type: "system/connected", clientId } satisfies SystemConnected);
     this.plog.info({ clientId }, "client connected");
 
-    socket.on("message", (raw) => this.handleMessage(clientId, raw.toString()));
+    // binaryType 維持 ws 預設 "nodebuffer"：RawData 恆為 Buffer（分片訊息亦已合併），故可直接 toString()。
+    socket.on("message", (raw) => this.handleMessage(clientId, (raw as Buffer).toString()));
     // protocol-level pong（回應伺服器的 ping()）→ 標記存活。
     socket.on("pong", () => this.alive.set(clientId, true));
     socket.on("close", () => this.cleanup(clientId, "close"));

@@ -14,10 +14,7 @@ function fakeRedis(pages: [string, string[]][], values: Record<string, string>):
     return Promise.resolve(page);
   });
   const mget = vi.fn((...keys: string[]) => Promise.resolve(keys.map((k) => values[k] ?? null)));
-  return { scan, mget } as unknown as WorkerSnapshotRedis & {
-    scan: ReturnType<typeof vi.fn>;
-    mget: ReturnType<typeof vi.fn>;
-  };
+  return { scan, mget };
 }
 
 describe("readWorkerSnapshots", () => {

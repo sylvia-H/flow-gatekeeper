@@ -5,7 +5,7 @@ import { ensureDiagnosisIndexes, TRIGGER_TTL_SECONDS } from "./diagnosis-reposit
 
 type IndexCall = { coll: string; keys: Record<string, number>; opts?: Record<string, unknown> };
 
-function fakeDb(failWhen: (c: IndexCall) => unknown | undefined) {
+function fakeDb(failWhen: (c: IndexCall) => Error | undefined) {
   const calls: IndexCall[] = [];
   const db = {
     collection: (coll: string) => ({

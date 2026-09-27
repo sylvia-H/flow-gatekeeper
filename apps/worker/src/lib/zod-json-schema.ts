@@ -36,7 +36,7 @@ export function zodToJsonSchema(schema: z.ZodTypeAny): JsonSchema {
       const properties: Record<string, JsonSchema> = {};
       const required: string[] = [];
       for (const [key, value] of Object.entries(shape)) {
-        const field = value as z.ZodTypeAny;
+        const field = value;
         const fieldDef = field._def as ZodDefLike;
         if (fieldDef.typeName === "ZodOptional") {
           properties[key] = zodToJsonSchema((field as z.ZodOptional<z.ZodTypeAny>).unwrap());
