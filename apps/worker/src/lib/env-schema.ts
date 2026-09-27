@@ -156,8 +156,10 @@ export function parseWorkerEnv(raw: Record<string, string | undefined>): WorkerE
     // 拖到重試用盡——provider 會丟不可重試錯誤，每筆診斷立即以友善的金鑰訊息失敗。
     warnings.push("GEMINI_API_KEY 未設定：每筆 AI 診斷將立即以 provider_error 失敗（不重試）");
   }
-  const { GEMINI_MODEL, AI_MAX_OUTPUT_TOKENS } = parsed.data;
+  const { AI_PROVIDER, GEMINI_MODEL, AI_MAX_OUTPUT_TOKENS } = parsed.data;
+  // fake provider 不呼叫 Gemini，GEMINI_MODEL 不作用；此時 warn 只會誤導。
   if (
+    AI_PROVIDER === "gemini" &&
     thinkingCapability(GEMINI_MODEL) === "always-on" &&
     AI_MAX_OUTPUT_TOKENS < MIN_OUTPUT_TOKENS_WITH_THINKING
   ) {

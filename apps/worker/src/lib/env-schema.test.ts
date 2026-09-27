@@ -173,6 +173,13 @@ describe("AI_PROVIDER 與 fake provider 參數（review02 Batch D e2e）", () =>
     expect(r.warnings.some((w) => w.includes("每筆診斷都會逾時"))).toBe(true);
   });
 
+  it("AI_PROVIDER=fake 時不做 GEMINI_MODEL 的 thinking 檢查（Gemini 不作用，warn 只會誤導）", () => {
+    const r = parseWorkerEnv({ AI_PROVIDER: "fake", GEMINI_MODEL: "gemini-2.5-pro", AI_MAX_OUTPUT_TOKENS: "2048" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.warnings.some((w) => w.includes("thinking"))).toBe(false);
+  });
+
   it("warn 的段數以假診斷 JSON 字元數為上限（FAKE_AI_TOKENS 過大不會誤報逾時）", () => {
     // 1000 段 × 100ms 若照字面算是 99.9s ≥ 30s；實際只會切成 FAKE_DIAGNOSIS_TEXT_LENGTH 段
     expect(FAKE_DIAGNOSIS_TEXT_LENGTH).toBeLessThan(300);
