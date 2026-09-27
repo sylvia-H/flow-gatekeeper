@@ -131,6 +131,19 @@ describe("mergeWorkerSnapshots（多實例合併）", () => {
     expect(mergeWorkerSnapshots([workerSnapshot])).toEqual(workerSnapshot);
   });
 
+  it("單筆自相矛盾（count=0 卻帶數值）同樣正規化為 null，與多實例行為一致", () => {
+    const odd: WorkerMetrics = {
+      snapshotAt: workerSnapshot.snapshotAt,
+      llmLatency: { count: 0, avgMs: 0, p95Ms: 0, maxMs: 0 },
+      cache: { hits: 0, misses: 0, hitRate: 0 },
+    };
+    expect(mergeWorkerSnapshots([odd])).toEqual({
+      snapshotAt: workerSnapshot.snapshotAt,
+      llmLatency: { count: 0, avgMs: null, p95Ms: null, maxMs: null },
+      cache: { hits: 0, misses: 0, hitRate: null },
+    });
+  });
+
   it("多筆：count／hits／misses 加總、avg 以 count 加權、p95／max 取最大、hitRate 重算、snapshotAt 取最新", () => {
     const b: WorkerMetrics = {
       snapshotAt: "2026-07-20T09:14:25.000Z",
@@ -209,9 +222,9 @@ describe("mergeMetrics（多實例）", () => {
 });
 
 describe("過期快照（已消失實例的殘留）", () => {
-  // apiPart.collectedAt = 09:14:22.481、windowMs = 60s → 容忍 90s，界線為 09:12:52.481
+  // apiPart.collectedAt = 09:14:22.481、windowMs = 60s → 容忍 150s，界線為 09:11:52.481
   const stale: WorkerMetrics = {
-    snapshotAt: "2026-07-20T09:12:52.480Z",
+    snapshotAt: "2026-07-20T09:11:52.480Z",
     llmLatency: { count: 100, avgMs: 9000, p95Ms: 9999, maxMs: 9999 },
     cache: { hits: 50, misses: 50, hitRate: 0.5 },
   };
@@ -226,8 +239,13 @@ describe("過期快照（已消失實例的殘留）", () => {
     expect(mergeMetrics(apiPart, [JSON.stringify(stale), JSON.stringify(stale)]).worker).toBeNull();
   });
 
-  it("恰在 1.5 × windowMs 界線上仍算新鮮；晚於 collectedAt（時鐘偏差）也算新鮮", () => {
-    const edge = { ...stale, snapshotAt: "2026-07-20T09:12:52.481Z" };
+  it("worker 漏寫一次（年齡介於 1–2 個窗）仍算新鮮，面板不因單次抖動整塊消失", () => {
+    const missedOnce = { ...workerSnapshot, snapshotAt: "2026-07-20T09:12:30.000Z" }; // 約 112 秒前
+    expect(dropStaleSnapshots([missedOnce], apiPart.collectedAt, apiPart.windowMs)).toEqual([missedOnce]);
+  });
+
+  it("恰在 2.5 × windowMs 界線上仍算新鮮；晚於 collectedAt（時鐘偏差）也算新鮮", () => {
+    const edge = { ...stale, snapshotAt: "2026-07-20T09:11:52.481Z" };
     const future = { ...workerSnapshot, snapshotAt: "2026-07-20T09:14:30.000Z" };
     expect(dropStaleSnapshots([edge, future, stale], apiPart.collectedAt, apiPart.windowMs)).toEqual([edge, future]);
   });

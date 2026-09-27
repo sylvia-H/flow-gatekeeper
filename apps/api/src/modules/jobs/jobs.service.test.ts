@@ -89,6 +89,29 @@ describe("JobsService.createDiagnosis", () => {
     expect(queue.add).toHaveBeenCalledTimes(1);
   });
 
+  it("併發重送時首發入列失敗 → 重送方拿到同一個錯誤，而不是指向不存在 job 的 200", async () => {
+    let rejectAdd: (e: Error) => void = () => undefined;
+    const queue = makeQueue({
+      add: () =>
+        new Promise((_, reject) => {
+          rejectAdd = reject;
+        }),
+    });
+    const { service, bindings } = makeService(queue);
+    const body = { jobId: JOB_ID, machineId: "cnc-01", socketId: SOCKET_A };
+    const first = service.createDiagnosis(body);
+    const firstAssertion = expect(first).rejects.toBeInstanceOf(ServiceUnavailableException);
+    // 等首發跑到 add（getJob 之後）再送重送。
+    await vi.waitFor(() => expect(queue.add).toHaveBeenCalledTimes(1));
+    const second = service.createDiagnosis({ ...body, socketId: SOCKET_B });
+    const secondAssertion = expect(second).rejects.toBeInstanceOf(ServiceUnavailableException);
+    rejectAdd(new Error("Connection is closed."));
+    await firstAssertion;
+    await secondAssertion;
+    expect(queue.add).toHaveBeenCalledTimes(1);
+    expect(bindings.map.has(JOB_ID)).toBe(false);
+  });
+
   it("同 jobId 但不同 machineId → 409", async () => {
     const { service } = makeService(makeQueue());
     await service.createDiagnosis({ jobId: JOB_ID, machineId: "cnc-01", socketId: SOCKET_A });

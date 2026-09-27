@@ -40,7 +40,11 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
     try {
       // blocking 設定：subscriber 只收不發，斷線時交給 ioredis 自動重連並重新訂閱。
       this.subscriber = new IORedis(this.config.redisOptions("blocking"));
-      void this.subscriber.psubscribe("ai-stream:*");
+      // 刻意 fire-and-forget 但自帶 catch：Redis 不可達時 psubscribe 留在 offline queue，關閉或斷線清佇列
+      // 會 reject；放任成浮空 rejection 會被全域致命守門當成崩潰 exit(1)，把優雅關閉誤報成崩潰。
+      void this.subscriber.psubscribe("ai-stream:*").catch((err: unknown) => {
+        this.logger.warn(`psubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
       this.subscriber.on("pmessage", (_pattern, channel, message) =>
         this.handleMessage(channel, message),
       );

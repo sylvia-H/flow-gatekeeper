@@ -1591,7 +1591,7 @@ export class JobsController {
 
 ### 8.5 BullMQ limiter
 
-> **已變更，現況：不再使用 BullMQ limiter。** 它計的是 job 啟動數而非 LLM 呼叫數——cache 命中、等待他人結果的 job 與每次重試都吃額度。現改為 worker **取得去重鎖且再查 cache 仍未命中後**，對 Redis 固定窗 `ai-rpm:<分鐘序號>` `INCR`（TTL 兩個窗長）；超過 `AI_RPM` 即 `job.moveToDelayed()` 延後到下一窗起點（加 0–2 秒抖動）並丟 `DelayedError`，不消耗 attempts、不打擾前端。`concurrency` 改由 `WORKER_CONCURRENCY` 設定。下面程式碼保留為起草時的 reference。
+> **已變更，現況：不再使用 BullMQ limiter。** 它計的是 job 啟動數而非 LLM 呼叫數——cache 命中、等待他人結果的 job 與每次重試都吃額度。現改為 worker **取得去重鎖且再查 cache 仍未命中後**，對 Redis 固定窗 `ai-rpm:<分鐘序號>` `INCR`（TTL 兩個窗長）；超過 `AI_RPM` 即 `job.moveToDelayed()` 延後到下一窗起點（加 0–2 秒抖動）並丟 `DelayedError`，不消耗 attempts、不打擾前端；延後期間 api 的 job-status relay 把 QueueEvents `delayed` 以 `job/status: waiting` 轉發並每 15 秒補送（到期逾 5 秒寬限即停），避免前端 45 秒 watchdog 把仍在排隊的 job 判成逾時。`concurrency` 改由 `WORKER_CONCURRENCY` 設定。下面程式碼保留為起草時的 reference。
 
 `apps/api/src/modules/jobs/jobs.module.ts` 與 worker 都要使用相同 queue name。Limiter 建議放 worker 建立處：
 
@@ -1775,7 +1775,7 @@ Return a concise diagnosis as JSON with this shape:
 }
 ```
 
-> **已變更，現況**：prompt 內手寫的 JSON 結構描述已不再是唯一約束——worker 由 `DiagnosisResultSchema` 產生 JSON Schema（`lib/zod-json-schema.ts`），經 `responseJsonSchema` 交給 adapter 走 Gemini 原生 structured output；`parseResult` 退為最後防線。`ai/prompt.ts` 另匯出 `PROMPT_VERSION`（目前 `diagnosis-v1`）。
+> **已變更，現況**：prompt 內手寫的 JSON 結構描述已不再是唯一約束——worker 由 `DiagnosisResultSchema` 產生 JSON Schema（`lib/zod-json-schema.ts`），經 `responseJsonSchema` 交給 adapter 走 Gemini 原生 structured output；`parseResult` 退為最後防線。`ai/prompt.ts` 另匯出 `PROMPT_VERSION`（目前 `diagnosis-v2`——改為內嵌 JSON Schema 時由 `diagnosis-v1` 升版，舊 cache 隨之失效）。
 
 ### 8.9.1 AI provider 隔離（換 LLM 不動主邏輯）
 
@@ -1831,8 +1831,8 @@ export class GeminiProvider implements AiProvider {
 > - **去重真正生效**：鎖值用 `randomUUID()`、釋放用 Lua compare-and-del（只刪自己的鎖）；等待者搶到鎖後**再查一次 cache**；啟動時驗證 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS`，鎖不會比 LLM 呼叫先過期。
 > - **LLM 限流**移到取鎖後的 Redis 固定窗（見 §8.5 現況）。
 > - **逾時**：`AbortSignal.timeout(AI_TIMEOUT_MS)` 交給 provider，真正中止底層串流；逾時後的殭屍串流不再送 token。
-> - **重試語意**：非最終嘗試的失敗只記 log 後 throw（交 BullMQ 退避），**不** publish `ai/error`；最終嘗試或不可重試錯誤才送。所有 `ai/*` 事件帶 `attempt`，前端換輪清空串流文字。
-> - **寫入順序**：先 insert `diagnoses`（`jobId` unique index，建立衝突時退回非 unique 並記 error）再寫 cache，最後寫 `diagnosisTriggers`（TTL 30 天）；cache 讀回一律 `safeParse`，不合 schema 即刪除並視為 miss。
+> - **重試語意**：非最終嘗試的失敗只記 log 後 throw（交 BullMQ 退避），**不** publish `ai/error`；最終嘗試或不可重試錯誤才送。所有 `ai/*` 事件帶 `attempt`，前端換輪清空串流文字；stalled 重派時 `attempt` 不變、`seq` 從 0 重播，前端以同輪 `seq` 0 判定重播並清空。
+> - **寫入順序**：先 insert `diagnoses`（`jobId` unique index，建立衝突時退回非 unique 並記 error；重啟時若只剩退回留下的同鍵非 unique 索引擋路，會先移除再重建 unique，清完重複資料即自動恢復）再寫 cache，最後寫 `diagnosisTriggers`（TTL 30 天）；cache 讀回一律 `safeParse`，不合 schema 即刪除並視為 miss。
 > - **關閉**：收到 SIGTERM 先立旗標，dedupe 等待中的 job 立即交回佇列，`worker.close()` 只需等真正在打 LLM 的 job（`stop_grace_period` 45s 維持）。heartbeat 依處理槽進度判斷卡死。
 > - **env fail-fast**：以 Zod 驗證（`apps/worker/src/lib/env-schema.ts`），留空套預設、非法即 exit 1；`GEMINI_API_KEY` 任何環境皆可留空。
 
@@ -3187,7 +3187,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   `instanceId = WORKER_INSTANCE_ID ?? os.hostname()`（容器內即 container id；限 `^[A-Za-z0-9._-]+$`、≤128，不合法拒絕啟動）。
   demo 容器內 `WORKER_INSTANCE_ID` 由 compose `environment` 釘為空字串，一律使用 hostname（container id），`apps/worker/.env` 裡的值只對 host 直跑生效。
   worker healthcheck 只看自身實例的 key；api 每個結算週期以 `SCAN MATCH metrics:worker:* COUNT 100` 分頁＋`MGET`，
-  逐筆 `WorkerMetricsSchema` 驗證、排除 `collectedAt - snapshotAt > 1.5 × windowMs` 的舊快照後合併（`count`／`hits`／
+  逐筆 `WorkerMetricsSchema` 驗證、排除 `collectedAt - snapshotAt > 2.5 × windowMs`（容忍 worker 漏寫一次） 的舊快照後合併（`count`／`hits`／
   `misses` 加總、`avgMs` 以 count 加權、`p95Ms` 取最大作近似上界、`maxMs` 取最大、`hitRate` 重算、`snapshotAt` 取最新；
   零筆 → `worker: null`），`WorkerMetrics` 契約形狀不變；worker 優雅關閉時主動 `DEL` 自身兩把 key，崩潰靠 TTL＋讀取端過濾。
   Gateway 仍為單實例（ADR-002 §6.1）。
@@ -3294,7 +3294,7 @@ docker compose ps -a                          # 判讀就緒：seed Exited(0) + 
 | # | 注入 | 預期觀察 | 判讀方式 |
 | --- | --- | --- | --- |
 | 1 | **Redis 停掉**：`docker compose stop redis` | api **不崩潰**：`GET /healthz` 轉 `503 unhealthy` 且 body 指名 `redis` `down`；此時按 Diagnose，`POST /diagnoses` 於 5 秒內回 **`503`**（不會永久掛住），前端顯示可讀錯誤；worker 的 command 連線在 `REDIS_COMMAND_TIMEOUT_MS` 內 reject、BullMQ 連線自動重連；heartbeat 寫不進去，worker healthcheck 轉 unhealthy（僅示警）。`docker compose start redis` 後 `/healthz` 回 200、worker 恢復消化、再按 Diagnose 正常。註：`depends_on: condition: service_healthy` 只在**啟動編排**時求值——執行中停掉 redis 不會連帶停掉或重啟 api／worker（它們靠自身重連撐過去）；但若此時對 api／worker 執行 `up -d`，它們會等 redis healthcheck 轉 healthy 才啟動。redis 停止期間 heartbeat 寫不進去，worker 自身的 `worker:heartbeat:<instanceId>` 過期 → worker 轉 unhealthy（僅示警） | 開發模式：`curl -i http://localhost:3000/healthz`；一鍵 demo（api 不對外開埠、nginx 也未反代 `/healthz`）：`docker compose ps` 看 api 轉 `unhealthy`，或 `docker inspect --format "{{json .State.Health}}" <api 容器名>` 看探針輸出；`docker compose logs --timestamps api worker` |
-| 2 | **Mongo 停掉**：`docker compose stop mongo` | 遙測推送與背壓比值**照常**（寫入不在推送路徑上）；`/healthz` 轉 `503`（`mongo` `down`）；api 的 telemetry buffer 滿（約 50 秒後）開始丟最舊，error log **每 30 秒至多一則**並附 `droppedPoints`／`failedPoints`／`droppedErrorLogs` 累計數；期間的 errorlog 轉換進獨立佇列，網路類失敗放回重試。`start mongo` 後恢復寫入，佇列中的 errorlog 補寫進去（重複鍵視為成功） | `docker compose logs api` 找 `persist telemetry failed` 與 `totals ...` 行（這些計數目前只出現在 error log，未進 `system/metrics`）；`/healthz` 判讀同場景 1 |
+| 2 | **Mongo 停掉**：`docker compose stop mongo` | 遙測推送與背壓比值**照常**（寫入不在推送路徑上）；`/healthz` 轉 `503`（`mongo` `down`）；api 每秒一批的 telemetry 寫入失敗即整批丟棄並計入 `failedPoints`（有損語意、不重試，buffer 只吸收單批卡住期間的累積，不會因故障而累積到滿），error log **每 30 秒至多一則**並附 `droppedPoints`／`failedPoints`／`droppedErrorLogs` 累計數；期間的 errorlog 轉換進獨立佇列，網路類失敗放回重試。`start mongo` 後恢復寫入，佇列中的 errorlog 補寫進去（重複鍵視為成功） | `docker compose logs api` 找 `persist telemetry failed` 與 `totals ...` 行（這些計數目前只出現在 error log，未進 `system/metrics`）；`/healthz` 判讀同場景 1 |
 | 3 | **金鑰缺席**：`apps/worker/.env` 的 `GEMINI_API_KEY` 留空後 `docker compose --profile demo up -d worker` | worker 正常啟動、只記一則 warn；遙測、背壓、`/healthz` 全部正常；按 Diagnose 後**第一次嘗試就**失敗（不重試、不等退避），drawer 顯示指名 `GEMINI_API_KEY` 的可讀訊息 | drawer 訊息、`docker compose logs worker`（`provider_error`、無 attempt 2／3） |
 | 4 | **畸形 WS 輸入**：在監控台頁面的 DevTools console 執行 `const s = new WebSocket(location.origin.replace('http','ws') + '/ws'); s.onopen = () => { s.send('{not json'); s.send(JSON.stringify({ type: 'machine/subscribe', token: 1, machineIds: 'x' })); s.send('x'.repeat(20000)); }` | api **不崩潰**、容器 `RestartCount` 不變：前兩則被記一則 `ignored client message`（`invalid-json`／`schema`）後忽略，超過 `maxPayload` 16 KiB 的那則使該連線被關閉；原本的監控台連線與遙測不受影響 | `docker inspect --format "{{.RestartCount}}" <api 容器名>`、`docker compose logs api` |
 | 5 | **worker 致命注入**（007）：`apps/worker/.env` 設 `WORKER_CHAOS=uncaught`（或 `rejection`）、`WORKER_CHAOS_AT=job` 後重建 worker，再按 Diagnose | worker 同步寫出致命訊息後 `exit(1)`，Docker 依退避重啟；in-flight job 由 BullMQ stalled 機制重派，最終完成或以 `ai/error` 收尾；`WORKER_CHAOS_AT=startup` 則可演練連續 5 次失敗後停止重啟。**演練後務必清空兩個變數再重建** | `docker inspect --format "{{.RestartCount}} {{.State.Status}}" <worker 容器名>`、`docker compose logs worker`；細節見 `specs/007-worker-process-supervision/quickstart.md` 場景 3／4 |

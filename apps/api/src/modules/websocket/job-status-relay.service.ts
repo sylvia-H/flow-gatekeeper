@@ -11,10 +11,19 @@ import { getAppLogger } from "../../logging/app-logger.js";
 
 /** 孤兒綁定回收安全期（QueueEvents 異常時避免 Map 洩漏，FR-002）。 */
 const ORPHAN_TTL_MS = 10 * 60_000;
+/**
+ * delayed 期間補送 `job/status: waiting` 的間隔。必須明顯短於前端 45 秒的無進展 watchdog：
+ * LLM 限流會把 job 延後到下一個分鐘窗（最長約 62 秒），重試退避也會 delayed，期間沒有任何事件，
+ * 不補送的話前端會把仍在排隊的 job 判成逾時失敗。
+ */
+export const DELAYED_KEEPALIVE_MS = 15_000;
+/** 到期後仍未收到 waiting/active 的寬限：promote 由 worker 的延遲計時觸發，略晚於到期時間屬正常。 */
+const DELAYED_GRACE_MS = 5_000;
 
 /**
  * Job 生命週期轉發（通道 B，憲章 IV）：以**獨立 blocking 連線**建 `QueueEvents`，把
- * waiting/active/completed/failed/progress 組成 `job/status` → `gateway.send`。
+ * waiting/active/completed/failed/progress 組成 `job/status` → `gateway.send`；`delayed` 以 `waiting`
+ * 轉發，並在延後期間定期補送（見 `DELAYED_KEEPALIVE_MS`）。
  *
  * **綁定清理單一 owner**：僅在 `completed`/`failed`（最終終態，晚於 `ai/done`）刪綁定，確保
  * 終態 `job/status` 一定送得出去（F1）；另以 `boundAt` 定期回收孤兒綁定。
@@ -32,6 +41,9 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
   private readonly plog = getAppLogger().child({ context: JobStatusRelayService.name });
   private queueEvents?: QueueEvents;
   private sweepTimer?: ReturnType<typeof setInterval>;
+  private keepaliveTimer?: ReturnType<typeof setInterval>;
+  /** 目前處於 delayed 的 job → 預計恢復排隊的時間戳（ms）。 */
+  private readonly delayedUntil = new Map<string, number>();
 
   constructor(
     private readonly config: AppConfigService,
@@ -48,11 +60,16 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
       this.queueEvents = new QueueEvents(DIAGNOSIS_QUEUE, {
         connection: this.config.redisOptions("blocking"),
       });
-      this.queueEvents.on("waiting", ({ jobId }) => this.emit(jobId, "waiting"));
+      this.queueEvents.on("waiting", ({ jobId }) => {
+        // delayed 到期被 promote 回 wait 也走這裡：離開 delayed，停止補送。
+        this.delayedUntil.delete(jobId);
+        this.emit(jobId, "waiting");
+      });
       this.queueEvents.on("active", ({ jobId }) => this.emit(jobId, "active"));
       this.queueEvents.on("progress", ({ jobId, data }) =>
         this.emit(jobId, "active", typeof data === "number" ? data : undefined),
       );
+      this.queueEvents.on("delayed", ({ jobId, delay }) => this.handleDelayed(jobId, Number(delay)));
       this.queueEvents.on("completed", ({ jobId }) => {
         this.emit(jobId, "completed");
         this.relay.deleteBinding(jobId);
@@ -68,6 +85,7 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
       });
       this.queueEvents.on("error", (err) => this.logger.warn(`QueueEvents error: ${err.message}`));
       this.sweepTimer = setInterval(() => this.sweepOrphans(), 60_000);
+      this.keepaliveTimer = setInterval(() => this.keepDelayedAlive(Date.now()), DELAYED_KEEPALIVE_MS);
       this.logger.log(`job-status relay listening QueueEvents('${DIAGNOSIS_QUEUE}')`);
     } catch (err) {
       this.logger.error(`job-status relay init failed: ${(err as Error).message}`);
@@ -76,6 +94,7 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleDestroy(): Promise<void> {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
+    if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
     await this.queueEvents?.close().catch(() => undefined);
   }
 
@@ -120,7 +139,30 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * job 進入 delayed（限流延後、重試退避、關閉中交回）：以契約既有的 `waiting` 告知前端它仍在
+   * 排隊，並登記到期時間讓 keepalive 在等待期間定期補送。`delay` 是事件流帶的絕對時間戳。
+   */
+  private handleDelayed(jobId: string, until: number): void {
+    if (!this.relay.getBinding(jobId)) return;
+    this.delayedUntil.set(jobId, Number.isFinite(until) ? until : Date.now());
+    this.emit(jobId, "waiting");
+  }
+
+  /** 對仍在 delayed 的 job 補送 waiting；已到期逾寬限、或綁定已清掉者不再追蹤。 */
+  private keepDelayedAlive(now: number): void {
+    for (const [jobId, until] of this.delayedUntil) {
+      if (!this.relay.getBinding(jobId) || now > until + DELAYED_GRACE_MS) {
+        this.delayedUntil.delete(jobId);
+        continue;
+      }
+      this.emit(jobId, "waiting");
+    }
+  }
+
   private emit(jobId: string, status: JobStatus["status"], progress?: number, error?: string): void {
+    // active/completed/failed 都代表 job 已離開 delayed，停止補送（waiting 由呼叫端各自處理）。
+    if (status !== "waiting") this.delayedUntil.delete(jobId);
     const binding = this.relay.getBinding(jobId);
     if (!binding) return; // 純後端 smoke 或已終態清理：略過
     const jobStatus: JobStatus = { type: "job/status", jobId, machineId: binding.machineId, status };

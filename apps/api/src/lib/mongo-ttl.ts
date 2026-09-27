@@ -105,14 +105,28 @@ function writeErrorList(err: unknown): unknown[] | undefined {
  * 其餘——帶 writeErrors（例如 121 文件驗證失敗）、或 server 直接拒絕整個指令（例如 10334
  * 文件過大）——都是同一批重送也必定再失敗的終局錯誤，重試只會每秒重送同一批直到永遠。
  * `rejected` 為這批中未寫入的筆數（重複鍵 11000 視為已寫入）。
+ *
+ * driver 6.x 的 `insertMany` 內部走 `bulkWrite`：連網路／選址失敗也會被包成
+ * `MongoBulkWriteError`，帶**空的** `writeErrors: []`，原始錯誤放在 `errorResponse`。
+ * 空陣列代表 server 根本沒有逐筆判定，不能當成毒批次——要拆開看原始錯誤才分得出能否重試。
  */
 export function classifyInsertFailure(err: unknown, batchSize: number): InsertFailure {
   const writeErrors = writeErrorList(err);
-  if (writeErrors) {
+  if (writeErrors && writeErrors.length > 0) {
     const rejected = writeErrors.filter(
       (w) => (w as { code?: unknown } | null)?.code !== 11000,
     ).length;
     return { kind: "terminal", rejected };
+  }
+  const inner = (err as { errorResponse?: unknown } | null)?.errorResponse;
+  if (
+    writeErrors &&
+    inner !== err &&
+    typeof inner === "object" &&
+    inner !== null &&
+    typeof (inner as { name?: unknown }).name === "string"
+  ) {
+    return classifyInsertFailure(inner, batchSize);
   }
   const e = err as { name?: unknown; errorLabels?: unknown } | null;
   const name = typeof e?.name === "string" ? e.name : "";

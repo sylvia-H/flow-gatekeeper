@@ -118,3 +118,50 @@ describe("JobStatusRelayService.handleFailed", () => {
     expect(gateway.send.mock.calls[0]?.[1]).toMatchObject({ type: "ai/error", attempt: 1 });
   });
 });
+
+describe("JobStatusRelayService delayed keepalive", () => {
+  type DelayedInternals = {
+    handleDelayed(jobId: string, until: number): void;
+    keepDelayedAlive(now: number): void;
+    emit(jobId: string, status: string): void;
+  };
+
+  function makeRelay() {
+    const gateway = { send: vi.fn() };
+    const aiRelay = new AiStreamRelayService({} as never, gateway as never);
+    aiRelay.bindJobToClient(JOB_ID, CLIENT_ID, "cnc-01");
+    const statusRelay = new JobStatusRelayService({} as never, gateway as never, aiRelay, {} as never);
+    const internals = statusRelay as unknown as DelayedInternals;
+    const statuses = () =>
+      gateway.send.mock.calls.map((c) => (c[1] as { status?: string }).status);
+    return { gateway, aiRelay, internals, statuses };
+  }
+
+  it("限流延後：立即送 waiting，延後期間每輪補送，到期逾寬限後停止", () => {
+    const { internals, statuses } = makeRelay();
+    internals.handleDelayed(JOB_ID, 60_000);
+    internals.keepDelayedAlive(15_000);
+    internals.keepDelayedAlive(30_000);
+    internals.keepDelayedAlive(45_000);
+    internals.keepDelayedAlive(70_000); // 已過 60s + 5s 寬限
+    internals.keepDelayedAlive(85_000);
+    expect(statuses()).toEqual(["waiting", "waiting", "waiting", "waiting"]);
+  });
+
+  it("job 回到 active 後不再補送", () => {
+    const { internals, statuses } = makeRelay();
+    internals.handleDelayed(JOB_ID, 60_000);
+    internals.emit(JOB_ID, "active");
+    internals.keepDelayedAlive(15_000);
+    expect(statuses()).toEqual(["waiting", "active"]);
+  });
+
+  it("綁定已清除（終態或孤兒回收）→ 不補送", () => {
+    const { aiRelay, internals, gateway } = makeRelay();
+    internals.handleDelayed(JOB_ID, 60_000);
+    aiRelay.deleteBinding(JOB_ID);
+    gateway.send.mockClear();
+    internals.keepDelayedAlive(15_000);
+    expect(gateway.send).not.toHaveBeenCalled();
+  });
+});

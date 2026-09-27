@@ -174,14 +174,16 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  // 先收尾再斷言：斷言失敗會中止 afterEach，若排在前面，mock 與 ws server／timer 會洩漏到後續測試。
   process.off("uncaughtException", onUncaught);
-  expect(exitSpy).not.toHaveBeenCalled();
-  expect(uncaught).toEqual([]);
+  const exitCalls = exitSpy.mock.calls.length;
   exitSpy.mockRestore();
   for (const h of running.splice(0)) {
     h.gateway.onModuleDestroy();
     await new Promise<void>((resolve) => h.server.close(() => resolve()));
   }
+  expect(exitCalls).toBe(0);
+  expect(uncaught).toEqual([]);
 });
 
 describe("MonitoringGateway：不可信輸入不得讓行程結束", () => {

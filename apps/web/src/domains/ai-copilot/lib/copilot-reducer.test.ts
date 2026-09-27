@@ -71,6 +71,15 @@ describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
     expect(s).toMatchObject({ status: "active", attempt: 2, streamText: "第二輪完整" });
   });
 
+  it("stalled 重派（attempt 不變、seq 從 0 重播）：丟掉前一次的半截文字，不拼接", () => {
+    let s = active("job-1");
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "崩潰前" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 1, text: "半截" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "重跑" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 1, text: "完整" });
+    expect(s).toMatchObject({ status: "active", attempt: 1, streamText: "重跑完整" });
+  });
+
   it("第 1 輪 token → 第 2 輪直接 done：completed 不保留舊輪文字", () => {
     let s = active();
     s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "舊輪半截" });

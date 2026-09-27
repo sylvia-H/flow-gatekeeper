@@ -46,9 +46,10 @@ function timeOf(iso: string): number {
  * 純函式：不讀 Redis、不看時鐘。
  */
 export function mergeWorkerSnapshots(snapshots: readonly WorkerMetrics[]): WorkerMetrics | null {
-  const [first, ...rest] = snapshots;
+  const [first] = snapshots;
   if (first === undefined) return null;
-  if (rest.length === 0) return first;
+  // 單筆也走完整合併：WorkerMetricsSchema 不強制 count=0 ⟹ null，捷徑直接回傳會讓單實例與多實例
+  // 對同一份自相矛盾的快照給出不同結果（前端把「沒有樣本」顯示成 0ms）。
 
   let count = 0;
   let weightedSum = 0;
@@ -88,11 +89,16 @@ export function mergeWorkerSnapshots(snapshots: readonly WorkerMetrics[]): Worke
   };
 }
 
-/** 快照「新鮮」的容忍倍數：worker 每 windowMs 刷新一次，允許半個週期的時鐘偏差與排程抖動。 */
-export const STALE_SNAPSHOT_FACTOR = 1.5;
+/**
+ * 快照「新鮮」的容忍倍數：worker 每 windowMs 才刷新一次，api 讀到的正常年齡本就落在 0–1 個窗；
+ * 漏寫一次（例如 Redis 瞬斷，command 連線會立刻 reject）年齡就落在 1–2 個窗。取 2.5 讓「漏一次」
+ * 完整容忍，另留半個窗給時鐘偏差與排程抖動；仍短於 TTL（3 個窗），已消失實例的殘留快照會比 TTL
+ * 更早被排除。
+ */
+export const STALE_SNAPSHOT_FACTOR = 2.5;
 
 /**
- * 濾掉過期快照：`collectedAt - snapshotAt > 1.5 × windowMs` 者不計入。
+ * 濾掉過期快照：`collectedAt - snapshotAt > 2.5 × windowMs` 者不計入。
  *
  * 為什麼不能只靠 TTL：快照 TTL 是 3 × 間隔，被重建或縮減掉的實例（容器 id 變了，舊 key 沒人刪）
  * 其最後一份快照會在這段期間持續被加總，數字偏高；而合併後 `snapshotAt` 取最新，又把它掩蓋掉。
@@ -122,7 +128,7 @@ export function dropStaleSnapshots(
  * `WorkerMetricsSchema` 者**逐筆略過**，不拖累其他實例；一筆有效快照都沒有時 `worker: null`，
  * 並照常回傳完整結構——**MUST NOT 拋錯**。指標蒐集自身的故障不得中斷摘要輸出，否則
  * 「監控台自己不可被監控」的缺口會在最需要時重現。快照過期（實例缺席逾 3 個週期）在此表現為
- * key 已不在掃描結果中；key 仍在但 `snapshotAt` 早於 1.5 個窗的快照（已消失實例的殘留）
+ * key 已不在掃描結果中；key 仍在但 `snapshotAt` 早於 2.5 個窗的快照（已消失實例的殘留）
  * 由 `dropStaleSnapshots` 排除，全部過期時同樣降級為 `worker: null`。
  *
  * 純函式：不讀 Redis、不記日誌、不看時鐘——所有 I/O 與時間戳由呼叫端（MetricsService）提供。

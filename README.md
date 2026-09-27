@@ -233,8 +233,8 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 ### 🚦 4. 佇列削峰與失敗韌性（BullMQ + Redis）
 
 - `POST /diagnoses` 只負責驗證、入列並立即回 jobId，**耗時工作全在獨立 worker**——API process 不做 long-running 診斷。body 以 `CreateDiagnosisBodySchema` 驗證（`machineId` `^[a-z0-9-]{1,32}$`、`socketId` 必須是 uuid、`requestedBy` ≤ 64 字），`jobId` 由前端 `crypto.randomUUID()` 產生並作 idempotency key（同 jobId 重送回同一結果、**不改綁**連線）。狀態碼：`201` 成功、`400` 不符契約、`415` 非 JSON、`409` jobId 衝突或綁定已失效、`503` 入列逾時（5 秒）或 Redis 不可用。
-- LLM 限流：worker 在**取得去重鎖且 cache 仍未命中**、真的要打 LLM 時，才對 Redis 固定窗 `ai-rpm:<分鐘序號>` 計數；超過 `AI_RPM`（預設 8）即 `moveToDelayed` 延後到下一窗（不消耗 attempts）。cache 命中與等待他人結果的 job 不吃額度——這取代了先前只能計 job 啟動數的 BullMQ limiter。`WORKER_CONCURRENCY`（預設 2）與限流是獨立維度。
-- `attempts`（預設 3）+ 指數退避；單次 AI streaming 以 `AbortSignal.timeout(AI_TIMEOUT_MS)`（預設 **30 秒**）**真正中止**底層串流，逾時後不再有殭屍 token。非最終嘗試的失敗**不**送 `ai/error`（只交 BullMQ 重試），最終嘗試或不可重試錯誤（金鑰無效、請求格式錯）才送；所有 `ai/*` 事件帶 `attempt`，前端換輪即清空串流文字。最終失敗時 api 另送一則 `ai/error(worker_failed)` 作安全網。
+- LLM 限流：worker 在**取得去重鎖且 cache 仍未命中**、真的要打 LLM 時，才對 Redis 固定窗 `ai-rpm:<分鐘序號>` 計數；超過 `AI_RPM`（預設 8）即 `moveToDelayed` 延後到下一窗（不消耗 attempts）；延後（含重試退避）期間 api 把 QueueEvents 的 `delayed` 以 `job/status: waiting` 轉發並每 15 秒補送一次，前端 45 秒無進展 watchdog 不會把仍在排隊的 job 誤判為逾時。cache 命中與等待他人結果的 job 不吃額度——這取代了先前只能計 job 啟動數的 BullMQ limiter。`WORKER_CONCURRENCY`（預設 2）與限流是獨立維度。
+- `attempts`（預設 3）+ 指數退避；單次 AI streaming 以 `AbortSignal.timeout(AI_TIMEOUT_MS)`（預設 **30 秒**）**真正中止**底層串流，逾時後不再有殭屍 token。非最終嘗試的失敗**不**送 `ai/error`（只交 BullMQ 重試），最終嘗試或不可重試錯誤（金鑰無效、請求格式錯）才送；所有 `ai/*` 事件帶 `attempt`，前端換輪即清空串流文字；worker 崩潰後 stalled 重派不遞增 `attempt`，前端以同一輪再收到 `seq` 0 判定為重播並同樣清空。最終失敗時 api 另送一則 `ai/error(worker_failed)` 作安全網。
 - worker 崩潰／停擺時，API 與即時通道**不崩潰**；worker 恢復後積壓任務可被消化。
 
 ### 💰 5. Cache-aside + dedupe lock（成本守門）
@@ -290,7 +290,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 
 - **結構化日誌**：api／worker／web 三端統一用 pino 輸出逐行 JSON（`LOG_LEVEL` 可調、`LOG_PRETTY` 於 dev 預設開、容器內一律釘 `false`），關鍵路徑帶關聯鍵（`jobId`／`machineId`）方便串接查詢；高頻路徑（`publishTelemetry` 與 telemetry 批次寫入）刻意**不**逐筆記錄，只在週期結算時輸出一則摘要，避免日誌本身變成新的高頻背壓源。
 - **`GET /healthz`**：免認證、不快取、每次請求即時探測（MUST NOT 回傳快取結果），二態回應——Redis 與 Mongo 皆連通回 `200 healthy`，任一失聯回 `503 unhealthy`，body 逐依賴列出 `status`／`latencyMs`／`error`；容器 healthcheck 即由它判定 api 是否就緒，各依賴探測獨立設逾時（`HEALTH_PROBE_TIMEOUT_MS`）避免一個依賴卡死拖垮整個探針。
-- **關鍵指標週期入 log + 廣播**：api 每 `METRICS_INTERVAL_MS`（預設 60s）結算一次 queue 深度（waiting／active／failed）、WS 連線數，並以 `SCAN MATCH metrics:worker:*` 讀取各 worker 實例寫進 Redis 的快照（`metrics:worker:<instanceId>`：LLM latency 的 count／avg／p95/max、cache 命中率），逐筆 schema 驗證、排除超過 1.5 個結算窗的舊快照後合併（count／hits／misses 加總、avg 以 count 加權、p95 與 max 取最大——p95 為近似上界、命中率重算）成一份摘要，用**專屬 metrics logger**（`METRICS_LOG_LEVEL` 獨立於 `LOG_LEVEL`）輸出一則，同時以新事件 `system/metrics` 廣播給所有已連線 client——摘要本身是 **at-most-once**（單輪結算失敗即略過、下一輪恢復，不重送不補發），worker 缺席或快照過期則整體降級為 `worker: null`，不讓「讀不到」被誤讀成「等於 0」。
+- **關鍵指標週期入 log + 廣播**：api 每 `METRICS_INTERVAL_MS`（預設 60s）結算一次 queue 深度（waiting／active／failed）、WS 連線數，並以 `SCAN MATCH metrics:worker:*` 讀取各 worker 實例寫進 Redis 的快照（`metrics:worker:<instanceId>`：LLM latency 的 count／avg／p95/max、cache 命中率），逐筆 schema 驗證、排除超過 2.5 個結算窗的舊快照（容忍漏寫一次）後合併（count／hits／misses 加總、avg 以 count 加權、p95 與 max 取最大——p95 為近似上界、命中率重算）成一份摘要，用**專屬 metrics logger**（`METRICS_LOG_LEVEL` 獨立於 `LOG_LEVEL`）輸出一則，同時以新事件 `system/metrics` 廣播給所有已連線 client——摘要本身是 **at-most-once**（單輪結算失敗即略過、下一輪恢復，不重送不補發），worker 缺席或快照過期則整體降級為 `worker: null`，不讓「讀不到」被誤讀成「等於 0」。
 - **dev-only Metrics Panel**：web 端以 `VITE_METRICS_PANEL` 開關（dev 預設開、production build 預設關）呈現上述指標，唯讀、預設收合，訂閱同一條 `/ws` 連線收 `system/metrics`——不新增任何額外連線或輪詢。
 - **有損寫入語意明文化**：順帶把兩項既有的「有損」設計決策寫清楚（telemetry 持久化——009 當時為 fire-and-forget，**已變更**為有上限 buffer＋每秒批次，現況見「[已宣告的取捨](#已宣告的取捨)」；errorlog 去重僅存於行程內記憶體），程式碼註解、README「[已宣告的取捨](#已宣告的取捨)」與 ADR-002 §6.4 三處指向同一份事實，不各自表述——這也是本專案「有損可以，未宣告的有損才是問題」原則的具體落地。
 
@@ -355,7 +355,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | `machine/subscribed` | api → web | 訂閱成功回執（回報當前訂閱集合） |
 | `machine/data` | api → web | **高頻**機台遙測資料點；payload 是**裸 `TelemetryPoint[]` 陣列**（無 `type` 包裝），前端以 `isTelemetryPoint` 逐點守衛後進 buffer、rAF 批次提交 |
 | `job/status` | api → web | 診斷任務狀態（`waiting`／`active`／`completed`／`failed` + `progress`） |
-| `ai/token` | api → web | **串流** AI token 區塊（`seq` 保序、逐段 append；帶 `attempt`，換輪即清空） |
+| `ai/token` | api → web | **串流** AI token 區塊（`seq` 保序、逐段 append；帶 `attempt`，換輪或同輪 `seq` 重回 0 即清空） |
 | `ai/done` | api → web | 最終診斷結果（含 `cached` 旗標、`attempt` 與通過驗證的 `result`；前端再驗一次 schema） |
 | `ai/error` | api → web | AI 供應商／worker 錯誤（`code` + 可讀 `message` + `attempt`）；只在最終嘗試或不可重試時送出，api 對最終失敗另補一則 `worker_failed` 作安全網 |
 | `ping` / `pong` | 雙向 | 應用層心跳；`pong` 逾時即 close 觸發重連，並由 RTT 導出延遲 ms |
@@ -443,7 +443,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | `ai-rpm:<分鐘序號>` | LLM 呼叫固定窗計數（`INCR`，TTL 兩個窗長）；取鎖且 cache 未命中才計數，超過 `AI_RPM` 即延後 |
 | `ai-stream:<jobId>` | Pub/Sub：worker 逐 token publish → Gateway 訂閱轉發到對應連線 |
 | `worker:heartbeat:<instanceId>` | 每個 worker 實例各一把存活探針（每 10s 寫、TTL 30s；依處理槽進度判斷卡死），容器 healthcheck **只讀自己的**（007）；優雅關閉時主動刪除 |
-| `metrics:worker:<instanceId>` | 每個 worker 實例的指標快照（LLM latency、cache 命中率；TTL 3 × `METRICS_INTERVAL_MS`）；api 以 `SCAN` 分頁＋`MGET` 讀取、排除超過 1.5 個結算窗的舊快照後合併進 `system/metrics`（009）；優雅關閉時主動刪除，崩潰則靠 TTL＋讀取端過濾 |
+| `metrics:worker:<instanceId>` | 每個 worker 實例的指標快照（LLM latency、cache 命中率；TTL 3 × `METRICS_INTERVAL_MS`）；api 以 `SCAN` 分頁＋`MGET` 讀取、排除超過 2.5 個結算窗的舊快照（容忍漏寫一次）後合併進 `system/metrics`（009）；優雅關閉時主動刪除，崩潰則靠 TTL＋讀取端過濾 |
 
 > `instanceId` = `WORKER_INSTANCE_ID`，留空則用 `os.hostname()`（容器內即 container id，天然唯一）；只允許 `[A-Za-z0-9._-]`、最長 128。compose 內一律使用 hostname（`WORKER_INSTANCE_ID` 被釘為空字串）。
 

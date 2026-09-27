@@ -35,6 +35,13 @@ describe("parseWorkerEnv", () => {
     expect(r.error).toContain("AI_CACHE_TTL_SECONDS");
   });
 
+  it("REDIS_PORT 超出 65535 → 失敗（與 api 同規則）", () => {
+    const r = parseWorkerEnv({ REDIS_PORT: "70000" });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("REDIS_PORT");
+  });
+
   it("鎖 TTL 短於 AI 逾時 → 失敗", () => {
     const r = parseWorkerEnv({ AI_DEDUPE_LOCK_SECONDS: "10", AI_TIMEOUT_MS: "30000" });
     expect(r.ok).toBe(false);

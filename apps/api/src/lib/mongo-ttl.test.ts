@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MongoBulkWriteError, MongoNetworkError, MongoServerError } from "mongodb";
 import {
   classifyInsertFailure,
   isIndexConflict,
@@ -94,5 +95,20 @@ describe("classifyInsertFailure", () => {
       rejected: 4,
     });
     expect(classifyInsertFailure(new Error("weird"), 2)).toEqual({ kind: "terminal", rejected: 2 });
+  });
+
+  // 用 driver 真實的包裝行為重現：insertMany 走 bulkWrite，連線失敗會變成 writeErrors 為空的 MongoBulkWriteError。
+  it("driver 包裝過的網路錯誤（MongoBulkWriteError、writeErrors 為空）→ transient", () => {
+    const wrapped = new MongoBulkWriteError(new MongoNetworkError("connection reset"), {} as never);
+    expect(wrapped.name).toBe("MongoBulkWriteError");
+    expect(wrapped.writeErrors).toEqual([]);
+    expect(classifyInsertFailure(wrapped, 3)).toEqual({ kind: "transient" });
+    expect(isOnlyDuplicateKeyError(wrapped)).toBe(false);
+  });
+
+  it("driver 包裝過的整批拒絕（非暫時性 server 錯誤）→ 整批 terminal", () => {
+    const inner = new MongoServerError({ message: "document too large", code: 10334 });
+    const wrapped = new MongoBulkWriteError(inner, {} as never);
+    expect(classifyInsertFailure(wrapped, 4)).toEqual({ kind: "terminal", rejected: 4 });
   });
 });

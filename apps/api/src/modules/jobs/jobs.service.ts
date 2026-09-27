@@ -42,6 +42,11 @@ class EnqueueTimeoutError extends Error {
 export class JobsService {
   // jobId 為 SC-002 跨行程串接的關聯鍵，MUST 為獨立結構化欄位（FR-002）。
   private readonly plog = getAppLogger().child({ context: JobsService.name });
+  /**
+   * 進行中的入列（jobId → 結果）。併發重送命中既有綁定時要等首發的入列結果：首發之後可能逾時或
+   * 409 而刪掉綁定並回錯誤，此時重送方若已先回 200，拿到的就是一個不存在的 job。
+   */
+  private readonly enqueuing = new Map<string, Promise<void>>();
 
   constructor(
     @InjectQueue(DIAGNOSIS_QUEUE) private readonly queue: Queue<DiagnosisJobPayload>,
@@ -58,6 +63,8 @@ export class JobsService {
         throw new ConflictException("jobId 已用於另一台機台的診斷");
       }
       this.plog.info({ jobId, machineId }, "duplicate diagnosis request, keeping original binding");
+      // 首發仍在入列：共用它的結果（失敗時拋出同一個錯誤）。
+      await this.enqueuing.get(jobId);
       return { jobId, machineId, status: "waiting" };
     }
 
@@ -73,6 +80,21 @@ export class JobsService {
       windowMinutes: 5,
     };
 
+    const work = this.enqueueOrUnbind(payload);
+    this.enqueuing.set(jobId, work);
+    try {
+      await work;
+    } finally {
+      this.enqueuing.delete(jobId);
+    }
+
+    this.plog.info({ jobId, machineId, requestedBy: payload.requestedBy }, "diagnosis job created");
+    return { jobId, machineId, status: "waiting" };
+  }
+
+  /** 有時限地入列；失敗時解除綁定並轉成對外的 409／503。 */
+  private async enqueueOrUnbind(payload: DiagnosisJobPayload): Promise<void> {
+    const { jobId, machineId } = payload;
     try {
       await withTimeout(this.enqueueOnce(payload), ENQUEUE_TIMEOUT_MS);
     } catch (err) {
@@ -83,9 +105,6 @@ export class JobsService {
       // 前端以同一 jobId 重送會得到 409 而非第二個 job，不會重複打 LLM。
       throw new ServiceUnavailableException("診斷佇列暫時無法使用，請稍後再試");
     }
-
-    this.plog.info({ jobId, machineId, requestedBy: payload.requestedBy }, "diagnosis job created");
-    return { jobId, machineId, status: "waiting" };
   }
 
   /**

@@ -22,11 +22,14 @@ const optionalString = z.preprocess(emptyToUndefined, z.string().optional());
 const stringWithDefault = (d: string) => z.preprocess(emptyToUndefined, z.string().default(d));
 const positiveInt = (d: number) =>
   z.preprocess(emptyToUndefined, z.coerce.number().int().positive().default(d));
+/** 與 api 的 `port()` 同一規則：同一個 REDIS_PORT 不該 api 拒絕啟動、worker 卻照跑到連線才失敗。 */
+const port = (d: number) =>
+  z.preprocess(emptyToUndefined, z.coerce.number().int().positive().max(65_535).default(d));
 
 /** Redis 連線子集——healthcheck 探針也用它，不必連 AI 設定一起驗。 */
 export const RedisEnvSchema = z.object({
   REDIS_HOST: stringWithDefault("127.0.0.1"),
-  REDIS_PORT: positiveInt(6379),
+  REDIS_PORT: port(6379),
   REDIS_PASSWORD: optionalString,
   /** cache／pub 一般指令的逾時；斷線時命令必須在這個時間內 reject，processor 才走得到錯誤路徑。 */
   REDIS_COMMAND_TIMEOUT_MS: positiveInt(5000),

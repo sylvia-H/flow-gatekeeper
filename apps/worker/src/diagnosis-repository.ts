@@ -1,5 +1,5 @@
 import { MongoServerError } from "mongodb";
-import type { Db } from "mongodb";
+import type { Collection, Db } from "mongodb";
 import type { DiagnosisResult } from "@flow-gatekeeper/contracts";
 
 /**
@@ -40,20 +40,55 @@ function isIndexConflict(err: unknown): boolean {
  * 既有資料若已有重複 jobId（或同名索引選項不同），建 unique 會失敗；若因此讓 bootstrap exit 1，
  * worker 會進 restart loop、整個 AI 功能停擺。所以衝突時記 error 並退回非 unique 索引——insert
  * 仍以 11000 判定冪等，只是此時不再有保證，需人工清理重複資料後重啟以恢復 unique。
+ *
+ * 恢復路徑：退回時建立的非 unique `{ jobId: 1 }` 索引會以同鍵擋住下次的 unique 建立（85/86），
+ * 若不處理，清完重複資料重啟也永遠回不到 unique。所以遇到衝突且存在這種同鍵非 unique 索引時，
+ * 先移除它再建一次 unique；仍失敗（重複資料還在）才再退回。
  */
 export async function ensureDiagnosisIndexes(db: Db, log: IndexLogger): Promise<void> {
   const diagnoses = db.collection("diagnoses");
   await diagnoses.createIndex({ machineId: 1, createdAt: -1 });
+  await ensureUniqueJobIdIndex(diagnoses, log);
+  await ensureTriggerIndexes(db, log);
+}
+
+async function ensureUniqueJobIdIndex(diagnoses: Collection, log: IndexLogger): Promise<void> {
+  const createUnique = () => diagnoses.createIndex({ jobId: 1 }, { unique: true });
+  let lastErr: unknown;
   try {
-    await diagnoses.createIndex({ jobId: 1 }, { unique: true });
+    await createUnique();
+    return;
   } catch (err) {
     if (!isIndexConflict(err)) throw err;
-    log.error({ err }, "diagnoses.jobId unique 索引建立失敗（既有重複資料或索引衝突），退回非 unique 索引；重試冪等不再有保證");
-    await diagnoses.createIndex({ jobId: 1 }).catch((e: unknown) => {
-      if (!isIndexConflict(e)) throw e;
-    });
+    lastErr = err;
   }
+  const blocking = (await diagnoses.indexes()).find(
+    (ix) => isJobIdOnlyKey(ix.key) && ix.unique !== true,
+  );
+  if (blocking?.name) {
+    await diagnoses.dropIndex(blocking.name);
+    try {
+      await createUnique();
+      return;
+    } catch (err) {
+      if (!isIndexConflict(err)) throw err;
+      lastErr = err;
+    }
+  }
+  log.error({ err: lastErr }, "diagnoses.jobId unique 索引建立失敗（既有重複資料或索引衝突），退回非 unique 索引；重試冪等不再有保證");
+  await diagnoses.createIndex({ jobId: 1 }).catch((e: unknown) => {
+    if (!isIndexConflict(e)) throw e;
+  });
+}
 
+/** 索引鍵是否恰為 `{ jobId: 1 }`（排除以 jobId 開頭的複合索引）。 */
+function isJobIdOnlyKey(key: unknown): boolean {
+  if (!key || typeof key !== "object") return false;
+  const entries = Object.entries(key as Record<string, unknown>);
+  return entries.length === 1 && entries[0]?.[0] === "jobId" && entries[0]?.[1] === 1;
+}
+
+async function ensureTriggerIndexes(db: Db, log: IndexLogger): Promise<void> {
   const triggers = db.collection("diagnosisTriggers");
   await triggers.createIndex({ machineId: 1, createdAt: -1 });
   try {

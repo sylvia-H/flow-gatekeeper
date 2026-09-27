@@ -5,7 +5,8 @@ import { DIAGNOSIS_RESULT_JSON_SCHEMA } from "../lib/zod-json-schema.js";
  * prompt 版本（進 cache signature）。**改動本檔 prompt 內容時 MUST 同時升版**——版本與內容放在
  * 同一個檔案，就是為了讓改 prompt 的人不會忘記讓舊 cache 失效（否則舊 cache 會續服務到 TTL）。
  */
-export const PROMPT_VERSION = "diagnosis-v1";
+// v2：結構說明由手寫範例改為內嵌 DiagnosisResultSchema 推導的 JSON Schema。
+export const PROMPT_VERSION = "diagnosis-v2";
 
 /**
  * 由機台脈絡組出診斷 prompt（指南 §8.9）：彙總近期 telemetry／errorlogs／maintenance，

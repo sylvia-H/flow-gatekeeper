@@ -143,6 +143,10 @@ export function copilotReducer(
       if (event.attempt > state.attempt) {
         return { ...state, attempt: event.attempt, streamText: event.text };
       }
+      // 同一輪卻收到 seq 0：worker 崩潰後 BullMQ 以 stalled 重派同一個 job 時只遞增 stalled 計數、
+      // 不遞增 attemptsMade，attempt 因此不變但串流從頭重播。seq 0 在一次執行裡只會出現在第一個
+      // token，所以它必然代表「新的一次執行」，要丟掉前一次的半截文字。
+      if (event.seq === 0) return { ...state, streamText: event.text };
       // 同一輪：單一有序 WebSocket 依 seq 遞送，直接 append 即保序（research R6）。
       return { ...state, streamText: state.streamText + event.text };
 

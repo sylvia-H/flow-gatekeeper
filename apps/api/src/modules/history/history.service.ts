@@ -23,7 +23,11 @@ import {
 
 /** 每隔多久把 buffer 批次寫進 Mongo。1 秒一次 ≈ 舊寫法（每 50ms 一次）的 1/20 round-trip。 */
 const FLUSH_INTERVAL_MS = 1_000;
-/** telemetry buffer 上限（點數）。5 台 × 20 點/秒 ≈ 100 點/秒，約可撐 50 秒的 Mongo 故障。 */
+/**
+ * telemetry buffer 上限（點數）。buffer 只吸收「單批寫入卡住」期間的累積（選址逾時 3 秒、
+ * socket 卡住上限 10 秒，約 300–1000 點），不是故障期間的重試佇列——失敗的那批不放回
+ * （見類別註解的有損語意）。上限只是防止寫入長時間卡住時記憶體無界成長的保險。
+ */
 const TELEMETRY_BUFFER_CAPACITY = 5_000;
 /** errorlog 待寫上限。轉換事件頻率遠低於 telemetry，1000 筆足以撐過長時間故障。 */
 const ERRORLOG_BUFFER_CAPACITY = 1_000;
@@ -115,7 +119,8 @@ export class HistoryService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit(): Promise<void> {
     // serverSelectionTimeoutMS 預設 30 秒：Mongo 不可達時每次操作都卡 30 秒才失敗。
-    // 縮到 3 秒讓啟動失敗與寫入失敗都快速浮現（寫入路徑本就有 buffer 吸收短暫中斷）。
+    // 縮到 3 秒讓啟動失敗與寫入失敗都快速浮現（等待期間新點先進 buffer，推送 cadence 不受牽制；
+    // 失敗的那批 telemetry 依有損語意不重試）。
     // socketTimeoutMS：Mongo「可達但卡住」時（選址成功、回應遲遲不來）單次操作也有上限。
     // 10 秒遠大於一批 ≤5000 點 insertMany 的正常耗時，不會誤殺正常寫入。
     this.client = new MongoClient(this.config.mongoUrl, {
