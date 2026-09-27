@@ -10,6 +10,8 @@
 依憲章 III「型別來源分層」——這是做 `switch(type)` 分派、由本系統自身產生的傳輸訊息，
 **以 TS 型別定義**，與既有 `system/connected`／`job/status`／`machine/data` 一致，不引入 Zod。
 
+> **已變更（2026-09-27 升級分支）**：現為 Zod schema（`SystemMetricsSchema`，型別由 `z.infer` 推導），理由為納入 AsyncAPI 漂移比對（`asyncapi-drift.test.ts`）；原決策敘述保留。下方型別區塊為起草時的 reference；現行驗證規則（`windowMs ≥ 1`、計數 ≥ 0、時間戳為 RFC 3339）以 `packages/contracts/src/events.ts` 為準。
+
 ```ts
 /** worker 回報的指標（來自 Redis 快照）；worker 缺席時整體為 null。 */
 export type WorkerMetrics = {

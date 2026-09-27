@@ -209,6 +209,7 @@ Edge Case「觀測能力不應隨一般過濾一起失效」與 SC-005 後半段
 - 型別來源分層（憲章 III）：`system/metrics` 是做 `switch(type)` 分派的傳輸訊息、
   由本系統自身產生（非外部不可信輸入），故**以 TS 型別定義**，與既有
   `system/connected`／`job/status`／`machine/data` 一致，不引入 Zod。
+  > **已變更（2026-09-27 升級分支）**：現為 Zod schema（`SystemMetricsSchema`，型別由 `z.infer` 推導），理由為納入 AsyncAPI 漂移比對（`asyncapi-drift.test.ts`）；原決策敘述保留。
 
 **高頻規則不適用、但必須明說**：憲章 IV 的「高頻事件 MUST 先進 buffer 再 rAF 批次提交」
 針對的是 `machine/data`（每 50ms）。`system/metrics` 是 **60 秒一則**的低頻控制訊息，

@@ -246,8 +246,8 @@ flow-gatekeeper/
 | 工具 | 建議版本 | 用途 | 確認指令 |
 | --- | --- | --- | --- |
 | Git | 最新穩定版 | branch、commit、Spec Kit feature flow | `git -v` |
-| Node.js | 22（以 repo 根 `.nvmrc` 為準；root `engines` 要求 `>=22`，CI 與 Dockerfile 同源） | web/api/worker runtime | `node -v` |
-| pnpm | 9+ | monorepo workspace | `pnpm -v` |
+| Node.js | 22（以 repo 根 `.nvmrc` 為準；root `engines` 要求 `>=22.12`（Vite 7／plugin-vue 6 的最低需求），CI 與 Dockerfile 同源） | web/api/worker runtime | `node -v` |
+| pnpm | 10（以 root `package.json` 的 `packageManager` 為準，現釘 `pnpm@10.34.5`；`corepack enable` 自動取得） | monorepo workspace | `pnpm -v` |
 | Docker Desktop | 最新穩定版 | Redis + MongoDB | `docker -v` |
 | uv | 最新穩定版 | 安裝 Spec Kit CLI | `uv --version` |
 | Claude Code | 最新可用版 | Spec Kit coding agent | `claude --version` |
@@ -650,6 +650,8 @@ packages:
 }
 ```
 
+> **現況註記**：已升 `pnpm@10.34.5`（升級分支 2026-09-27；root `package.json` 以 `packageManager` 含 sha512 釘版），上方 reference 保留起草時原貌。
+
 ### 6.8 `asyncapi.yaml`
 
 > **現況註記**：下面是 001 起草時的 reference。現行 `asyncapi.yaml` 為 `info.version: 1.1.0`、共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`），`ai/*` 帶 `attempt`、`machine/subscribe` 帶長度上限；並由 `packages/contracts/src/asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
@@ -973,6 +975,8 @@ export type DiagnosisResult = z.infer<typeof DiagnosisResultSchema>;
 > worker 拿到 LLM 回傳後，必須用 `DiagnosisResultSchema.parse()` 驗證再寫庫/回傳；parse 失敗就走 `ai/error`，不要把未驗證的物件當結果（見 8.10）。同樣模式可套用到 telemetry/event payload。
 >
 > **現況註記（2026-09-27）**：contracts 已擴充為 Zod 化的完整契約——`ws-client.ts` 的 `ClientControlMessageSchema`（`machineIds` ≤ 50、每個 ≤ 64、token ≤ 512）、`http.ts` 的 `CreateDiagnosisBodySchema`／`CreateDiagnosisResponseSchema`、`ai-stream.ts` 的 `AiStreamEventSchema`（含 `attempt`）、`job-status.ts` 的 `JobStatusSchema`、`metrics.ts` 的 `WorkerMetricsSchema`，以及 `machine/data` 裸陣列的 `isTelemetryPoint` 守衛。`package.json` 的 `exports` 另加 `development` condition 指向 `src`（見 §2.2）。
+>
+> **現況註記（2026-09 技術棧升級）**：Zod 已由 3 升至 **4**（上方 `package.json` 的 `"zod": "^3.24.0"` 為起草時的 reference，現為 `^4.6.5`），`zod-to-json-schema` 已移除、改用內建 `z.toJSONSchema()`。伺服器→客戶端控制訊息（`SystemConnected`／`MachineSubscribed`／`Pong`／`SystemUnauthorized`／`SystemMetrics`）與 `TelemetryPoint` 也改以 Zod 定義、型別由 `z.infer` 推導，`asyncapi-drift.test.ts` 因此能逐一比對全部 12 則 message 的結構（`format` 不再略過；`snapshotAt`／`collectedAt`／`timestamp` 以 `z.iso.datetime({ offset: true })` 對齊 asyncapi 的 `date-time`——RFC 3339 須含秒、接受 `Z` 或 `±hh:mm` 時區；Zod 預設只收 `Z`，比文件嚴，故明確開 offset）。`machine/data` 的 runtime 入口仍是手寫 `isTelemetryPoint`（高頻路徑不逐筆 `safeParse`），`TelemetryPointSchema` 只供漂移測試與低頻用途。worker 餵 Gemini `responseJsonSchema` 的 schema 亦改由 `z.toJSONSchema()` 產生（見 `apps/worker/src/lib/zod-json-schema.ts`）。
 
 `packages/contracts/src/index.ts`：
 
@@ -3202,14 +3206,14 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
     MUST 一併調高）、api 15s（stopProducer → flush 5s → `app.close()`）。
   - base image tag＋digest 雙釘（`node:22.23.3-alpine`、`nginxinc/nginx-unprivileged:1.31.6-alpine`、`redis:7.4.11-alpine`、
     `mongo:7.0.43`）；升版流程：`docker buildx imagetools inspect <image>:<tag>` 取新 digest，tag 與 digest 一起改。
-  - 建置：BuildKit `RUN --mount=type=cache`＋`pnpm fetch`＋`pnpm install --offline --filter <app>...`；`pnpm deploy --prefer-offline`
-    （pnpm 9 的 deploy 不讀 lockfile、需要 registry metadata）。全棧 demo 需 BuildKit（Docker 23+ 預設）。
+  - 建置：BuildKit `RUN --mount=type=cache`＋`pnpm fetch`＋`pnpm install --offline --filter <app>...`；`pnpm deploy --legacy --prefer-offline`
+    （legacy deploy 不讀 lockfile、需要 registry metadata；pnpm 10 起非 injected workspace 須加 `--legacy`，否則 `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`）。全棧 demo 需 BuildKit（Docker 23+ 預設）。
   - web runtime 改 `nginx-unprivileged`（uid 101），容器內 `listen 8080`、compose `8080:8080`（對外入口不變）；`server_tokens off`、
     `X-Content-Type-Options`、`X-Frame-Options DENY`、`Referrer-Policy`、CSP（`default-src 'self'`、`connect-src 'self'`——CSP3 的 `'self'` 已涵蓋同源 ws/wss；要相容舊 Safari 再加回 `ws: wss:`、
     `frame-ancestors 'none'` 等）、gzip、`/assets/` `immutable` 一年、`index.html` `no-cache`。
   - packages 加 `files: ["dist"]`、`sideEffects: false`（runtime image 不再帶 src／測試）；root `pnpm.overrides`（multer ≥2.3.0、
     qs ≥6.16.0、body-parser ≥1.20.6、postcss ≥8.5.23、nanoid ≥3.3.18）使 `pnpm audit --prod` 由 19 項（9 high）降至 3 項（0 high，
-    餘 file-type 與 `@nestjs/core` 需升主版本）；`.gitignore` 補 `*.tsbuildinfo`、`.vite/`。
+    餘 file-type 與 `@nestjs/core` 需升主版本；**已變更**：2026-09 技術棧升級改用 NestJS 11（Express 5）＋`@nestjs/bullmq` 12 後 `pnpm audit --prod` 歸零，multer／qs／body-parser 三項 override 因 Express 5 相依鏈已自帶修補版而移除，現況見 root `package.json` 的 `pnpm.overrides`）；`.gitignore` 補 `*.tsbuildinfo`、`.vite/`。
 
 ---
 

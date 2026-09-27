@@ -76,7 +76,7 @@
 | --- | --- | --- |
 | **I. 規格驅動開發** | ✅ PASS | 已走 specify → clarify → plan；branch `009-Observability-Baseline` 自 `develop` 開出；merge 將用 `--no-ff`。 |
 | **II. 單一真實來源** | ✅ PASS | dev 面板視覺依 `design-spec.md` 具名 token、沿用 `BackpressureBadge` 語彙，不散落 hex；`system/metrics` 先改 `packages/contracts` + `asyncapi.yaml` 再改三端；跨 feature 決策已列 ⚑ 回補清單（research 末節）。 |
-| **III. 契約優先與型別安全** | ✅ PASS | `SystemMetrics` 加在 `packages/contracts` 並納入 `ServerControlMessage`，三端不另寫平行定義。依「型別來源分層」，它是做 `switch(type)` 分派、由本系統自身產生的傳輸訊息 → **以 TS 型別定義**，與既有 `system/connected`／`job/status` 一致，不引入 Zod。全棧 strict TS，無新增 `any`。 |
+| **III. 契約優先與型別安全** | ✅ PASS | `SystemMetrics` 加在 `packages/contracts` 並納入 `ServerControlMessage`，三端不另寫平行定義。依「型別來源分層」，它是做 `switch(type)` 分派、由本系統自身產生的傳輸訊息 → **以 TS 型別定義**，與既有 `system/connected`／`job/status` 一致，不引入 Zod。全棧 strict TS，無新增 `any`。<br>**已變更（2026-09-27 升級分支）**：現為 Zod schema（`SystemMetricsSchema`，型別由 `z.infer` 推導），理由為納入 AsyncAPI 漂移比對（`asyncapi-drift.test.ts`）；原決策敘述保留。 |
 | **IV. 即時通道架構紀律** | ✅ PASS（含明示邊界） | 沿用原生 `ws`，不引入 Socket.IO。**worker 不直接 emit ws**——指標走 Redis key → api 合併 → Gateway 廣播。Redis 連線分離：health probe 用**專屬**連線，MUST NOT 借用 subscriber。**高頻規則邊界**：`system/metrics` 是 60s 一則的低頻控制訊息，直接寫入 reactive store 是正確的，MUST NOT 進 telemetry 的 rAF buffer（否則會污染背壓比值量測）——此邊界在 contracts/metrics-summary.md §3 與程式註解中明示。 |
 | **V. AI 診斷紀律** | ✅ PASS | 不動 `AiProvider` interface、cache signature、`DiagnosisResultSchema.parse()`。僅在 `streamDiagnosis` 呼叫外圍加計時、在 `replyCached()` 加命中計數——**純觀測，不改控制流**。 |
 | **VI. 祕密與設定衛生** | ✅ PASS | 只新增 6 個非敏感環境變數並同步 `.env.example`。日誌欄位不含 token／API key（`WS_AUTH_SECRET`、`GEMINI_API_KEY` 絕不入 log）。 |

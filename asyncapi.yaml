@@ -282,6 +282,7 @@ components:
             const: system/metrics
           windowMs:
             type: integer
+            minimum: 1
             description: Window covered by this summary (equals METRICS_INTERVAL_MS). Clients derive the staleness threshold (2x) from this field and MUST NOT hardcode it.
           collectedAt:
             type: string
@@ -293,12 +294,16 @@ components:
             properties:
               waiting:
                 type: integer
+                minimum: 0
               active:
                 type: integer
+                minimum: 0
               failed:
                 type: integer
+                minimum: 0
           wsConnections:
             type: integer
+            minimum: 0
             description: Instantaneous gauge; not a windowed average.
           worker:
             oneOf:

@@ -6,7 +6,9 @@
 | 審查對象 | `main` @ `3e94ac2`（v1.0.0，Feature 001–009 全數併入） |
 | 方法 | 6 個獨立審查 agent（Opus 5.5）分面向平行檢視，由統籌者交叉比對、去重、排序後統整 |
 | 修復狀態 | **P0～P2 缺陷已於同日由 `fix/20260927-research-review`（17 個 commit）修復並 `--no-ff` 併入 `develop`（`a8ef62a`）**。修復後由 3 個獨立驗收 agent 逐項核對（比較基準 `1cfc8c0..a8ef62a`），P0 六項全部經實測重現「修復前會崩／修復後不會」確認 |
-| 修復後檢查 | `contract:lint`／`-r typecheck`／`-r lint` 全綠；`-r test` 524 個測試通過（shared 16、contracts 58、api 155、worker 132、web 163）；乾淨 clone 不 build 直接 typecheck／test 全綠；`pnpm audit --prod` 由 19 項降至 3 項 moderate（全部經 `@nestjs/bullmq@10` 帶入，NestJS 11 升級後消除） |
+| 修復後檢查 | `contract:lint`／`-r typecheck`／`-r lint` 全綠；`-r test` 524 個測試通過（shared 16、contracts 58、api 155、worker 132、web 163）；乾淨 clone 不 build 直接 typecheck／test 全綠；`pnpm audit --prod` 由 19 項降至 3 項 moderate（全部經 `@nestjs/bullmq@10` 帶入） |
+| 升級狀態 | **§4 技術棧升級已於同日由 `upgrade/20260927-tech-stack`（9 個 commit）完成**：pnpm 10.34.5、NestJS 11.2.6（Express 5、`@nestjs/bullmq` 12）、Vite 7.3.6、plugin-vue 6、vue-tsc 3、vitest 4.1.11、Pinia 3、Vue 3.5 patch、eslint-plugin-vue 10、Zod 4.6.5（移除 `zod-to-json-schema`）、五個控制訊息型別 Zod 化納入漂移比對、shared 補 `tsconfig.build.json`、`engines.node >=22.12`。由獨立驗收 agent 做靜態檢查、乾淨 clone、全棧 demo（`--profile demo`）與 dev 軌道執行期驗證後併回 `develop` |
+| 升級後檢查 | 驗收後另以 `/code-review high` 對整支分支複審，7 項 findings 修正 6 項（時間戳改 `z.iso.datetime({ offset: true })` 對齊 RFC 3339、`system/metrics` 驗證規則上收契約並同步 asyncapi `minimum`、漂移測試只略過內建 format pattern 並比對 `allOf`、`toGeminiNode` 冗餘分支、文件矛盾回補、`@__PURE__` 標記）。最終：`-r test` **583** 個（shared 16、contracts 113、api 155、worker 136、web 163）；`pnpm audit` 全量與 `--prod` **皆為 0**；乾淨 clone 免 build 全綠；三個 Docker image 重建成功並全 healthy；web bundle 224.32 kB（gzip 75.62 kB） |
 | 本文現況 | **已修復項目已自本文移除**，只保留「部分修復」「未修復」「修復後新發現的殘留」與尚未執行的架構級建議。原始完整審查內容見 git 歷史 `fd34905` |
 | 相關 | ADR-001、ADR-002（§3／§6／§7 已回補現況）、`CLAUDE.md`、實作指南 §15.6、`README.md` |
 
@@ -33,6 +35,10 @@
 | §6.3 Lint | `recommendedTypeChecked`、`no-floating-promises`、`no-restricted-imports` 架構邊界、plugin-vue 移 root、tsconfig 補三項 | 已修復 |
 | §6.4 文件漂移 | 14 項中 13 項已更正（#13 見 §1.2） | 已修復 |
 | §4 `@google/generative-ai` → `@google/genai` | 影響僅 adapter 與 smoke 兩檔 | 已修復 |
+| §4 技術棧升級（升級分支） | pnpm 10、NestJS 11、Vite 7、vitest 4、Pinia 3、Zod 4；audit 全量歸零 | 已完成（見上表「升級狀態」） |
+| §1.4 pnpm 9.0.0（原殘留） | `packageManager` 升 `pnpm@10.34.5` 附 hash；Node 24 上 install 崩潰問題消失 | 已修復（升級分支） |
+| §2.3 AsyncAPI 漂移覆蓋缺口（原延後） | `TelemetryPoint`／`SystemConnected`／`Pong`／`MachineSubscribed`／`SystemMetrics`／`SystemUnauthorized` Zod 化並納入結構比對；`normalize()` 不再略過 `format` 與 `additionalProperties`；加覆蓋率測試（asyncapi 新增 message 未登記即紅） | 已修復（升級分支） |
+| §3.2 b `packages/shared` build 帶入測試檔（原殘留） | 補 `tsconfig.build.json` | 已修復（升級分支） |
 
 ---
 
@@ -55,11 +61,10 @@
 - demo 預設 `TELEMETRY_TTL_SECONDS` 仍為 `604800`（`.env.demo.example:50`），原建議降到 1 天。
 - 建議：`system/metrics` 加 `persist: { dropped, failed }`；demo env 範本 TTL 改 86400。
 
-### 1.4 §3.2 pnpm 版本（實際已造成問題）
+### 1.4 §3.2 root script 呼叫裸 `pnpm`（pnpm 版本本身已升）
 
-- `packageManager` 仍為 `pnpm@9.0.0`（無 hash）。本機 Node 24.20 配此版本執行 `pnpm install` 會在 postinstall lifecycle 崩潰（`Error: readStream must be readable`），乾淨 clone 需加 `--ignore-scripts` 才能安裝；`.nvmrc` 已釘 22 但無法約束本機。
-- root `lint`／`typecheck`／`test` script 內部呼叫裸 `pnpm`，PATH 無 pnpm 的環境會失敗（本機需 `corepack pnpm -r <script>` 繞過）。
-- 建議：升 `pnpm@10.x` 並附 hash（`corepack use pnpm@10`）；Node 25 起 corepack 不再內建，Dockerfile 改 `npm i -g pnpm@<ver>` 或官方 image。**已納入升級分支第一階段。**
+- root `lint`／`typecheck`／`test` script 內部呼叫裸 `pnpm`，PATH 無 pnpm 的環境（例如只有 corepack）會失敗，需 `corepack pnpm -r <script>` 繞過。CI 與 Dockerfile 有 pnpm 於 PATH 不受影響。
+- 建議：root script 改為 `pnpm -r` 的等價寫法但不依賴 PATH（例如 `corepack pnpm -r`），或在 README 註明。
 
 ### 1.5 §3.2 `/livez`／`/readyz` 未拆（低優先、未記錄延後）
 
@@ -94,11 +99,10 @@
 - web 測試仍跑在 node 環境，無 jsdom／`@vue/test-utils` 元件測試。
 - 無 e2e（WS 全鏈路）、無 testcontainers 跨 process 整合測試、無負載腳本（屬 roadmap 011）。
 
-### 2.3 §6.2 AsyncAPI 漂移測試的覆蓋缺口
+### 2.3 §6.2 AsyncAPI 漂移測試（已於升級分支補齊，剩一項未加嚴）
 
-- `TelemetryPoint`、`SystemConnected`、`Pong`、`MachineSubscribed`、`SystemMetrics` 外層仍為純 TS 型別，漂移測試對這些 message 只驗 `type` const、結構未比對。
-- `normalize()` 略過 `format`、`additionalProperties`，`jobId` 的 uuid 格式差異抓不到。
-- 建議：Zod 4 升級後改用內建 `z.toJSONSchema`，並將上述五個型別 Zod 化納入比對。**已納入升級分支第三階段。**
+- 12 則 message 與 3 個 component schema 現已全部結構比對，`format`／`additionalProperties` 不再略過。
+- **未加嚴（刻意）**：WS 訊息的 `jobId`、`clientId` 仍為 `z.string()`，`asyncapi.yaml` 亦未標 uuid format，兩邊一致、漂移測試不會抓。加嚴需同步改大量以 `"job-1"` 為 fixture 的測試，暫不做。
 
 ### 2.4 §6.5 SDD 流程未精簡
 
@@ -126,8 +130,8 @@
 | # | 問題 | 位置 | 建議 |
 | --- | --- | --- | --- |
 | a | `REDIS_PASSWORD` 分散設定：compose 的 redis 從根 `.env` 插值讀取 `--requirepass`，api／worker 容器各自從 `env_file` 讀取，兩邊不一致時 NOAUTH，目前只靠註解提醒（`docker-compose.yml:25`） | | compose `environment` 統一插值，或文件明列同步步驟 |
-| b | `packages/shared/tsconfig.json` include `src/**/*.ts`，build 會把 `*.test.ts` 編進 dist | | `exclude: ["**/*.test.ts"]` |
-| c | Mongo 仍無 auth（原修法只要求綁 `127.0.0.1`，已達成） | | 記為已知 |
+| b | Mongo 仍無 auth（原修法只要求綁 `127.0.0.1`，已達成） | | 記為已知 |
+| c | pnpm 10 的 `pnpm deploy` 對非 injected workspace 報 `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`，api／worker Dockerfile 改用 `deploy --legacy`；未改 `injectWorkspacePackages`（會讓 `development` export condition 直讀 src 的開發流程失效）。pnpm 後續版本可能移除 legacy 模式 | `apps/{api,worker}/Dockerfile` | 追蹤 pnpm 版本；若 legacy 被移除，改為 `pnpm fetch` + 手動裁剪或 `injectWorkspacePackages` 並重新設計 dev 解析 |
 
 ### 3.3 web
 
@@ -146,11 +150,11 @@
 
 | 項目 | 建議 | 理由 | 狀態 |
 | --- | --- | --- | --- |
-| NestJS 10 | **升 11**，穩定後評估 12 | `@nestjs/core` moderate advisory 修補只在 11.1.18 以上，Nest 10 線無修補；`file-type` 2 項 moderate 亦經 `@nestjs/bullmq@10` 帶入；Express 5 路由語法變更但本專案只有兩個端點 | 升級分支第一階段 |
-| pnpm 9.0.0 | 升 10.x 並附 hash | §1.4 | 升級分支第一階段 |
-| Vite 5 / vitest 2 / plugin-vue 5 / vue-tsc 2 | 升（一起綁） | vitest 2.1.9 有 critical（<3.2.6）、vite 5.4.21 有 dev server fs.deny CVE；`vite.config` 極簡風險低；Vite 7 需 Node 20.19+ | 升級分支第二階段 |
-| Vue 3.5 / Pinia 2 | Pinia 順手升；Vue 更新 patch、等 3.6 穩定 | gatekeeper 與框架無關 | 升級分支第二階段 |
-| Zod 3.25 | 升 4，漂移測試改用內建 `z.toJSONSchema`，並補 §2.3 的五個型別 | 可拿掉 `zod-to-json-schema`；可餵 Gemini `responseSchema` | 升級分支第三階段 |
+| NestJS 10 | 升 11，穩定後評估 12 | `@nestjs/core` moderate advisory 修補只在 11.1.18 以上；Express 5 路由語法變更但本專案只有兩個端點 | **已完成**：11.2.6、`@nestjs/bullmq` 12.0.0、express 5.2.1；`multer`／`qs`／`body-parser` override 已可移除 |
+| pnpm 9.0.0 | 升 10.x 並附 hash | Node 24 上 9.0.0 install 崩潰 | **已完成**：10.34.5；`onlyBuiltDependencies`（esbuild、msgpackr-extract）明列；Dockerfile 改 `deploy --legacy`（見 §3.2 c） |
+| Vite 5 / vitest 2 / plugin-vue 5 / vue-tsc 2 | 升（一起綁） | vitest 2.1.9 critical、vite 5.4.21 fs.deny CVE | **已完成**：Vite 7.3.6（不升 8）、vitest 4.1.11（不升 5）、plugin-vue 6.0.9、vue-tsc 3.3.11；`engines.node` 收緊 `>=22.12`；vitest 4 預設不排除 dist，各套件 `vitest.config.ts` 補 `exclude` |
+| Vue 3.5 / Pinia 2 | Pinia 順手升；Vue 更新 patch、等 3.6 穩定 | gatekeeper 與框架無關 | **已完成**：Vue `~3.5.43`、Pinia 3.0.4、eslint-plugin-vue 10.11.1（eslint 本體維持 9） |
+| Zod 3.25 | 升 4，漂移測試改用內建 `z.toJSONSchema` | 拿掉 `zod-to-json-schema` | **已完成**：4.6.5；`z.uuid()`／`z.iso.datetime()` 加嚴（生產端 `randomUUID()`／`toISOString()` 皆通過）；Gemini `responseJsonSchema` 逐鍵相同、prompt sha256 不變故 `PROMPT_VERSION` 未升。**接受的代價**：web bundle 190 → 224.77 kB（gzip 62.9 → 75.8 kB，+20%），來自 Zod 4 classic 本體（方法鏈 API tree-shake 差、預設載 en locale）；改 `zod/mini` 可降至約 8 kB gzip 但需改寫 contracts 撰寫 API 與 locale 設定，屬跨 feature 決策，列為後續選項。**外部可見變化**：400 回應 `issues[].code` 由 `invalid_string` 變 `invalid_format`（repo 內無消費者） |
 | `@google/generative-ai` | 換 `@google/genai` | | **已完成** |
 | BullMQ 5／ioredis 5／mongodb 6 | 維持 | 皆為各自 major 最新線；bullmq 6 與 ioredis 6 剛發布、breaking 未查證 | 不排程 |
 | Tailwind 3.4 | **暫緩** | v4 CSS-first 對 token 化更貼合，但 `@tailwind`→`@import`、`theme()`、尺度更名需先處理；視覺回歸風險高、收益低 | 不排程 |
@@ -209,8 +213,8 @@ api 同時是 Gateway、mock telemetry producer、BullMQ producer、Pub/Sub 轉�
 
 ## 7. 剩餘項目建議處理順序
 
-1. **升級分支**（進行中）：pnpm 10 + NestJS 11（§4）→ Vite／vitest／Vue／Pinia → Zod 4 + 漂移測試補五個型別（§2.3）。
-2. **小修一批**（可併入升級分支收尾或獨立 `fix:`）：§1.2 healthcheck／seed env、§1.3 TTL 與 `persist` 指標、§3.1 b／e、§3.2 b、§3.3 a／b／c。
+1. ~~升級分支~~ **已完成並併入 develop**（§4）。後續選項：`zod/mini`（bundle）、追蹤 pnpm `deploy --legacy` 存續（§3.2 c）。
+2. **小修一批**（獨立 `fix:`）：§1.2 healthcheck／seed env、§1.3 TTL 與 `persist` 指標、§1.4 root script、§3.1 b／e、§3.3 a／b／c。
 3. **文件記錄延後項**：§1.1 連線數上限、§1.5 `/livez`／`/readyz`、§2.1 `protocolVersion` 寫進 ADR-002 §6。
 4. **010–012 roadmap** 依 SDD 流程另開 feature。
 5. **§6.5 SDD 精簡**與 feature 收尾清單，於下一個 feature 起草時一併處理。

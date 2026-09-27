@@ -119,6 +119,11 @@ describe("classifyWsMessage — WS 分流分類（憲章 IV）", () => {
     expect(classifyWsMessage({ ...METRICS, worker: { snapshotAt: 1 } }).kind).toBe("ignore");
     expect(classifyWsMessage({ ...METRICS, queue: { waiting: 0 } }).kind).toBe("ignore");
     expect(classifyWsMessage({ ...METRICS, windowMs: 0 }).kind).toBe("ignore");
+    // 規則來自契約 SystemMetricsSchema：計數不得為負、須為整數；collectedAt 須為 RFC 3339
+    expect(classifyWsMessage({ ...METRICS, wsConnections: -1 }).kind).toBe("ignore");
+    expect(classifyWsMessage({ ...METRICS, queue: { waiting: 0, active: -1, failed: 0 } }).kind).toBe("ignore");
+    expect(classifyWsMessage({ ...METRICS, windowMs: 1.5 }).kind).toBe("ignore");
+    expect(classifyWsMessage({ ...METRICS, collectedAt: "yesterday" }).kind).toBe("ignore");
   });
 
   it("未知 type 與非物件 → ignore", () => {

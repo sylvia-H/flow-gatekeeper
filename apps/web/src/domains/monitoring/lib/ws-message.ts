@@ -2,7 +2,7 @@ import {
   AiStreamEventSchema,
   isTelemetryPoint,
   JobStatusSchema,
-  WorkerMetricsSchema,
+  SystemMetricsSchema,
   type AiDone,
   type AiError,
   type AiToken,
@@ -32,34 +32,6 @@ export type RoutedWsMessage =
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-/**
- * `system/metrics` 的外層欄位手寫檢查；`worker` 那一半跨 process 經 Redis 傳遞、結構較深，
- * 直接沿用契約的 `WorkerMetricsSchema`（低頻，60 秒一則，用 zod 無效能疑慮）。
- */
-function parseSystemMetrics(msg: Record<string, unknown>): SystemMetrics | null {
-  const { windowMs, collectedAt, queue, wsConnections } = msg;
-  if (!isCount(windowMs) || windowMs === 0) return null;
-  if (typeof collectedAt !== "string") return null;
-  if (!isRecord(queue) || !isCount(queue.waiting) || !isCount(queue.active) || !isCount(queue.failed)) {
-    return null;
-  }
-  if (!isCount(wsConnections)) return null;
-  const worker = WorkerMetricsSchema.nullable().safeParse(msg.worker ?? null);
-  if (!worker.success) return null;
-  return {
-    type: "system/metrics",
-    windowMs,
-    collectedAt,
-    queue: { waiting: queue.waiting, active: queue.active, failed: queue.failed },
-    wsConnections,
-    worker: worker.data,
-  };
 }
 
 /**
@@ -99,10 +71,12 @@ export function classifyWsMessage(parsed: unknown): RoutedWsMessage {
     // 批次提交路徑——那條路徑是為每 50ms 的高頻遙測而設（憲章 IV）；把它塞進去會延遲到下一批
     // 遙測才顯示，並**污染背壓比值的量測**（received/rendered 是賣點一的核心證據）。
     // 契約邊界說明見 contracts/metrics-summary.md §3。
+    // 驗證直接用契約的 `SystemMetricsSchema`（含巢狀 `WorkerMetricsSchema`；`windowMs ≥ 1`、
+    // 各計數 ≥ 0 的規則也在契約內），不在 web 另寫平行檢查。低頻（60 秒一則），用 zod 無效能疑慮。
     case "system/metrics": {
-      const metrics = parseSystemMetrics(parsed);
-      return metrics
-        ? { kind: "metrics", metrics }
+      const r = SystemMetricsSchema.safeParse(parsed);
+      return r.success
+        ? { kind: "metrics", metrics: r.data }
         : { kind: "ignore", reason: "invalid system/metrics" };
     }
     case "system/connected":

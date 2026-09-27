@@ -56,11 +56,13 @@ RUN pnpm --filter @flow-gatekeeper/contracts build \
 
 # pnpm 官方 workspace 裁剪：輸出含 production 依賴與 workspace 套件實體的獨立目錄，runtime 不需 pnpm。
 # workspace 套件的 "files": ["dist"] 使 contracts/shared 只帶 dist（不帶 src、*.test.ts）。
-# deploy 在 pnpm 9 不讀 lockfile、會重新解析版本，需要 registry metadata——用 --offline 會因
+# pnpm 10 的 deploy 預設只接受 inject-workspace-packages=true 的 workspace（否則 ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE）；
+# 本專案不 inject（dev 期 typecheck／vitest 經 development condition 直接讀 workspace src），故加 --legacy 沿用舊版 deploy。
+# legacy deploy 不讀 lockfile、會重新解析版本，需要 registry metadata——用 --offline 會因
 # metadata 快取不在場而失敗（ERR_PNPM_NO_OFFLINE_META），故改 --prefer-offline：tarball 仍從
 # store（cache mount）取，只有 metadata 走網路。
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
-    pnpm --filter @flow-gatekeeper/api deploy --prod --prefer-offline --store-dir /root/.local/share/pnpm/store /out
+    pnpm --filter @flow-gatekeeper/api deploy --legacy --prod --prefer-offline --store-dir /root/.local/share/pnpm/store /out
 
 # ---- runtime：只帶裁剪產物，入口為建置產物（dev 工具不進 prod image）----
 FROM node:22.23.3-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
