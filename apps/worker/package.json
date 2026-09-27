@@ -12,7 +12,8 @@
     "smoke:gemini": "tsx --conditions=development src/ai/smoke-gemini.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@flow-gatekeeper/contracts": "workspace:*",

@@ -110,7 +110,11 @@ async function tryCreateIndex(
   }
 }
 
-/** 找出鍵恰為 `{ jobId: 1 }` 的索引（Mongo 不允許同鍵兩個索引，最多一個）。 */
+/**
+ * 找出鍵恰為 `{ jobId: 1 }` 的索引。同名索引（預設 `jobId_1`）選項不同時 Mongo 回 85／86；但 2026-09-27
+ * 整合測試實測 Mongo 7：**不同名**的非 unique `{ jobId: 1 }` 與 unique 索引可以並存（此時重複資料撞的是
+ * 11000、不是 85），所以這裡取第一個命中者，並以 `unique` 旗標判斷是否已達目的。
+ */
 async function findJobIdIndex(coll: Collection): Promise<{ name: string; unique: boolean } | undefined> {
   const ix = (await coll.indexes()).find((i) => isJobIdOnlyKey(i.key) && typeof i.name === "string");
   return ix?.name ? { name: ix.name, unique: ix.unique === true } : undefined;
