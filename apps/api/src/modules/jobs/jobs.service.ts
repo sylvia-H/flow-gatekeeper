@@ -1,4 +1,10 @@
-import { ConflictException, Inject, Injectable, ServiceUnavailableException } from "@nestjs/common";
+import {
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Queue } from "bullmq";
 import { randomUUID } from "node:crypto";
@@ -8,6 +14,7 @@ import type {
   CreateDiagnosisResponse,
   DiagnosisJobPayload,
 } from "@flow-gatekeeper/contracts";
+import { MACHINE_IDS } from "../telemetry/mock-telemetry.service.js";
 import { AiStreamRelayService } from "../websocket/ai-stream-relay.service.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 
@@ -19,6 +26,13 @@ export const ENQUEUE_TIMEOUT_MS = 5_000;
 
 /** 綁定查詢／建立／清理——JobsService 只需要 relay 的這三個能力（測試可注入 fake）。 */
 export type JobBindingStore = Pick<AiStreamRelayService, "bindJobToClient" | "getBinding" | "deleteBinding">;
+
+/**
+ * api 手上的機台名冊（與 Gateway 過濾訂閱共用 `MACHINE_IDS` 單一來源）。
+ * 不在名冊的 machineId 不入列：否則每個亂數 id 必然 cache miss、真的打一次 LLM，且沒有任何
+ * telemetry／errorlog／維修紀錄可供診斷。
+ */
+const KNOWN_MACHINE_IDS: ReadonlySet<string> = new Set(MACHINE_IDS);
 
 class EnqueueTimeoutError extends Error {
   constructor() {
@@ -37,6 +51,8 @@ class EnqueueTimeoutError extends Error {
  * - 同 jobId、不同 machineId → 409（同一把 key 不能代表兩個請求）。
  * - 綁定已不在、但 job 仍留在 Redis（已完成／失敗、或綁定被回收）→ 409：不會重跑，
  *   也不會再有任何事件，靜默回 200 只會讓前端等到 watchdog 逾時。
+ *
+ * machineId 不在機台名冊 → 404，在任何綁定與入列之前擋下（見 `KNOWN_MACHINE_IDS`）。
  */
 @Injectable()
 export class JobsService {
@@ -56,6 +72,15 @@ export class JobsService {
   async createDiagnosis(body: CreateDiagnosisBody): Promise<CreateDiagnosisResponse> {
     const jobId = body.jobId ?? randomUUID();
     const { machineId } = body;
+
+    // 名冊檢查先於冪等檢查：未知機台不可能有既有綁定，也不該因重送而得到 409 這類誤導的回應。
+    if (!KNOWN_MACHINE_IDS.has(machineId)) {
+      throw new NotFoundException({
+        statusCode: 404,
+        error: "Not Found",
+        message: "machineId 不在機台名冊中",
+      });
+    }
 
     const existing = this.relay.getBinding(jobId);
     if (existing) {

@@ -31,7 +31,7 @@ function isJsonContentType(contentType: string | undefined): boolean {
  * idempotency key）為 uuid。這些欄位會一路進 BullMQ payload、Mongo 查詢與 LLM prompt，
  * 入口擋下型別或長度不對的輸入，下游就不必各自防禦 NoSQL 運算子注入與 prompt 灌水。
  * - Content-Type 不是 JSON → 415；body 不符契約 → 400（只回 issue 路徑與代碼，不回顯原始輸入）；
- * - 佇列不可用 → 503；jobId 重複但對不上 → 409（見 JobsService）。
+ * - machineId 不在機台名冊 → 404；佇列不可用 → 503；jobId 重複但對不上 → 409（見 JobsService）。
  */
 @Controller("diagnoses")
 export class JobsController {

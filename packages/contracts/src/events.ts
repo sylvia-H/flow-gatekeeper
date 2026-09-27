@@ -129,6 +129,20 @@ export const SystemMetricsSchema = /* @__PURE__ */ z.object({
   wsConnections: z.number().int().nonnegative(),
   /** worker 快照缺席、過期或畸形時為 `null`（降級輸出，api 仍廣播自己那一半）。 */
   worker: WorkerMetricsSchema.nullable(),
+  /**
+   * api 歷史寫入路徑（telemetry／errorlogs 落 Mongo）的有損預算，皆為 api 行程啟動以來的**累計值**
+   * （counter，不隨週期歸零；增量由讀者自行相減）。
+   * - `dropped`：遺失的紀錄數——buffer 滿丟最舊的遙測點、寫入失敗不重試的遙測點、被丟棄的 errorlog 合計。
+   * - `failed`：`insertMany` 失敗的批次數（telemetry 與 errorlogs 合計）。
+   *
+   * optional：舊版 api 不帶此欄位，讀者 MUST 容忍缺席。
+   */
+  persist: z
+    .object({
+      dropped: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+    })
+    .optional(),
 });
 
 export type SystemConnected = z.infer<typeof SystemConnectedSchema>;

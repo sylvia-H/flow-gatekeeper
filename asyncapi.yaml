@@ -310,6 +310,19 @@ components:
               - $ref: "#/components/schemas/WorkerMetrics"
               - type: "null"
             description: Null when the worker snapshot is absent, expired, or malformed (degraded output).
+          persist:
+            type: object
+            required: [dropped, failed]
+            properties:
+              dropped:
+                type: integer
+                minimum: 0
+                description: Records lost on the API history write path (telemetry points dropped on buffer overflow or failed writes, plus discarded errorlogs).
+              failed:
+                type: integer
+                minimum: 0
+                description: Failed insertMany batches (telemetry and errorlogs combined).
+            description: Optional. Cumulative counters since API process start (not reset per window). Older API versions omit this field; clients MUST tolerate its absence.
 
   schemas:
     WorkerMetrics:

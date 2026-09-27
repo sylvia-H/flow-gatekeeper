@@ -49,7 +49,7 @@ type TelemetryDoc = {
   state: MachineState;
 };
 
-/** 寫入路徑計數器快照，供之後接進指標（此處只暴露、不自行輸出）。 */
+/** 寫入路徑計數器快照；經 `toPersistStats` 摘要後接進 `system/metrics.persist`（此處只暴露、不自行輸出）。 */
 export type HistoryWriteStats = {
   /** 目前 buffer 內待寫的 telemetry 點數。 */
   bufferedPoints: number;
@@ -64,6 +64,17 @@ export type HistoryWriteStats = {
   /** errorlog 被丟棄的筆數（累計）：待寫佇列滿，或遇到非暫時性錯誤（毒批次）不再重試。 */
   droppedErrorLogs: number;
 };
+
+/**
+ * `system/metrics.persist` 的摘要：`dropped`＝遺失的紀錄數（buffer 滿丟棄的遙測點＋寫入失敗不重試的
+ * 遙測點＋被丟棄的 errorlog），`failed`＝`insertMany` 失敗批數。兩者皆為累計值。
+ */
+export function toPersistStats(stats: HistoryWriteStats): { dropped: number; failed: number } {
+  return {
+    dropped: stats.droppedPoints + stats.failedPoints + stats.droppedErrorLogs,
+    failed: stats.persistFailures,
+  };
+}
 
 function toTelemetryDoc(point: TelemetryPoint): TelemetryDoc {
   return {

@@ -1,23 +1,23 @@
 import "reflect-metadata";
 import type { Server as HttpServer } from "node:http";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { config as loadEnv } from "dotenv";
 import { Logger } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module.js";
+import { loadApiDotenv } from "./lib/env-file.js";
 import { getAppLogger } from "./logging/app-logger.js";
 import { PinoLoggerService } from "./logging/pino-logger.service.js";
 import { fatalExit, installFatalHandlers } from "./logging/fatal.js";
-import { HistoryService } from "./modules/history/history.service.js";
+import { HistoryService, toPersistStats } from "./modules/history/history.service.js";
 import { MonitoringGateway } from "./modules/websocket/monitoring.gateway.js";
 import { AppConfigService } from "./modules/config/config.service.js";
 import { JobsService } from "./modules/jobs/jobs.service.js";
 import { MetricsService } from "./modules/metrics/metrics.service.js";
 
 // 明確載入本套件的 .env（apps/api/.env），不依賴 cwd——避免從別處啟動時 WS_AUTH_SECRET
-// 等設定靜默落空（例如授權被意外停用）。
-loadEnv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../.env") });
+// 等設定靜默落空（例如授權被意外停用）。healthcheck／seed 共用同一個載入函式。
+loadApiDotenv();
 
 /**
  * apps/api entry。Feature 002 起實際啟動 NestJS HTTP server，並把同一個 HTTP server
@@ -51,9 +51,11 @@ export async function bootstrap(): Promise<void> {
   // 與 `MonitoringGateway` 是 AppModule 層的 provider，對 MetricsModule 不可見，故沿用本檔
   // 既有的組合根接線慣例（同上一行的 gateway.attach）。純觀測接線，不改任何既有控制流。
   const jobs = app.get(JobsService);
+  const history = app.get(HistoryService);
   app.get(MetricsService).bind({
     queueCounts: () => jobs.getQueueCounts(),
     wsConnections: () => gateway.connectionCount,
+    persistStats: () => toPersistStats(history.getWriteStats()),
     broadcast: (payload) => gateway.broadcastMetrics(payload),
   });
 

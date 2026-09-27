@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseApiEnv } from "./env-schema.js";
+import {
+  MAX_TIMER_DELAY_MS,
+  MIN_MOCK_TELEMETRY_INTERVAL_MS,
+  MIN_WS_HEARTBEAT_MS,
+  parseApiEnv,
+} from "./env-schema.js";
 
 describe("parseApiEnv", () => {
   it("完全未設定 → 全部套用預設值", () => {
@@ -69,5 +74,26 @@ describe("parseApiEnv", () => {
     }
     expect(message).toContain("WS_HEARTBEAT_MS");
     expect(message).toContain("API_PORT");
+  });
+
+  it.each([
+    ["WS_HEARTBEAT_MS", "1"],
+    ["WS_HEARTBEAT_MS", "999"],
+    ["WS_HEARTBEAT_MS", String(2 ** 31)],
+    ["WS_HEARTBEAT_MS", "15000.5"],
+    ["MOCK_TELEMETRY_INTERVAL_MS", "1"],
+    ["MOCK_TELEMETRY_INTERVAL_MS", "4"],
+    ["MOCK_TELEMETRY_INTERVAL_MS", String(2 ** 31)],
+  ])("%s=%s（低於下限、超過計時器上限或非整數）被拒", (key, value) => {
+    expect(() => parseApiEnv({ [key]: value })).toThrow(new RegExp(key));
+  });
+
+  it("計時器間隔的上下限邊界值照用", () => {
+    expect(parseApiEnv({ WS_HEARTBEAT_MS: String(MIN_WS_HEARTBEAT_MS) }).WS_HEARTBEAT_MS).toBe(1_000);
+    expect(
+      parseApiEnv({ MOCK_TELEMETRY_INTERVAL_MS: String(MIN_MOCK_TELEMETRY_INTERVAL_MS) })
+        .MOCK_TELEMETRY_INTERVAL_MS,
+    ).toBe(5);
+    expect(parseApiEnv({ WS_HEARTBEAT_MS: String(MAX_TIMER_DELAY_MS) }).WS_HEARTBEAT_MS).toBe(MAX_TIMER_DELAY_MS);
   });
 });

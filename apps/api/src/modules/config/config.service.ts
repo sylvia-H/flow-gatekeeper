@@ -1,6 +1,8 @@
 import { Injectable } from "@nestjs/common";
 import type { RedisOptions } from "ioredis";
 import {
+  MAX_METRICS_INTERVAL_MS,
+  MIN_METRICS_INTERVAL_MS,
   resolveLogLevel,
   resolveMetricsInterval,
   resolveMetricsLogLevel,
@@ -61,7 +63,7 @@ export class AppConfigService {
   // ——裸 `Number()` 會把 `HEALTH_PROBE_TIMEOUT_MS=`（空字串，`??` 不生效）解成 0、非數值解成
   // NaN，兩者都讓逾時 promise 立刻 reject → 依賴恆判 down → /healthz 恆 503（見 lib 的說明）。
   readonly healthProbeTimeoutMs = resolveHealthProbeTimeout(process.env).timeoutMs;
-  // 009 US3：指標結算間隔（預設 60000ms、下限 5000ms，低於下限一律回退預設而非 clamp）。
+  // 009 US3：指標結算間隔（預設 60000ms、須為 5000–2^31-1 的整數，不合法一律回退預設而非 clamp）。
   readonly metricsIntervalMs = resolveMetricsInterval(process.env).intervalMs;
   // 指標摘要 child logger 的等級——**獨立於 LOG_LEVEL**，使 LOG_LEVEL=warn 時摘要仍輸出（SC-005）。
   readonly metricsLogLevel = resolveMetricsLogLevel(process.env);
@@ -76,7 +78,7 @@ export class AppConfigService {
         .child({ context: AppConfigService.name })
         .warn(
           { invalidMetricsInterval: interval.rawValue, fallbackIntervalMs: interval.intervalMs },
-          `METRICS_INTERVAL_MS="${interval.rawValue ?? ""}" 不合法或低於下限，已回退至 ${interval.intervalMs}ms`,
+          `METRICS_INTERVAL_MS="${interval.rawValue ?? ""}" 不合法（須為 ${MIN_METRICS_INTERVAL_MS}–${MAX_METRICS_INTERVAL_MS} 的整數），已回退至 ${interval.intervalMs}ms`,
         );
     }
 
