@@ -650,6 +650,8 @@ packages:
 }
 ```
 
+> **現況註記**：已升 `pnpm@10.34.5`（升級分支 2026-09-27；root `package.json` 以 `packageManager` 含 sha512 釘版），上方 reference 保留起草時原貌。
+
 ### 6.8 `asyncapi.yaml`
 
 > **現況註記**：下面是 001 起草時的 reference。現行 `asyncapi.yaml` 為 `info.version: 1.1.0`、共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`），`ai/*` 帶 `attempt`、`machine/subscribe` 帶長度上限；並由 `packages/contracts/src/asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
