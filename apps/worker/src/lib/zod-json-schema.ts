@@ -63,9 +63,8 @@ function toGeminiNode(node: unknown, path: string): unknown {
         props[name] = toGeminiNode(sub, `${path}.${key}.${name}`);
       }
       out[key] = props;
-    } else if (key === "enum" || key === "required" || key === "propertyOrdering") {
-      out[key] = value;
     } else {
+      // 其餘鍵（含 enum／required 等純值陣列）走通用遞迴：原始值原樣返回、陣列逐項複製，輸出與直通相同
       out[key] = toGeminiNode(value, `${path}.${key}`);
     }
   }
