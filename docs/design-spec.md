@@ -1,7 +1,7 @@
 ﻿# flow-gatekeeper Claude Design 規格 003
 
 > ⚠️ **已移轉，本檔為歷史起點，不再更新。** canonical 規格在
-> [`apps/web/design/design-spec.md`](../apps/web/design/design-spec.md)（含 v0.4 起的 token 回寫與 `refs/`）。
+> [`apps/web/design/design-spec.md`](../apps/web/design/design-spec.md)（含 v0.4 起的 token 回寫與 `refs/`；**現況為 v0.5**——2026-09-27 審查修正：`colors.base` 改名 `canvas`、`fg-subtle` 提亮、補 `fontSize` token、背壓計量含丟棄筆數等）。
 > 前端一切以該檔為準；本檔僅保留 v0.3 交接原貌供追溯。
 
 > 這份文件是 Claude Design 與 Spec Kit / Claude Code 之間的交接契約。  

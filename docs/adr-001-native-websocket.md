@@ -60,7 +60,7 @@ flow-gatekeeper 是一個即時流程監控與 AI 診斷面板，有三個與本
    worker 與 Gateway 是不同 process，token 走 Redis Pub/Sub relay。這原本就是 Socket.IO Redis adapter 想解決的問題；既然這塊已自管，再引入 Socket.IO 的多實例機制只會疊床架屋，也會吃掉一個可展示的技能。
 
 4. **與專案整體論述一致。**
-   rAF batching、Redis 削峰、BullMQ limiter、cache-aside、dedupe lock——整個專案的主軸是「親手做了即時/分散式系統裡較難的部分」。即時通道交給 Socket.IO 會在這條敘事線中間破一個洞。
+   rAF batching、Redis 削峰、BullMQ 佇列與 LLM 限流（2026-09 起由 BullMQ limiter 改為取鎖後的 Redis 固定窗）、cache-aside、dedupe lock——整個專案的主軸是「親手做了即時/分散式系統裡較難的部分」。即時通道交給 Socket.IO 會在這條敘事線中間破一個洞。
 
 ---
 
@@ -75,6 +75,7 @@ flow-gatekeeper 是一個即時流程監控與 AI 診斷面板，有三個與本
 | Transport fallback | 不支援；目標環境（現代瀏覽器 + 直連）不需要 |
 | 多實例水平擴展 | 目前單實例；要擴展時用既有的 Redis Pub/Sub 自己廣播 |
 | ack callback | 不需要；telemetry 是單向高頻推送，診斷結果走 job 狀態 |
+| 輸入驗證與連線防護（Socket.IO 亦不代勞，但自管協定更需要明寫） | 2026-09 審查修復補上：客戶端控制訊息以 `ClientControlMessageSchema` `safeParse`、`ws` 的 `maxPayload` 16 KiB、每條連線掛 `error` listener、`machineIds` 與名冊取交集、可選 Origin 白名單 `WS_ALLOWED_ORIGINS`——畸形訊息只會被拒絕，不會讓 Gateway 崩潰 |
 
 **風險自覺**：原生 ws 的價值是有條件的——只有在這些手刻部分**做得正確**（涵蓋重連、心跳逾時、清理、背壓上限）時才成立。做得草率反而會傳達「重造輪子又造壞」的反訊號。因此這些細節在 `useHighFrequencyWs` 與 Gateway 都有明確處理，並列入 feature 驗收。
 
@@ -110,3 +111,5 @@ flow-gatekeeper 是一個即時流程監控與 AI 診斷面板，有三個與本
 ## 8. 可量化的佐證（建議在 demo 呈現）
 
 前端 store 維護 `receivedMessages` 與 `renderedBatches` 兩個計數：把 mock frequency 拉到 10ms，demo 時秀出「收進 N 筆訊息、只觸發 M 次渲染批次」（例如 41:1）。把「背壓」從抽象說法變成一個畫面上看得見的比值，是這個決策最直接的證據。
+
+> **比值定義（2026-09 更正）**：`receivedMessages` 以**遙測資料點**計（一則 WS `machine/data` 訊息是一個裸陣列、含多個點），且**含**溢位合併與格式不符而未渲染的丟棄筆數；比值由 `apps/web/src/shared/lib/backpressure.ts` 的 `backpressureRatio` 單一實作。上面的 41:1 只是示意——實際比值隨節拍、機台數與瀏覽器幀率而異，不宣稱固定值；可重跑的量測自動化列為 roadmap 011（效能證據自動化）。規格見 `apps/web/design/design-spec.md` v0.5 §7.2.1。
