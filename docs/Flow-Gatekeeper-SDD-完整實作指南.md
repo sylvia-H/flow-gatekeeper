@@ -973,6 +973,8 @@ export type DiagnosisResult = z.infer<typeof DiagnosisResultSchema>;
 > worker 拿到 LLM 回傳後，必須用 `DiagnosisResultSchema.parse()` 驗證再寫庫/回傳；parse 失敗就走 `ai/error`，不要把未驗證的物件當結果（見 8.10）。同樣模式可套用到 telemetry/event payload。
 >
 > **現況註記（2026-09-27）**：contracts 已擴充為 Zod 化的完整契約——`ws-client.ts` 的 `ClientControlMessageSchema`（`machineIds` ≤ 50、每個 ≤ 64、token ≤ 512）、`http.ts` 的 `CreateDiagnosisBodySchema`／`CreateDiagnosisResponseSchema`、`ai-stream.ts` 的 `AiStreamEventSchema`（含 `attempt`）、`job-status.ts` 的 `JobStatusSchema`、`metrics.ts` 的 `WorkerMetricsSchema`，以及 `machine/data` 裸陣列的 `isTelemetryPoint` 守衛。`package.json` 的 `exports` 另加 `development` condition 指向 `src`（見 §2.2）。
+>
+> **現況註記（2026-09 技術棧升級）**：Zod 已由 3 升至 **4**（上方 `package.json` 的 `"zod": "^3.24.0"` 為起草時的 reference，現為 `^4.6.5`），`zod-to-json-schema` 已移除、改用內建 `z.toJSONSchema()`。伺服器→客戶端控制訊息（`SystemConnected`／`MachineSubscribed`／`Pong`／`SystemUnauthorized`／`SystemMetrics`）與 `TelemetryPoint` 也改以 Zod 定義、型別由 `z.infer` 推導，`asyncapi-drift.test.ts` 因此能逐一比對全部 12 則 message 的結構（`format` 不再略過；`snapshotAt`／`collectedAt`／`timestamp` 以 `z.iso.datetime()` 對齊 asyncapi 的 `date-time`）。`machine/data` 的 runtime 入口仍是手寫 `isTelemetryPoint`（高頻路徑不逐筆 `safeParse`），`TelemetryPointSchema` 只供漂移測試與低頻用途。worker 餵 Gemini `responseJsonSchema` 的 schema 亦改由 `z.toJSONSchema()` 產生（見 `apps/worker/src/lib/zod-json-schema.ts`）。
 
 `packages/contracts/src/index.ts`：
 

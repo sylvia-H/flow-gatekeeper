@@ -253,8 +253,8 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 ### 📐 7. 契約優先的全棧型別安全
 
 - `packages/contracts` 定義即時通道的訊息契約——`asyncapi.yaml`（`info.version` 1.1.0）共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`）——以及 `DiagnosisResultSchema`、`CreateDiagnosisBodySchema`（`POST /diagnoses`）、佇列常數與 `DiagnosisJobPayload`（不含 prompt 版本，改由 worker 自行管理）。
-- 需要 runtime 驗證的方向一律 Zod：客戶端控制訊息 `ClientControlMessageSchema`、`AiStreamEventSchema`（含 `attempt`）、`JobStatusSchema`、`WorkerMetricsSchema`；`machine/data` payload 為裸陣列、由 `isTelemetryPoint` 守衛逐點驗證。
-- web／api／worker 三端**共用同一份**契約，新增 event/payload 一律**先改契約再改各端**；`asyncapi.yaml` 以 Spectral 做契約 lint，另有 asyncapi↔Zod **漂移測試**（`packages/contracts/src/asyncapi-drift.test.ts`）防止兩份來源分岔。
+- 需要 runtime 驗證的方向一律 Zod：客戶端控制訊息 `ClientControlMessageSchema`、`AiStreamEventSchema`（含 `attempt`）、`JobStatusSchema`、`WorkerMetricsSchema`；`machine/data` payload 為裸陣列、由 `isTelemetryPoint` 守衛逐點驗證（高頻路徑不逐筆 `safeParse`）。伺服器→客戶端的控制訊息（`SystemConnectedSchema`、`MachineSubscribedSchema`、`PongSchema`、`SystemUnauthorizedSchema`、`SystemMetricsSchema`）與 `TelemetryPointSchema` 也以 Zod 定義、型別由 `z.infer` 推導，供漂移測試做結構比對。
+- web／api／worker 三端**共用同一份**契約，新增 event/payload 一律**先改契約再改各端**；`asyncapi.yaml` 以 Spectral 做契約 lint，另有 asyncapi↔Zod **漂移測試**（`packages/contracts/src/asyncapi-drift.test.ts`，以 Zod 4 內建 `z.toJSONSchema()` 轉出後逐一比對全部 12 則 message 的結構，含 `format`）防止兩份來源分岔。
 - 全棧 strict TypeScript（`noUncheckedIndexedAccess`），避免 `any` 擴散。
 
 ### 🤖 8. 每機台狀態機的 Copilot Drawer
@@ -363,7 +363,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | `system/unauthorized` | api → web | 訂閱授權失敗（`WS_AUTH_SECRET` 不符） |
 | `system/metrics` | api → web | **009**：週期廣播的營運指標摘要（queue 深度、WS 連線數、worker 端 LLM latency／cache 命中率），廣播給所有已連線 client、與訂閱狀態無關；供 dev-only Metrics Panel 消費 |
 
-> 伺服器→客戶端的純分派控制訊息（`pong`／`system/*`）以 TS 型別定義；需 runtime 驗證的 payload 用 Zod——包括來自任意連線者的客戶端控制訊息（`ClientControlMessageSchema`：`ping`、`machine/subscribe`）、`DiagnosisResult`、`AiStreamEvent`、`JobStatus`、`WorkerMetrics`——兩者仍同以 `packages/contracts` 為單一來源（憲章 Principle III）。契約全貌另見 [`asyncapi.yaml`](asyncapi.yaml)（`info.version` 1.1.0，共 12 個 channel），並由 `asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
+> 所有 WS 訊息都以 `packages/contracts` 的 Zod schema 定義、型別由 `z.infer` 推導（憲章 Principle III）。需 runtime 驗證的 payload 在入口 `safeParse`——來自任意連線者的客戶端控制訊息（`ClientControlMessageSchema`：`ping`、`machine/subscribe`）、`DiagnosisResult`、`AiStreamEvent`、`JobStatus`、`WorkerMetrics`；伺服器→客戶端的純分派控制訊息（`pong`／`system/*`）與高頻的 `machine/data` 則只用 schema 做漂移比對，runtime 走手寫守衛或 `switch(type)` 分派。契約全貌另見 [`asyncapi.yaml`](asyncapi.yaml)（`info.version` 1.1.0，共 12 個 channel），並由 `asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
 
 ### 部署與監督拓撲（demo 容器模式，007–009）
 
@@ -413,10 +413,10 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | **即時通道** | 原生 WebSocket（前後端）+ Redis Pub/Sub 跨進程 relay |
 | **佇列 / 快取** | Redis 7（BullMQ queue、Pub/Sub、cache-aside＋dedupe lock、LLM 限流固定窗、worker heartbeat、worker 指標快照） |
 | **資料庫** | MongoDB 7（telemetry time-series + TTL、errorlogs、maintenanceRecords、diagnoses） |
-| **契約** | `packages/contracts`（Zod 單一來源，`z.infer` 推導型別）+ `asyncapi.yaml` |
+| **契約** | `packages/contracts`（Zod 4 單一來源，`z.infer` 推導型別）+ `asyncapi.yaml` |
 | **可觀測性** | pino（結構化 JSON 日誌 + 專屬 metrics child logger）、`GET /healthz` 依賴探針、`system/metrics` 廣播 |
 | **部署 / 監督** | Docker 多階段建置（BuildKit cache mount、`pnpm fetch`＋`install --offline`、`pnpm deploy --prod` 裁剪 workspace 依賴；base image tag＋digest 雙釘）、`restart: on-failure:5`、redis／mongo healthcheck＋`service_healthy`、資源上限與 log 輪替、Redis heartbeat 存活探針（每實例一把）、`nginx-unprivileged`（web 容器內同源反代 `/ws`、`/diagnoses`，安全 header＋gzip） |
-| **語言 / 工具鏈** | Node 22（`.nvmrc`，`engines >=22.12`，Vite 7 需求）、strict TypeScript 5.6、pnpm workspace、ESLint 9、Vitest 4、vue-tsc 3、Spectral（contract lint） |
+| **語言 / 工具鏈** | Node 22（`.nvmrc`，`engines >=22.12`，Vite 7 需求）、strict TypeScript 5.9、pnpm workspace、ESLint 9、Vitest 4、vue-tsc 3、Spectral（contract lint） |
 | **本機 infra** | Docker Compose：不帶分組起 Redis 7 + MongoDB 7（開發模式）；`demo` profile 起 api／worker／web／seed 全棧受監督容器 |
 
 ---
