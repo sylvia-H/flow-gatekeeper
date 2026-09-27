@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { effectScope, watchEffect } from "vue";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { useMonitoringStore } from "./monitoring.store.js";
 
@@ -28,7 +29,7 @@ describe("monitoring store — 背壓批次關係（FR-010 / SC-002）", () => {
     setActivePinia(createPinia());
   });
 
-  it("applyTelemetryBatch 呼叫 3 次、每次 N 筆 → received=3N、rendered=3、ratio=round(N)", () => {
+  it("applyTelemetryBatch 呼叫 3 次、每次 N 筆 → received=3N、rendered=3", () => {
     const store = useMonitoringStore();
     const N = 7;
 
@@ -38,16 +39,42 @@ describe("monitoring store — 背壓批次關係（FR-010 / SC-002）", () => {
 
     expect(store.receivedMessages).toBe(3 * N);
     expect(store.renderedBatches).toBe(3);
-    expect(store.batchRatio).toBe(Math.round(N));
   });
 
-  it("renderedBatches===0 時 batchRatio===0（避免除以零）", () => {
+  it("recordDropped：溢位與格式不符分開計數，兩者都計入 received、不計入 rendered", () => {
     const store = useMonitoringStore();
-    expect(store.renderedBatches).toBe(0);
-    expect(store.batchRatio).toBe(0);
+    store.applyTelemetryBatch(makeBatch(5));
+    store.recordDropped(7, "overflow");
+    store.recordDropped(2, "invalid");
+    store.recordDropped(0, "overflow"); // 0 筆不動
+    expect(store.droppedMessages).toBe(7);
+    expect(store.invalidMessages).toBe(2);
+    expect(store.receivedMessages).toBe(14);
+    expect(store.renderedBatches).toBe(1);
   });
 
-  it("每台只保留最新快照；machineList 依 machineId 穩定排序", () => {
+  it("一批多筆只觸發一次 machines 依賴（shallowRef + triggerRef）", () => {
+    const store = useMonitoringStore();
+    let runs = 0;
+    const scope = effectScope();
+    scope.run(() => {
+      watchEffect(
+        () => {
+          void store.machines.get("m-0");
+          runs += 1;
+        },
+        { flush: "sync" },
+      );
+    });
+    expect(runs).toBe(1); // 初次執行
+    store.applyTelemetryBatch(makeBatch(10)); // 10 筆、5 台
+    expect(runs).toBe(2);
+    store.applyTelemetryBatch([]); // 空批次不觸發
+    expect(runs).toBe(2);
+    scope.stop();
+  });
+
+  it("每台只保留最新快照", () => {
     const store = useMonitoringStore();
     store.applyTelemetryBatch([
       {
@@ -76,7 +103,7 @@ describe("monitoring store — 背壓批次關係（FR-010 / SC-002）", () => {
 
     expect(store.machines.size).toBe(2);
     expect(store.machines.get("press-02")?.state).toBe("warning");
-    expect(store.machineList.map((m) => m.machineId)).toEqual(["mixer-01", "press-02"]);
+    expect([...store.machines.keys()].sort()).toEqual(["mixer-01", "press-02"]);
   });
 
   it("selectMachine 設定 selectedMachine getter", () => {
@@ -184,5 +211,45 @@ describe("monitoring store — latency 重置（US4 重連）", () => {
     expect(store.latencyMs).toBeNull();
     store.setConnectionStatus("connected"); // 重連上但尚無 pong
     expect(store.latencyMs).toBeNull();
+  });
+});
+
+describe("monitoring store — Pause 期間凍結 stale 時鐘", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-27T00:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("暫停 60 秒後 Fleet Health 不把有資料的機台算 stale；恢復後照常判斷", () => {
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.applyTelemetryBatch([point("mixer-01", "healthy")]);
+    store.togglePause();
+    expect(store.pausedAt).not.toBeNull();
+
+    vi.advanceTimersByTime(60_000);
+    store.tickNow();
+    expect(store.now - store.staleNow).toBe(60_000); // now 照走、staleNow 凍結
+    expect(store.fleetHealth.healthy).toBe(1);
+
+    store.togglePause(); // resume：凍結解除（實際畫面會在下一幀收到 buffer 沖出的新資料）
+    expect(store.pausedAt).toBeNull();
+    expect(store.staleNow).toBe(store.now);
+    expect(store.fleetHealth.healthy).toBe(0);
+  });
+
+  it("暫停中斷線 → 不凍結，照常標 stale", () => {
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.applyTelemetryBatch([point("mixer-01", "healthy")]);
+    store.togglePause();
+    vi.advanceTimersByTime(30_000);
+    store.tickNow();
+    store.setConnectionStatus("reconnecting");
+    expect(store.fleetHealth.healthy).toBe(0);
   });
 });

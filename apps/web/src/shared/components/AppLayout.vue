@@ -46,7 +46,7 @@ const { size: sidebarWidth, startDrag: onSidebarHandleDown } = useResizeDrag({
 
 <template>
   <!-- App shell：不讓 body scroll，內部各區自行 scroll（design-spec §6.1） -->
-  <div class="flex h-screen w-screen overflow-hidden bg-base font-sans text-fg">
+  <div class="flex h-screen w-screen overflow-hidden bg-canvas font-sans text-fg">
     <!-- Left sidebar（預設 240px，可拖曳調整寬度；mobile 收起交給 Polish 處理） -->
     <aside
       class="hidden shrink-0 flex-col border-r border-subtle bg-surface md:flex"

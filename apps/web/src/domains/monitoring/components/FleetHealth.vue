@@ -58,7 +58,7 @@ function pct(count: number): number {
       </div>
     </dl>
 
-    <div class="mt-2 px-1 text-right font-mono text-[10px] text-fg-subtle">
+    <div class="mt-2 px-1 text-right font-mono text-2xs text-fg-subtle">
       total {{ summary.total }}
     </div>
   </section>
