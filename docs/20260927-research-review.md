@@ -8,7 +8,7 @@
 | 修復狀態 | **P0～P2 缺陷已於同日由 `fix/20260927-research-review`（17 個 commit）修復並 `--no-ff` 併入 `develop`（`a8ef62a`）**。修復後由 3 個獨立驗收 agent 逐項核對（比較基準 `1cfc8c0..a8ef62a`），P0 六項全部經實測重現「修復前會崩／修復後不會」確認 |
 | 修復後檢查 | `contract:lint`／`-r typecheck`／`-r lint` 全綠；`-r test` 524 個測試通過（shared 16、contracts 58、api 155、worker 132、web 163）；乾淨 clone 不 build 直接 typecheck／test 全綠；`pnpm audit --prod` 由 19 項降至 3 項 moderate（全部經 `@nestjs/bullmq@10` 帶入） |
 | 升級狀態 | **§4 技術棧升級已於同日由 `upgrade/20260927-tech-stack`（9 個 commit）完成**：pnpm 10.34.5、NestJS 11.2.6（Express 5、`@nestjs/bullmq` 12）、Vite 7.3.6、plugin-vue 6、vue-tsc 3、vitest 4.1.11、Pinia 3、Vue 3.5 patch、eslint-plugin-vue 10、Zod 4.6.5（移除 `zod-to-json-schema`）、五個控制訊息型別 Zod 化納入漂移比對、shared 補 `tsconfig.build.json`、`engines.node >=22.12`。由獨立驗收 agent 做靜態檢查、乾淨 clone、全棧 demo（`--profile demo`）與 dev 軌道執行期驗證後併回 `develop` |
-| 升級後檢查 | `-r test` **553** 個（shared 16、contracts 83、api 155、worker 136、web 163）；`pnpm audit` 全量與 `--prod` **皆為 0**；乾淨 clone 免 build 全綠；三個 Docker image 重建成功並全 healthy；web bundle 224.77 kB（gzip 75.79 kB） |
+| 升級後檢查 | 驗收後另以 `/code-review high` 對整支分支複審，7 項 findings 修正 6 項（時間戳改 `z.iso.datetime({ offset: true })` 對齊 RFC 3339、`system/metrics` 驗證規則上收契約並同步 asyncapi `minimum`、漂移測試只略過內建 format pattern 並比對 `allOf`、`toGeminiNode` 冗餘分支、文件矛盾回補、`@__PURE__` 標記）。最終：`-r test` **583** 個（shared 16、contracts 113、api 155、worker 136、web 163）；`pnpm audit` 全量與 `--prod` **皆為 0**；乾淨 clone 免 build 全綠；三個 Docker image 重建成功並全 healthy；web bundle 224.32 kB（gzip 75.62 kB） |
 | 本文現況 | **已修復項目已自本文移除**，只保留「部分修復」「未修復」「修復後新發現的殘留」與尚未執行的架構級建議。原始完整審查內容見 git 歷史 `fd34905` |
 | 相關 | ADR-001、ADR-002（§3／§6／§7 已回補現況）、`CLAUDE.md`、實作指南 §15.6、`README.md` |
 
