@@ -3324,12 +3324,17 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **斷言面補齊**（報告 TQ-4～TQ-9）：`processor` 事件序列與重試分支、`job-status-relay`、`HistoryService`、pino logger 包裝、web 元件測試（`CopilotDrawer`、`MachineNodeCard`、`MetricsPanel`、metrics store）。
   - **CI**：`ci.yml` 改為契約 lint → typecheck → lint → `test:coverage`（含門檻、上傳 lcov）→ build，加 `permissions: contents: read`、`concurrency`、`timeout-minutes: 20`；仍只保留 `workflow_dispatch`。
 - **code-review findings（6 項，行為與結構收斂）**：
-  - Gateway「已發 close(1008) 但對端不回 close frame」的逾期回收改由恆常執行的心跳 sweep 負責（門檻 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，terminate reason `close-not-honoured`），**未設 `WS_AUTH_SECRET` 時違規關閉也適用**；有設密鑰時授權 sweep 仍保留同一檢查（共用 `reapUnhonouredClose`），檢查頻率不受 `WS_HEARTBEAT_MS` 設多大牽制（final-review 補回）。
-  - Gateway 以 `closeRequestedAt` 為「關閉中」的單一來源（`isClosing()`），違規與授權逾期共用唯一關閉入口 `requestClose()`，移除重複的 `closing` 旗標。
+  - Gateway「已發 close(1008) 但對端不回 close frame」的逾期回收：**現況為逐連線計時器**——`requestClose()` 發出 close 時掛 `setTimeout(min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)).unref()`，到期即以 `close-not-honoured` terminate，對端正常回 close 時由 `cleanup` 清掉計時器；**未設 `WS_AUTH_SECRET` 時違規關閉也適用**，且不依賴心跳或授權 sweep 的檢查間隔（`f2d9cb0`）。演進：`12dcdd5` 先把回收放在心跳 sweep，final-review（`620d4b6`）補回授權 sweep 共用檢查，final-review-2 再改為逐連線計時器並移除兩個 sweep 的回收分支。
+  - Gateway 以逐連線 `closeTimer` 為「關閉中」的單一來源（`isClosing()` 由其推導），違規與授權逾期共用唯一關閉入口 `requestClose()`，移除重複的 `closing` 旗標（原以 `closeRequestedAt` 時戳表示，`f2d9cb0` 改為計時器）。
   - web `useDiagnoseTrigger`：`hasClient` 改由 `connectionBlockedReason` 推導，連線把關條件只寫一處。
   - 日誌節流器收進 `@flow-gatekeeper/shared/logging`（`packages/shared/src/logging/throttle.ts`）：`LogThrottle`、`ConnectionErrorThrottle` 與共用節流窗常數 `ERROR_LOG_THROTTLE_MS`（30 s），api 與 worker 不再各抄一份；api `lib/connection-error-throttle.ts` 只留 ioredis 事件接線。
   - worker 連線錯誤節流的 key 只用連線名、不含錯誤內容（`createThrottledErrorReporter().error(conn, log)`），key 集合有界。
   - `docker-compose.yml` 的 healthcheck `start_interval` 註解補上 Compose CLI 2.20.2+ 需求（與 README 前置需求一致）。
+- **最終兩段式審查（2026-09-28）**：全支 `develop..HEAD` 收尾前分兩段審查，修正共 9 個 commit（標 `[final-review]`／`[final-review-2]`），逐項判定見報告附錄 C.9。
+  - **第一段**：乾淨 Opus 5.5 跑 `/code-review xhigh develop..HEAD`，13 項 findings、修 9 項（6 commit：`620d4b6`、`67a7f0b`、`3e1436a`、`591b380`、`c3cf2ba`、`0348a35`），統籌者另補漏 1 commit（`aadbe96`）。主要修正：Gateway 授權 sweep 補回關閉逾期回收（後被第二段取代）；worker `findJobIdIndex` 在同鍵 unique 與非 unique 索引並存時**優先認 unique**，不誤 drop 既有索引；`AI_PROVIDER=fake` 時略過 `GEMINI_MODEL` thinking 警告；e2e harness 起全棧前無條件 `down -v`、ws-client 常駐 error listener、整合測試完整還原 Nest Logger；nightly mutation timeout 放寬到 180 分（推估值，待 runner 實測收斂）；`tests/e2e/package.json` 移除 `version` 維持「六份 package.json 對齊 tag」。補漏：契約 `system/metrics.collectedAt` 語意改為僅供顯示與稽核、新鮮度以收訊時刻判定（報告 CT-4）；`apps/api/.env.demo.example` 補 `METRICS_INTERVAL_MS`／`METRICS_LOG_LEVEL`（DOC-11）；README 明寫 `AI_TIMEOUT_MS` MUST 小於前端 45 秒 watchdog。
+  - **第二段**：Fable 5.1 對上述 fix commit 跑 `/code-review high`，8 項 findings 全修（`f2d9cb0`、`11223ca`）：關閉逾期回收改為**逐連線計時器**（見上方 code-review findings 第一點）；`packages/contracts` `collectedAt` 註解與 asyncapi 同步；api 新增 `src/test-support/nest-logger.ts`（`overrideNestLogger`／`silenceNestLogger`）取代三處手抄；e2e ws-client 握手階段加逾時並 terminate。
+  - **未修、待決**：`AI_PROVIDER=fake` 在 production 只 warn、是否改為須 opt-in 旗標（需使用者決策）；`@vitest/coverage-v8` 釘死而 `vitest` 用 caret，下次升級相依時統一；兩項重構類建議。報告第二輪其餘未排程項已集中到 ADR-002 §6.5.1。
+  - **收尾數字**（2026-09-28 實跑）：`pnpm test:coverage` 94 檔 982 測試通過，lines 81.52％、branches 76.56％；整合測試 27（worker 20＋api 7）；e2e 5 場景；契約 lint／typecheck／lint／`pnpm -r build` 全綠。
 - **e2e 實測發現（留給 012-lite）**：worker 被 `SIGKILL` 後，BullMQ 需等 job lock（30 s）過期、再經 stalled 檢查（每 30 s，先標記、下一輪才搬回 wait），重派的 `waiting`／第二次 `active` 約在 kill 後 **92 秒**才出現、`completed` 約 101 秒；這段期間前端**收不到任何事件**，已超過前端 45 秒無進展 watchdog。stalled 重派**不遞增** `attemptsMade`，重跑的 `ai/*` `attempt` 維持 1、`seq` 從 0 重播。這是審查報告 AR-1／AR-3（relay 未監聽 `stalled`、等待者無 keepalive）的實測佐證，處理排入 roadmap 012-lite（ADR-002 §6.5）。
 
 ---

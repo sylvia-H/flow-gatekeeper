@@ -83,7 +83,7 @@ v1.0.0 之後各維護分支的現況摘要見 `docs/Flow-Gatekeeper-SDD-完整�
   redis／mongo `restart: unless-stopped`；web 等 api healthy 才啟動。
 - **契約版本**：`asyncapi.yaml` `info.version` 1.1.0 → **1.2.0**（明細見下方「asyncapi 契約版本」）。
 - **產品版本**（`fix/20260927-review02-batch-cd`）：五份套件 `package.json` 的 `version` 由 `0.1.0` 對齊為 `1.1.0`，root `package.json` 新增 `"version": "1.1.0"`。
-- **Gateway 關閉逾期回收**（`fix/20260927-review02-batch-cd`）：已發 `close(1008)` 但對端不回 close frame 的連線，改由恆常執行的心跳 sweep 在 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 後 terminate——**未設 `WS_AUTH_SECRET` 時（違規累計 10 次的關閉）也生效**，此前只在有密鑰時由授權 sweep 處理。
+- **Gateway 關閉逾期回收**（`fix/20260927-review02-batch-cd`）：已發 `close(1008)` 但對端不回 close frame 的連線，由發出 close 時掛上的**逐連線計時器**在 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 到期後 terminate（reason `close-not-honoured`），不再依賴心跳或授權 sweep 的檢查間隔——**未設 `WS_AUTH_SECRET` 時（違規累計 10 次的關閉）也生效**，此前只在有密鑰時由授權 sweep 處理。
 - **CI**：`test` 步驟改為 `pnpm test:coverage`（含門檻、上傳 lcov artifact），加 `permissions: contents: read`、`concurrency`、`timeout-minutes: 20`；仍只保留手動觸發。
 
 ### Fixed
@@ -104,11 +104,13 @@ v1.0.0 之後各維護分支的現況摘要見 `docs/Flow-Gatekeeper-SDD-完整�
 - compose 的 Redis／Mongo 只綁 127.0.0.1；web 入口預設只綁本機（`WEB_BIND`）；Redis 可經 `REDIS_PASSWORD` 啟用 `requirepass`。
 - `pnpm audit --prod` 歸零（NestJS 11／Express 5 升級後）。
 - chaos 故障注入在 `NODE_ENV=production` 預設拒絕武裝。
+- worker `diagnoses` 的 `jobId` 索引：Mongo 7 下不同名的 unique 與非 unique `{ jobId: 1 }` 並存時，改為優先認 unique，不再誤 drop 既有索引（`fix/20260927-review02-batch-cd`）。
+- worker `AI_PROVIDER=fake` 時不再發出 `GEMINI_MODEL` thinking／`AI_MAX_OUTPUT_TOKENS` 誤導性警告。
 
 ### Internal
 
 - 日誌節流器（`LogThrottle`、`ConnectionErrorThrottle`、`ERROR_LOG_THROTTLE_MS`）收進 `@flow-gatekeeper/shared/logging`，api 與 worker 共用一份；worker 連線錯誤節流 key 只用連線名。對外行為不變。
-- Gateway 以 `closeRequestedAt` 為關閉中的單一來源（`isClosing()`／`requestClose()`）；web `useDiagnoseTrigger` 的 `hasClient` 改由 `connectionBlockedReason` 推導。
+- Gateway 以逐連線 `closeTimer` 為關閉中的單一來源（`isClosing()` 由其推導，違規與授權逾期共用 `requestClose()`）；web `useDiagnoseTrigger` 的 `hasClient` 改由 `connectionBlockedReason` 推導。
 
 ## [1.0.0] - 2026-08-05
 

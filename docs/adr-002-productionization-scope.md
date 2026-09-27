@@ -175,6 +175,29 @@ dev 期間 worker 保留 `tsx watch`（熱重載價值 > 監督價值，且人�
 | api healthcheck 每次載入整份 env zod schema | `apps/api/src/healthcheck.ts` 經 `resolveHealthcheckPort` 呼叫 `parseApiEnv`，每次探針執行都載入並驗證整份 env schema（含 zod） | 屬微優化：探針間隔以秒計，額外開銷不影響判定正確性 | 改為輕量探針：只讀 `API_PORT` 並做最小驗證，不引入 zod | 後續（第二輪修復 code-review 未指派項） |
 | WEB-4 行動版關 sheet 後點同卡片不重開 | 行動版 Copilot sheet 只在「選取機台改變」時開啟；關閉後再點同一張卡片沒有反應 | 桌面版不受影響，且有換卡片的繞路 | 點擊已選取卡片也觸發開啟 | 後續（第二輪報告 WEB-4） |
 
+### 6.5.1 第二輪審查未排程項 backlog（2026-09-28）
+
+`docs/20260927-research-review02.md` 附錄 C（修復完成度複查）逐項核對後，下列項目未修且原本只存在於報告本身、在真實來源查無延後紀錄；依 CLAUDE.md 集中於此成為有追蹤位置的 backlog。已有追蹤位置者（§6.5 主表、roadmap 010-lite／012-lite／011、憲章例外）不重列；010-lite 相關的三列因 §6.5 主表未單獨列出而在此補齊。各項明細與檔案位置以報告 §3／§4 為準（行號會漂移，引用以 ID 為準）。
+
+| 項目 | 現況 | 為何延後 | 升級路徑 | 追蹤位置 |
+| --- | --- | --- | --- | --- |
+| WK-4／AR-F4 LLM 成功後步驟失敗會重打 LLM | worker 無 `findByJobId`，`callLlmAndReply` 前不以 jobId 查 `diagnoses`；LLM 已回應但落庫／寫快取／發布任一步失敗時，BullMQ 重試會再打一次 LLM，`diagnoses` 與 cache／畫面結果可能不一致（報告 §5.2 FMEA 列為未處理） | 需同時界定 processor 的冪等邊界與 012-lite 的 `returnvalue` 完成語意，單獨補查詢會與之重工 | 處理前先以 jobId 查 `diagnoses`，已有結果即直接重送／回填；與 012-lite 一併設計（依報告 §3.2 建議） | 本表；roadmap 012-lite 立案時併入 |
+| WK-6 `smoke-gemini.ts` 未走 provider | `apps/worker/src/ai/smoke-gemini.ts` 仍直接 `generateContent`（非 stream），未經 `GeminiProvider`／`responseJsonSchema`，金鑰仍 `trim()`；已從 build 排除，不進 runtime | 僅為手動冒煙腳本，不影響產品行為 | 改為透過 `AiProvider` 實作呼叫，與正式路徑共用串流與 schema 設定（依報告 §3.2 建議） | 本表 |
+| AR-A9／API-7（錯誤碼）契約無 `AiErrorCode` | `job-status-relay.service.ts` `handleFailed` 仍把 BullMQ `failedReason` 原文當 `message` 下發；前端以字串判斷 | 需改契約（新增 enum、升 `info.version`）與三端，屬跨 feature 契約變更 | 契約新增 `AiErrorCode` enum，worker／api 依碼下發、前端依碼顯示（依報告 §3.2、§5.4） | 本表；roadmap **010-lite** |
+| API-8／AR-A2 `WorkerMetrics.windowMs` | `WorkerMetricsSchema`（`packages/contracts/src/metrics.ts`）仍無 `windowMs`，api 與 worker 以各自的 `METRICS_INTERVAL_MS` 隱性對齊 | 需改契約並升版 | `WorkerMetrics` 加 `windowMs`，api 合併時以快照自帶窗寬計算（依報告 §3.3、§5.4） | 本表；roadmap **010-lite** |
+| AR-A1 逾時常數三端各一份 | WS 心跳、前端 watchdog、`AI_TIMEOUT_MS` 等門檻分散在 api／worker／web；README 已明寫 `AI_TIMEOUT_MS` MUST 小於前端 45 秒 watchdog，但無執行期驗證 | 需與 `protocolVersion` 下發一起設計 | `system/connected` 下發 watchdog 等門檻（見 §6.5 `protocolVersion` 列）（依報告 §3.3） | 本表；roadmap **010-lite** |
+| Low：api（API-7、API-9、AR-S6、API-10） | API-7：未停用 `x-powered-by`、畸形 JSON 400 回顯輸入片段、body 上限沿用預設；API-9：Mongo 不可達 exit 1 而 Redis 不通仍啟動，韌性不對稱；AR-S6：`getJobCounts` 不含 `delayed`，限流時面板顯示佇列 0；API-10：逐 client `JSON.stringify`、`MetricsService` 每週期 `SCAN` | 單項影響小，demo 單實例無實害 | 依報告 §4 各列建議 | 本表 |
+| Low：worker（WK-7、WK-8、WK-9、WK-10 餘項、WK-11、TQ-L16） | WK-7：`latestState` 查詢無時間界、查詢串行；WK-8：簽章缺 `windowMinutes`、`topErrorCodes` 命名誤導；WK-9：`PROMPT_VERSION` 手動、prompt 內嵌 schema；WK-10 餘項：`usage.outputTokens` 未含 `thoughtsTokenCount`（`recordLatency` 部分已修）；WK-11：prompt 插入欄位無長度上限與資料邊界；TQ-L16：`mapFinishReason` 缺 exhaustive、`RECITATION` 等歸 `other` | 快取命中率、效能與防禦深度類，現行 mock 資料量下無實害 | 依報告 §4 各列建議；WK-11 在接外部輸入（`maintenanceRecords`）前 MUST 處理 | 本表 |
+| Low：web（WEB-5／CT-7、WEB-6／CT-11、WEB-7、WEB-8、WEB-9、AR-A7／AR-模組餘項） | WEB-5／CT-7：`@__PURE__` 只標 `events.ts`、`events.ts` 註解不實；WEB-6／CT-11：api dev 讀 dist、worker dev 讀 src，兩軌錯開；WEB-7：`MetricsPanel` 整塊 `role="status"`（`MetricsPanel.test.ts` 以「尚未修」測試記錄現況）；WEB-8：Fleet Health 每幀重算；WEB-9：`useResizeDrag` `localStorage` 無 try/catch、無鍵盤操作；AR-模組餘項：`shared/components` 的 TopBar／MetricsPanel／AppLayout 仍反向匯入 `domains/` | 體積／無障礙／開發體驗類，不影響核心資料流 | 依報告 §4 各列與 §5.3（web `src/app/` 殼層＋lint 禁反向匯入） | 本表 |
+| Low：contracts（CT-5、CT-9、CT-10、CT-12 補充） | CT-5：漂移測試 `normalize` 白名單未反轉、date-time 變體不區分；CT-9：`datetime.test.ts` 宣稱依 RFC 3339 與實作不符；CT-10：web lint `ImportExpression` 只涵蓋 `pino\|socket.io`；CT-12 補充：`SystemConnected.clientId` 為 `z.string()` 而 `socketId` 為 `z.uuid()` | 生產端無實害，屬防漂移強化 | 依報告 §4 各列建議；asyncapi 改由 Zod 產生（§5.5）可一併消解 CT-5 | 本表 |
+| Low：infra（INF-7、INF-8 餘項、INF-10 餘項、INF-11、INF-12、INF-13 餘項） | INF-7：`ignoredBuiltDependencies` 遺留 `@nestjs/core`、`lucide-vue-next` deprecated、eslint 9 EOL、`pnpm dedupe --check` 不過；INF-8 餘項：actions 未釘 SHA、缺 `pnpm audit`／`compose config -q`／image smoke；INF-10 餘項：`scripts/dev-up.ps1` 仍呼叫裸 `pnpm`；INF-11：無 dependabot／renovate；INF-12：builder 選入 root 全套 dev 相依；INF-13 餘項：`.nvmrc` 仍為浮動 `22` | CI 仍只 `workflow_dispatch`，恢復自動觸發時一併處理；相依升級另開分支 | 依報告 §4 各列與 §5.5（`lucide-vue-next` → `@lucide/vue`、eslint 10） | 本表 |
+| Low：品質（TQ-L3／L4、TQ-L5／L6、TQ-L7、TQ-L8／L9、TQ-L10／L11 餘項、TQ-12、TQ-L13～L15、TQ-L17／L18） | TQ-L3／L4：`tsconfig.build.json` exclude 不存在的 `*.check.ts`、`vitest.config.ts` 註解過時；TQ-L5／L6：worker `import "dotenv/config"`（cwd 相依）、「side-effect-free」註解不實；TQ-L7：`isConnectedMessage` 死碼；TQ-L8／L9：`AiStreamRelayService` 在 `psubscribe` resolve 前記 subscribed、Nest Logger 與 pino 混用；TQ-L10／L11 餘項：「帶時限等待」四份實作、`resolveMetricsInterval` 呼叫兩次；TQ-12：api／worker `isIndexConflict` 語意不同；TQ-L13～L15：程式碼註解引用 FR 未標 feature、帶時間語境註解、strict lint 命中（`!`／`as`）；TQ-L17／L18：api 單元測試未全面靜音 Nest Logger（已有 `src/test-support/nest-logger.ts` 可重用）、`diagnose-api` jobId 不一致分支無測試 | 程式品質與維護性，不改對外行為 | 依報告 §4 各列建議；dotenv 統一載入見 §5.5 | 本表 |
+| §5.3 模組邊界餘項 | Gateway 未拆 `WsConnectionRegistry`／`SubscriptionService`／`TelemetryPipeline`（`JobRoutingRegistry` 見 §6.5 單實例狀態列）；門檻與 `deriveMachineState` 仍在 `packages/shared` | 重構類，無行為缺陷 | 依報告 §5.3 | 本表 |
+| §5.5 技術棧建議餘項 | dotenv 統一載入、Gemini 429 改 `moveToDelayed`、Mongo 對診斷的硬相依明確化、asyncapi 改由 Zod 產生（`zod/mini` 另見指南 §15.6，須走 ADR） | 各自需評估或跨 feature，未排程 | 依報告 §5.5 | 本表 |
+| 最終審查未修：`AI_PROVIDER=fake` 在 production 只 warn | `AI_PROVIDER=fake` 於 `NODE_ENV=production` 允許啟動、只記 warn（Batch D 決策） | 是否改為須顯式 opt-in 旗標（比照 `WORKER_CHAOS_ALLOW_IN_PRODUCTION`）需使用者決策 | 若決定收緊：新增 opt-in 環境變數，未設時 production 拒絕啟動 | 本表（review02 batch-cd 最終審查第一段 #2） |
+| 最終審查未修：`@vitest/coverage-v8` 釘死、`vitest` 用 caret | 兩者主版本需一致，現為一釘一浮 | 不在測試基礎建設分支範圍 | 下次升級相依時統一為同一種版號策略 | 本表（最終審查第一段 #8） |
+| 最終審查未修：nightly mutation timeout 為推估值 | `nightly-mutation.yml` timeout 180 分為依 2 vCPU runner 推估，未實測 | 需等 nightly 實跑 | 依首次 runner 實測時間收斂 | 本表（最終審查第一段 #3） |
+
 ---
 
 ## 7. 明確拒絕的路線（over-engineering 邊界）
