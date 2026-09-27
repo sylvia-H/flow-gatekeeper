@@ -57,10 +57,12 @@ healthcheck:
 
 ## 6. 運維指令契約（README「雙模式」章節 MUST 涵蓋）
 
+> **現況**：本 feature 原以 `supervised` profile 起受監督 worker；008 全棧容器化後 compose 只剩 `demo` profile（worker 併入其中），下表指令已改為現況寫法。只起 worker（連同其依賴的 redis／mongo）時在 `up` 後指名 `worker`。
+
 | 情境 | 指令 |
 |------|------|
 | 開發模式（零變化） | `docker compose up -d`（只起 infra）→ `./scripts/dev-up.ps1` |
-| 受監督模式啟動 | `docker compose --profile supervised up -d --build` |
-| 受監督模式停止（優雅） | `docker compose --profile supervised stop worker`（SIGTERM，45s 寬限） |
+| 受監督模式啟動 | `docker compose --profile demo up -d --build worker` |
+| 受監督模式停止（優雅） | `docker compose --profile demo stop worker`（SIGTERM，45s 寬限） |
 | 健康／重啟狀態查詢 | `docker ps`（STATUS 欄含 health）；`docker inspect --format "{{.RestartCount}} {{.State.Status}} {{.State.Health.Status}}" <worker>` |
 | 記錄判讀 | `docker logs --timestamps <worker>` |
