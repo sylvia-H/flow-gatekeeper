@@ -11,7 +11,7 @@
 <br/>
 
 ![Vue 3.5](https://img.shields.io/badge/Vue-3.5-42b883?logo=vuedotjs&logoColor=white)
-![NestJS 10](https://img.shields.io/badge/NestJS-10-e0234e?logo=nestjs&logoColor=white)
+![NestJS 11](https://img.shields.io/badge/NestJS-11-e0234e?logo=nestjs&logoColor=white)
 ![TypeScript strict](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)
 ![Native ws](https://img.shields.io/badge/realtime-native%20ws-000000?logo=socketdotio&logoColor=white)
 ![BullMQ](https://img.shields.io/badge/queue-BullMQ%20%2B%20Redis-dc382d?logo=redis&logoColor=white)
@@ -408,7 +408,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | 層 | 選型 |
 | --- | --- |
 | **前端** | Vue 3.5（SFC, `<script setup>`）、Pinia、Tailwind CSS 3、lucide-vue-next、Vite 5 |
-| **API / Gateway** | NestJS 10、原生 `ws`（掛 HTTP server，path `/ws`）、`@nestjs/bullmq` |
+| **API / Gateway** | NestJS 11（Express 5）、原生 `ws`（掛 HTTP server，path `/ws`）、`@nestjs/bullmq` |
 | **Worker** | 獨立 Node ESM process、BullMQ、`@google/genai`（Gemini，包在 `AiProvider` 後；原生 structured output） |
 | **即時通道** | 原生 WebSocket（前後端）+ Redis Pub/Sub 跨進程 relay |
 | **佇列 / 快取** | Redis 7（BullMQ queue、Pub/Sub、cache-aside＋dedupe lock、LLM 限流固定窗、worker heartbeat、worker 指標快照） |
