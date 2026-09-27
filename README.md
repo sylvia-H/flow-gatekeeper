@@ -416,7 +416,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | **契約** | `packages/contracts`（Zod 單一來源，`z.infer` 推導型別）+ `asyncapi.yaml` |
 | **可觀測性** | pino（結構化 JSON 日誌 + 專屬 metrics child logger）、`GET /healthz` 依賴探針、`system/metrics` 廣播 |
 | **部署 / 監督** | Docker 多階段建置（BuildKit cache mount、`pnpm fetch`＋`install --offline`、`pnpm deploy --prod` 裁剪 workspace 依賴；base image tag＋digest 雙釘）、`restart: on-failure:5`、redis／mongo healthcheck＋`service_healthy`、資源上限與 log 輪替、Redis heartbeat 存活探針（每實例一把）、`nginx-unprivileged`（web 容器內同源反代 `/ws`、`/diagnoses`，安全 header＋gzip） |
-| **語言 / 工具鏈** | Node 22（`.nvmrc`，`engines >=22.12`，Vite 7 需求）、strict TypeScript 5.6、pnpm workspace、ESLint 9、Vitest、Spectral（contract lint） |
+| **語言 / 工具鏈** | Node 22（`.nvmrc`，`engines >=22.12`，Vite 7 需求）、strict TypeScript 5.6、pnpm workspace、ESLint 9、Vitest 4、vue-tsc 3、Spectral（contract lint） |
 | **本機 infra** | Docker Compose：不帶分組起 Redis 7 + MongoDB 7（開發模式）；`demo` profile 起 api／worker／web／seed 全棧受監督容器 |
 
 ---

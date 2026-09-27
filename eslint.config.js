@@ -48,7 +48,12 @@ export default tseslint.config(
         // 以 TS project service 為每個檔案找最近的 tsconfig.json；各套件 tsconfig 只 include src，
         // 套件根目錄的 *.config.ts 不在任何 program 內，改用 default project（以 base 的編譯選項）處理。
         projectService: {
-          allowDefaultProject: ["apps/*/vite.config.ts", "apps/*/vitest.config.ts", "apps/*/tailwind.config.ts"],
+          allowDefaultProject: [
+            "apps/*/vite.config.ts",
+            "apps/*/vitest.config.ts",
+            "apps/*/tailwind.config.ts",
+            "packages/*/vitest.config.ts",
+          ],
           defaultProject: "tsconfig.base.json",
         },
         tsconfigRootDir: import.meta.dirname,

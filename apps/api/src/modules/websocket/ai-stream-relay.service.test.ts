@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Redis 不可達時 psubscribe 會在連線關閉清佇列時 reject：用假 ioredis 重現這個 rejection。
 const psubscribe = vi.fn(() => Promise.reject(new Error("Connection is closed.")));
+// 被測程式以 `new IORedis()` 建構：vitest 4 起箭頭函式實作的 vi.fn 不能被 `new`，須用 function 實作。
 vi.mock("ioredis", () => ({
-  default: vi.fn(() => ({ psubscribe, on: vi.fn(), quit: vi.fn(() => Promise.resolve("OK")) })),
+  default: vi.fn(function () {
+    return { psubscribe, on: vi.fn(), quit: vi.fn(() => Promise.resolve("OK")) };
+  }),
 }));
 
 const { AiStreamRelayService } = await import("./ai-stream-relay.service.js");
