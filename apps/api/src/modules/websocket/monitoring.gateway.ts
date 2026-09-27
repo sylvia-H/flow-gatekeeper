@@ -110,15 +110,17 @@ type ClientState = {
   overHighWaterTicks: number;
   violations: number;
   /**
-   * 因違規／授權逾期發出 close(1008) 的時刻；有值即「關閉中」（見 `isClosing`），等待 'close'
-   * 事件清理、期間的訊息一律忽略。對端遲不回 close frame 時由心跳 sweep 依此 terminate。
+   * 因違規／授權逾期發出 close(1008) 時掛上的逐連線計時器（見 `requestClose`）；有值即「關閉中」
+   * （見 `isClosing`），期間的訊息一律忽略。對端在 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 內回
+   * close frame → 'close' 事件進 `cleanup` 清掉此計時器；逾期未回 → 計時器以 `close-not-honoured`
+   * terminate。
    */
-  closeRequestedAt?: number;
+  closeTimer?: ReturnType<typeof setTimeout>;
 };
 
-/** 已發出 close、等待對端回 close frame 的連線（單一來源：`closeRequestedAt`）。 */
+/** 已發出 close、等待對端回 close frame 的連線（單一來源：`closeTimer`）。 */
 function isClosing(state: ClientState): boolean {
-  return state.closeRequestedAt !== undefined;
+  return state.closeTimer !== undefined;
 }
 
 type ViolationReason = "invalid-json" | "schema" | "unauthorized";
@@ -161,6 +163,8 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   private sendHighWaterBytes = DEFAULT_WS_SEND_HIGH_WATER_BYTES;
   private maxConnections = DEFAULT_MAX_WS_CONNECTIONS;
   private authGraceMs = DEFAULT_WS_AUTH_GRACE_MS;
+  /** 發出 close 後等待對端 close frame 的上限：`min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，於 attach 算定。 */
+  private closeDeadlineMs = DEFAULT_WS_AUTH_GRACE_MS;
   private droppedSends = 0;
 
   constructor(
@@ -211,6 +215,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     this.sendHighWaterBytes = options.sendHighWaterBytes ?? DEFAULT_WS_SEND_HIGH_WATER_BYTES;
     this.maxConnections = options.maxConnections ?? DEFAULT_MAX_WS_CONNECTIONS;
     this.authGraceMs = options.authGraceMs ?? DEFAULT_WS_AUTH_GRACE_MS;
+    this.closeDeadlineMs = Math.min(this.config.wsHeartbeatMs, this.authGraceMs);
     this.wss = new WebSocketServer({
       server,
       path: "/ws",
@@ -399,16 +404,27 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
       { clientId, violations: state.violations },
       "too many client violations, closing with 1008",
     );
-    this.requestClose(state, 1008, "policy violation");
+    this.requestClose(clientId, state, 1008, "policy violation");
     return true;
   }
 
   /**
-   * 發出 close 並記下時刻（違規與授權逾期的唯一關閉入口）。之後的訊息一律忽略；對端遲不回
-   * close frame 時由 `reapUnhonouredClose` 在 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 後 terminate。
+   * 發出 close 並掛逐連線計時器（違規與授權逾期的唯一關閉入口）；之後的訊息一律忽略。
+   *
+   * 對端滿 `closeDeadlineMs`＝`min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 仍未回 close frame 即 terminate
+   * （reason `close-not-honoured`）。不靠計時器也不會無限佔名額——ws 的 `close()` 會同步進入 CLOSING 並
+   * 啟動內建 closeTimer（約 30 s），CLOSING 後 `ping()` 不會真的送出、心跳 sweep 也會以 heartbeat-timeout
+   * 回收；逐連線計時器提供與 sweep 間隔、是否設密鑰、`WS_HEARTBEAT_MS` 設多大都無關的精確上限，
+   * 並讓日誌可與半死連線區分。`WS_AUTH_GRACE_MS` 恆有值（預設 10 s），無密鑰時同樣可作門檻。
+   * `unref()`：此計時器不應阻止行程結束。
    */
-  private requestClose(state: ClientState, code: number, reason: string): void {
-    state.closeRequestedAt = Date.now();
+  private requestClose(clientId: ClientId, state: ClientState, code: number, reason: string): void {
+    const deadlineMs = this.closeDeadlineMs;
+    state.closeTimer = setTimeout(() => {
+      this.plog.warn({ clientId, closeDeadlineMs: deadlineMs }, "close frame not received, terminating");
+      this.terminate(clientId, "close-not-honoured");
+    }, deadlineMs);
+    state.closeTimer.unref();
     state.socket.close(code, reason);
   }
 
@@ -439,20 +455,10 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
    * 心跳探活掃描：上一輪未回帶正確 nonce 的 pong 者判定失效並回收（涵蓋網路硬中斷的半死連線）；
    * `bufferedAmount` 連續 `WS_SLOW_CONSUMER_TICKS` 輪超過高水位者視為慢讀者回收；其餘標記為
    * 待驗證並送 `ping(nonce)`。回收上限約 2 × WS_HEARTBEAT_MS（SC-005）。授權期限不在此檢查
-   * （見 `sweepAuthGrace`）。
-   *
-   * 關閉逾期回收也在此：已發 close(1008) 的連線，距發出時刻滿 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`
-   * 仍未收到對端 close frame 即 terminate。即使沒有這一步也不會無限佔名額——ws 的 `close()` 會同步
-   * 進入 CLOSING 並啟動內建 closeTimer（約 30 s），CLOSING 後 `ping()` 不會真的送出、下一輪即以
-   * heartbeat-timeout 回收（≤ 2 × WS_HEARTBEAT_MS）；本檢查提供更緊的顯式上限與獨立的 terminate reason
-   * （`close-not-honoured`，日誌可與半死連線區分），且因心跳 sweep 恆常執行而不依賴是否設密鑰。
-   * `WS_AUTH_GRACE_MS` 恆有值（預設 10 s），無密鑰時同樣可作門檻。有設密鑰時授權 sweep 也做同一檢查
-   * （見 `reapUnhonouredClose`），檢查頻率才不受 `WS_HEARTBEAT_MS` 設多大牽制。
+   * （見 `sweepAuthGrace`）；已發 close 者的逾期回收由逐連線計時器負責（見 `requestClose`）。
    */
   private sweepDeadConnections(): void {
-    const now = Date.now();
     for (const [clientId, state] of this.clients) {
-      if (this.reapUnhonouredClose(clientId, state, now)) continue;
       if (!state.alive) {
         this.plog.warn({ clientId }, "heartbeat timeout, terminating");
         this.terminate(clientId, "heartbeat-timeout");
@@ -486,38 +492,20 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
    * 授權期限掃描（有設密鑰時由 attach 以 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 間隔驅動）：
    * 逾 `WS_AUTH_GRACE_MS` 仍未授權者以 1008 關閉。不另開每連線 timer，故實際關閉時間介於
    * 期限～期限 + 一個掃描間隔，最長約 2 × WS_AUTH_GRACE_MS（與心跳間隔設多大無關）。
-   * 已發出 close 但對端遲不回 close frame 者，同樣在此以 `reapUnhonouredClose` 逾期 terminate：心跳 sweep
-   * 也會做，但它每 `WS_HEARTBEAT_MS` 才跑一次（可設到 2^31-1），停在 CLOSING 的連線仍計入未授權子池，
-   * 只靠心跳會讓「開連線、不回 close frame」長時間佔滿子池。
+   * 已發 close 者跳過；其逾期回收由逐連線計時器負責（見 `requestClose`）。
    */
   private sweepAuthGrace(): void {
     if (!this.config.wsAuthSecret) return;
     const now = Date.now();
     for (const [clientId, state] of this.clients) {
-      if (isClosing(state)) {
-        this.reapUnhonouredClose(clientId, state, now);
-        continue;
-      }
-      if (state.authorized || now - state.connectedAt < this.authGraceMs) continue;
+      if (isClosing(state) || state.authorized || now - state.connectedAt < this.authGraceMs) continue;
       this.throttledWarn(
         "auth-grace-expired",
         { clientId, authGraceMs: this.authGraceMs },
         "websocket not authorized within grace period, closing with 1008",
       );
-      this.requestClose(state, 1008, "authorization timeout");
+      this.requestClose(clientId, state, 1008, "authorization timeout");
     }
-  }
-
-  /**
-   * 已發 close 且距發出時刻滿 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 仍未收到對端 close frame → terminate
-   * （reason `close-not-honoured`）。心跳 sweep 與授權 sweep 共用；回傳是否已回收。
-   */
-  private reapUnhonouredClose(clientId: ClientId, state: ClientState, now: number): boolean {
-    if (state.closeRequestedAt === undefined) return false;
-    if (now - state.closeRequestedAt < Math.min(this.config.wsHeartbeatMs, this.authGraceMs)) return false;
-    this.plog.warn({ clientId }, "close frame not received, terminating");
-    this.terminate(clientId, "close-not-honoured");
-    return true;
   }
 
   private terminate(clientId: ClientId, reason: string): void {
@@ -531,6 +519,8 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     const state = this.clients.get(clientId);
     if (!state) return; // 冪等：避免 terminate→close 重複清理/記錄
     this.clients.delete(clientId);
+    // 對端已回 close frame（或已被 terminate）：撤掉逾期計時器，不讓它之後再 terminate 一條已清理的連線。
+    if (state.closeTimer) clearTimeout(state.closeTimer);
     if (!state.authorized) this.unauthorizedCount -= 1;
     this.plog.info({ clientId, reason }, "client disconnected");
   }
