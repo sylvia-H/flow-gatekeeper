@@ -5,7 +5,7 @@ import { Worker } from "bullmq";
 import { MongoClient } from "mongodb";
 import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
 import type { DiagnosisJobPayload } from "@flow-gatekeeper/contracts";
-import { createLogger } from "@flow-gatekeeper/shared/logging";
+import { createLogger, ERROR_LOG_THROTTLE_MS } from "@flow-gatekeeper/shared/logging";
 import { bullmqConnectionOptions, createCommandConnection, waitForReady } from "./redis.js";
 import type { AiProvider } from "./ai/provider.js";
 import { GeminiProvider } from "./ai/gemini-provider.js";
@@ -33,12 +33,6 @@ import { createProcessor, isTerminalFailure } from "./processor.js";
 
 /** 啟動期等待 Redis 就緒的上限；超過即 fail-fast，交由監督者重啟。 */
 const REDIS_READY_TIMEOUT_MS = 10_000;
-
-/**
- * 連線錯誤 log 的節流窗（與 api 的 `ERROR_LOG_THROTTLE_MS` 同值）：Redis 不可達或認證失敗時
- * ioredis 每 100–270 ms 重連一次，同一錯誤在窗內只記一則，下一則附上被壓掉的次數。
- */
-const CONNECTION_ERROR_LOG_THROTTLE_MS = 30_000;
 
 export async function bootstrap(): Promise<void> {
   // 致命錯誤語意（007 let it crash）：未捕捉例外／未處理拒絕代表行程狀態未定義，
@@ -88,10 +82,10 @@ export async function bootstrap(): Promise<void> {
   // 沒掛 error 監聽時 ioredis 會把每次重連失敗印成未處理的 error 事件；這裡改走結構化日誌。
   // 轉態節流：同一連線的同一錯誤在窗內只記一則（重連洗版會淹沒其他日誌）；連線回到 ready 時
   // 記一則「已恢復」並重置，之後再故障第一則立即可見。
-  const connErrors = createThrottledErrorReporter(CONNECTION_ERROR_LOG_THROTTLE_MS);
+  const connErrors = createThrottledErrorReporter(ERROR_LOG_THROTTLE_MS);
   for (const [conn, redis] of [["pub", pub], ["cache", cache]] as const) {
     redis.on("error", (err: Error) =>
-      connErrors.error(conn, err, (suppressed) => redisLogger.warn({ err, conn, suppressed }, "Redis 連線錯誤")),
+      connErrors.error(conn, (suppressed) => redisLogger.warn({ err, conn, suppressed }, "Redis 連線錯誤")),
     );
     redis.on("ready", () =>
       connErrors.recovered(conn, (suppressed) => redisLogger.info({ conn, suppressed }, "Redis 連線已恢復")),
@@ -155,7 +149,7 @@ export async function bootstrap(): Promise<void> {
   // 與 pub／cache 共用轉態節流：Redis 斷線時 BullMQ 的重連錯誤同樣會洗版。
   // 錯誤與恢復走同一個 redisLogger（conn: "bullmq"），故障→恢復在同一 context 下可成對查到。
   worker.on("error", (err) =>
-    connErrors.error("bullmq", err, (suppressed) => redisLogger.error({ err, conn: "bullmq", suppressed }, "BullMQ worker error")),
+    connErrors.error("bullmq", (suppressed) => redisLogger.error({ err, conn: "bullmq", suppressed }, "BullMQ worker error")),
   );
 
   worker.on("ready", () => {

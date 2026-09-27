@@ -1,53 +1,7 @@
-/** 同一條連線持續故障時，兩則錯誤日誌之間的最短間隔。與 HistoryService 的寫入錯誤節流同量級。 */
-export const CONNECTION_ERROR_LOG_THROTTLE_MS = 30_000;
+import { ConnectionErrorThrottle } from "@flow-gatekeeper/shared/logging";
 
-/** 節流器對單一事件的判定：`log` 表示該輸出、`suppressed` 為上次輸出以來被壓掉的則數。 */
-export type ThrottleDecision = { log: true; suppressed: number } | { log: false };
-
-/**
- * 連線錯誤日誌的**轉態節流**。
- *
- * ioredis 斷線（含 AUTH 失敗）時每 100–270 ms 重連一次、每次都發 `error`，直接記錄會洗版。
- * 本類別只在「轉態」與「持續故障的每 `intervalMs`」放行：
- * - 健康 → 故障的第一則錯誤：立即放行（讓故障一開始就可見）；
- * - 故障持續中：每 `intervalMs` 至多放行一則，並回報期間被壓掉的則數；
- * - 故障 → 恢復（`ready`）：回報一次恢復（含壓掉的則數），並重置——下一次故障的第一則照樣立即可見。
- *
- * **每條連線一個狀態機、不依錯誤訊息分流**：節流的單位是「這條連線是否在故障中」，不以
- * 錯誤訊息當 key。訊息常帶變動內容（位址、埠、重試次數、節點名），以訊息分 key 會讓 key
- * 集合隨故障期間無上限成長，也會讓同一次故障因訊息略有差異而重複放行；故障期間訊息改變
- * （如 ECONNREFUSED → WRONGPASS）時，下一則放行的日誌仍會帶出最新的那則錯誤。
- *
- * 純狀態機：不看時鐘、不記日誌，時間由呼叫端傳入，輸出由呼叫端決定。
- */
-export class ConnectionErrorThrottle {
-  private failing = false;
-  private lastLoggedAt = 0;
-  private suppressed = 0;
-
-  constructor(private readonly intervalMs: number = CONNECTION_ERROR_LOG_THROTTLE_MS) {}
-
-  onError(now: number): ThrottleDecision {
-    if (!this.failing || now - this.lastLoggedAt >= this.intervalMs) {
-      const suppressed = this.suppressed;
-      this.failing = true;
-      this.lastLoggedAt = now;
-      this.suppressed = 0;
-      return { log: true, suppressed };
-    }
-    this.suppressed += 1;
-    return { log: false };
-  }
-
-  /** 連線恢復。先前不在故障中則不需輸出（`log: false`）。 */
-  onReady(): ThrottleDecision {
-    if (!this.failing) return { log: false };
-    const suppressed = this.suppressed;
-    this.failing = false;
-    this.suppressed = 0;
-    return { log: true, suppressed };
-  }
-}
+// 轉態節流器 `ConnectionErrorThrottle` 與通用節流窗常數 `ERROR_LOG_THROTTLE_MS` 已收進
+// `@flow-gatekeeper/shared/logging`（與 worker 共用同一份實作）；此檔只留 ioredis 事件接線。
 
 /** 可掛 `error`／`ready` 監聽的連線（ioredis `Redis` 即符合）。 */
 export type ConnectionEvents = {

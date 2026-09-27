@@ -7,7 +7,7 @@ import type { SystemMetrics } from "@flow-gatekeeper/contracts";
 import { AppConfigService } from "../config/config.service.js";
 import { attachThrottledErrorLog } from "../../lib/connection-error-throttle.js";
 import { mergeMetrics } from "../../lib/metrics-merge.js";
-import { LogThrottle } from "../../lib/telemetry-buffer.js";
+import { LogThrottle } from "@flow-gatekeeper/shared/logging";
 import { throttledFields } from "../../lib/throttled-log.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 import { readWorkerSnapshots } from "./worker-snapshots.js";

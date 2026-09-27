@@ -801,20 +801,99 @@ describe("MonitoringGateway：出口閘門（背壓、授權、違規、連線�
     slow.ws.close();
   });
 
-  it("授權逾期發出 close 後對端不回 close frame → 再過一個期限即 terminate，不再佔名額", async () => {
-    const { port, gateway } = await startGateway({ secret: "s3cret", authGraceMs: 60_000 });
+  /**
+   * 模擬「close frame 已送出、對端卻遲不回應」：真實 ws 的 `close()` 會同步進入 CLOSING，但在對端回
+   * close frame（或內建 closeTimer 約 30 s 到期）前不會發出 'close' 事件。此處把 server 端 socket 的
+   * `close()` 換成「只把 readyState 設為 CLOSING、不送 frame、不觸發事件」，重現該中間態；CLOSING 下
+   * `ping()` 走 ws 的 sendAfterClose、不會真的送出（與真實行為一致）。回傳 close 的 spy。
+   */
+  function stallClose(socket: WebSocket): ReturnType<typeof vi.fn> {
+    const closeSpy = vi.fn(() => {
+      Object.defineProperty(socket, "readyState", { configurable: true, get: () => WebSocket.CLOSING });
+    });
+    socket.close = closeSpy;
+    return closeSpy;
+  }
+
+  function warnSpy(gateway: MonitoringGateway): ReturnType<typeof vi.spyOn> {
+    return vi.spyOn((gateway as unknown as { plog: { warn: (...args: unknown[]) => void } }).plog, "warn");
+  }
+
+  it("授權逾期發出 close 後對端不回 close frame（CLOSING 停滯）→ 心跳 sweep 於 min(心跳, 授權期限) 後 terminate", async () => {
+    const { port, gateway } = await startGateway({ secret: "s3cret", authGraceMs: 60_000, heartbeatMs: 15_000 });
+    const warn = warnSpy(gateway);
     const stubborn = await openClient(port);
     const socket = serverSocket(gateway, stubborn.clientId);
-    socket.close = () => undefined; // 模擬 close frame 送出後對端不回應：連線停在 OPEN
+    const closeSpy = stallClose(socket);
     age(gateway, stubborn.clientId, 60_000);
     internals(gateway).sweepAuthGrace();
+    expect(closeSpy).toHaveBeenCalledWith(1008, "authorization timeout");
+    expect(socket.readyState).toBe(WebSocket.CLOSING);
     expect(gateway.connectionCount).toBe(1);
     const state = internals(gateway).clients.get(stubborn.clientId);
     if (!state || state.closeRequestedAt === undefined) throw new Error("closeRequestedAt 未設定");
-    state.closeRequestedAt -= 60_000;
-    const closed = waitClose(stubborn.ws);
+    // 授權 sweep 只負責發 close；再掃一次不會重複發 close，也不會 terminate。
     internals(gateway).sweepAuthGrace();
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(gateway.connectionCount).toBe(1);
+    // 門檻 = min(15 s, 60 s) = 15 s。
+    state.closeRequestedAt -= 15_000;
+    const closed = waitClose(stubborn.ws);
+    internals(gateway).sweepDeadConnections();
     expect(gateway.connectionCount).toBe(0);
     expect(await closed).toBe(1006);
+    expect(warn).toHaveBeenCalledWith({ clientId: stubborn.clientId }, "close frame not received, terminating");
+  });
+
+  /** 讓 server 端 close() 停在 CLOSING（見 `stallClose`），再累計違規到上限觸發 1008。 */
+  async function violateWithStalledClose(
+    gateway: MonitoringGateway,
+    client: Client,
+  ): Promise<{ closeRequestedAt?: number; alive: boolean }> {
+    const closeSpy = stallClose(serverSocket(gateway, client.clientId));
+    for (let i = 0; i < WS_MAX_VIOLATIONS; i += 1) client.ws.send("{not json");
+    await vi.waitFor(() => expect(closeSpy).toHaveBeenCalledWith(1008, "policy violation"));
+    const state = internals(gateway).clients.get(client.clientId);
+    if (!state || state.closeRequestedAt === undefined) throw new Error("closeRequestedAt 未設定");
+    return state;
+  }
+
+  it("無密鑰：違規 1008 後停在 CLOSING → 心跳 sweep 於 min(心跳, 授權期限) 逾期即以 close-not-honoured terminate", async () => {
+    // 門檻 = min(15 s, 5 s) = 5 s：授權期限較短時以它為準（無密鑰時 WS_AUTH_GRACE_MS 同樣有值）。
+    const { port, gateway } = await startGateway({ heartbeatMs: 15_000, authGraceMs: 5_000 });
+    const warn = warnSpy(gateway);
+    const client = await openClient(port);
+    const state = await violateWithStalledClose(gateway, client);
+
+    // 第 1 輪：close 剛發出、未逾期 → 連線仍在（CLOSING 下 ping 不會送出，alive 轉 false）。
+    internals(gateway).sweepDeadConnections();
+    expect(gateway.connectionCount).toBe(1);
+    if (state.closeRequestedAt === undefined) throw new Error("closeRequestedAt 未設定");
+    // 未達 5 s 門檻：不因關閉逾期回收。第 1 輪的 ping 沒送出、alive 已是 false；手動設回 true 以隔離
+    // 變因——只測關閉逾期門檻，不讓心跳逾時先觸發。
+    state.closeRequestedAt -= 4_000;
+    state.alive = true;
+    internals(gateway).sweepDeadConnections();
+    expect(gateway.connectionCount).toBe(1);
+
+    // 逾 5 s 門檻：關閉逾期檢查優先於心跳逾時，reason 為 close-not-honoured。
+    state.closeRequestedAt -= 1_000;
+    const closed = waitClose(client.ws);
+    internals(gateway).sweepDeadConnections();
+    expect(gateway.connectionCount).toBe(0);
+    expect(await closed).toBe(1006);
+    expect(warn).toHaveBeenCalledWith({ clientId: client.clientId }, "close frame not received, terminating");
+    expect(warn).not.toHaveBeenCalledWith({ clientId: client.clientId }, "heartbeat timeout, terminating");
+  });
+
+  it("無密鑰＋onModuleInit：心跳計時器本身會回收違規後停在 CLOSING 的連線", async () => {
+    const { port, gateway } = await startGateway({ init: true, intervalMs: 1_000, heartbeatMs: 150 });
+    const warn = warnSpy(gateway);
+    const client = await openClient(port);
+    const closed = waitClose(client.ws);
+    await violateWithStalledClose(gateway, client);
+    expect(await closed).toBe(1006);
+    expect(gateway.connectionCount).toBe(0);
+    expect(warn).toHaveBeenCalledWith({ clientId: client.clientId }, "close frame not received, terminating");
   });
 });

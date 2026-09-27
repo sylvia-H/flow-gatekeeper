@@ -68,6 +68,27 @@ describe("useDiagnoseTrigger — 可否診斷看「連線活著且已授權」�
     expect(trigger.canDiagnoseSelected.value).toBe(true);
   });
 
+  // 對現行實作（hasClient 由 connectionBlockedReason 推導）此測試恆真；它的價值是回歸防線——
+  // 日後若有人又把兩者改回各寫一份條件，只要任一狀態下兩者分歧就會在此失敗。
+  it("hasClient 與 connectionBlockedReason 在各連線狀態下永遠一致（前者＝後者為 null）", () => {
+    const { monitoring, trigger } = setup();
+    const agree = (): void =>
+      expect(trigger.hasClient.value).toBe(trigger.connectionBlockedReason.value === null);
+    agree(); // 初始：未連線
+    monitoring.setConnectionStatus("connected");
+    agree();
+    monitoring.setClientId("c1");
+    agree(); // 尚未訂閱
+    monitoring.setAuthorized(true);
+    agree(); // live
+    expect(trigger.hasClient.value).toBe(true);
+    monitoring.setAuthorized(false);
+    agree(); // 未授權
+    monitoring.setConnectionStatus("reconnecting");
+    agree();
+    expect(trigger.hasClient.value).toBe(false);
+  });
+
   it("斷線期間 diagnose 不送出 POST（socketId 已清空）", () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);

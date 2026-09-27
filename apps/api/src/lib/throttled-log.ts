@@ -1,4 +1,4 @@
-import type { LogThrottle } from "./telemetry-buffer.js";
+import type { LogThrottle } from "@flow-gatekeeper/shared/logging";
 
 /**
  * 節流記錄的共用樣板：同 key 在 `LogThrottle` 的窗內只放行一則；放行時把期間被壓掉的則數以

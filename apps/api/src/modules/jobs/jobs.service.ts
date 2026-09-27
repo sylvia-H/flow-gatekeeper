@@ -16,9 +16,8 @@ import type {
 } from "@flow-gatekeeper/contracts";
 import { AiStreamRelayService } from "../websocket/ai-stream-relay.service.js";
 import { MonitoringGateway } from "../websocket/monitoring.gateway.js";
-import { LogThrottle } from "../../lib/telemetry-buffer.js";
+import { ERROR_LOG_THROTTLE_MS, LogThrottle } from "@flow-gatekeeper/shared/logging";
 import { throttledFields } from "../../lib/throttled-log.js";
-import { CONNECTION_ERROR_LOG_THROTTLE_MS } from "../../lib/connection-error-throttle.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 
 /**
@@ -72,7 +71,7 @@ export class JobsService {
    * 409（socket 未授權／離線）warn 的全域節流：每 30 秒至多一則並附 `suppressed`。此路徑可由
    * 任何人以亂數 socketId 反覆觸發，逐則記錄等於讓外部請求直接放大日誌量。
    */
-  private readonly rejectLogThrottle = new LogThrottle(CONNECTION_ERROR_LOG_THROTTLE_MS);
+  private readonly rejectLogThrottle = new LogThrottle(ERROR_LOG_THROTTLE_MS);
   /**
    * 進行中的入列（jobId → 結果）。併發重送命中既有綁定時要等首發的入列結果：首發之後可能逾時或
    * 409 而刪掉綁定並回錯誤，此時重送方若已先回 200，拿到的就是一個不存在的 job。
