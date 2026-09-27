@@ -3202,8 +3202,8 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
     MUST 一併調高）、api 15s（stopProducer → flush 5s → `app.close()`）。
   - base image tag＋digest 雙釘（`node:22.23.3-alpine`、`nginxinc/nginx-unprivileged:1.31.6-alpine`、`redis:7.4.11-alpine`、
     `mongo:7.0.43`）；升版流程：`docker buildx imagetools inspect <image>:<tag>` 取新 digest，tag 與 digest 一起改。
-  - 建置：BuildKit `RUN --mount=type=cache`＋`pnpm fetch`＋`pnpm install --offline --filter <app>...`；`pnpm deploy --prefer-offline`
-    （pnpm 9 的 deploy 不讀 lockfile、需要 registry metadata）。全棧 demo 需 BuildKit（Docker 23+ 預設）。
+  - 建置：BuildKit `RUN --mount=type=cache`＋`pnpm fetch`＋`pnpm install --offline --filter <app>...`；`pnpm deploy --legacy --prefer-offline`
+    （legacy deploy 不讀 lockfile、需要 registry metadata；pnpm 10 起非 injected workspace 須加 `--legacy`，否則 `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`）。全棧 demo 需 BuildKit（Docker 23+ 預設）。
   - web runtime 改 `nginx-unprivileged`（uid 101），容器內 `listen 8080`、compose `8080:8080`（對外入口不變）；`server_tokens off`、
     `X-Content-Type-Options`、`X-Frame-Options DENY`、`Referrer-Policy`、CSP（`default-src 'self'`、`connect-src 'self'`——CSP3 的 `'self'` 已涵蓋同源 ws/wss；要相容舊 Safari 再加回 `ws: wss:`、
     `frame-ancestors 'none'` 等）、gzip、`/assets/` `immutable` 一年、`index.html` `no-cache`。

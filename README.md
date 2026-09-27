@@ -512,14 +512,14 @@ flow-gatekeeper/
 
 | 軌道 | 適合誰 | 前置需求 | 入口 |
 | --- | --- | --- | --- |
-| **開發模式** | 日常改 code、要熱重載的開發者 | Node 22（`.nvmrc`）、pnpm 9+（`corepack enable`）、Docker Desktop | web `http://localhost:5173` |
+| **開發模式** | 日常改 code、要熱重載的開發者 | Node 22（`.nvmrc`）、pnpm 10（`corepack enable`，版本依 `packageManager`）、Docker Desktop | web `http://localhost:5173` |
 | **一鍵 demo（全棧容器）** | 拿到 repo 想最快看到系統跑起來的展示者／評估者 | **只需** Docker Desktop + 此 repo + 填妥兩份設定範本 | 單一入口 `http://localhost:8080` |
 
 > 兩軌**不要同時啟動**——`redis`／`mongo` 為兩模式共用，資料層會互相干擾（詳見下方「執行模式」的注意事項）。
 
 ### 軌道 A — 開發模式（日常開發，熱重載）
 
-**前置需求**：Node.js 22（版本以 repo 根的 `.nvmrc` 為準，root `engines` 要求 `>=22`；用 nvm／fnm 可直接讀它）、pnpm 9+、Docker Desktop（跑 Redis 7 + MongoDB 7）、一組 Gemini API key（選用，僅診斷會用到；留空也能跑，見「[注意事項](#注意事項)」）。
+**前置需求**：Node.js 22（版本以 repo 根的 `.nvmrc` 為準，root `engines` 要求 `>=22`；用 nvm／fnm 可直接讀它）、pnpm 10（`packageManager` 釘選 `pnpm@10.34.5`）、Docker Desktop（跑 Redis 7 + MongoDB 7）、一組 Gemini API key（選用，僅診斷會用到；留空也能跑，見「[注意事項](#注意事項)」）。
 
 > PATH 上沒有 `pnpm` 時，先執行一次 `corepack enable`（Node 內建，依 root `package.json` 的 `packageManager` 取得對應 pnpm），或以 `corepack pnpm <指令>` 代替 `pnpm <指令>`。
 
