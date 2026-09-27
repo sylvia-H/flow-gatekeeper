@@ -203,6 +203,27 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("diagnosis-repository × 真 
     expect(ix).toMatchObject({ name: "custom_jobId_unique", unique: true });
   });
 
+  it("不同名的舊非 unique jobId 索引與不同名的 unique 索引並存（85）：不 drop 舊索引、不記 error", async () => {
+    const db = freshDb();
+    const diagnoses = db.collection("diagnoses");
+    // 先建的非 unique 在 indexes() 中排在前面——findJobIdIndex 不能因此誤判為「尚無 unique」。
+    await diagnoses.createIndex({ jobId: 1 }, { name: "legacy_jobId" });
+    await diagnoses.createIndex({ jobId: 1 }, { unique: true, name: "custom_jobId_unique" });
+    const log = new RecordingLogger();
+
+    await ensureDiagnosisIndexes(db, log);
+
+    expect(log.errors).toEqual([]);
+    const sameKey = ((await diagnoses.indexes()) as IndexInfo[])
+      .filter((i) => JSON.stringify(i.key) === JSON.stringify({ jobId: 1 }))
+      .map((i) => [i.name, i.unique === true])
+      .sort();
+    expect(sameKey).toEqual([
+      ["custom_jobId_unique", true],
+      ["legacy_jobId", false],
+    ]);
+  });
+
   it("同名 jobId_1 但鍵不同（86 IndexKeySpecsConflict）：不拋、記 error，保留原索引（需人工處理）", async () => {
     const db = freshDb();
     const diagnoses = db.collection("diagnoses");
