@@ -1,6 +1,6 @@
 import { computed, type ComputedRef } from "vue";
-import { useMonitoringStore } from "../../domains/monitoring/stores/monitoring.store.js";
-import { useCopilotStore } from "../../domains/ai-copilot/stores/copilot.store.js";
+import { useMonitoringStore } from "../../monitoring/stores/monitoring.store.js";
+import { useCopilotStore } from "../stores/copilot.store.js";
 
 export interface DiagnoseTrigger {
   /** 是否已取得 clientId（＝即時通道已派發連線識別，POST /diagnoses 才有 socketId 可帶）。 */

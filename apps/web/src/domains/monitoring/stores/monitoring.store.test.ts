@@ -44,13 +44,37 @@ describe("monitoring store — 背壓批次關係（FR-010 / SC-002）", () => {
   it("recordDropped：溢位與格式不符分開計數，兩者都計入 received、不計入 rendered", () => {
     const store = useMonitoringStore();
     store.applyTelemetryBatch(makeBatch(5));
-    store.recordDropped(7, "overflow");
-    store.recordDropped(2, "invalid");
-    store.recordDropped(0, "overflow"); // 0 筆不動
+    store.recordDropped({ overflow: 7, invalid: 2 });
+    store.recordDropped({ overflow: 0, invalid: 0 }); // 0 筆不動
     expect(store.droppedMessages).toBe(7);
     expect(store.invalidMessages).toBe(2);
     expect(store.receivedMessages).toBe(14);
     expect(store.renderedBatches).toBe(1);
+  });
+
+  it("recordDropped：一次呼叫＝一次提交（每個計數 ref 至多觸發一次依賴），0 筆不觸發", () => {
+    const store = useMonitoringStore();
+    let runs = 0;
+    const scope = effectScope();
+    scope.run(() => {
+      watchEffect(
+        () => {
+          void store.droppedMessages;
+          void store.invalidMessages;
+          void store.receivedMessages;
+          runs += 1;
+        },
+        { flush: "sync" },
+      );
+    });
+    expect(runs).toBe(1);
+    store.recordDropped({ overflow: 0, invalid: 0 });
+    expect(runs).toBe(1);
+    store.recordDropped({ overflow: 3, invalid: 0 });
+    // droppedMessages + receivedMessages 各寫一次（sync watcher 逐次觸發）；invalid 未動
+    expect(runs).toBe(3);
+    expect(store.invalidMessages).toBe(0);
+    scope.stop();
   });
 
   it("一批多筆只觸發一次 machines 依賴（shallowRef + triggerRef）", () => {

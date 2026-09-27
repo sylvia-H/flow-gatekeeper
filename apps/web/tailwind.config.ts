@@ -7,7 +7,8 @@ import type { Config } from 'tailwindcss';
  *
  * 注意 Tailwind 3 對未定義的 class（例如少了 fontSize.number 的 `text-number`）是靜默略過、
  * 不報錯，所以新 token 一律先在這裡定義再用。顏色名不可與 fontSize 名相同（曾有
- * `colors.base` 讓 `text-base` 同時輸出字級與顏色），底色因此命名為 `canvas`。
+ * `colors.base` 讓 `text-base` 同時輸出字級與顏色），底色因此命名為 `canvas`；
+ * 同理顏色名也不可與 utility 修飾字撞名（`ring-inset`），內嵌面因此是 `surface.inset`。
  */
 export default {
   content: ['./index.html', './src/**/*.{vue,ts}'],
@@ -18,9 +19,11 @@ export default {
         surface: {
           DEFAULT: '#111820',
           hover: '#141D27',
+          // 內嵌面（輸入框、串流面板、拓樸畫布底）→ `bg-surface-inset`。不可命名為頂層 `inset`：
+          // 會與內建 `ring-inset` 撞名，讓它輸出「環顏色」而非 `--tw-ring-inset: inset`。
+          inset: '#0E151B',
         },
         elevated: '#17212B',
-        inset: '#0E151B',
         subtle: '#26323D',
         strong: '#3E5266',
         fg: '#E7EDF2',

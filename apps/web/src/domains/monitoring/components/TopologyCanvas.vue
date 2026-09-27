@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { useMonitoringStore } from "../stores/monitoring.store.js";
-import { useDiagnoseTrigger } from "../../../shared/composables/useDiagnoseTrigger.js";
+import { useDiagnoseTrigger } from "../../ai-copilot/composables/useDiagnoseTrigger.js";
 import { isStale } from "../lib/stale.js";
 import MachineNodeCard from "./MachineNodeCard.vue";
 
@@ -37,7 +37,7 @@ function onDiagnose(machineId: string): void {
 </script>
 
 <template>
-  <div class="topology-bg h-full overflow-auto bg-inset p-4 md:p-6">
+  <div class="topology-bg h-full overflow-auto bg-surface-inset p-4 md:p-6">
     <!-- search 查無相符：空狀態（非破版空白，FR-015／Edge Cases） -->
     <div
       v-if="nodes.length === 0"
@@ -68,7 +68,7 @@ function onDiagnose(machineId: string): void {
 </template>
 
 <style scoped>
-/* design-spec §6.3 grid overlay（底色用 bg-inset token，僅格線走 spec 定義的疊圖） */
+/* design-spec §6.3 grid overlay（底色用 bg-surface-inset token，僅格線走 spec 定義的疊圖） */
 .topology-bg {
   background-image:
     linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),

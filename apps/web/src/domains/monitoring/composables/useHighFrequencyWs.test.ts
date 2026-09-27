@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { effectScope, type EffectScope } from "vue";
-import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
+import type { DiagnosisResult, MachineState, SystemMetrics, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import {
   useHighFrequencyWs,
   type HighFrequencyWsHandle,
@@ -147,14 +147,39 @@ describe("useHighFrequencyWs — rAF 批次（憲章 IV／硬規則 1）", () =>
     expect(spies.onBatch).toHaveBeenCalledTimes(1);
   });
 
-  it("畸形資料點在入口剔除並以 onDrop('invalid') 回報，其餘照常入 buffer", () => {
+  it("畸形資料點在入口剔除並計入 invalid，其餘照常入 buffer", () => {
     const { spies } = mount();
     const ws = FakeWebSocket.latest();
     ws.serverOpen();
     ws.serverSend([pt("a"), null, { type: "machine/data", machineId: "x" }]);
-    expect(spies.onDrop).toHaveBeenCalledWith(2, "invalid");
     vi.advanceTimersByTime(FRAME);
+    expect(spies.onDrop).toHaveBeenCalledWith({ overflow: 0, invalid: 2 });
     expect(spies.onBatch.mock.calls[0]?.[0].map((p) => p.machineId)).toEqual(["a"]);
+  });
+
+  it("丟棄計數先累計於非 reactive 計數器：onmessage 不回報，每幀至多一次 onDrop（§3.3 a）", () => {
+    const { spies } = mount();
+    const ws = FakeWebSocket.latest();
+    ws.serverOpen();
+    for (let i = 0; i < 50; i += 1) ws.serverSend([null, pt("a")]);
+    expect(spies.onDrop).not.toHaveBeenCalled(); // 訊息路徑不碰 store
+
+    vi.advanceTimersByTime(FRAME);
+    expect(spies.onDrop).toHaveBeenCalledTimes(1);
+    expect(spies.onDrop).toHaveBeenLastCalledWith({ overflow: 0, invalid: 50 });
+
+    vi.advanceTimersByTime(FRAME * 3); // 沒有新丟棄的幀不提交
+    expect(spies.onDrop).toHaveBeenCalledTimes(1);
+  });
+
+  it("Pause 期間丟棄計數照常每幀提交（遙測批次仍凍結）", () => {
+    const { spies } = mount({ isPaused: () => true });
+    const ws = FakeWebSocket.latest();
+    ws.serverOpen();
+    ws.serverSend([null, null, pt("a")]);
+    vi.advanceTimersByTime(FRAME);
+    expect(spies.onBatch).not.toHaveBeenCalled();
+    expect(spies.onDrop).toHaveBeenCalledWith({ overflow: 0, invalid: 2 });
   });
 
   it("onBatch 丟例外不讓下一幀停排；log 節流（首次立即印，之後每 10 秒最多一則）", () => {
@@ -182,7 +207,7 @@ describe("useHighFrequencyWs — rAF 批次（憲章 IV／硬規則 1）", () =>
 });
 
 describe("useHighFrequencyWs — 溢位與暫停", () => {
-  it("超過 maxBufferSize 時合併：每台保留最新＋轉換點，丟棄筆數以 onDrop('overflow') 回報", () => {
+  it("超過 maxBufferSize 時合併：每台保留最新＋轉換點，丟棄筆數以 onDrop overflow 回報", () => {
     let paused = true;
     const { spies } = mount({ maxBufferSize: 10, isPaused: () => paused });
     const ws = FakeWebSocket.latest();
@@ -203,10 +228,10 @@ describe("useHighFrequencyWs — 溢位與暫停", () => {
     expect(batch.some((p) => p.machineId === "b")).toBe(true);
     expect(batch.some((p) => p.machineId === "a" && p.telemetry.temperature === 110)).toBe(true);
     expect(batch.at(-1)?.telemetry.temperature).toBe(119);
-    const dropped = spies.onDrop.mock.calls
-      .filter(([, reason]) => reason === "overflow")
-      .reduce((sum, [n]) => sum + n, 0);
+    const dropped = spies.onDrop.mock.calls.reduce((sum, [counts]) => sum + counts.overflow, 0);
     expect(dropped + batch.length).toBe(21); // 沒有任何一筆憑空消失而未計數
+    // 暫停 6 幀內溢位多次合併，但每幀至多一次 onDrop
+    expect(spies.onDrop.mock.calls.length).toBeLessThanOrEqual(6);
   });
 
   it("pause 期間續存不提交；resume 後下一幀一次沖出全部", () => {
@@ -258,6 +283,73 @@ describe("useHighFrequencyWs — 溢位與暫停", () => {
     doc.visibilityState = "visible";
     doc.dispatchEvent(new Event("visibilitychange"));
     expect(vi.getTimerCount()).toBe(timersWhileHidden - 1);
+    expect(spies.onBatch).not.toHaveBeenCalled();
+  });
+});
+
+const RESULT: DiagnosisResult = {
+  summary: "溫度偏高",
+  severity: "warning",
+  likelyCauses: ["冷卻風扇效率下降"],
+  suggestedActions: [{ label: "檢查風扇", priority: "medium" }],
+  evidence: [{ source: "telemetry", excerpt: "temperature 88" }],
+};
+
+const DIAGNOSIS_EVENTS = [
+  { type: "job/status", jobId: "j1", machineId: "mixer-01", status: "active", progress: 40 },
+  { type: "ai/token", jobId: "j1", attempt: 1, seq: 0, text: "溫" },
+  { type: "ai/done", jobId: "j1", attempt: 1, cached: false, result: RESULT },
+  { type: "ai/error", jobId: "j1", attempt: 2, code: "timeout", message: "LLM timeout" },
+] as const;
+
+const METRICS: SystemMetrics = {
+  type: "system/metrics",
+  windowMs: 60_000,
+  collectedAt: "2026-09-27T00:00:00.000Z",
+  queue: { waiting: 0, active: 1, failed: 0 },
+  wsConnections: 2,
+  worker: null,
+};
+
+describe("useHighFrequencyWs — 非遙測訊息分流（TQ-3）", () => {
+  it("ai/*／job/status 立即交 onDiagnosisEvent、system/metrics 立即交 onMetrics，皆不進遙測 buffer", () => {
+    const onDiagnosisEvent = vi.fn<NonNullable<UseHighFrequencyWsOptions["onDiagnosisEvent"]>>();
+    const onMetrics = vi.fn<NonNullable<UseHighFrequencyWsOptions["onMetrics"]>>();
+    const { spies } = mount({ onDiagnosisEvent, onMetrics });
+    const ws = FakeWebSocket.latest();
+    ws.serverOpen();
+
+    ws.serverSend([pt("a")]);
+    for (const event of DIAGNOSIS_EVENTS) ws.serverSend(event);
+    ws.serverSend(METRICS);
+    ws.serverSend([pt("b")]);
+
+    // 分流是同步的：不等 rAF，也不經 buffer
+    expect(onDiagnosisEvent.mock.calls.map(([e]) => e.type)).toEqual(DIAGNOSIS_EVENTS.map((e) => e.type));
+    expect(onDiagnosisEvent.mock.calls.map(([e]) => e)).toEqual([...DIAGNOSIS_EVENTS]);
+    expect(onMetrics).toHaveBeenCalledTimes(1);
+    expect(onMetrics).toHaveBeenCalledWith(METRICS);
+    expect(spies.onBatch).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(FRAME);
+    expect(spies.onBatch).toHaveBeenCalledTimes(1);
+    // 遙測批次只含遙測點：診斷事件與指標摘要沒有混進 buffer
+    expect(spies.onBatch.mock.calls[0]?.[0]).toEqual([pt("a"), pt("b")]);
+    // 非遙測訊息也不算丟棄
+    expect(spies.onDrop).not.toHaveBeenCalled();
+  });
+
+  it("Pause 期間診斷事件與指標摘要照常即時分流（凍結只作用在遙測）", () => {
+    const onDiagnosisEvent = vi.fn<NonNullable<UseHighFrequencyWsOptions["onDiagnosisEvent"]>>();
+    const onMetrics = vi.fn<NonNullable<UseHighFrequencyWsOptions["onMetrics"]>>();
+    const { spies } = mount({ onDiagnosisEvent, onMetrics, isPaused: () => true });
+    const ws = FakeWebSocket.latest();
+    ws.serverOpen();
+    ws.serverSend(DIAGNOSIS_EVENTS[1]);
+    ws.serverSend(METRICS);
+    vi.advanceTimersByTime(FRAME * 3);
+    expect(onDiagnosisEvent).toHaveBeenCalledTimes(1);
+    expect(onMetrics).toHaveBeenCalledTimes(1);
     expect(spies.onBatch).not.toHaveBeenCalled();
   });
 });
@@ -327,6 +419,26 @@ describe("useHighFrequencyWs — 心跳與重連", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
     vi.advanceTimersByTime(1_000);
     expect(FakeWebSocket.instances).toHaveLength(3);
+  });
+
+  it("收到 system/connected 才把退避歸零：之後斷線回到 1 秒重連（TQ-3）", () => {
+    mount();
+    // 連兩次失敗把退避推到 attempt 2（下一次 4 秒）
+    FakeWebSocket.latest().close(); // attempt 0 → 1s
+    vi.advanceTimersByTime(1_000);
+    FakeWebSocket.latest().close(); // attempt 1 → 2s
+    vi.advanceTimersByTime(2_000);
+    expect(FakeWebSocket.instances).toHaveLength(3);
+
+    const third = FakeWebSocket.latest();
+    third.serverOpen();
+    third.serverSend({ type: "system/connected", clientId: "c3" });
+    third.close(); // 已真正連上過 → attempt 0 → 1s（未歸零則為 4s）
+
+    vi.advanceTimersByTime(999);
+    expect(FakeWebSocket.instances).toHaveLength(3);
+    vi.advanceTimersByTime(1);
+    expect(FakeWebSocket.instances).toHaveLength(4);
   });
 
   it("pong 逾時後、舊 socket 的 close 尚未到達就 online 重連 → 舊心跳不會關掉新 socket", () => {

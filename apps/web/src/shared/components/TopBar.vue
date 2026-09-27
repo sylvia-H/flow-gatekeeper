@@ -7,7 +7,7 @@ import {
   useMonitoringStore,
   type ConnectionStatus,
 } from "../../domains/monitoring/stores/monitoring.store.js";
-import { useDiagnoseTrigger } from "../composables/useDiagnoseTrigger.js";
+import { useDiagnoseTrigger } from "../../domains/ai-copilot/composables/useDiagnoseTrigger.js";
 
 /**
  * TopBar（design-spec §7.2）：search（外觀）、connection chip、BackpressureBadge、
@@ -73,7 +73,7 @@ function onSearchInput(event: Event): void {
         placeholder="Search machines"
         aria-label="Search machines"
         :value="store.searchQuery"
-        class="h-9 w-full rounded-control border border-subtle bg-inset pl-8 pr-3 text-sm text-fg placeholder:text-fg-subtle focus:border-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        class="h-9 w-full rounded-control border border-subtle bg-surface-inset pl-8 pr-3 text-sm text-fg placeholder:text-fg-subtle focus:border-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         @input="onSearchInput"
       />
     </div>

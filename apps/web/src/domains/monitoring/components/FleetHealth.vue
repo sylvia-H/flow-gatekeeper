@@ -39,7 +39,7 @@ function pct(count: number): number {
     </div>
 
     <!-- 比例條：四段依佔比排列；0 佔比不顯示 -->
-    <div class="flex h-2 w-full overflow-hidden rounded-pill bg-inset" role="presentation">
+    <div class="flex h-2 w-full overflow-hidden rounded-pill bg-surface-inset" role="presentation">
       <div
         v-for="seg in segments"
         :key="seg.key"

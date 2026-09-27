@@ -4,7 +4,7 @@ import type {
   SystemMetrics,
   TelemetryPoint,
 } from "@flow-gatekeeper/contracts";
-import type { ConnectionStatus } from "../stores/monitoring.store.js";
+import type { ConnectionStatus, DropCounts } from "../stores/monitoring.store.js";
 import { nextBackoffDelay } from "../lib/backoff.js";
 import { classifyWsMessage, type DiagnosisEvent } from "../lib/ws-message.js";
 import { coalesceTelemetry } from "../lib/telemetry-coalesce.js";
@@ -50,8 +50,10 @@ export interface UseHighFrequencyWsOptions {
   /**
    * 選用：遙測在進 store 前被捨棄時回報筆數——`overflow` 為 buffer 溢位合併、`invalid` 為
    * 入口型別守衛剔除。交 store.recordDropped，讓背壓計量看得出資料曾被丟棄。
+   * 與遙測同樣先累計於非 reactive 計數器，**每幀至多呼叫一次**（硬規則 1）；Pause 期間照常
+   * 每幀提交（計數不是畫面內容，凍結它只會讓背壓 badge 在 resume 時一次跳動）。
    */
-  onDrop?: (count: number, reason: "overflow" | "invalid") => void;
+  onDrop?: (counts: DropCounts) => void;
   /**
    * 選用：pump 每幀讀它——回 true 時**跳過 flush、續存 buffer**（畫面凍結），
    * resume（回 false）後下一幀 flush 整個 buffer＝直接跳到最新。
@@ -95,6 +97,10 @@ export function useHighFrequencyWs(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let hiddenFlushTimer: ReturnType<typeof setInterval> | null = null;
 
+  // 丟棄筆數的非 reactive 累計；每幀 commitDrops 一次交出（硬規則 1）。
+  let pendingOverflow = 0;
+  let pendingInvalid = 0;
+
   let batchErrorCount = 0;
   let lastBatchErrorLogAt = Number.NEGATIVE_INFINITY;
 
@@ -125,13 +131,31 @@ export function useHighFrequencyWs(
     }
   }
 
+  /** 把本幀累計的丟棄筆數一次交給 onDrop；先歸零再呼叫，回呼丟例外也不會重複計數。 */
+  function commitDrops(): void {
+    if (pendingOverflow === 0 && pendingInvalid === 0) return;
+    const counts: DropCounts = { overflow: pendingOverflow, invalid: pendingInvalid };
+    pendingOverflow = 0;
+    pendingInvalid = 0;
+    options.onDrop?.(counts);
+  }
+
+  /** 一幀的工作：遙測批次＋丟棄計數，各至多一次提交。 */
+  function frame(): void {
+    try {
+      flush();
+    } finally {
+      commitDrops();
+    }
+  }
+
   /**
    * rAF pump：每幀 flush 一次，跨重連持續運作。排程放在 finally：任何例外都不能讓下一幀
    * 停排——否則 buffer 卡在上限、畫面凍結，連線 chip 卻仍顯示 Connected，是無聲故障。
    */
   function pump(): void {
     try {
-      flush();
+      frame();
     } finally {
       if (!manualClose) rafId = requestAnimationFrame(pump);
     }
@@ -195,7 +219,7 @@ export function useHighFrequencyWs(
       // 溢位不截斷最舊：改合併，保住每台最新值與期間的狀態轉換（Event Stream 不斷片）。
       const { kept, dropped } = coalesceTelemetry(buffer, maxBufferSize);
       buffer = kept;
-      if (dropped > 0) options.onDrop?.(dropped, "overflow");
+      pendingOverflow += dropped;
     }
   }
 
@@ -211,7 +235,7 @@ export function useHighFrequencyWs(
     const routed = classifyWsMessage(parsed);
     switch (routed.kind) {
       case "telemetry":
-        if (routed.rejected > 0) options.onDrop?.(routed.rejected, "invalid");
+        pendingInvalid += routed.rejected;
         pushTelemetry(routed.points);
         return;
       case "diagnosis":
@@ -294,7 +318,7 @@ export function useHighFrequencyWs(
    */
   function onVisibilityChange(): void {
     if (document.visibilityState === "hidden") {
-      if (hiddenFlushTimer === null) hiddenFlushTimer = setInterval(flush, HIDDEN_FLUSH_MS);
+      if (hiddenFlushTimer === null) hiddenFlushTimer = setInterval(frame, HIDDEN_FLUSH_MS);
     } else {
       clearHiddenFlush();
     }
@@ -324,6 +348,8 @@ export function useHighFrequencyWs(
     ws = null; // 先解除現役身分，socket 的 close 事件就不會再排重連
     socket?.close();
     buffer = [];
+    pendingOverflow = 0;
+    pendingInvalid = 0;
     onStatus("disconnected");
   }
 

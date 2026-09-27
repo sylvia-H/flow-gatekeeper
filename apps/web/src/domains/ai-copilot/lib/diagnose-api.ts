@@ -32,7 +32,11 @@ export class DiagnoseRequestError extends Error {
 }
 
 /** 狀態碼 → 使用者看得懂的句子（不把「HTTP 503」這種字樣丟給使用者）。 */
-function messageForStatus(status: number): string {
+export function messageForStatus(status: number): string {
+  // 404：api 對名冊外的 machineId 回 404。
+  if (status === 404) return "此機台不在名冊中";
+  // 429：nginx 對 `/diagnoses` 限流（limit_req）；回應是 nginx 錯誤頁，不會有中文 message。
+  if (status === 429) return "診斷請求過於頻繁，請稍後再試";
   if (status === 409) return "此診斷請求已失效，請重新發起";
   if (status === 503) return "診斷佇列暫時無法使用，請稍後再試";
   if (status === 400 || status === 415) return "請求格式不被接受（前端版本可能過舊）";

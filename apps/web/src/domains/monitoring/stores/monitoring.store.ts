@@ -16,6 +16,12 @@ const EVENT_CAP = 50;
  */
 export type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
 
+/** 一幀內在進 store 前被捨棄的遙測筆數：`overflow`＝buffer 溢位合併、`invalid`＝入口型別守衛剔除。 */
+export interface DropCounts {
+  overflow: number;
+  invalid: number;
+}
+
 /**
  * `MachineLive` —— 前端投影，衍生自契約 `TelemetryPoint`（非契約新增）。
  * 只保留每台機台「最新一筆」快照 + 收到時的 `lastUpdated`（供 stale 判斷）。
@@ -144,12 +150,17 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   /**
    * composable 回報在進 store 前就被捨棄的筆數。兩者都計入 `receivedMessages`（它們確實抵達了），
    * 但不計入 `renderedBatches`（沒有觸發任何提交）。
+   *
+   * 呼叫端（`useHighFrequencyWs`）先把丟棄筆數累計在非 reactive 計數器，每幀 flush 時才
+   * 一次交進來（硬規則 1）：本 action 每幀至多一次，不隨訊息數成長。
    */
-  function recordDropped(count: number, reason: "overflow" | "invalid"): void {
-    if (count <= 0) return;
-    if (reason === "overflow") droppedMessages.value += count;
-    else invalidMessages.value += count;
-    receivedMessages.value += count;
+  function recordDropped(counts: DropCounts): void {
+    const overflow = Math.max(0, counts.overflow);
+    const invalid = Math.max(0, counts.invalid);
+    if (overflow === 0 && invalid === 0) return;
+    if (overflow > 0) droppedMessages.value += overflow;
+    if (invalid > 0) invalidMessages.value += invalid;
+    receivedMessages.value += overflow + invalid;
   }
 
   function selectMachine(machineId: string): void {
