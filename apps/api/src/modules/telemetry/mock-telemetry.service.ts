@@ -2,8 +2,11 @@ import { Injectable } from "@nestjs/common";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { deriveMachineState } from "@flow-gatekeeper/shared";
 
-/** 固定 5 台示範機台（spec Assumptions / data-model）。 */
-const MACHINE_IDS = ["mixer-01", "press-02", "pack-03", "oven-04", "sorter-05"] as const;
+/**
+ * 固定 5 台示範機台（spec Assumptions / data-model）。
+ * api 內的機台名冊單一來源：Gateway 以此過濾 client 送來的 machineIds，不另寫一份。
+ */
+export const MACHINE_IDS = ["mixer-01", "press-02", "pack-03", "oven-04", "sorter-05"] as const;
 
 /**
  * 決定性 mock telemetry producer（指南 §7.3 規格為單一來源）。
@@ -15,6 +18,11 @@ const MACHINE_IDS = ["mixer-01", "press-02", "pack-03", "oven-04", "sorter-05"] 
 @Injectable()
 export class MockTelemetryService {
   private tick = 0;
+
+  /** 本 producer 會產生資料的機台清單（Gateway 訂閱白名單的來源）。 */
+  get machineIds(): readonly string[] {
+    return MACHINE_IDS;
+  }
 
   nextBatch(): TelemetryPoint[] {
     this.tick += 1;
