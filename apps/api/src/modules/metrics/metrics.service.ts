@@ -6,9 +6,7 @@ import type { SystemMetrics } from "@flow-gatekeeper/contracts";
 import { AppConfigService } from "../config/config.service.js";
 import { mergeMetrics } from "../../lib/metrics-merge.js";
 import { getAppLogger } from "../../logging/app-logger.js";
-
-/** worker 側指標快照的 Redis key（contracts/metrics-summary.md §5）。 */
-export const WORKER_METRICS_KEY = "metrics:worker";
+import { readWorkerSnapshots } from "./worker-snapshots.js";
 
 /**
  * 指標來源與出口——由組合根（`main.ts`）於 `app.listen()` 後綁定。
@@ -27,12 +25,12 @@ export type MetricsSources = {
 /**
  * 週期指標結算（009 US3；FR-008／FR-008a、contracts/metrics-summary.md §4）。
  *
- * 每 `METRICS_INTERVAL_MS`：讀 queue counts + ws 連線數 → `GET metrics:worker`（非破壞性，
- * 不 `DEL`）→ `mergeMetrics` 合併 → 以**專屬 metrics child logger** 輸出一則摘要 → 廣播
+ * 每 `METRICS_INTERVAL_MS`：讀 queue counts + ws 連線數 → `SCAN metrics:worker:*` + `MGET`
+ * 讀回各 worker 實例快照（非破壞性，不 `DEL`）→ `mergeMetrics` 合併 → 以**專屬 metrics child logger** 輸出一則摘要 → 廣播
  * `system/metrics` 給所有連線。
  *
- * **FR-009**：本服務不在任何高頻路徑（`publishTelemetry`／`persistBatch`）記錄任何東西，
- * 只在週期結算時輸出一則。
+ * 本服務刻意不在任何高頻路徑（每 tick 的 telemetry 廣播與 History `enqueue`）記錄任何東西，
+ * 只在週期結算時輸出一則——否則指標本身就會成為每秒 20 次的 log 噪音源。
  */
 @Injectable()
 export class MetricsService implements OnModuleInit, OnModuleDestroy {
@@ -49,12 +47,9 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     // 專屬連線（憲章 IV 連線分離）：與 BullMQ producer／QueueEvents／ai-stream subscriber／
-    // health 探測皆分開，僅供本服務讀取 worker 快照使用。
-    this.redis = new IORedis({
-      host: this.config.redisHost,
-      port: this.config.redisPort,
-      maxRetriesPerRequest: null,
-    });
+    // health 探測皆分開，僅供本服務讀取 worker 快照使用。`command` 設定：Redis 不通時 SCAN／MGET
+    // 立刻失敗、本則以 `worker: null` 降級，而不是排隊到重連。
+    this.redis = new IORedis(this.config.redisOptions("command"));
     this.redis.on("error", (err) => this.logger.warn({ err }, "metrics redis connection error"));
   }
 
@@ -76,10 +71,11 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
    * 單次結算。**MUST NOT 拋錯、MUST NOT 影響主流程**——本方法由 timer 以
    * fire-and-forget 呼叫，任何逸出的 rejection 都會變成浮空 rejection。
    *
-   * **重入防護**：Redis 中斷期間 `queueCounts()`（BullMQ → Redis）會**掛住**而非立刻失敗
-   * （連線設 `maxRetriesPerRequest: null`，指令會排隊等重連）。沒有防護時，中斷每過一個間隔
-   * 就多堆一輪在途結算，恢復當下全部同時完成——實測會看到同一毫秒連續兩則摘要，違反
-   * 「每 `METRICS_INTERVAL_MS` 一則」。跳過的那一輪不補發（本訊息本就是 at-most-once）。
+   * **重入防護**：producer 與本服務的連線已改為斷線即 reject（`redisOptions("command")`），
+   * 但 BullMQ Queue 在「首次連線尚未 ready」時仍會等待連線建立，`queueCounts()` 可能掛到
+   * Redis 恢復。沒有防護時，每過一個間隔就多堆一輪在途結算，恢復當下全部同時完成——實測會看到
+   * 同一毫秒連續兩則摘要，違反「每 `METRICS_INTERVAL_MS` 一則」。跳過的那一輪不補發（本訊息本就
+   * 是 at-most-once）。
    */
   private async settle(): Promise<void> {
     const sources = this.sources;
@@ -105,11 +101,12 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    // worker 快照：key 不存在／過期／畸形一律由 mergeMetrics 降級為 `worker: null`，
-    // 摘要照常輸出（FR-008）。讀取本身失敗（Redis 不通）也一律當作缺席，不中斷。
-    let workerRaw: string | null = null;
+    // worker 快照：每個實例一把 key，逐筆驗證後合併；過期／畸形者由 mergeMetrics 略過，
+    // 一筆有效的都沒有時降級為 `worker: null`，摘要照常輸出。讀取本身失敗（Redis 不通）也一律
+    // 當作全數缺席，不中斷。
+    let workerRaws: (string | null)[] = [];
     try {
-      workerRaw = (await this.redis?.get(WORKER_METRICS_KEY)) ?? null;
+      workerRaws = this.redis ? await readWorkerSnapshots(this.redis) : [];
     } catch (err) {
       this.logger.warn({ err }, "worker 指標快照讀取失敗，本則以 worker: null 降級輸出");
     }
@@ -121,7 +118,7 @@ export class MetricsService implements OnModuleInit, OnModuleDestroy {
         queue,
         wsConnections: sources.wsConnections(),
       },
-      workerRaw,
+      workerRaws,
     );
 
     this.logger.info(

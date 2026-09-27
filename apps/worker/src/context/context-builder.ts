@@ -28,6 +28,13 @@ export type DiagnosisContext = {
 };
 
 /**
+ * 單一查詢的伺服器端時間上限。驅動預設 `socketTimeoutMS: 0`（永不逾時）——查詢一旦掛住，
+ * processor 就卡在這裡、佔住 concurrency 槽，而 heartbeat 仍新鮮。設上限讓它以錯誤結束，
+ * 交給 BullMQ 重試；5s 對「近 N 分鐘、單一機台、有索引」的查詢是很寬裕的預算。
+ */
+export const CONTEXT_QUERY_MAX_TIME_MS = 5000;
+
+/**
  * 讀 Mongo 組診斷脈絡（FR-011）：窗口內 telemetry 彙總、最近 state、近 5 筆 errorlogs、
  * 近 3 筆 maintenanceRecords，並導出 `topErrorCodes`（供 US2 簽章）。純讀取、不寫入。
  */
@@ -35,8 +42,10 @@ export async function buildDiagnosisContext(args: {
   mongo: Db;
   machineId: string;
   windowMinutes: number;
+  maxTimeMS?: number;
 }): Promise<DiagnosisContext> {
   const { mongo, machineId, windowMinutes } = args;
+  const maxTimeMS = args.maxTimeMS ?? CONTEXT_QUERY_MAX_TIME_MS;
   const since = new Date(Date.now() - windowMinutes * 60_000);
 
   const aggRows = await mongo
@@ -55,7 +64,7 @@ export async function buildDiagnosisContext(args: {
           maxErrorRate: { $max: "$telemetry.errorRate" },
         },
       },
-    ])
+    ], { maxTimeMS })
     .toArray();
   const telemetry: TelemetrySummary | null = aggRows[0]
     ? {
@@ -71,7 +80,7 @@ export async function buildDiagnosisContext(args: {
 
   const latestDoc = (await mongo
     .collection("telemetry")
-    .find({ "metadata.machineId": machineId })
+    .find({ "metadata.machineId": machineId }, { maxTimeMS })
     .sort({ timestamp: -1 })
     .limit(1)
     .next()) as { state?: string } | null;
@@ -79,7 +88,7 @@ export async function buildDiagnosisContext(args: {
 
   const errorDocs = (await mongo
     .collection("errorlogs")
-    .find({ machineId, timestamp: { $gte: since } })
+    .find({ machineId, timestamp: { $gte: since } }, { maxTimeMS })
     .sort({ timestamp: -1 })
     .limit(5)
     .toArray()) as { state?: string; message?: string; timestamp?: Date }[];
@@ -92,7 +101,7 @@ export async function buildDiagnosisContext(args: {
 
   const maintenanceDocs = (await mongo
     .collection("maintenanceRecords")
-    .find({ machineId })
+    .find({ machineId }, { maxTimeMS })
     .sort({ performedAt: -1 })
     .limit(3)
     .toArray()) as {

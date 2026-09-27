@@ -17,6 +17,8 @@
 **/node_modules
 **/dist
 coverage
+# tsc 增量資訊若隨 context 進去、而 dist 被上面排除，tsc 可能誤判「已是最新」而不輸出 dist
+**/*.tsbuildinfo
 
 # ---- 版控與本機工具狀態 ----
 .git

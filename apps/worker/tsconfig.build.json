@@ -1,4 +1,9 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // production 編譯必須與 runtime（node 原生載入 packages 的 dist）對照同一份 dist 型別：
+    // 否則 src 已改、dist 未重建時型別檢查會過、執行期卻炸。開發期的 src 對照由 tsconfig.json（typecheck）負責。
+    "customConditions": []
+  },
   "exclude": ["src/**/*.test.ts", "src/**/*.check.ts"]
 }

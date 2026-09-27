@@ -4,9 +4,11 @@ import type { WorkerMetrics } from "@flow-gatekeeper/contracts";
 import {
   createMetricsCollector,
   MAX_LATENCY_SAMPLES,
-  METRICS_KEY,
   type MetricsRedis,
 } from "./metrics-collector.js";
+import { workerMetricsKey } from "./redis-keys.js";
+
+const KEY = workerMetricsKey("test-instance");
 
 /**
  * 收集器的**視窗語意**測試（data-model E5）。重點是環形緩衝寫滿 1000 筆後繞回的路徑——
@@ -54,6 +56,7 @@ describe("createMetricsCollector — 窗內累加與環形緩衝", () => {
     const { redis, writes, logger } = stubs();
     const collector = createMetricsCollector({
       redis,
+      key: KEY,
       logger,
       env: { METRICS_INTERVAL_MS: "5000" },
     });
@@ -77,6 +80,7 @@ describe("createMetricsCollector — 窗內累加與環形緩衝", () => {
     const { redis, writes, logger } = stubs();
     const collector = createMetricsCollector({
       redis,
+      key: KEY,
       logger,
       env: { METRICS_INTERVAL_MS: "5000" },
     });
@@ -97,6 +101,7 @@ describe("createMetricsCollector — 窗內累加與環形緩衝", () => {
     const { redis, writes, logger } = stubs();
     const collector = createMetricsCollector({
       redis,
+      key: KEY,
       logger,
       env: { METRICS_INTERVAL_MS: "5000" },
     });
@@ -122,6 +127,7 @@ describe("createMetricsCollector — 窗內累加與環形緩衝", () => {
     const { redis, writes, logger } = stubs();
     const collector = createMetricsCollector({
       redis,
+      key: KEY,
       logger,
       env: { METRICS_INTERVAL_MS: "5000" },
     });
@@ -137,11 +143,12 @@ describe("createMetricsCollector — 窗內累加與環形緩衝", () => {
     collector.stop();
   });
 
-  it("只寫 metrics:worker，TTL 為 3 × 間隔秒數；MUST NOT 碰 007 的 worker:heartbeat（FR-010）", () => {
+  it("只寫本實例的 metrics:worker:<id>，TTL 為 3 × 間隔秒數；MUST NOT 碰 007 的 worker:heartbeat（FR-010）", () => {
     vi.useFakeTimers();
     const { redis, writes, logger } = stubs();
     const collector = createMetricsCollector({
       redis,
+      key: KEY,
       logger,
       env: { METRICS_INTERVAL_MS: "5000" },
     });
@@ -150,7 +157,7 @@ describe("createMetricsCollector — 窗內累加與環形緩衝", () => {
     vi.advanceTimersByTime(15_000);
 
     expect(writes.length).toBeGreaterThan(0);
-    expect(writes.every((w) => w.key === METRICS_KEY)).toBe(true);
+    expect(writes.every((w) => w.key === "metrics:worker:test-instance")).toBe(true);
     expect(writes.every((w) => w.seconds === 15)).toBe(true);
     collector.stop();
   });
@@ -160,6 +167,7 @@ describe("createMetricsCollector — 窗內累加與環形緩衝", () => {
     const { redis, writes, logger } = stubs();
     const collector = createMetricsCollector({
       redis,
+      key: KEY,
       logger,
       env: { METRICS_INTERVAL_MS: "5000" },
     });
@@ -178,6 +186,7 @@ describe("createMetricsCollector — 窗內累加與環形緩衝", () => {
     const { redis, logger, logged } = stubs();
     const collector = createMetricsCollector({
       redis,
+      key: KEY,
       logger,
       env: { METRICS_INTERVAL_MS: "1000" },
     });

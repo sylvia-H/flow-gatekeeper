@@ -5,7 +5,7 @@
 | 狀態 | Accepted |
 | 日期 | 2026-07-06 |
 | 範圍 | 部署與執行模型（worker/api/web）、process 監督、可觀測性，以及「明確不補」的運維層差距 |
-| 相關 | Feature 007/008/009（實作指南 §13–§15）、`apps/worker/src/main.ts` process handlers、`docker-compose.yml`、`scripts/dev-up.ps1`、ADR-001 |
+| 相關 | Feature 007/008/009（實作指南 §13–§15）、`apps/worker/src/main.ts` process handlers、`docker-compose.yml`、`scripts/dev-up.ps1`、ADR-001、2026-09-27 審查報告（`docs/20260927-research-review.md`）與其修復分支 `fix/20260927-research-review` |
 
 ---
 
@@ -15,7 +15,7 @@ flow-gatekeeper 是作品集 side project，核心賣點是三件事：前端 rA
 
 > **差距最大的不是「選了什麼技術」，而是「執行與運維層整個缺席」。**
 
-功能層的選型（pnpm monorepo + Zod 契約單一來源、BullMQ limiter/attempts/backoff、`AiProvider` 介面隔離、cache signature 含 `promptVersion`/`model`）都站得住腳，可以直接帶進生產。真正的落差集中在運維層（完整清單見 §3）。
+功能層的選型（pnpm monorepo + Zod 契約單一來源、BullMQ limiter/attempts/backoff、`AiProvider` 介面隔離、cache signature 含 `promptVersion`/`model`）都站得住腳（撰寫時的評估；2026-09 審查修復已把 limiter 換成取鎖後的 Redis 固定窗、signature 另含 provider id，見 README），可以直接帶進生產。真正的落差集中在運維層（完整清單見 §3）。
 
 直接導火線是 `fix/worker-stream-resilience` hotfix 留下的「另一半」：worker 的 `uncaughtException`/`unhandledRejection` 目前是「log + 續跑」，因為專案沒有任何 process 監督者——`api`/`worker`/`web` 都在 host 上各開一個 PowerShell 視窗用 `tsx watch` 跑，`docker-compose.yml` 只起 Redis + Mongo。**「翻轉為 `exit(1)`」與「建立監督者」是同一件事的兩半，只做一半是退步**，所以整包留給正式 feature。
 
@@ -37,17 +37,19 @@ flow-gatekeeper 是作品集 side project，核心賣點是三件事：前端 rA
 
 ## 3. 與生產的差距全景（誠實盤點）
 
+> 「現況」欄為本 ADR 撰寫時（2026-07-06，006 完成後）的盤點；各列後段的「→ 已落地／已變更」標註為之後的現況（最近一次回補：2026-09-27 審查修復）。差距敘述本身保留，作為決策由來。
+
 | # | 層面 | 現況 | 生產基線 | 本 ADR 的處置 |
 | --- | --- | --- | --- | --- |
-| 1 | 執行模型 | `tsx watch` 開在 PowerShell 視窗，無 Dockerfile、無 restart 策略——**沒有可部署的形態** | 三端容器映像 + 編排器帶 restart 與健康檢查 | **實作**：007（worker）、008（api/web） |
-| 2 | 崩潰語意 | worker `uncaughtException` log + 續跑（行程狀態未定義，Node 官方明言 not safe to resume） | let it crash：`exit(1)` + 監督者重啟乾淨行程 | **實作**：007 |
-| 3 | 可觀測性 | 只有 console log；無結構化日誌、metrics、tracing、告警 | 結構化 JSON log + metrics + 告警是上線入場券 | **實作基線**：009（僅日誌 + healthz + 指標入 log） |
-| 4 | Gateway 擴展 | 單實例有狀態：訂閱表與 jobId 路由在行程內 `Map`，`psubscribe ai-stream:*` | 連線狀態外置或 sticky session + 跨實例路由 | **文件化**：§6.1 |
-| 5 | Streaming 可靠性 | Redis Pub/Sub at-most-once，Gateway 重啟或前端重連期間 token 永久丟失 | Redis Streams 可回放，或 token 落地 + offset 續傳 | **文件化**：§6.2 |
-| 6 | 認證與安全 | `WS_AUTH_SECRET` 靜態共享字串放在訊息 payload；`ws://` 明文；HTTP 端點無驗證與 rate limit | 升級握手驗 JWT/OIDC、`wss://`、per-user 授權與配額 | **文件化**：§6.3 |
-| 7 | 資料寫入語意 | telemetry 持久化 fire-and-forget；errorlog 去重靠行程內 `lastState` Map | 明確宣告的丟失預算，或帶重試的寫入佇列 | **文件化 + 明文註解**：§6.4、009 |
-| 8 | 資料層 HA | Redis/Mongo 各單節點，Redis 身兼 queue/cache/Pub/Sub/lock 四職 | 託管服務或 Sentinel/replica set，職責分實例 | **拒絕**：§7 |
-| 9 | CI/CD | CI 刻意暫停（私有 repo 省 Actions 分鐘數），無 image 發布管線 | CI 產 image → registry → 自動部署 | **不綁在 007–009**：CI 恢復另議 |
+| 1 | 執行模型 | 撰寫時：`tsx watch` 開在 PowerShell 視窗，無 Dockerfile、無 restart 策略——**沒有可部署的形態**。→ **已落地（007／008）**：三端多階段 Dockerfile、compose `demo` profile、`restart: on-failure:5`、api `/healthz`／worker heartbeat／web 入口三種 healthcheck；開發模式仍保留 host 直跑（§4.4）。**2026-09 運維加固**：redis／mongo 補 healthcheck、api／worker／seed 改 `depends_on: service_healthy`；各服務 `deploy.resources.limits` 與 json-file log 輪替（10MB × 3）；base image tag＋digest 雙釘、BuildKit cache mount；web 改非 root 的 `nginx-unprivileged`（容器內 8080）並加安全 header。現況見 README「執行模式」與「部署與監督拓撲」 | 三端容器映像 + 編排器帶 restart 與健康檢查 | **實作**：007（worker）、008（api/web） |
+| 2 | 崩潰語意 | 撰寫時：worker `uncaughtException` log + 續跑（行程狀態未定義，Node 官方明言 not safe to resume）。→ **已落地（007，api 於 2026-09 修復補齊）**：worker 與 api 的 `uncaughtException`／`unhandledRejection` 皆以 `writeSync` 同步寫出致命訊息（worker 為純文字 stderr、api 為與 pino 同形的 JSON）後 `exit(1)`，交監督者重啟。現況見 README「let it crash + process 監督」 | let it crash：`exit(1)` + 監督者重啟乾淨行程 | **實作**：007 |
+| 3 | 可觀測性 | 撰寫時：只有 console log；無結構化日誌、metrics、tracing、告警。→ **已落地基線（009）**：pino 結構化 JSON、`GET /healthz`、queue／WS／LLM latency／cache 命中率週期入 log 並廣播 `system/metrics`；tracing、告警、exporter 仍依 §7 不做。現況見 README「可觀測性基線」 | 結構化 JSON log + metrics + 告警是上線入場券 | **實作基線**：009（僅日誌 + healthz + 指標入 log） |
+| 4 | Gateway 擴展 | 單實例有狀態：訂閱表與 jobId 路由在行程內 `Map`，`psubscribe ai-stream:*`。→ **Gateway 仍成立**；2026-09 審查另指出更早的斷點：`POST /diagnoses` 的 `socketId` 把 HTTP 請求綁在收到 WS 連線的那個實例（見 §6.1）。**worker 端的多實例限制已解除**：heartbeat／metrics key 改為 `worker:heartbeat:<instanceId>`／`metrics:worker:<instanceId>`，api 以 SCAN 合併 | 連線狀態外置或 sticky session + 跨實例路由 | **文件化**：§6.1 |
+| 5 | Streaming 可靠性 | Redis Pub/Sub at-most-once，Gateway 重啟或前端重連期間 token 永久丟失。→ 仍成立；另更正：最終結果雖落庫，但目前**沒有讀取端點**（見 §6.2） | Redis Streams 可回放，或 token 落地 + offset 續傳 | **文件化**：§6.2 |
+| 6 | 認證與安全 | 撰寫時：`WS_AUTH_SECRET` 靜態共享字串放在訊息 payload；`ws://` 明文；HTTP 端點無驗證與 rate limit。→ **部分已變更（2026-09 修復）**：基本加固已落地——WS 控制訊息 Zod `safeParse`、`maxPayload` 16 KiB、可選 Origin 白名單 `WS_ALLOWED_ORIGINS`、`POST /diagnoses` Zod 驗證＋只收 JSON＋jobId 冪等、api 讀 `REDIS_PASSWORD`、Redis／Mongo 只綁 127.0.0.1。身分驗證、`wss://`、rate limit 仍未做（§6.3） | 升級握手驗 JWT/OIDC、`wss://`、per-user 授權與配額 | **文件化**：§6.3 |
+| 7 | 資料寫入語意 | 撰寫時：telemetry 持久化 fire-and-forget；errorlog 去重靠行程內 `lastState` Map。→ **已變更（2026-09 修復）**：telemetry 改為有上限 buffer（5000 點）＋每秒批次＋單一 in-flight＋丟棄計數；errorlog 佇列區分可重試／終局失敗；`lastState` 仍在行程內（§6.4） | 明確宣告的丟失預算，或帶重試的寫入佇列 | **文件化 + 明文註解**：§6.4、009 |
+| 8 | 資料層 HA | Redis/Mongo 各單節點。撰寫時寫「Redis 身兼 queue/cache/Pub/Sub/lock 四職」——**已更正**：實際職責為 BullMQ 佇列、Pub/Sub（`ai-stream:*`）、cache／dedupe lock（`ai-cache:*`／`ai-lock:*`）、worker heartbeat（`worker:heartbeat:<instanceId>`）、worker 指標快照（`metrics:worker:<instanceId>`）、LLM 限流窗（`ai-rpm:*`）。仍為單節點，但已補基本護欄：`maxmemory 256mb`＋`noeviction`（BullMQ 要求）、可選 `requirepass`（見 §7 補充） | 託管服務或 Sentinel/replica set，職責分實例 | **拒絕**：§7 |
+| 9 | CI/CD | CI 刻意暫停（私有 repo 省 Actions 分鐘數），無 image 發布管線。→ 仍暫停（僅 `workflow_dispatch`）；workflow 已改讀 `.nvmrc`（Node 22）並補 `pnpm build` | CI 產 image → registry → 自動部署 | **不綁在 007–009**：CI 恢復另議 |
 
 ---
 
@@ -77,6 +79,8 @@ Feature 007 原藍圖列了三條候選路線（容器化 / pm2 / systemd），�
 ### 4.4 附帶決策：dev 迴圈不強制容器化
 
 dev 期間 worker 保留 `tsx watch`（熱重載價值 > 監督價值，且人在場看 log 即可）；容器 + 監督用於 demo/prod-ish 情境。兩種模式如何用 compose profiles 或 scripts 切換，留給 Feature 007/008 的 `/speckit.clarify` 定細節。
+
+> **已落地（007／008 clarify 定案）**：同一份 `docker-compose.yml` 以 profile 分組——不帶 profile 只起 Redis／Mongo（開發模式，app 由 `scripts/dev-up.ps1` 在 host 直跑：worker `tsx watch`、api `nest start --watch`、web `vite`），`demo` profile 起 seed／api／worker／web 全棧受監督容器；兩模式刻意不同時啟動（共用資料層）。現況見 README「執行模式：開發模式與一鍵 demo」與實作指南 §16。
 
 ---
 
@@ -110,27 +114,31 @@ dev 期間 worker 保留 `tsx watch`（熱重載價值 > 監督價值，且人�
 
 ### 6.1 Gateway 單實例與水平擴展
 
-- **現況**：訂閱表（`clientId -> Set<machineId>`）與 `jobId -> clientId` 路由都在 Gateway 行程內的 `Map`；AI relay 用 `psubscribe ai-stream:*`。開第二個 API 實例就壞：兩台 Gateway 各自收到所有 token，會重複轉發或找不到 client；API 重啟則所有訂閱歸零。
+- **現況**：訂閱表（`clientId -> Set<machineId>`）與 `jobId -> clientId` 路由都在 Gateway 行程內的 `Map`；AI relay 用 `psubscribe ai-stream:*`。開第二個 API 實例就壞：兩台 Gateway 各自收到所有 token，會重複轉發或找不到 client；API 重啟則所有訂閱歸零。**補充（2026-09 審查）**：第一個斷點其實更早——`POST /diagnoses` 帶 `socketId`，把 HTTP 請求綁在收到該 WS 連線的實例上，LB 把 HTTP 與 WS 分到不同實例時綁定查不到對象；errorlog 的 `lastState` 也在行程內。
 - **為何不做**：demo 負載單實例綽綽有餘；ADR-001 本來就把「需要多實例」列為推翻條件之一；動這裡等於重寫 Gateway 核心，卻不新增任何可展示的能力。
+- **worker 端已解除（2026-09）**：原本 `worker:heartbeat`／`metrics:worker` 是單一 key，多副本時任一副本活著就替已死的副本續命、指標互相覆寫。現改為每實例一把（`instanceId` = `WORKER_INSTANCE_ID` ?? `os.hostname()`，容器內即 container id；限 `[A-Za-z0-9._-]` ≤ 128；demo 容器內 `WORKER_INSTANCE_ID` 由 compose `environment` 釘為空字串，一律使用 hostname（container id），`apps/worker/.env` 裡的值只對 host 直跑生效。）：healthcheck 只看自己的 key；api 每個結算週期以 `SCAN MATCH metrics:worker:* COUNT 100` 分頁＋`MGET` 讀取、逐筆 `WorkerMetricsSchema` 驗證、排除 `collectedAt - snapshotAt > 2.5 × windowMs`（容忍 worker 漏寫一次） 的舊快照後合併（`count`／`hits`／`misses` 加總、`avgMs` 以 count 加權、`p95Ms` 取最大作近似上界、`maxMs` 取最大、`hitRate` 重算、`snapshotAt` 取最新；零筆 → `worker: null`），`WorkerMetrics` 契約形狀不變；worker 優雅關閉時 `DEL` 自身兩把 key，崩潰則靠 TTL＋讀取端過濾。**Gateway 單實例的限制不變。**
 - **生產路徑**：訂閱表外置 Redis；用精準 channel subscribe（`subscribe ai-stream:<jobId>`，只訂自己路由的 job）取代 `psubscribe *`；LB 開 sticky session，或把連線層抽成獨立 tier。屆時也應重新評估 Socket.IO + Redis adapter（見 ADR-001 §6）。
 
 ### 6.2 Redis Pub/Sub 的 at-most-once 語意
 
 - **現況**：AI token 走 `ai-stream:<jobId>` 是 fire-and-forget。Gateway 若在串流中重啟、或前端斷線重連，中間的 token 永久丟失。
-- **為何可接受**：最終診斷結果會落 MongoDB `diagnoses` 並進 Redis cache，丟失的只是「打字機動畫的過場」，不是資料；重連後可拿完整結果。
+- **為何可接受**：最終診斷結果會落 MongoDB `diagnoses` 並進 Redis cache，丟失的只是「打字機動畫的過場」，不是資料；重連後可拿完整結果（此句已更正，見下一條）。
+- **更正（2026-09 審查）**：上一條「重連後可拿完整結果」撰寫時即無程式支撐——HTTP 只有 `POST /diagnoses` 與 `GET /healthz`，**目前沒有任何結果讀取端點**；重連後拿到新 `clientId`、綁定失效，前端只能顯示「中斷 + Retry」（Retry 若簽章相同且快取未過期會秒回 Cached，這是目前唯一的取回路徑）。資料確實落庫，但使用者取不回。補上 `GET /diagnoses/:jobId` 與重連 rebind 列為 roadmap 012（串流韌性）。
 - **生產路徑**：改用 Redis Streams（`XADD`/`XREAD` + consumer group），client 帶 last-id 續傳即可回放斷線期間的 token；或 token 落地 + offset 續傳。
 
 ### 6.3 認證：`WS_AUTH_SECRET` 是佔位符
 
-- **現況**：一個靜態共享字串，放在 `machine/subscribe` 訊息 payload 裡比對。沒有使用者身分、沒有到期、`ws://` 明文、`POST /diagnoses` 無驗證與 rate limit。
+- **現況**：一個靜態共享字串，放在 `machine/subscribe` 訊息 payload 裡比對。沒有使用者身分、沒有到期、`ws://` 明文、`POST /diagnoses` 無身分驗證與 rate limit。
+- **已落地的基本加固（2026-09 修復，成本近零、不與 OIDC 綁在一起延後）**：客戶端控制訊息以 `ClientControlMessageSchema` `safeParse`（token ≤ 512、`machineIds` ≤ 50 且每個 ≤ 64）、`maxPayload` 16 KiB、每條連線掛 `error` listener、`machineIds` 與名冊取交集、可選 Origin 白名單 `WS_ALLOWED_ORIGINS`（防 Cross-Site WebSocket Hijacking）；`POST /diagnoses` 以 Zod 驗證、只收 `application/json`（跨站請求必過 preflight）、jobId 冪等且不改綁；api 讀 `REDIS_PASSWORD`；compose 的 Redis／Mongo 只綁 127.0.0.1。
 - **為何不做**：專案沒有多使用者需求，demo 情境反而常要把它清空；引入 OIDC/JWT 生命週期管理會吃掉大量開發時間卻展示不了核心賣點。
-- **生產路徑**：驗證移到 HTTP upgrade 握手階段（header/query 帶短效 JWT），通過才建連線；全面 `wss://`；job 建立端點加身分驗證與配額。
+- **生產路徑**：驗證移到 HTTP upgrade 握手階段（帶短效 JWT，通過才建連線；**不要放 query string**——會進 nginx access log，改用 `Sec-WebSocket-Protocol` 或 cookie）；全面 `wss://`；job 建立端點加身分驗證與配額。
 
 ### 6.4 有損寫入語意
 
-- **現況**：telemetry 持久化是 fire-and-forget（`void persistBatch(...)`，刻意不 await 以免卡住推送 cadence）；API 崩潰時 in-flight batch 直接丟。errorlog 去重靠行程內 `lastState` Map，重啟後會重寫一筆、多實例下判斷會錯。
+- **撰寫時的現況**：telemetry 持久化是 fire-and-forget（`void persistBatch(...)`，刻意不 await 以免卡住推送 cadence）；API 崩潰時 in-flight batch 直接丟。errorlog 去重靠行程內 `lastState` Map，重啟後會重寫一筆、多實例下判斷會錯。
+- **現況（已變更，2026-09 審查修復）**：fire-and-forget 暴露的是「故障時無上限」——Mongo 卡住時每 50ms 疊一個帶資料的 `insertMany` promise。現改為**有上限 buffer＋單一 in-flight＋丟棄計數**：Gateway 每 tick 同步 `enqueue()` 進記憶體 buffer（上限 5000 點，滿即丟最舊、計入 `droppedPoints`），`HistoryService` 每秒 flush 一次、同時只允許一個寫入；寫入失敗的那批 telemetry 不重試（計入 `failedPoints`），錯誤 log 30 秒節流並附累計數。errorlog 進獨立佇列（上限 1000）：網路／選址類失敗放回重試、server 明確拒絕的毒批次丟棄並計數。正常關閉走 stopProducer → flush（上限 5 秒）→ `app.close()`，所以有損只剩「崩潰（至多約 1 秒＋進行中一批）」與「關閉 flush 逾時」兩種情形。`lastState` 仍在行程內，重啟邊界可能重複一筆 errorlog 的宣告不變。
 - **決策**：**明文接受**「可丟失最後數秒 telemetry、errorlog 在重啟邊界可能重複」。有損是可以的，未宣告的有損才是問題。
-- **落地（✅ 已完成，Feature 009）**：語意已明文於三處且指向同一份事實——`persistBatch` 與 `detectErrorTransitions` 的程式註解、README 的「已宣告的取捨」小節，兩者皆引用本節。若未來轉為不可丟失，路徑是寫入前先進佇列（BullMQ 或 Redis Stream）再批次落庫；該路徑仍**不在範圍內**。
+- **落地（✅ 已完成，Feature 009；2026-09 更新）**：語意已明文於三處且指向同一份事實——009 當時為 `persistBatch` 與 `detectErrorTransitions` 的程式註解，現為 `HistoryService`（`apps/api/src/modules/history/history.service.ts`）類別註解；README 的「已宣告的取捨」小節同步更新，兩者皆引用本節。若未來轉為不可丟失，路徑是寫入前先進佇列（BullMQ 或 Redis Stream）再批次落庫；該路徑仍**不在範圍內**（2026-09 審查亦認為對每秒一批的量級過重，現行有上限 buffer 已足）。
 
 ---
 
@@ -146,6 +154,8 @@ dev 期間 worker 保留 `tsx watch`（熱重載價值 > 監督價值，且人�
 | OIDC / 完整 IAM | 生產必備 | 無多使用者需求（見 §6.3）；升級路徑已文件化 |
 | Redis Sentinel/Cluster、Mongo replica set | 資料層 HA | 單機 demo 沒有「另一台機器」可以故障轉移；HA 的正解是託管服務，那是部署環境的選擇而非程式碼的選擇 |
 
+> **補充（2026-09 審查）**：「拒絕 HA」不等於「單節點可以不設防」。現況已補上成本近零的基本護欄——Redis／Mongo 只綁 127.0.0.1、redis `maxmemory 256mb`＋`noeviction`、可選的 Redis 認證（repo 根 `.env` 或 shell 設 `REDIS_PASSWORD` 即由 compose 加 `--requirepass`，且 `apps/api/.env(.demo)`、`apps/worker/.env` 必須同值）、各服務資源上限與 log 輪替。Mongo 仍無認證（只綁 localhost），屬已知簡化。
+
 另外：**CI/CD 發布管線（image registry、自動部署）不綁進 007–009**。CI 目前因私有 repo 節省 Actions 分鐘數而刻意暫停，恢復時機是獨立決策；007/008 的 Dockerfile 寫好後，接上 CI 產 image 是機械工作，不需要現在做。
 
 ---
@@ -157,7 +167,7 @@ dev 期間 worker 保留 `tsx watch`（熱重載價值 > 監督價值，且人�
 | dev 與 demo 變成雙執行模型（`tsx watch` vs 容器） | 用 compose profiles / scripts 收斂成兩條明確指令；文件寫清楚哪個情境用哪條 |
 | Docker Desktop 成為 demo 的硬需求 | 本來就是（Redis/Mongo 已在 compose）；只是從「起 infra」升級為「起全棧」 |
 | `restart: on-failure` 只偵測行程死亡，偵測不到「活著但卡住」 | 007 的健康探針（heartbeat key + compose healthcheck）補位 |
-| 四項差距只文件化，系統本身仍有這些弱點 | 每項都有 §6 的升級路徑小節，面試被追問時直接引用；風險自覺本身就是可展示的判斷力 |
+| 四項差距只文件化，系統本身仍有這些弱點 | 每項都有 §6 的升級路徑小節，面試被追問時直接引用；風險自覺本身就是可展示的判斷力（§6.3 的基本加固與 §6.4 的有界寫入已於 2026-09 落地，見各節現況） |
 | 三個 feature 比一個大 feature 多兩輪 SDD 流程開銷 | 換來獨立驗收與乾淨的 git 歷史，符合專案一貫節奏 |
 
 ---

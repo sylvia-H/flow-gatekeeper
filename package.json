@@ -3,20 +3,36 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "pnpm -r lint",
+    "lint": "eslint eslint.config.js && pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "build": "pnpm -r build",
+    "build:packages": "pnpm --filter @flow-gatekeeper/contracts --filter @flow-gatekeeper/shared build",
     "contract:lint": "spectral lint asyncapi.yaml",
     "check": "pnpm contract:lint && pnpm typecheck && pnpm lint && pnpm test"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
     "@stoplight/spectral-cli": "^6.15.0",
+    "@types/node": "~22",
     "eslint": "^9.13.0",
+    "eslint-plugin-vue": "^9.28.0",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.11.0",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "vue-eslint-parser": "^9.4.3"
   },
-  "packageManager": "pnpm@9.0.0"
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "pnpm": {
+    "overrides": {
+      "multer@<2.3.0": "^2.3.0",
+      "qs@<6.16.0": "^6.16.0",
+      "body-parser@<1.20.6": "^1.20.6",
+      "postcss@<8.5.23": "^8.5.23",
+      "nanoid@<3.3.18": "^3.3.18"
+    }
+  }
 }

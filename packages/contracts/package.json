@@ -5,8 +5,13 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
   "exports": {
     ".": {
+      "development": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
@@ -14,7 +19,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src",
+    "lint": "eslint .",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
@@ -22,6 +27,8 @@
   },
   "devDependencies": {
     "typescript": "^5.6.0",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "yaml": "^2.9.1",
+    "zod-to-json-schema": "^3.25.2"
   }
 }

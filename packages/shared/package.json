@@ -5,12 +5,18 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
   "exports": {
     ".": {
+      "development": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
     "./logging": {
+      "development": "./src/logging/index.ts",
       "types": "./dist/logging/index.d.ts",
       "default": "./dist/logging/index.js"
     }
@@ -18,7 +24,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src",
+    "lint": "eslint .",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {

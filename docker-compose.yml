@@ -1,18 +1,86 @@
+# 共用日誌設定：json-file 預設不輪替，長跑的 demo（telemetry 高頻寫 log）會把
+# /var/lib/docker/containers 撐爆磁碟。每服務上限 10MB × 3 檔，`docker compose logs` 照常可用。
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
+  # base image 一律「tag + digest」雙釘：tag 供人讀出版本、digest 保證重建可重現（tag 會被上游重推）。
+  # 升版時兩者一起改（digest 取法：docker buildx imagetools inspect <image>:<tag>）。
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes
+      - "127.0.0.1:6379:6379"
+    # --maxmemory-policy MUST 為 noeviction：BullMQ 的 job／lock／stalled key 若被 LRU 淘汰，
+    # 佇列會靜默遺失 job 或重複派發（BullMQ 官方要求）。滿載時改為寫入報錯，由 api／worker 的
+    # 錯誤處理顯性浮現，而非資料悄悄消失。256mb 對 demo 規模（快取 600s TTL、job 保留有上限）綽綽有餘。
+    #
+    # REDIS_PASSWORD（取自 shell 或 repo root 的 .env，由 compose 插值）有值時才加 --requirepass；
+    # 未設則與既有行為一致（本機 dev 無認證）。經 docker-entrypoint.sh 啟動而非 sh -c redis-server：
+    # 官方 entrypoint 只在「第一個參數是 redis-server」時才降權為 redis 使用者，直接 sh -c 會以 root 執行。
+    # 已知取捨：密碼會出現在容器行程參數（docker inspect／ps 可見）——redis 沒有「從 env 讀密碼」的
+    # 原生選項，demo 規模接受；正式環境應改掛 redis.conf（secret 檔）。
+    # 啟用後 api／worker 的 env 檔 MUST 帶同一個 REDIS_PASSWORD，否則連線被拒。
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command:
+      - sh
+      - -c
+      - >-
+        exec docker-entrypoint.sh redis-server
+        --appendonly yes
+        --maxmemory 256mb
+        --maxmemory-policy noeviction
+        $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}
     volumes:
       - redis-data:/data
+    # 讓 api／worker 以 service_healthy 等到「可接受命令」才啟動，而非只等容器行程起來
+    # （AOF 載入期間 port 已開但回 LOADING 錯誤）。密碼走 REDISCLI_AUTH 而非 `-a --no-auth-warning`：
+    # 前者 redis-cli 原生讀取、不出現在探針的行程參數；未設密碼時不匯出——對無認證的 redis
+    # 送 AUTH "" 會被拒而誤判 unhealthy。`$$` 讓變數留到容器內的 sh 才展開（讀容器 env），
+    # 不被 compose 在 host 端插值。
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'if [ -n "$$REDIS_PASSWORD" ]; then export REDISCLI_AUTH="$$REDIS_PASSWORD"; fi; redis-cli ping | grep -q PONG'
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    # 384m = maxmemory 256mb + AOF rewrite fork 的 copy-on-write 與連線緩衝餘裕；
+    # 貼齊 256m 會在 rewrite 時被 OOM kill。
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+    logging: *default-logging
 
   mongo:
-    image: mongo:7
+    image: mongo:7.0.43@sha256:9854f7139445d766a9523571d6f047530c45547460ffcf8259eb2bf4264632ca
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
     volumes:
       - mongo-data:/data/db
+    # 冷啟動（首次初始化 data dir、或 journal 回放）可能超過 30s；service_healthy 讓 api／worker／seed
+    # 等到真正可查詢，而不是先起來、連不上、各自消耗一次 on-failure:5 額度（審查 §3.2）。
+    # mongosh 連線失敗即非零退出；ping 成功印 1。
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    # mongo 7 依 cgroup 上限推算 WiredTiger cache（1g 上限 → 取下限 256MB），
+    # 足夠 demo 資料量且不會吃光開發機記憶體。
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+    logging: *default-logging
 
   # worker 受監督形態（Feature 007，008 收進 demo 分組，與 api／web／seed 同組）。
   # 既有 `docker compose up -d` 只起 infra、行為零變化；全棧 demo 為
@@ -25,16 +93,22 @@ services:
     # 明確宣告 image 名——否則 compose 自動生成 <專案名>-worker（專案名取目錄名、不穩定），
     # 與 T022 祕密衛生驗收逐一 docker run 三個具名映像的指令對不上（008 T002）。
     image: flow-gatekeeper-worker:local
+    # 等依賴「可用」而非「已啟動」：避免冷啟動期間連不上而白白消耗 restart 額度（審查 §3.2）。
     depends_on:
-      - redis
-      - mongo
+      redis:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
     # 監督語意（ADR-002／research D4）：非零退出才重啟（Docker 內建指數退避），
     # 連續失敗 5 次後停止；優雅關閉 exit(0) 不觸發重啟。
     restart: on-failure:5
     # tini 為 PID 1、node 為子行程——同 namespace 對 PID 1 送 SIGSTOP 會被核心忽略，
     # US5 活鎖演練需凍結 node 子行程（research D5）。
     init: true
-    # SIGTERM → SIGKILL 寬限：涵蓋 worker.close() 最長收尾（≈ AI_TIMEOUT_MS 30s）＋關閉緩衝（research D7）
+    # SIGTERM → SIGKILL 寬限：worker.close() 只需等「正在打 LLM」的 job——上限 AI_TIMEOUT_MS 30s
+    # ＋結果寫入 ≤10s ≈ 40s，再留 5s 緩衝（research D7）。dedupe 等待迴圈（最長約 80s）不計入：
+    # 它會觀察關閉訊號、提早把 job 交回佇列，不再拖住關閉（審查 §3.2 已修）。
+    # 若調高 AI_TIMEOUT_MS，本值 MUST 同步調高，否則收尾中的 job 會被 SIGKILL、只能靠 stalled 重派。
     stop_grace_period: 45s
     # 祕密與調參於執行時注入（憲章 VI：不烘入 image）；容器內連線位址由 environment 覆蓋
     env_file: apps/worker/.env
@@ -47,6 +121,10 @@ services:
       # （.env.example 明示可覆寫），bootstrap 會因找不到該模組而失敗 → restart:on-failure:5
       # 崩潰迴圈。api 用隔離的 .env.demo（無此變數）故無此風險。
       LOG_PRETTY: "false"
+      # 同招釘死 worker 實例 id：空字串會被 env schema 的 preprocess 視為未設定、改用容器 hostname
+      # （每副本各異）。若不釘，apps/worker/.env 裡留著的 WORKER_INSTANCE_ID 會讓所有副本共用同一
+      # id，heartbeat／metrics key 互相覆蓋，重現「任一副本活著即掩蓋其他死亡」的問題。
+      WORKER_INSTANCE_ID: ""
     # 健康判定（FR-007，僅示警、不自動重啟）：讀 Redis heartbeat key（10s 週期／TTL 30s），
     # 連續 3 次失敗轉 unhealthy——補「行程活著但卡住」的偵測盲點（contracts §3–§4）
     healthcheck:
@@ -55,6 +133,13 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    # demo 規模：單 job 記憶體以 prompt／回應字串為主，512m 有數倍餘裕。
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+    logging: *default-logging
 
   # api（Gateway）受監督形態（Feature 008 US1）。行為與 host 直跑逐項一致，
   # 崩潰自動重啟，停止時在寬限期內優雅收尾且不被重啟（FR-001／FR-003／FR-004）。
@@ -69,14 +154,16 @@ services:
     init: true
     # 15s MUST NOT 照抄 worker 的 45s——後者為涵蓋 AI_TIMEOUT_MS 的 LLM 收尾而算，
     # api 不呼叫 LLM，收尾僅為關閉連線、量級為秒內（FR-004、contracts §4）。
+    # 關閉順序 stopProducer → telemetry flush（上限 5s）→ app.close()，最壞約 5s＋數秒，15s 足夠。
     stop_grace_period: 15s
     # 長式 depends_on：seed 一次性服務成功完成才啟動 api（示範資料先於服務備妥，FR-012）。
     # depends_on 只在啟動編排時求值——api 崩潰重啟不會重跑 seed（research D7、CHK044）。
+    # redis／mongo 改等 service_healthy（原 service_started 只保證容器行程已起，審查 §3.2）。
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
       mongo:
-        condition: service_started
+        condition: service_healthy
       seed:
         condition: service_completed_successfully
     # demo 專用 env 檔（與開發者 dev 的 apps/api/.env 完全隔離，避免 dev 值滲入 demo）——
@@ -99,6 +186,13 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    # 單一 Node 行程；telemetry 批次 buffer 有上限，512m 有餘裕。
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+    logging: *default-logging
     # api 不宣告 ports——全棧模式下 Gateway MUST NOT 另行對外暴露連接埠（FR-006）。
     # 瀏覽器只面對 web 的 8080，/ws 與 /diagnoses 由 nginx 同源轉發至 api:3000。
     # （T008 曾為 US1 一致性比對暫時發佈 3000，已於 T012 web 容器交付時移除，CHK054。）
@@ -114,12 +208,20 @@ services:
     image: flow-gatekeeper-api:local
     command: ["node", "dist/scripts/seed.js"]
     restart: "no"
+    # 等 mongo 真正可查詢——seed 失敗會連帶 api 無法啟動（api 以其成功完成為條件）。
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
     # 與 api 同一份 demo env 檔（seed 只需 MONGO_*，位址由 environment 覆蓋）。
     env_file: apps/api/.env.demo
     environment:
       MONGO_URL: mongodb://mongo:27017/flow-gatekeeper
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.5"
+    logging: *default-logging
 
   # web（監控台前端）容器形態（Feature 008 US2）。nginx 是唯一對外入口（8080），
   # 同時提供靜態產物與 /ws、/diagnoses 的同源反向代理至 api（FR-002／FR-006）。
@@ -129,20 +231,29 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
     image: flow-gatekeeper-web:local
-    # 唯一對外入口——避開 dev 的 5173／3000（research D2）。改埠只改此一行（同源相對路徑使前端自然可攜）。
+    # 唯一對外入口——避開 dev 的 5173／3000（research D2）。改對外埠只改左側（同源相對路徑使前端自然可攜）。
+    # 容器內埠為 8080：runtime 改用 nginxinc/nginx-unprivileged（非 root，無法 bind <1024 的埠），
+    # 見 apps/web/Dockerfile 與 nginx.conf 的 listen。
     ports:
-      - "8080:80"
+      - "8080:8080"
     restart: on-failure:5
     depends_on:
       - api
     # 入口位址有回應即 healthy（FR-011）。用 `-O /dev/null` 而非 `--spider`——後者的支援隨
-    # busybox 版本浮動（nginx:alpine 未鎖版），`-O /dev/null` 在 busybox wget 一律可用、意義等同。
+    # busybox 版本浮動，`-O /dev/null` 在 busybox wget 一律可用、意義等同。埠跟著容器內 listen 為 8080。
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
+    # 純靜態伺服＋反代，nginx worker 記憶體以 MB 計。
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.5"
+    logging: *default-logging
 
 volumes:
   redis-data: {}

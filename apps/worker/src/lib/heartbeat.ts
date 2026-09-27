@@ -1,16 +1,18 @@
 /**
  * 存活訊號 heartbeat（007 US5；research D5、data-model E2）。
  *
- * worker ready 後每 10s 寫 `worker:heartbeat`（值＝ISO timestamp、TTL 30s）。
+ * worker ready 後每 10s 寫 `worker:heartbeat:<instanceId>`（值＝ISO timestamp、TTL 30s）。
  * 由 `setInterval` 驅動——事件迴圈被卡死（活鎖）時 timer 不觸發、key 過期、
  * healthcheck 連續失敗轉 unhealthy，補「行程活著但不做事」的偵測盲點。
- * 單實例假設：key 不帶實例後綴（多實例明確 out of scope，ADR-002 §6）。
+ * 另可傳入 `isAlive`（見 `lib/liveness.ts`）：事件迴圈正常但所有 concurrency 槽都卡住時
+ * 停止刷新，讓 healthcheck 也能看見「行程活著、timer 在跳，但一筆 job 都消化不了」的情況。
+ * key 帶實例後綴（見 `lib/redis-keys.ts`）：水平擴展時共用單一 key 會讓任一活著的副本替
+ * 已死的副本續命，healthcheck 只看自己實例的 key 才能各自判活。
  *
  * 生命週期：優雅關閉時 `stopHeartbeat()` 清 timer；致命退出（let it crash）不清，
  * key 於 TTL 內自然過期——「訊號消失」本身就是語意。
  */
 
-export const HEARTBEAT_KEY = "worker:heartbeat";
 export const HEARTBEAT_INTERVAL_MS = 10_000;
 export const HEARTBEAT_TTL_SECONDS = 30;
 
@@ -31,11 +33,26 @@ let timer: ReturnType<typeof setInterval> | null = null;
  * 寫入失敗記 warn 不拋出——單次心跳失敗不該變成浮空 rejection 觸發致命守門；
  * 持續失敗的結果就是 key 過期 → unhealthy，正好是此機制要呈現的語意。
  */
-export function startHeartbeat(redis: HeartbeatRedis, warn: (msg: string) => void): void {
+export function startHeartbeat(
+  redis: HeartbeatRedis,
+  /** 本實例的心跳 key（由 `heartbeatKey(instanceId)` 產生，healthcheck 以同一 id 推導）。 */
+  key: string,
+  warn: (msg: string) => void,
+  isAlive: () => boolean = () => true,
+): void {
   stopHeartbeat();
+  let stalled = false;
   const beat = (): void => {
+    if (!isAlive()) {
+      // 只在轉態時 warn 一次，避免每 10s 洗版；不寫 key → TTL 到期 → healthcheck 轉 unhealthy。
+      if (!stalled) warn("所有處理槽長時間無進度，暫停刷新 heartbeat");
+      stalled = true;
+      return;
+    }
+    if (stalled) warn("處理槽恢復進度，恢復刷新 heartbeat");
+    stalled = false;
     void redis
-      .set(HEARTBEAT_KEY, new Date().toISOString(), "EX", HEARTBEAT_TTL_SECONDS)
+      .set(key, new Date().toISOString(), "EX", HEARTBEAT_TTL_SECONDS)
       .catch((err: unknown) => {
         warn(`heartbeat 寫入失敗：${err instanceof Error ? err.message : String(err)}`);
       });

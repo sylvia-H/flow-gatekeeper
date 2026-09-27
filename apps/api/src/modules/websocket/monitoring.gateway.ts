@@ -3,7 +3,10 @@ import type { OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import type { Server as HttpServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
+import type { VerifyClientCallbackAsync } from "ws";
+import { ClientControlMessageSchema } from "@flow-gatekeeper/contracts";
 import type {
+  ClientControlMessage,
   MachineSubscribed,
   Pong,
   SystemConnected,
@@ -14,9 +17,21 @@ import { AppConfigService } from "../config/config.service.js";
 import { MockTelemetryService } from "../telemetry/mock-telemetry.service.js";
 import { HistoryService } from "../history/history.service.js";
 import { filterPointsForSubscription } from "../../lib/subscription-filter.js";
+import { isOriginAllowed, parseAllowedOrigins } from "../../lib/ws-origin.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 
 type ClientId = string;
+
+/**
+ * 單則 client 訊息上限 16 KiB。合法控制訊息最大約 512（token）+ 50×64（machineIds）≈ 4 KiB；
+ * ws 預設 100 MiB 等於讓任何連線者都能逼 api 配置巨量記憶體。
+ */
+export const WS_MAX_PAYLOAD_BYTES = 16 * 1024;
+
+export type GatewayAttachOptions = {
+  /** Origin 白名單；未指定時讀 `WS_ALLOWED_ORIGINS`（空＝不檢查）。 */
+  allowedOrigins?: readonly string[];
+};
 
 /**
  * 原生 `ws` Gateway（掛在 NestJS HTTP server，path `/ws`），非 Socket.IO（憲章 IV、ADR-001）。
@@ -24,8 +39,11 @@ type ClientId = string;
  * - 連線生命週期：連線→system/connected、close/心跳逾時→清理（FR-001/FR-008）。
  * - 訂閱：machine/subscribe 取代式 + 授權（FR-002/FR-003）；未訂閱者不收遙測（FR-004）。
  * - 心跳：應用層 ping→pong（FR-007a）+ 伺服器端探活回收半死連線（FR-007b/SC-005）。
- * - 落地：全量 fire-and-forget 交給 HistoryService（FR-009/FR-010）。
+ * - 落地：全量同步進 HistoryService buffer，由其每秒批次落庫（FR-009/FR-010）。
  * - 記錄：連線/斷線/授權失敗/逾時回收（FR-017）。
+ * - 輸入加固：client 訊息一律視為不可信——Zod safeParse 後才分派、socket/server 皆掛 error
+ *   listener、maxPayload 16 KiB、Origin 白名單、machineIds 與已知機台取交集。任何畸形輸入
+ *   都只影響該則訊息（或該條連線），不得讓行程結束。
  * - send()：對單一連線推送任意 payload，003 AI relay 銜接點（FR-015）。
  */
 @Injectable()
@@ -56,8 +74,17 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     this.heartbeatTimer = setInterval(() => this.sweepDeadConnections(), this.config.wsHeartbeatMs);
   }
 
-  onModuleDestroy(): void {
+  /**
+   * 停止產生新 telemetry（冪等）。關閉流程要先呼叫：Nest 的 onModuleDestroy 不保證 Gateway
+   * 比 HistoryModule 先停，若 producer 還在跑，最後幾批會丟進已關閉的 Mongo。
+   */
+  stopProducer(): void {
     if (this.producerTimer) clearInterval(this.producerTimer);
+    this.producerTimer = undefined;
+  }
+
+  onModuleDestroy(): void {
+    this.stopProducer();
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     // 優雅關閉（FR-004）：主動 terminate 所有連線並關閉 ws server。升級後的 ws 是「活躍連線」，
     // 不主動釋放的話 app.close() 等待的 http.Server 'close' 永不回呼——關閉會掛到 stop_grace_period
@@ -71,9 +98,35 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   }
 
   /** 由 main.ts 在 app.listen() 後呼叫，與 HTTP 共用同一個 port（ws://host:port/ws）。 */
-  attach(server: HttpServer): void {
-    this.wss = new WebSocketServer({ server, path: "/ws" });
+  attach(server: HttpServer, options: GatewayAttachOptions = {}): void {
+    const allowedOrigins =
+      options.allowedOrigins ?? parseAllowedOrigins(process.env.WS_ALLOWED_ORIGINS);
+    this.wss = new WebSocketServer({
+      server,
+      path: "/ws",
+      maxPayload: WS_MAX_PAYLOAD_BYTES,
+      ...(allowedOrigins.length > 0 ? { verifyClient: this.originVerifier(allowedOrigins) } : {}),
+    });
     this.wss.on("connection", (socket) => this.handleConnection(socket));
+    // 掛 server 端 error listener：ws 會把底層 http server 的 error 轉發到 wss，
+    // 沒有 listener 時 EventEmitter 直接 throw → uncaughtException → 行程結束。
+    this.wss.on("error", (err) => {
+      this.plog.error({ err }, "websocket server error");
+    });
+  }
+
+  /** upgrade 前比對 Origin；不在白名單回 403 並不建立連線。 */
+  private originVerifier(allowed: readonly string[]): VerifyClientCallbackAsync {
+    return (info, done) => {
+      // ws 的型別宣告 origin 為 string，但實際上沒帶 header 時是 undefined。
+      const origin = (info.origin as string | undefined) || undefined;
+      if (isOriginAllowed(origin, allowed)) {
+        done(true);
+        return;
+      }
+      this.plog.warn({ origin }, "websocket upgrade rejected: origin not allowed");
+      done(false, 403, "Forbidden");
+    };
   }
 
   private handleConnection(socket: WebSocket): void {
@@ -84,20 +137,40 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     this.send(clientId, { type: "system/connected", clientId } satisfies SystemConnected);
     this.plog.info({ clientId }, "client connected");
 
-    socket.on("message", (raw) => this.handleMessage(clientId, raw.toString()));
+    // binaryType 維持 ws 預設 "nodebuffer"：RawData 恆為 Buffer（分片訊息亦已合併），故可直接 toString()。
+    socket.on("message", (raw) => this.handleMessage(clientId, (raw as Buffer).toString()));
     // protocol-level pong（回應伺服器的 ping()）→ 標記存活。
     socket.on("pong", () => this.alive.set(clientId, true));
     socket.on("close", () => this.cleanup(clientId, "close"));
+    // 協定層錯誤（非法 opcode、未遮罩 frame、無效 UTF-8、超過 maxPayload）ws 會 emit 'error'，
+    // 沒有 listener 就會直接 throw 讓行程崩潰。ws 會自行關閉這條連線，後續由 'close' 清理。
+    socket.on("error", (err) => {
+      this.plog.warn({ clientId, err: { message: err.message } }, "websocket client error");
+    });
   }
 
   private handleMessage(clientId: ClientId, raw: string): void {
-    let msg: { type?: string; token?: string; machineIds?: string[] };
+    let json: unknown;
     try {
-      msg = JSON.parse(raw) as typeof msg;
+      json = JSON.parse(raw);
     } catch {
+      this.plog.warn({ clientId, reason: "invalid-json" }, "ignored client message");
       return; // 無法解析的訊息安全忽略（FR-014）
     }
 
+    const parsed = ClientControlMessageSchema.safeParse(json);
+    if (!parsed.success) {
+      // 只記路徑與訊息摘要，不記原始內容——原始內容可能含 token。
+      const issues = parsed.error.issues
+        .slice(0, 5)
+        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
+      this.plog.warn({ clientId, reason: "schema", issues }, "ignored client message");
+      return; // 未知 type 或形狀不符一律安全忽略（FR-014）
+    }
+    this.dispatch(clientId, parsed.data);
+  }
+
+  private dispatch(clientId: ClientId, msg: ClientControlMessage): void {
     switch (msg.type) {
       case "ping":
         this.send(clientId, { type: "pong", ts: Date.now() } satisfies Pong);
@@ -111,7 +184,10 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
           this.send(clientId, { type: "system/unauthorized" } satisfies SystemUnauthorized);
           return;
         }
-        const machineIds = msg.machineIds ?? [];
+        // 只保留已知機台（去重、保持 client 給的順序）：未知 id 訂閱了也不會有資料，
+        // 留著只會讓每次廣播多做無謂比對。
+        const known = new Set(this.telemetry.machineIds);
+        const machineIds = [...new Set(msg.machineIds)].filter((id) => known.has(id));
         // 取代式：新集合即為當前訂閱的唯一真實狀態（FR-002）。
         this.subscriptions.set(clientId, new Set(machineIds));
         this.send(clientId, {
@@ -121,8 +197,6 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
         break;
       }
 
-      default:
-        break; // 未知 type 安全忽略（FR-014）
     }
   }
 
@@ -138,8 +212,9 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    // 持久化：全部機台、與訂閱無關（FR-009）；fire-and-forget，不 await 阻塞 cadence（FR-010）。
-    void this.history.persistBatch(points);
+    // 持久化：全部機台、與訂閱無關（FR-009）；只進記憶體 buffer，由 HistoryService 每秒批次
+    // 落庫，推送 cadence 不受資料庫延遲牽制（FR-010）。
+    this.history.enqueue(points);
   }
 
   /**

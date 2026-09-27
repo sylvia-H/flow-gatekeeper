@@ -7,18 +7,17 @@ import { summarizeLatency } from "./latency.js";
 /**
  * worker 端指標收集器（009 US3；data-model E4／E5、contracts/metrics-summary.md §5／§6）。
  *
- * 記憶體累加 → 每 `METRICS_INTERVAL_MS` 結算一次：寫入 Redis 快照 `metrics:worker`
- * （供 api 合併）、同時記入 worker 自身的 metrics 日誌（使 worker 日誌可獨立判讀），
+ * 記憶體累加 → 每 `METRICS_INTERVAL_MS` 結算一次：寫入本實例的 Redis 快照
+ * `metrics:worker:<instanceId>`（api 掃描所有實例後合併；共用單一 key 時多副本會互相覆寫、
+ * 只剩 1/N 的數字）、同時記入 worker 自身的 metrics 日誌（使 worker 日誌可獨立判讀），
  * 然後把窗內累加器歸零。
  *
  * **FR-009**：所有累加都只動記憶體，高頻路徑不寫任何日誌——只在結算時輸出一則。
  *
- * **MUST NOT 讀寫、覆寫或改動 007 的 `worker:heartbeat`**（FR-010）：兩者各自獨立
+ * **MUST NOT 讀寫、覆寫或改動 007 的 `worker:heartbeat:<instanceId>`**：兩者各自獨立
  * ——不同命名空間（`worker:` vs `metrics:`）、不同 TTL（30s vs 3×間隔）、不同消費者
  * （compose healthcheck vs api 收集器），MUST NOT 互相取代或合併。
  */
-
-export const METRICS_KEY = "metrics:worker";
 
 /** 環形緩衝上限（data-model E5）：無界成長會在長跑 demo 緩慢吃記憶體，且拉高 p95 計算成本。 */
 export const MAX_LATENCY_SAMPLES = 1000;
@@ -44,6 +43,8 @@ export type MetricsCollector = {
 
 export type CreateMetricsCollectorOptions = {
   redis: MetricsRedis;
+  /** 本實例的快照 key（由 `workerMetricsKey(instanceId)` 產生）。 */
+  key: string;
   /** 專屬 metrics child logger（`context: "metrics"`、level 由 `METRICS_LOG_LEVEL` 獨立釘定）。 */
   logger: ChildLogger;
   env?: Record<string, string | undefined>;
@@ -51,6 +52,7 @@ export type CreateMetricsCollectorOptions = {
 
 export function createMetricsCollector({
   redis,
+  key,
   logger,
   env = process.env,
 }: CreateMetricsCollectorOptions): MetricsCollector {
@@ -97,7 +99,7 @@ export function createMetricsCollector({
     // 降級為 `worker: null`。寫入失敗只記 warn 不拋出——單次快照失敗不該變成浮空 rejection
     // 觸發致命守門（let it crash → exit(1)），把觀測層小故障放大成行程級重啟。
     void redis
-      .set(METRICS_KEY, JSON.stringify(snapshot), "EX", Math.ceil((intervalMs * 3) / 1000))
+      .set(key, JSON.stringify(snapshot), "EX", Math.ceil((intervalMs * 3) / 1000))
       .catch((err: unknown) => {
         logger.warn({ err }, "metrics 快照寫入失敗");
       });

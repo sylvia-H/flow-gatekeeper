@@ -2,7 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import type { OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import IORedis from "ioredis";
 import type { Redis } from "ioredis";
-import type { AiStreamEvent } from "@flow-gatekeeper/contracts";
+import { AiStreamEventSchema } from "@flow-gatekeeper/contracts";
 import { AppConfigService } from "../config/config.service.js";
 import { MonitoringGateway } from "./monitoring.gateway.js";
 import { getAppLogger } from "../../logging/app-logger.js";
@@ -18,6 +18,9 @@ export type JobBinding = { clientId: string; machineId: string; boundAt: number 
  * `ai/done` 就刪綁定，通道 B（T020）的終態 `job/status:completed` 會查不到對象（F1）。綁定的
  * 建立由 `JobsService` 呼叫 `bindJobToClient`，清理由 job-status relay 單一負責。
  * subscriber 連線 MUST NOT 跑一般 command（憲章 IV）。
+ *
+ * **轉發前必驗**：channel 上的字串來自任何能對 Redis `PUBLISH` 的一方，不只是 worker；未經
+ * `AiStreamEventSchema` 驗證就轉發，等於讓偽造的 `ai/done` 繞過硬規則 6 直接進前端畫面。
  */
 @Injectable()
 export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
@@ -35,12 +38,13 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
   onModuleInit(): void {
     // 韌性：subscribe 初始化以 try/catch 包覆（T027），Redis/worker 異常時 api 仍能啟動。
     try {
-      this.subscriber = new IORedis({
-        host: this.config.redisHost,
-        port: this.config.redisPort,
-        maxRetriesPerRequest: null,
+      // blocking 設定：subscriber 只收不發，斷線時交給 ioredis 自動重連並重新訂閱。
+      this.subscriber = new IORedis(this.config.redisOptions("blocking"));
+      // 刻意 fire-and-forget 但自帶 catch：Redis 不可達時 psubscribe 留在 offline queue，關閉或斷線清佇列
+      // 會 reject；放任成浮空 rejection 會被全域致命守門當成崩潰 exit(1)，把優雅關閉誤報成崩潰。
+      void this.subscriber.psubscribe("ai-stream:*").catch((err: unknown) => {
+        this.logger.warn(`psubscribe failed: ${err instanceof Error ? err.message : String(err)}`);
       });
-      void this.subscriber.psubscribe("ai-stream:*");
       this.subscriber.on("pmessage", (_pattern, channel, message) =>
         this.handleMessage(channel, message),
       );
@@ -78,13 +82,27 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
     const jobId = channel.slice("ai-stream:".length);
     const binding = this.jobRooms.get(jobId);
     if (!binding) return; // 純後端 smoke 或已重連：略過推送，job 仍完成
-    let event: AiStreamEvent;
+    let raw: unknown;
     try {
-      event = JSON.parse(message) as AiStreamEvent;
+      raw = JSON.parse(message);
     } catch {
       this.plog.warn({ jobId, channel }, "unparsable ai-stream message");
       return;
     }
-    this.gateway.send(binding.clientId, event); // 只轉發、不刪綁定（F1）
+    const parsed = AiStreamEventSchema.safeParse(raw);
+    if (!parsed.success) {
+      // 只記 issue 路徑與代碼，不記原始內容：畸形訊息可能夾帶任意大小或敏感的 payload。
+      const issues = parsed.error.issues
+        .slice(0, 5)
+        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.code}`);
+      this.plog.warn({ jobId, channel, issues }, "invalid ai-stream message dropped");
+      return;
+    }
+    // channel 尾綴才是綁定依據；payload 內的 jobId 與之不符代表來源可疑，不轉發給這個 client。
+    if (parsed.data.jobId !== jobId) {
+      this.plog.warn({ jobId, channel, payloadJobId: parsed.data.jobId }, "ai-stream jobId mismatch dropped");
+      return;
+    }
+    this.gateway.send(binding.clientId, parsed.data); // 只轉發、不刪綁定（F1）
   }
 }

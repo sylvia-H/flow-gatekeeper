@@ -20,8 +20,8 @@ apps/web/design/
 
 | 項目 | 內容 |
 | --- | --- |
-| Spec 版本 | `v0.4` |
-| 最後更新 | `2026-07-02` |
+| Spec 版本 | `v0.5` |
+| 最後更新 | `2026-09-27` |
 | 產品 | flow-gatekeeper |
 | 風格 | 致敬 Argo CD 的暗色 operational dashboard |
 | 主要使用者 | 想監控高頻流程狀態、查看 AI 診斷的工程/維運使用者 |
@@ -151,7 +151,7 @@ flow-gatekeeper 應該像一個可長時間盯著看的維運工具，而不是�
 
 | Token | 用途 | 建議預設 | 最終值 |
 | --- | --- | --- | --- |
-| `bg-base` | app 最底層背景 | `#0B1014` | `#0B1014` |
+| `bg-canvas` | app 最底層背景（v0.5 由 `bg-base` 改名，見 §5 說明） | `#0B1014` | `#0B1014` |
 | `bg-surface` | panel、主內容背景 | `#111820` | `#111820` |
 | `bg-surface-hover` | card hover 抬起背景（§7.3 hover） | — | `#141D27` |
 | `bg-elevated` | drawer、popover、浮層 | `#17212B` | `#17212B` |
@@ -160,7 +160,7 @@ flow-gatekeeper 應該像一個可長時間盯著看的維運工具，而不是�
 | `border-strong` | selected、active、hover 邊框 | `#3E5266` | `#3E5266` |
 | `text-primary` | 主要文字 | `#E7EDF2` | `#E7EDF2` |
 | `text-secondary` | 次要文字 | `#9AA8B5` | `#9AA8B5` |
-| `text-muted` | metadata、placeholder | `#687684` | `#687684` |
+| `text-muted` | metadata、placeholder | `#687684` | `#7C8A98` |
 | `accent` | selected、primary action | `#4FA3FF` | `#4FA3FF` |
 | `accent-hover` | primary action hover | `#76B8FF` | `#76B8FF` |
 | `accent-bg` | subtle selected background | `#102A42` | `#102A42` |
@@ -179,12 +179,19 @@ flow-gatekeeper 應該像一個可長時間盯著看的維運工具，而不是�
 | `crit-border` | critical card / chip 邊框（§7.3 critical） | — | `#7A2A30` |
 | `crit-bg` | critical subtle background | `#3B151A` | `#3B151A` |
 
+對比規則（WCAG AA，一般文字 ≥ 4.5:1）：
+
+- `text-muted`（Tailwind `fg-subtle`）大量用於 10–12px 的 metadata，原值 `#687684` 對 `bg-surface` 僅約 3.8:1、對 `bg-elevated` 約 3.5:1，未達 AA。v0.5 提亮為 `#7C8A98`：對 `bg-canvas` 5.41:1、`bg-surface` 5.06:1、`bg-surface-hover` 4.82:1、`bg-elevated` 4.61:1、`bg-inset` 5.21:1，仍明顯低於 `text-secondary`（對 surface 7.35:1），層級不變。
+- `text-muted` 不得放在 `accent-bg` 等彩色底上當正文（對 `accent-bg` 僅 4.15:1）；彩色底上的文字用對應的 `*-fg` 或 `accent`。
+
 ### 4.2 Typography
 
 | Token | 用途 | 建議預設 | 最終值 |
 | --- | --- | --- | --- |
 | `font-sans` | 一般 UI | `Inter, ui-sans-serif, system-ui` | `Inter, ui-sans-serif, system-ui` |
 | `font-mono` | machine id、數值、log、job id | `JetBrains Mono, ui-monospace, monospace` | `JetBrains Mono, ui-monospace, monospace` |
+| `text-2xs` | 狀態徽章、計數、單位等極小標籤（v0.5 新增） | — | `10px / 14px` |
+| `text-pill` | pill 形 chip 標籤（v0.5 新增） | — | `11px / 16px` |
 | `text-xs` | metadata、badge | `12px / 16px` | `12px / 16px` |
 | `text-sm` | 一般 UI | `14px / 20px` | `14px / 20px` |
 | `text-md` | panel title | `16px / 24px` | `16px / 24px` |
@@ -197,6 +204,8 @@ flow-gatekeeper 應該像一個可長時間盯著看的維運工具，而不是�
 - 不用 viewport width 直接縮放 font-size。
 - 數值使用 mono，減少寬度跳動。
 - compact panel 內不要使用 hero-scale 大字。
+- 不使用任意值字級（如 `text-[10px]`）；10px／11px 一律用 `text-2xs`／`text-pill`。
+- telemetry 數值與單位分開渲染：數值 `text-number`，單位 `text-2xs` + `text-muted`（見 `refs/node-states.png`）。
 
 ### 4.3 Shape、Spacing、Shadow
 
@@ -219,12 +228,16 @@ flow-gatekeeper 應該像一個可長時間盯著看的維運工具，而不是�
 
 貼到 `apps/web/tailwind.config.ts` 的 `theme.extend`。
 
+- 顏色名 MUST NOT 與 `fontSize` 名相同：v0.4 的 `colors.base` 與 Tailwind 內建 `fontSize.base` 撞名，`text-base` 會同時輸出字級與顏色。v0.5 起底色改名 `canvas`（`bg-canvas`／`text-canvas`），`text-base` 只代表 16px 字級。
+- Tailwind 3 對未定義的 class 靜默略過、不報錯（v0.4 的 `text-number` 即因未定義而從未產生 CSS），新 token 一律先在此定義。
+- `text-xs`／`text-sm` 與 Tailwind 內建值相同，不另定義；`text-lg` 依 §4.2 覆寫為 20px。
+
 ```ts
 export default {
   theme: {
     extend: {
       colors: {
-        base: '#0B1014',
+        canvas: '#0B1014',
         surface: {
           DEFAULT: '#111820',
           hover: '#141D27',
@@ -235,7 +248,7 @@ export default {
         strong: '#3E5266',
         fg: '#E7EDF2',
         'fg-muted': '#9AA8B5',
-        'fg-subtle': '#687684',
+        'fg-subtle': '#7C8A98',
         accent: {
           DEFAULT: '#4FA3FF',
           hover: '#76B8FF',
@@ -270,6 +283,13 @@ export default {
       boxShadow: {
         card: '0 1px 0 rgba(255,255,255,0.04), 0 12px 28px rgba(0,0,0,0.22)',
         drawer: '-18px 0 36px rgba(0,0,0,0.35)',
+      },
+      fontSize: {
+        '2xs': ['10px', '14px'],
+        pill: ['11px', '16px'],
+        md: ['16px', '24px'],
+        lg: ['20px', '28px'],
+        number: ['22px', '28px'],
       },
       fontFamily: {
         sans: ['Inter', 'ui-sans-serif', 'system-ui'],
@@ -309,7 +329,7 @@ export default {
 
 | 區域 | 尺寸 | 內容 | 注意事項 |
 | --- | --- | --- | --- |
-| App shell | `100vw x 100vh` | 整體背景 `bg-base` | 不讓 body scroll；內部區域各自 scroll。 |
+| App shell | `100vw x 100vh` | 整體背景 `bg-canvas` | 不讓 body scroll；內部區域各自 scroll。 |
 | Left sidebar | 預設 `240px` wide，可拖曳調整 `200-420px`（偏好存 localStorage） | product name、environment、machine groups、nav icons | 可縮到 72px collapsed。 |
 | Top bar | `56px` high | search、connection status、mock frequency、backpressure meter、diagnose action | control 高度固定 32-36px。 |
 | Main topology | fill remaining | node grid / topology canvas | 背景 `bg-inset`，可用細 grid。 |
@@ -397,9 +417,10 @@ type AppLayoutProps = {
 
 內容：
 
-- 累積收到的 telemetry 訊息數（`receivedMessages`）。
+- 累積收到的 telemetry 訊息數（`receivedMessages`）。**含**抵達後未渲染即被丟棄的筆數（buffer 溢位合併、入口格式不符剔除），它回答的是「網路上收到多少」。
 - 累積渲染批次數（`renderedBatches`）。
 - 兩者比值，例如 `41:1`。
+- 有丟棄時（`droppedMessages + invalidMessages > 0`）另列 `N dropped`，tooltip 分列兩者，讓比值偏移有跡可循。
 
 Props：
 
@@ -407,6 +428,8 @@ Props：
 type BackpressureBadgeProps = {
   receivedMessages: number;
   renderedBatches: number;
+  droppedMessages?: number; // buffer 溢位合併丟棄（預設 0）
+  invalidMessages?: number; // 入口型別守衛剔除（預設 0）
 };
 ```
 
@@ -414,6 +437,7 @@ type BackpressureBadgeProps = {
 
 ```text
 12,840 msgs · 312 frames · 41:1
+12,840 msgs · 312 frames · 41:1 · 230 dropped   ← 有丟棄時
 ```
 
 樣式：
@@ -473,7 +497,8 @@ type BackpressureBadgeProps = {
 文字規則：
 
 - machine id 使用 mono。
-- telemetry value 使用 mono + `text-number`。
+- telemetry value 使用 mono + `text-number`；單位另以 `text-2xs` + `text-muted` 緊接在後，空間不足時單位換行而非溢出。
+- diagnose icon 預設 hover／focus 才顯示；觸控裝置（`@media (hover: none)`）常駐顯示，避免「看不見卻點得到」。
 - 長 machine name 最多兩行。
 - 數值區使用固定 grid，避免跳動造成 layout shift。
 
@@ -624,7 +649,9 @@ UI 規則：
 
 判斷：
 
-- `Date.now() - lastUpdated > 10_000`
+- `staleNow - lastUpdated > 10_000`；`staleNow` 平時等於 `Date.now()`（每秒 tick）。
+- **Pause 期間**（且連線中）`staleNow` 凍結在按下 Pause 的時刻：資料仍持續抵達 buffer，只是畫面不提交，不符合「資料停止抵達」的 stale 語意；卡片 Stale badge、相對時間與 Fleet Health 同步凍結，畫面就是 Pause 當下的完整快照。
+- Pause 期間若斷線，`staleNow` 恢復照走，照常標 stale（§8.2 disconnected 語意優先）。
 
 UI：
 
@@ -669,6 +696,8 @@ apps/web/src/domains/ai-copilot/stores/copilot.store.ts
 - progress bar 要有 `aria-valuenow` 或 indeterminate 描述。
 - drawer close 可用 Escape。
 - keyboard focus ring 使用 `accent`，不可移除。
+- `prefers-reduced-motion: reduce`：停掉 critical pulse、串流游標與 indeterminate progress 的循環動畫（indeterminate 停成靜止的 1/3 條），transition 縮到近乎瞬間；狀態仍由色彩 tint、文字徽章與 aria 傳達。
+- 小字（`text-2xs`／`text-pill`／`text-xs`）的文字色對其背景 MUST ≥ 4.5:1（見 §4.1 對比規則）。
 
 ---
 
@@ -715,5 +744,6 @@ apps/web/src/domains/ai-copilot/stores/copilot.store.ts
 - `v0.2`：加入具體預設 token、desktop/mobile、component states。
 - `v0.3`：整合為 Spec Kit 可用交接規格，補齊 file mapping、interaction states、accessibility、screenshot 驗收。
 - `v0.4`：Claude Design 交接落地（refs 三張定稿 + `_sources/` 匯出）。依實際產出回寫衍生 token：`bg-surface-hover`、`accent-bg-strong`、`accent-wash` 與各狀態 `*-fg`/`*-border`（ok/warn/crit），並同步 §5 Tailwind `theme.extend`。此版起 `apps/web/design/design-spec.md` 為 canonical（`docs/design-spec.md` 為歷史起點）。
+- `v0.5`（2026-09-27 審查修正）：`text-muted`／`fg-subtle` 提亮 `#687684` → `#7C8A98`（AA）並加 §4.1 對比規則；§5 補 `fontSize`（`2xs`、`pill`、`md`、`lg`、`number`——`text-number` 先前未定義、從未產生 CSS）；`colors.base` 改名 `canvas`（與 `fontSize.base` 撞名）；§4.2 禁任意值字級、數值／單位分開；§7.2.1 背壓計量含丟棄筆數；§7.3 觸控裝置 diagnose icon 常駐；§8.3 Pause 凍結 stale 時鐘；§10 reduced-motion。
 
 

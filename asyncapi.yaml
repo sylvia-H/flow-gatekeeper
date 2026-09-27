@@ -1,7 +1,7 @@
 asyncapi: 2.6.0
 info:
   title: flow-gatekeeper Realtime Events
-  version: 0.1.0
+  version: 1.1.0
   description: WebSocket events for telemetry, diagnosis jobs, and AI streaming.
   contact:
     name: flow-gatekeeper
@@ -34,7 +34,9 @@ channels:
     subscribe:
       operationId: machineData
       summary: Server pushes high-frequency machine telemetry.
-      description: Server streams telemetry points for subscribed machines at high frequency.
+      description: >-
+        Server streams telemetry points for subscribed machines at high frequency. Each frame is a
+        bare JSON array of TelemetryPoint (no envelope); each element carries its own type.
       message:
         $ref: "#/components/messages/MachineData"
 
@@ -132,14 +134,20 @@ components:
             const: machine/subscribe
           token:
             type: string
+            maxLength: 512
           machineIds:
             type: array
+            maxItems: 50
             items:
               type: string
+              minLength: 1
+              maxLength: 64
 
     MachineData:
       payload:
-        $ref: "#/components/schemas/TelemetryPoint"
+        type: array
+        items:
+          $ref: "#/components/schemas/TelemetryPoint"
 
     JobStatus:
       payload:
@@ -166,12 +174,16 @@ components:
     AiToken:
       payload:
         type: object
-        required: [type, jobId, seq, text]
+        required: [type, jobId, attempt, seq, text]
         properties:
           type:
             const: ai/token
           jobId:
             type: string
+          attempt:
+            type: integer
+            minimum: 1
+            description: BullMQ attempt number (attemptsMade + 1). The job id is reused across retries and seq restarts at 0, so clients reset accumulated stream text when this changes. A stalled re-dispatch (worker crash) does not increment attemptsMade, so seq also restarts at 0 within the same attempt; clients treat seq 0 as a new execution and reset as well.
           seq:
             type: integer
           text:
@@ -180,12 +192,16 @@ components:
     AiDone:
       payload:
         type: object
-        required: [type, jobId, cached, result]
+        required: [type, jobId, attempt, cached, result]
         properties:
           type:
             const: ai/done
           jobId:
             type: string
+          attempt:
+            type: integer
+            minimum: 1
+            description: BullMQ attempt number (attemptsMade + 1). The job id is reused across retries and seq restarts at 0, so clients reset accumulated stream text when this changes. A stalled re-dispatch (worker crash) does not increment attemptsMade, so seq also restarts at 0 within the same attempt; clients treat seq 0 as a new execution and reset as well.
           cached:
             type: boolean
           result:
@@ -194,12 +210,16 @@ components:
     AiError:
       payload:
         type: object
-        required: [type, jobId, code, message]
+        required: [type, jobId, attempt, code, message]
         properties:
           type:
             const: ai/error
           jobId:
             type: string
+          attempt:
+            type: integer
+            minimum: 1
+            description: BullMQ attempt number (attemptsMade + 1). The job id is reused across retries and seq restarts at 0, so clients reset accumulated stream text when this changes. A stalled re-dispatch (worker crash) does not increment attemptsMade, so seq also restarts at 0 within the same attempt; clients treat seq 0 as a new execution and reset as well.
           code:
             type: string
           message:
@@ -300,6 +320,7 @@ components:
           properties:
             count:
               type: integer
+              minimum: 0
             avgMs:
               type: [number, "null"]
             p95Ms:
@@ -313,8 +334,10 @@ components:
           properties:
             hits:
               type: integer
+              minimum: 0
             misses:
               type: integer
+              minimum: 0
             hitRate:
               type: [number, "null"]
           description: hitRate is hits / (hits + misses); null (not 0) when the denominator is 0.

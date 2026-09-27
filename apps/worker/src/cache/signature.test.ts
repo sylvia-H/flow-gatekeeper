@@ -6,6 +6,7 @@ const base = {
   state: "critical",
   topErrorCodes: ["critical", "warning"],
   promptVersion: "diagnosis-v1",
+  providerId: "gemini",
   model: "gemini-2.5-flash",
 };
 
@@ -40,6 +41,12 @@ describe("buildDiagnosisSignature", () => {
 
   it("不同 promptVersion 產生不同簽章", () => {
     expect(buildDiagnosisSignature({ ...base, promptVersion: "diagnosis-v2" })).not.toBe(
+      buildDiagnosisSignature(base),
+    );
+  });
+
+  it("不同 providerId（即使 model 字串相同）產生不同簽章", () => {
+    expect(buildDiagnosisSignature({ ...base, providerId: "other" })).not.toBe(
       buildDiagnosisSignature(base),
     );
   });

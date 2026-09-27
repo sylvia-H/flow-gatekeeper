@@ -1,7 +1,8 @@
 <!-- SPECKIT START -->
-For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current plan:
-`specs/009-observability-baseline/plan.md`
+<!-- 提醒：下次執行 speckit-agent-context-update 會覆寫本區塊，屆時再把 current plan 指向新 feature 的 plan.md。 -->
+目前**無進行中的 SDD feature**；最近一次完成的是 009（`specs/009-observability-baseline/plan.md`）。
+009 之後的跨 feature 修復見審查報告 `docs/20260927-research-review.md`（修復分支 `fix/20260927-research-review`，
+現況摘要見 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15.6）。技術棧、結構與指令以 README 與指南為準。
 <!-- SPECKIT END -->
 
 # flow-gatekeeper — Agent 操作指引
@@ -133,3 +134,20 @@ commit**，不需逐次徵詢；流程為：
   不得放任 fast-forward 結果留在 `develop` 上。
 - merge 完成後 push 屬於影響共享狀態的操作，依專案慣例（見最上層「執行動作」原則）
   仍 SHOULD 先與使用者確認再 push，除非使用者已明確授權。
+- 既有歷史中 006、007 與數個 fix/docs 分支的 merge commit 仍是 git 預設的 `Merge branch '…'`，
+  **不改寫既有 git 歷史**；本規則自此對之後的 merge 生效。
+
+### `main` 的 release 流程
+
+`main` 只接收**發布**，日常開發與 feature merge 一律在 `develop`。發布時：
+
+1. 確認 `develop` 上 `pnpm check` 與 `pnpm build` 通過、README／指南／ADR 已回補（見「跨 Feature 決策 MUST 回補真實來源」），
+   契約有變更時 `asyncapi.yaml` 的 `info.version` 已升版。
+2. `git checkout main` → `git merge --no-ff develop`，merge commit 訊息格式為
+   `merge(release): 併入 develop 準備 <版本> 發布`（前例：`merge(release): 併入 develop 準備第一版發布（v1.0.0）`）。
+3. 在該 merge commit 上打 annotated tag：`git tag -a vX.Y.Z -m "flow-gatekeeper vX.Y.Z：<中文摘要>"`（前例：`flow-gatekeeper v1.0.0：第一版正式發布`）。
+4. 建立 GitHub Release（對應 tag），上傳 demo 影片等二進位資產；README「端到端操作 Demo」的連結指向
+   `releases/download/vX.Y.Z/flow-gatekeeper-demo.mp4`、海報圖指向 `raw/main/docs/demo/...`——重錄 demo 或換版時
+   MUST 同步更新這兩個連結，避免 README 指到舊版或不存在的資產。
+5. push `main` 與 tag（`git push origin main --follow-tags`）屬影響共享狀態的操作，SHOULD 先與使用者確認。
+   發布後若 `main` 上有直接修正（例如 README 連結），MUST 回併 `develop`，不讓兩支分岔。

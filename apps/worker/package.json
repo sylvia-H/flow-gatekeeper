@@ -5,20 +5,21 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "start:dev": "tsx watch src/main.ts",
-    "smoke:gemini": "tsx src/ai/smoke-gemini.ts",
+    "start:dev": "tsx watch --conditions=development src/main.ts",
+    "smoke:gemini": "tsx --conditions=development src/ai/smoke-gemini.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src",
+    "lint": "eslint .",
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@flow-gatekeeper/contracts": "workspace:*",
     "@flow-gatekeeper/shared": "workspace:*",
-    "@google/generative-ai": "^0.21.0",
+    "@google/genai": "^2.24.0",
     "bullmq": "^5.21.0",
     "dotenv": "^16.4.5",
     "ioredis": "^5.4.1",
-    "mongodb": "^6.10.0"
+    "mongodb": "^6.10.0",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "tsx": "^4.19.0",

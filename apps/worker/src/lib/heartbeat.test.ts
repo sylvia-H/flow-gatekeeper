@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { isHeartbeatFresh } from "./heartbeat.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { HEARTBEAT_INTERVAL_MS, isHeartbeatFresh, startHeartbeat, stopHeartbeat } from "./heartbeat.js";
 
 /** isHeartbeatFresh 邊界（憲章測試門檻；contracts/supervision-runtime.md §3）。 */
 describe("isHeartbeatFresh", () => {
@@ -18,5 +18,32 @@ describe("isHeartbeatFresh", () => {
 
   it("PTTL -2（key 不存在）＝不健康", () => {
     expect(isHeartbeatFresh(-2)).toBe(false);
+  });
+});
+
+describe("startHeartbeat 的 isAlive 閘門", () => {
+  afterEach(() => {
+    stopHeartbeat();
+    vi.useRealTimers();
+  });
+
+  it("處理槽全卡住時停止寫 key、只 warn 一次；恢復後續寫", () => {
+    vi.useFakeTimers();
+    const set = vi.fn().mockResolvedValue("OK");
+    const warn = vi.fn();
+    let alive = true;
+    startHeartbeat({ set }, "worker:heartbeat:w1", warn, () => alive);
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(set).toHaveBeenLastCalledWith("worker:heartbeat:w1", expect.any(String), "EX", 30);
+
+    alive = false;
+    vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS * 3);
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    alive = true;
+    vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS);
+    expect(set).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });
