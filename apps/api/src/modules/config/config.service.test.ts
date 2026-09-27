@@ -54,4 +54,22 @@ describe("AppConfigService env 驗證與 WS Origin 白名單", () => {
     vi.stubEnv("WS_ALLOWED_ORIGINS", "");
     expect(new AppConfigService().wsAllowedOrigins).toEqual([]);
   });
+
+  it("WS 背壓高水位與連線數上限：留空套預設、有值照用、超出範圍建構即 throw", () => {
+    const defaults = new AppConfigService();
+    expect(defaults.wsSendHighWaterBytes).toBe(1024 * 1024);
+    expect(defaults.maxWsConnections).toBe(500);
+    expect(defaults.wsAuthGraceMs).toBe(10_000);
+
+    vi.stubEnv("WS_SEND_HIGH_WATER_BYTES", "131072");
+    vi.stubEnv("MAX_WS_CONNECTIONS", "20");
+    vi.stubEnv("WS_AUTH_GRACE_MS", "5000");
+    const custom = new AppConfigService();
+    expect(custom.wsAuthGraceMs).toBe(5_000);
+    expect(custom.wsSendHighWaterBytes).toBe(131_072);
+    expect(custom.maxWsConnections).toBe(20);
+
+    vi.stubEnv("MAX_WS_CONNECTIONS", "0");
+    expect(() => new AppConfigService()).toThrow(/MAX_WS_CONNECTIONS/);
+  });
 });

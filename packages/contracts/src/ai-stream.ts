@@ -2,7 +2,7 @@ import { z } from "zod";
 import { DiagnosisResultSchema } from "./schemas.js";
 
 /**
- * AI 串流事件（worker → Redis `ai-stream:<jobId>` → Gateway → web）。
+ * AI 串流事件（worker → Redis `ai-stream:<jobId>` → Gateway → web）。Gateway 轉發時，有設 `WS_AUTH_SECRET` 時只送已授權（通過 `machine/subscribe` token 檢查）的連線。
  *
  * 以 Zod 定義是因為 relay 從 Redis 讀回的是任何能 PUBLISH 的一方都寫得進去的字串，
  * 必須 `safeParse` 後才轉發；`ai/done.result` 也因此直接沿用 `DiagnosisResultSchema`。
@@ -14,7 +14,7 @@ import { DiagnosisResultSchema } from "./schemas.js";
  */
 const attempt = z.number().int().min(1);
 
-/** ai/token：串流 AI token 區塊。 */
+/** ai/token：串流 AI token 區塊（有設 `WS_AUTH_SECRET` 時只送已授權（通過 `machine/subscribe` token 檢查）的連線）。 */
 export const AiTokenSchema = z.object({
   type: z.literal("ai/token"),
   jobId: z.string(),
@@ -23,7 +23,7 @@ export const AiTokenSchema = z.object({
   text: z.string(),
 });
 
-/** ai/done：最終 AI 診斷結果（已通過 schema 驗證）。 */
+/** ai/done：最終 AI 診斷結果（已通過 schema 驗證；有設 `WS_AUTH_SECRET` 時只送已授權（通過 `machine/subscribe` token 檢查）的連線）。 */
 export const AiDoneSchema = z.object({
   type: z.literal("ai/done"),
   jobId: z.string(),
@@ -32,7 +32,7 @@ export const AiDoneSchema = z.object({
   result: DiagnosisResultSchema,
 });
 
-/** ai/error：AI 供應商或 worker 錯誤。 */
+/** ai/error：AI 供應商或 worker 錯誤（有設 `WS_AUTH_SECRET` 時只送已授權（通過 `machine/subscribe` token 檢查）的連線）。 */
 export const AiErrorSchema = z.object({
   type: z.literal("ai/error"),
   jobId: z.string(),

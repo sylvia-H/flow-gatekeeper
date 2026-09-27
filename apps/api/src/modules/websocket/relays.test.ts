@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Job } from "bullmq";
 import { AiStreamRelayService } from "./ai-stream-relay.service.js";
-import { JobStatusRelayService } from "./job-status-relay.service.js";
+import { JobStatusRelayService, queueEventsConnection } from "./job-status-relay.service.js";
+import { attachThrottledErrorLog } from "../../lib/connection-error-throttle.js";
 
 const JOB_ID = "0e6c2b7a-1f3d-4d8e-a9b0-c1d2e3f4a5b6";
 const OTHER_JOB_ID = "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a";
@@ -163,5 +164,65 @@ describe("JobStatusRelayService delayed keepalive", () => {
     gateway.send.mockClear();
     internals.keepDelayedAlive(15_000);
     expect(gateway.send).not.toHaveBeenCalled();
+  });
+});
+
+describe("queueEventsConnection：QueueEvents 接上連線錯誤節流", () => {
+  it("error 掛在 QueueEvents、ready 取自底層連線；持續故障只放行第一則，恢復後重置", async () => {
+    const qeListeners = new Map<string, (err: Error) => void>();
+    const clientListeners = new Map<string, () => void>();
+    const fakeClient = { on: vi.fn((event: string, l: () => void) => clientListeners.set(event, l)) };
+    const queueEvents = {
+      on: vi.fn((event: string, l: (err: Error) => void) => qeListeners.set(event, l)),
+      client: Promise.resolve(fakeClient),
+    };
+    const errors: number[] = [];
+    const recovered: number[] = [];
+    attachThrottledErrorLog(
+      queueEventsConnection(queueEvents as never),
+      { error: (_err, suppressed) => errors.push(suppressed), recovered: (n) => recovered.push(n) },
+      { now: () => 0 },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const fireError = qeListeners.get("error");
+    expect(fireError).toBeDefined();
+    for (let i = 0; i < 4; i += 1) fireError?.(new Error("ECONNREFUSED"));
+    expect(errors).toEqual([0]);
+    clientListeners.get("ready")?.();
+    expect(recovered).toEqual([3]);
+    fireError?.(new Error("ECONNREFUSED"));
+    expect(errors).toEqual([0, 0]);
+  });
+
+  it("取底層連線失敗 → 只是收不到恢復訊號，不產生浮空 rejection", async () => {
+    const queueEvents = { on: vi.fn(), client: Promise.reject(new Error("closing")) };
+    const conn = queueEventsConnection(queueEvents as never);
+    conn.on("ready", () => undefined);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(queueEvents.on).not.toHaveBeenCalled();
+  });
+
+  it("掛上監聽時底層連線已是 ready（首次 ready 已發過）→ 補觸發一次，開機期間的故障也記得到恢復", async () => {
+    const qeListeners = new Map<string, (err: Error) => void>();
+    const fakeClient = { status: "ready", on: vi.fn() };
+    const queueEvents = {
+      on: vi.fn((event: string, l: (err: Error) => void) => qeListeners.set(event, l)),
+      client: Promise.resolve(fakeClient),
+    };
+    const errors: number[] = [];
+    const recovered: number[] = [];
+    attachThrottledErrorLog(
+      queueEventsConnection(queueEvents as never),
+      { error: (_err, suppressed) => errors.push(suppressed), recovered: (n) => recovered.push(n) },
+      { now: () => 0 },
+    );
+    // 開機期間（client 尚未 resolve）已發生故障。
+    qeListeners.get("error")?.(new Error("ECONNREFUSED"));
+    qeListeners.get("error")?.(new Error("ECONNREFUSED"));
+    await vi.waitFor(() => expect(recovered).toEqual([1]));
+    expect(errors).toEqual([0]);
+    expect(fakeClient.on).toHaveBeenCalledWith("ready", expect.any(Function));
   });
 });

@@ -46,6 +46,11 @@ export class AppConfigService {
   readonly wsAuthSecret = this.env.WS_AUTH_SECRET ?? "";
   // WS upgrade 的 Origin 白名單；空陣列＝不檢查（解析規則與 Gateway 共用 lib/ws-origin.ts）。
   readonly wsAllowedOrigins = parseAllowedOrigins(this.env.WS_ALLOWED_ORIGINS);
+  // WS 出口背壓高水位（bytes）與同時連線數上限（範圍驗證見 lib/env-schema.ts）。
+  readonly wsSendHighWaterBytes = this.env.WS_SEND_HIGH_WATER_BYTES;
+  readonly maxWsConnections = this.env.MAX_WS_CONNECTIONS;
+  // 有設 WS_AUTH_SECRET 時，連線通過 token 檢查的期限（逾時以 1008 關閉，防止佔住連線名額）。
+  readonly wsAuthGraceMs = this.env.WS_AUTH_GRACE_MS;
   readonly mongoUrl = this.env.MONGO_URL;
   readonly mongoDb = this.env.MONGO_DB;
   readonly telemetryTtlSeconds = this.env.TELEMETRY_TTL_SECONDS;

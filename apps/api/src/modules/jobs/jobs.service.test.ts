@@ -3,7 +3,7 @@ import { ConflictException, NotFoundException, ServiceUnavailableException } fro
 import type { Queue } from "bullmq";
 import type { DiagnosisJobPayload } from "@flow-gatekeeper/contracts";
 import { ENQUEUE_TIMEOUT_MS, JobsService } from "./jobs.service.js";
-import type { JobBindingStore } from "./jobs.service.js";
+import type { ClientPresence, JobBindingStore } from "./jobs.service.js";
 import type { JobBinding } from "../websocket/ai-stream-relay.service.js";
 import { MACHINE_IDS } from "../telemetry/mock-telemetry.service.js";
 
@@ -36,10 +36,20 @@ function makeQueue(impl: QueueImpl = {}) {
   };
 }
 
-function makeService(queue: ReturnType<typeof makeQueue>) {
+/** 在線且已授權的 clientId 集合；預設 SOCKET_A／SOCKET_B 皆在線且已授權。 */
+function makePresence(authorized: readonly string[] = [SOCKET_A, SOCKET_B]) {
+  const set = new Set(authorized);
+  const presence: ClientPresence & { set: Set<string> } = {
+    set,
+    isAuthorized: (clientId) => set.has(clientId),
+  };
+  return presence;
+}
+
+function makeService(queue: ReturnType<typeof makeQueue>, presence = makePresence()) {
   const bindings = makeBindings();
-  const service = new JobsService(queue as unknown as Queue<DiagnosisJobPayload>, bindings);
-  return { service, bindings };
+  const service = new JobsService(queue as unknown as Queue<DiagnosisJobPayload>, bindings, presence);
+  return { service, bindings, presence };
 }
 
 afterEach(() => {
@@ -189,5 +199,42 @@ describe("JobsService.createDiagnosis", () => {
       status: "waiting",
     });
     expect(queue.add).toHaveBeenCalledTimes(1);
+  });
+
+  it("socketId 不在線或未授權 → 409（body 形狀同 400／404）：不綁定、不查佇列、不入列", async () => {
+    const queue = makeQueue();
+    const { service, bindings } = makeService(queue, makePresence([]));
+    const err = await service
+      .createDiagnosis({ jobId: JOB_ID, machineId: "mixer-01", socketId: SOCKET_A })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).getStatus()).toBe(409);
+    expect((err as ConflictException).getResponse()).toEqual({
+      statusCode: 409,
+      error: "Conflict",
+      message: "WebSocket 連線不存在或未授權，請重新連線後再發起診斷",
+    });
+    expect(bindings.map.size).toBe(0);
+    expect(queue.getJob).not.toHaveBeenCalled();
+    expect(queue.add).not.toHaveBeenCalled();
+  });
+
+  it("冪等重送也檢查：原連線已斷線後以同 jobId 重送 → 409，原綁定不動", async () => {
+    const queue = makeQueue();
+    const { service, bindings, presence } = makeService(queue);
+    await service.createDiagnosis({ jobId: JOB_ID, machineId: "mixer-01", socketId: SOCKET_A });
+    presence.set.delete(SOCKET_A);
+    await expect(
+      service.createDiagnosis({ jobId: JOB_ID, machineId: "mixer-01", socketId: SOCKET_A }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(queue.add).toHaveBeenCalledTimes(1);
+    expect(bindings.map.get(JOB_ID)?.clientId).toBe(SOCKET_A);
+  });
+
+  it("名冊檢查先於在線檢查：未知機台 + 未授權連線 → 仍是 404", async () => {
+    const { service } = makeService(makeQueue(), makePresence([]));
+    await expect(
+      service.createDiagnosis({ jobId: JOB_ID, machineId: "cnc-99", socketId: SOCKET_A }),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });

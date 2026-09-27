@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   BadRequestException,
+  ConflictException,
   NotFoundException,
   ServiceUnavailableException,
   UnsupportedMediaTypeException,
@@ -116,7 +117,8 @@ describe("JobsController.create", () => {
       getBinding: () => undefined,
       deleteBinding: vi.fn(),
     };
-    const controller = new JobsController(new JobsService(queue, bindings));
+    const presence = { isAuthorized: () => true };
+    const controller = new JobsController(new JobsService(queue, bindings, presence));
     const err = await captureError(controller.create(JSON_TYPE, { machineId: "ghost-01", socketId: SOCKET_ID }));
     expect(err).toBeInstanceOf(NotFoundException);
     expect((err as NotFoundException).getStatus()).toBe(404);
@@ -127,5 +129,29 @@ describe("JobsController.create", () => {
       controller.create(JSON_TYPE, { machineId: "mixer-01", socketId: SOCKET_ID }),
     ).resolves.toMatchObject({ machineId: "mixer-01", status: "waiting" });
     expect(add).toHaveBeenCalledTimes(1);
+  });
+
+  it("接真實 JobsService：socketId 未在線或未授權 → 409，不綁定、不入列", async () => {
+    const add = vi.fn(async () => ({}));
+    const queue = { getJob: vi.fn(async () => undefined), add } as unknown as Queue<DiagnosisJobPayload>;
+    const bindings = {
+      bindJobToClient: vi.fn(),
+      getBinding: () => undefined,
+      deleteBinding: vi.fn(),
+    };
+    const authorized = new Set<string>();
+    const presence = { isAuthorized: (clientId: string) => authorized.has(clientId) };
+    const controller = new JobsController(new JobsService(queue, bindings, presence));
+    const err = await captureError(controller.create(JSON_TYPE, { machineId: "mixer-01", socketId: SOCKET_ID }));
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).getStatus()).toBe(409);
+    expect(add).not.toHaveBeenCalled();
+    expect(bindings.bindJobToClient).not.toHaveBeenCalled();
+
+    authorized.add(SOCKET_ID);
+    await expect(
+      controller.create(JSON_TYPE, { machineId: "mixer-01", socketId: SOCKET_ID }),
+    ).resolves.toMatchObject({ machineId: "mixer-01", status: "waiting" });
+    expect(bindings.bindJobToClient).toHaveBeenCalledTimes(1);
   });
 });

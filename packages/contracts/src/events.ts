@@ -108,8 +108,9 @@ export const SystemUnauthorizedSchema = /* @__PURE__ */ z.object({ type: z.liter
 
 /**
  * system/metrics：伺服器週期廣播的營運指標摘要。
- * 廣播給**所有已連線 client**、與 `machine/subscribe` 訂閱狀態無關——這是系統層級的健康訊號，
- * 不屬於任何一台機台，沒訂閱機台的畫面也需要它。
+ * 廣播給**所有已授權 client**（未設 `WS_AUTH_SECRET` 時即所有已連線 client；有設時為通過
+ * `machine/subscribe` token 檢查者），與訂閱了哪些機台無關——這是系統層級的健康訊號，
+ * 不屬於任何一台機台，訂閱空集合的畫面也需要它。
  */
 export const SystemMetricsSchema = /* @__PURE__ */ z.object({
   type: z.literal("system/metrics"),
@@ -159,11 +160,17 @@ export type ServerControlMessage =
   | SystemUnauthorized
   | SystemMetrics;
 
-/** 伺服器→客戶端的所有訊息 `type`（`machine/data` 以陣列整批送出，但 `type` 仍取自其元素）。 */
-export type ServerMessage = TelemetryPoint | JobStatus | AiStreamEvent | ServerControlMessage;
+/**
+ * 伺服器→客戶端的單一 WS frame（Gateway `send()` 的出口型別）。`machine/data` 以
+ * `TelemetryPoint[]` **整批**送出（一個 frame 是一個陣列），其餘訊息皆為單一物件。
+ */
+export type ServerMessage = TelemetryPoint[] | JobStatus | AiStreamEvent | ServerControlMessage;
 
-/** WS 上所有訊息 `type` 字面值的聯集。 */
-export type WsMessageType = ServerMessage["type"] | ClientControlMessage["type"];
+/** WS 上所有訊息 `type` 字面值的聯集（`machine/data` 取自批次陣列的元素）。 */
+export type WsMessageType =
+  | TelemetryPoint["type"]
+  | Exclude<ServerMessage, TelemetryPoint[]>["type"]
+  | ClientControlMessage["type"];
 
 /**
  * WS 訊息 `type` 的 runtime 清單，供契約漂移測試與 asyncapi 比對。

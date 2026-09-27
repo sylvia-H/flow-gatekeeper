@@ -1,6 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import type { OnModuleDestroy, OnModuleInit } from "@nestjs/common";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { Server as HttpServer } from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import type { VerifyClientCallbackAsync } from "ws";
@@ -9,6 +9,7 @@ import type {
   ClientControlMessage,
   MachineSubscribed,
   Pong,
+  ServerMessage,
   SystemConnected,
   SystemMetrics,
   SystemUnauthorized,
@@ -18,6 +19,14 @@ import { MockTelemetryService } from "../telemetry/mock-telemetry.service.js";
 import { HistoryService } from "../history/history.service.js";
 import { filterPointsForSubscription } from "../../lib/subscription-filter.js";
 import { isOriginAllowed, parseAllowedOrigins } from "../../lib/ws-origin.js";
+import { safeEqualString } from "../../lib/safe-equal.js";
+import { LogThrottle } from "../../lib/telemetry-buffer.js";
+import { CONNECTION_ERROR_LOG_THROTTLE_MS } from "../../lib/connection-error-throttle.js";
+import {
+  DEFAULT_MAX_WS_CONNECTIONS,
+  DEFAULT_WS_AUTH_GRACE_MS,
+  DEFAULT_WS_SEND_HIGH_WATER_BYTES,
+} from "../../lib/env-schema.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 
 type ClientId = string;
@@ -28,35 +37,91 @@ type ClientId = string;
  */
 export const WS_MAX_PAYLOAD_BYTES = 16 * 1024;
 
+/**
+ * 慢讀者判定：心跳 tick 時 `bufferedAmount` 仍超過高水位的**連續**次數達此值即 terminate。
+ * 單一 tick 超標可能只是瞬間網路抖動（期間的推送已被略過、不會繼續堆積）；連續 3 輪
+ * （預設約 45 秒）仍消化不掉，代表對端已不在讀，留著只會佔記憶體。
+ */
+export const WS_SLOW_CONSUMER_TICKS = 3;
+
+/**
+ * 每連線違規（無法解析的 JSON、schema 不符、錯誤 token）累計達此值即以 1008 關閉。
+ * 合法前端不會送出任何一種；無上限時同一連線可無限暴力猜 token、每則都寫一行 warn 放大日誌。
+ */
+export const WS_MAX_VIOLATIONS = 10;
+
+/** 心跳 ping 的 nonce 長度；pong 必須原樣帶回才算存活。 */
+const PING_NONCE_BYTES = 8;
+
 export type GatewayAttachOptions = {
   /** Origin 白名單；未指定時讀 `WS_ALLOWED_ORIGINS`（空＝不檢查）。 */
   allowedOrigins?: readonly string[];
+  /** 單一連線送出緩衝高水位（bytes）；未指定時用 `DEFAULT_WS_SEND_HIGH_WATER_BYTES`。 */
+  sendHighWaterBytes?: number;
+  /** 同時連線數上限；未指定時用 `DEFAULT_MAX_WS_CONNECTIONS`。 */
+  maxConnections?: number;
+  /** 有設密鑰時通過 token 檢查的期限（ms）；未指定時用 `DEFAULT_WS_AUTH_GRACE_MS`。 */
+  authGraceMs?: number;
 };
+
+/** 單一連線的全部伺服器端狀態（清理時整筆移除，不會有殘留的平行 Map）。 */
+type ClientState = {
+  socket: WebSocket;
+  /** 連線建立時間（ms）；授權期限以此起算。 */
+  connectedAt: number;
+  subscriptions: Set<string>;
+  /**
+   * 是否已授權：未設 `WS_AUTH_SECRET` 時連上即授權；有設時僅在通過 `machine/subscribe` token
+   * 檢查後才成立。AI／job 事件（`send()`）與 `system/metrics` 只送已授權連線。
+   */
+  authorized: boolean;
+  /** 上一輪心跳後是否收到帶正確 nonce 的 pong。 */
+  alive: boolean;
+  /** 本輪心跳送出的 nonce；尚未送出或已回應則為 undefined（未經請求的 pong 一律不算）。 */
+  pingNonce?: Buffer;
+  /** 連續幾個心跳 tick `bufferedAmount` 超過高水位。 */
+  overHighWaterTicks: number;
+  violations: number;
+  /** 已因違規發出 close，等待 'close' 事件清理；期間的訊息一律忽略。 */
+  closing: boolean;
+};
+
+type ViolationReason = "invalid-json" | "schema" | "unauthorized";
 
 /**
  * 原生 `ws` Gateway（掛在 NestJS HTTP server，path `/ws`），非 Socket.IO（憲章 IV、ADR-001）。
  *
  * - 連線生命週期：連線→system/connected、close/心跳逾時→清理（FR-001/FR-008）。
  * - 訂閱：machine/subscribe 取代式 + 授權（FR-002/FR-003）；未訂閱者不收遙測（FR-004）。
- * - 心跳：應用層 ping→pong（FR-007a）+ 伺服器端探活回收半死連線（FR-007b/SC-005）。
+ * - 心跳：應用層 ping→pong（FR-007a）+ 伺服器端探活回收半死連線（FR-007b/SC-005）；協定層
+ *   ping 帶每輪隨機 nonce，pong 必須原樣帶回才算存活——暫停讀取、只顧主動送 pong 的對端騙不過。
  * - 落地：全量同步進 HistoryService buffer，由其每秒批次落庫（FR-009/FR-010）。
- * - 記錄：連線/斷線/授權失敗/逾時回收（FR-017）。
+ * - 記錄：連線/斷線/授權失敗/逾時回收（FR-017）；同類 warn 以 LogThrottle 節流——**授權失敗、
+ *   畸形訊息、Origin 拒絕、連線數拒絕等日誌為 30 秒抽樣**（key 為事件種類、全域共用，每 30 秒
+ *   至多一則並附 `suppressed` 被壓掉的則數），不是逐則記錄；逐連線的斷線／回收仍逐則記錄。
  * - 輸入加固：client 訊息一律視為不可信——Zod safeParse 後才分派、socket/server 皆掛 error
- *   listener、maxPayload 16 KiB、Origin 白名單、machineIds 與已知機台取交集。任何畸形輸入
+ *   listener、maxPayload 16 KiB、Origin 白名單、連線數上限、授權期限（有密鑰時連線須在
+ *   `WS_AUTH_GRACE_MS` 內通過 token，否則 1008——不讓不訂閱的連線佔住名額）、machineIds 與已知機台取交集、
+ *   token 常數時間比較、每連線違規計數（達 `WS_MAX_VIOLATIONS` 以 1008 關閉）。任何畸形輸入
  *   都只影響該則訊息（或該條連線），不得讓行程結束。
- * - send()：對單一連線推送任意 payload，003 AI relay 銜接點（FR-015）。
+ * - 出口閘門：所有推送經 `deliver()` 做背壓（`bufferedAmount` 超過高水位即略過該筆、連續
+ *   `WS_SLOW_CONSUMER_TICKS` 個心跳 tick 超標則 terminate）；對外的 `send()` 另只送已授權連線。
  */
 @Injectable()
 export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   // 連線相關事件需要 clientId 為獨立結構化欄位（FR-002），Nest Logger 的 API 只能帶字串
   // context，故此類事件改走底層 pino child logger 直接呼叫（contracts/log-fields.md §2）。
   private readonly plog = getAppLogger().child({ context: MonitoringGateway.name });
+  // key 為固定的事件種類（不含 clientId）：key 集合有界、不隨連線數成長。
+  private readonly warnThrottle = new LogThrottle(CONNECTION_ERROR_LOG_THROTTLE_MS);
   private wss?: WebSocketServer;
   private producerTimer?: ReturnType<typeof setInterval>;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
-  private readonly clients = new Map<ClientId, WebSocket>();
-  private readonly subscriptions = new Map<ClientId, Set<string>>();
-  private readonly alive = new Map<ClientId, boolean>();
+  private readonly clients = new Map<ClientId, ClientState>();
+  private sendHighWaterBytes = DEFAULT_WS_SEND_HIGH_WATER_BYTES;
+  private maxConnections = DEFAULT_MAX_WS_CONNECTIONS;
+  private authGraceMs = DEFAULT_WS_AUTH_GRACE_MS;
+  private droppedSends = 0;
 
   constructor(
     private readonly config: AppConfigService,
@@ -70,7 +135,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
       () => this.publishTelemetry(),
       this.config.mockTelemetryIntervalMs,
     );
-    // 伺服器端心跳探活：回收網路硬中斷的「半死」連線（FR-007b/SC-005）。
+    // 伺服器端心跳探活：回收網路硬中斷的「半死」連線（FR-007b/SC-005）與慢讀者。
     this.heartbeatTimer = setInterval(() => this.sweepDeadConnections(), this.config.wsHeartbeatMs);
   }
 
@@ -90,9 +155,8 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     // 不主動釋放的話 app.close() 等待的 http.Server 'close' 永不回呼——關閉會掛到 stop_grace_period
     // 逾時被 SIGKILL（非零退出→被監督者誤判為崩潰而重啟一個正被停止的服務）。terminate 觸發的
     // 'close' 事件會再進 cleanup()，其冪等守衛可安全重入。
-    for (const [clientId, socket] of [...this.clients]) {
-      socket.terminate();
-      this.cleanup(clientId, "shutdown");
+    for (const clientId of [...this.clients.keys()]) {
+      this.terminate(clientId, "shutdown");
     }
     this.wss?.close();
   }
@@ -101,11 +165,14 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   attach(server: HttpServer, options: GatewayAttachOptions = {}): void {
     const allowedOrigins =
       options.allowedOrigins ?? parseAllowedOrigins(process.env.WS_ALLOWED_ORIGINS);
+    this.sendHighWaterBytes = options.sendHighWaterBytes ?? DEFAULT_WS_SEND_HIGH_WATER_BYTES;
+    this.maxConnections = options.maxConnections ?? DEFAULT_MAX_WS_CONNECTIONS;
+    this.authGraceMs = options.authGraceMs ?? DEFAULT_WS_AUTH_GRACE_MS;
     this.wss = new WebSocketServer({
       server,
       path: "/ws",
       maxPayload: WS_MAX_PAYLOAD_BYTES,
-      ...(allowedOrigins.length > 0 ? { verifyClient: this.originVerifier(allowedOrigins) } : {}),
+      verifyClient: this.upgradeVerifier(allowedOrigins),
     });
     this.wss.on("connection", (socket) => this.handleConnection(socket));
     // 掛 server 端 error listener：ws 會把底層 http server 的 error 轉發到 wss，
@@ -115,46 +182,80 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  /** upgrade 前比對 Origin；不在白名單回 403 並不建立連線。 */
-  private originVerifier(allowed: readonly string[]): VerifyClientCallbackAsync {
+  /**
+   * upgrade 前的兩道檢查：連線數上限（已達上限回 503，不建立連線）與 Origin 白名單（不在清單
+   * 回 403；清單為空則不檢查）。連線數以「已建立的連線」計：同一瞬間併發的 upgrade 可能略微
+   * 超出上限，屬可接受的誤差（目的是擋住無上限成長，而非精確配額）。
+   */
+  private upgradeVerifier(allowedOrigins: readonly string[]): VerifyClientCallbackAsync {
     return (info, done) => {
-      // ws 的型別宣告 origin 為 string，但實際上沒帶 header 時是 undefined。
-      const origin = (info.origin as string | undefined) || undefined;
-      if (isOriginAllowed(origin, allowed)) {
-        done(true);
+      if (this.clients.size >= this.maxConnections) {
+        this.throttledWarn(
+          "max-connections",
+          { connections: this.clients.size, maxConnections: this.maxConnections },
+          "websocket upgrade rejected: too many connections",
+        );
+        done(false, 503, "Service Unavailable");
         return;
       }
-      this.plog.warn({ origin }, "websocket upgrade rejected: origin not allowed");
-      done(false, 403, "Forbidden");
+      if (allowedOrigins.length > 0) {
+        // ws 的型別宣告 origin 為 string，但實際上沒帶 header 時是 undefined。
+        const origin = (info.origin as string | undefined) || undefined;
+        if (!isOriginAllowed(origin, allowedOrigins)) {
+          this.throttledWarn("origin-rejected", { origin }, "websocket upgrade rejected: origin not allowed");
+          done(false, 403, "Forbidden");
+          return;
+        }
+      }
+      done(true);
     };
   }
 
   private handleConnection(socket: WebSocket): void {
     const clientId = randomUUID();
-    this.clients.set(clientId, socket);
-    this.subscriptions.set(clientId, new Set());
-    this.alive.set(clientId, true);
-    this.send(clientId, { type: "system/connected", clientId } satisfies SystemConnected);
+    const state: ClientState = {
+      socket,
+      connectedAt: Date.now(),
+      subscriptions: new Set(),
+      // 未設密鑰（demo／本機）時沒有可驗的 token，連上即視為已授權。
+      authorized: !this.config.wsAuthSecret,
+      alive: true,
+      overHighWaterTicks: 0,
+      violations: 0,
+      closing: false,
+    };
+    this.clients.set(clientId, state);
+    this.deliver(clientId, { type: "system/connected", clientId } satisfies SystemConnected);
     this.plog.info({ clientId }, "client connected");
 
     // binaryType 維持 ws 預設 "nodebuffer"：RawData 恆為 Buffer（分片訊息亦已合併），故可直接 toString()。
     socket.on("message", (raw) => this.handleMessage(clientId, (raw as Buffer).toString()));
-    // protocol-level pong（回應伺服器的 ping()）→ 標記存活。
-    socket.on("pong", () => this.alive.set(clientId, true));
+    // protocol-level pong：只有原樣帶回本輪 nonce 者才算存活；未經請求或 nonce 不符的 pong 忽略。
+    socket.on("pong", (data) => {
+      if (state.pingNonce && data.equals(state.pingNonce)) {
+        state.alive = true;
+        state.pingNonce = undefined;
+      }
+    });
     socket.on("close", () => this.cleanup(clientId, "close"));
     // 協定層錯誤（非法 opcode、未遮罩 frame、無效 UTF-8、超過 maxPayload）ws 會 emit 'error'，
     // 沒有 listener 就會直接 throw 讓行程崩潰。ws 會自行關閉這條連線，後續由 'close' 清理。
     socket.on("error", (err) => {
-      this.plog.warn({ clientId, err: { message: err.message } }, "websocket client error");
+      this.throttledWarn(
+        "client-error",
+        { clientId, err: { message: err.message } },
+        "websocket client error",
+      );
     });
   }
 
   private handleMessage(clientId: ClientId, raw: string): void {
+    if (this.clients.get(clientId)?.closing !== false) return; // 已離線或正因違規關閉
     let json: unknown;
     try {
       json = JSON.parse(raw);
     } catch {
-      this.plog.warn({ clientId, reason: "invalid-json" }, "ignored client message");
+      this.recordViolation(clientId, "invalid-json");
       return; // 無法解析的訊息安全忽略（FR-014）
     }
 
@@ -164,51 +265,90 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
       const issues = parsed.error.issues
         .slice(0, 5)
         .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
-      this.plog.warn({ clientId, reason: "schema", issues }, "ignored client message");
+      this.recordViolation(clientId, "schema", { issues });
       return; // 未知 type 或形狀不符一律安全忽略（FR-014）
     }
     this.dispatch(clientId, parsed.data);
   }
 
   private dispatch(clientId: ClientId, msg: ClientControlMessage): void {
+    const state = this.clients.get(clientId);
+    if (!state) return;
     switch (msg.type) {
       case "ping":
-        this.send(clientId, { type: "pong", ts: Date.now() } satisfies Pong);
+        this.deliver(clientId, { type: "pong", ts: Date.now() } satisfies Pong);
         break;
 
       case "machine/subscribe": {
         const secret = this.config.wsAuthSecret;
-        if (secret && msg.token !== secret) {
-          // 無效授權：回 system/unauthorized 且不建立/變更訂閱（FR-003/SC-006）。
-          this.plog.warn({ clientId }, "unauthorized subscribe");
-          this.send(clientId, { type: "system/unauthorized" } satisfies SystemUnauthorized);
-          return;
+        if (secret) {
+          if (!safeEqualString(msg.token, secret)) {
+            // 無效授權：回 system/unauthorized 且不建立/變更訂閱、不改變授權狀態（FR-003/SC-006）。
+            if (this.recordViolation(clientId, "unauthorized")) return;
+            this.deliver(clientId, { type: "system/unauthorized" } satisfies SystemUnauthorized);
+            return;
+          }
+          state.authorized = true;
         }
         // 只保留已知機台（去重、保持 client 給的順序）：未知 id 訂閱了也不會有資料，
         // 留著只會讓每次廣播多做無謂比對。
         const known = new Set(this.telemetry.machineIds);
         const machineIds = [...new Set(msg.machineIds)].filter((id) => known.has(id));
         // 取代式：新集合即為當前訂閱的唯一真實狀態（FR-002）。
-        this.subscriptions.set(clientId, new Set(machineIds));
-        this.send(clientId, {
+        state.subscriptions = new Set(machineIds);
+        this.deliver(clientId, {
           type: "machine/subscribed",
           machineIds,
         } satisfies MachineSubscribed);
         break;
       }
-
     }
+  }
+
+  /**
+   * 記一次違規並節流記錄；累計達 `WS_MAX_VIOLATIONS` 時以 1008（policy violation）關閉連線。
+   * 回傳 true 表示連線已被關閉（或已不在），呼叫端不必再回應。
+   */
+  private recordViolation(
+    clientId: ClientId,
+    reason: ViolationReason,
+    extra: Record<string, unknown> = {},
+  ): boolean {
+    const state = this.clients.get(clientId);
+    if (!state) return true;
+    state.violations += 1;
+    this.throttledWarn(
+      `violation:${reason}`,
+      { clientId, reason, violations: state.violations, ...extra },
+      reason === "unauthorized" ? "unauthorized subscribe" : "ignored client message",
+    );
+    if (state.violations < WS_MAX_VIOLATIONS) return false;
+    state.closing = true;
+    this.throttledWarn(
+      "violation-close",
+      { clientId, violations: state.violations },
+      "too many client violations, closing with 1008",
+    );
+    state.socket.close(1008, "policy violation");
+    return true;
+  }
+
+  /** 同類 warn 每 `CONNECTION_ERROR_LOG_THROTTLE_MS` 至多一則，並帶出期間被壓掉的則數。 */
+  private throttledWarn(key: string, fields: Record<string, unknown>, msg: string): void {
+    const hit = this.warnThrottle.hit(key, Date.now());
+    if (!hit) return;
+    this.plog.warn(hit.suppressed > 0 ? { ...fields, suppressed: hit.suppressed } : fields, msg);
   }
 
   /** 每 tick：只把訂閱機台的 TelemetryPoint[] 推給各訂閱者（FR-004）；全量落地與推送解耦。 */
   private publishTelemetry(): void {
     const points = this.telemetry.nextBatch();
 
-    // 即時推送：只送訂閱者（FR-004）。
-    for (const [clientId, machineIds] of this.subscriptions) {
-      const selected = filterPointsForSubscription(points, machineIds);
+    // 即時推送：只送訂閱者（FR-004）。有設密鑰時訂閱只在授權通過後才建立，未授權者訂閱恆為空。
+    for (const [clientId, state] of this.clients) {
+      const selected = filterPointsForSubscription(points, state.subscriptions);
       if (selected.length > 0) {
-        this.send(clientId, selected);
+        this.deliver(clientId, selected);
       }
     }
 
@@ -218,27 +358,65 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * 心跳探活掃描：上一輪未回 pong 者判定失效並回收（涵蓋網路硬中斷的半死連線）；
-   * 存活者標記為待驗證並送 ping()。回收上限約 2 × WS_HEARTBEAT_MS（SC-005）。
+   * 心跳探活掃描：上一輪未回帶正確 nonce 的 pong 者判定失效並回收（涵蓋網路硬中斷的半死連線）；
+   * `bufferedAmount` 連續 `WS_SLOW_CONSUMER_TICKS` 輪超過高水位者視為慢讀者回收；
+   * 有設密鑰且逾 `WS_AUTH_GRACE_MS` 仍未授權者以 1008 關閉（不另開每連線 timer，故實際關閉時間
+   * 約為期限～期限 + 一個心跳間隔）；其餘標記為待驗證並送 `ping(nonce)`。回收上限約
+   * 2 × WS_HEARTBEAT_MS（SC-005）。
    */
   private sweepDeadConnections(): void {
-    for (const [clientId, socket] of this.clients) {
-      if (this.alive.get(clientId) === false) {
-        this.plog.warn({ clientId }, "heartbeat timeout, terminating");
-        socket.terminate();
-        this.cleanup(clientId, "heartbeat-timeout");
+    const now = Date.now();
+    const requireAuth = Boolean(this.config.wsAuthSecret);
+    for (const [clientId, state] of this.clients) {
+      if (requireAuth && !state.authorized && !state.closing && now - state.connectedAt >= this.authGraceMs) {
+        state.closing = true;
+        this.throttledWarn(
+          "auth-grace-expired",
+          { clientId, authGraceMs: this.authGraceMs },
+          "websocket not authorized within grace period, closing with 1008",
+        );
+        state.socket.close(1008, "authorization timeout");
         continue;
       }
-      this.alive.set(clientId, false);
-      socket.ping();
+      if (!state.alive) {
+        this.plog.warn({ clientId }, "heartbeat timeout, terminating");
+        this.terminate(clientId, "heartbeat-timeout");
+        continue;
+      }
+      if (state.socket.bufferedAmount > this.sendHighWaterBytes) {
+        state.overHighWaterTicks += 1;
+        if (state.overHighWaterTicks >= WS_SLOW_CONSUMER_TICKS) {
+          this.plog.warn(
+            {
+              clientId,
+              bufferedAmount: state.socket.bufferedAmount,
+              highWaterBytes: this.sendHighWaterBytes,
+              ticks: state.overHighWaterTicks,
+            },
+            "slow consumer, terminating",
+          );
+          this.terminate(clientId, "slow-consumer");
+          continue;
+        }
+      } else {
+        state.overHighWaterTicks = 0;
+      }
+      state.alive = false;
+      state.pingNonce = randomBytes(PING_NONCE_BYTES);
+      state.socket.ping(state.pingNonce);
     }
+  }
+
+  private terminate(clientId: ClientId, reason: string): void {
+    const state = this.clients.get(clientId);
+    if (!state) return;
+    state.socket.terminate();
+    this.cleanup(clientId, reason);
   }
 
   private cleanup(clientId: ClientId, reason: string): void {
     if (!this.clients.has(clientId)) return; // 冪等：避免 terminate→close 重複清理/記錄
     this.clients.delete(clientId);
-    this.subscriptions.delete(clientId);
-    this.alive.delete(clientId);
     this.plog.info({ clientId, reason }, "client disconnected");
   }
 
@@ -247,24 +425,62 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     return this.clients.size;
   }
 
+  /** 因背壓（`bufferedAmount` 超過高水位）被略過的推送累計則數（counter，不歸零）。 */
+  get droppedSendCount(): number {
+    return this.droppedSends;
+  }
+
+  /** 該 clientId 是否為目前在線的連線。 */
+  isOnline(clientId: ClientId): boolean {
+    return this.clients.has(clientId);
+  }
+
   /**
-   * 廣播 `system/metrics` 給**所有已連線 client**（009 FR-008a）。
+   * 該 clientId 是否在線**且**已授權——`POST /diagnoses` 綁定 socketId 前的檢查（API-4）：
+   * 不檢查的話，任何人都能拿一條未授權（或已斷線）的 clientId 發起診斷，繞過 `WS_AUTH_SECRET`。
+   */
+  isAuthorized(clientId: ClientId): boolean {
+    return this.clients.get(clientId)?.authorized === true;
+  }
+
+  /**
+   * 廣播 `system/metrics` 給**所有已授權 client**（009 FR-008a；未設密鑰時即所有已連線 client）。
    *
-   * 與 `machine/subscribe` 訂閱狀態**無關**：指標是系統級資訊、不隸屬任何機台，用機台訂閱
-   * 過濾它在語意上不成立（contracts/metrics-summary.md §2）。至多送一次——漏送一則即等
-   * 下一週期，不重送、不補發。
+   * 與訂閱了哪些機台**無關**：指標是系統級資訊、不隸屬任何機台，用機台訂閱過濾它在語意上
+   * 不成立（contracts/metrics-summary.md §2）。至多送一次——漏送一則即等下一週期，不重送、不補發。
    */
   broadcastMetrics(payload: SystemMetrics): void {
-    for (const clientId of this.clients.keys()) {
-      this.send(clientId, payload);
+    for (const [clientId, state] of this.clients) {
+      if (state.authorized) this.deliver(clientId, payload);
     }
   }
 
-  /** 對單一連線推送任意 payload——003 AI relay / job status relay 的銜接點（FR-015）。 */
-  send(clientId: ClientId, payload: unknown): void {
-    const socket = this.clients.get(clientId);
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(payload));
+  /**
+   * 對單一**已授權**連線推送——003 AI relay / job status relay 的銜接點（FR-015）。
+   * 未授權或已離線的 clientId 一律靜默略過：AI 串流與 job 狀態不得送給沒通過 token 檢查的連線。
+   */
+  send(clientId: ClientId, payload: ServerMessage): void {
+    if (!this.isAuthorized(clientId)) return;
+    this.deliver(clientId, payload);
+  }
+
+  /**
+   * 所有推送的唯一出口（不檢查授權：`system/connected`／`system/unauthorized` 這類連線層控制
+   * 訊息必須送得到未授權連線）。背壓：`bufferedAmount` 已超過高水位時略過該筆並計數——對端
+   * 讀不動時繼續 `send()` 只會讓 api 記憶體無上限成長；持續超標由心跳 sweep 回收。
+   */
+  private deliver(clientId: ClientId, payload: ServerMessage): void {
+    const state = this.clients.get(clientId);
+    if (state?.socket.readyState !== WebSocket.OPEN) return;
+    if (state.socket.bufferedAmount > this.sendHighWaterBytes) {
+      this.droppedSends += 1;
+      this.throttledWarn(
+        "backpressure-drop",
+        { clientId, bufferedAmount: state.socket.bufferedAmount, droppedSends: this.droppedSends },
+        "websocket send skipped: buffered amount over high water mark",
+      );
+      return;
     }
+    state.socket.send(JSON.stringify(payload));
   }
 }

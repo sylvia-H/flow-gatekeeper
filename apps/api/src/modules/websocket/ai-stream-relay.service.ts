@@ -6,6 +6,7 @@ import { AiStreamEventSchema } from "@flow-gatekeeper/contracts";
 import { AppConfigService } from "../config/config.service.js";
 import { MonitoringGateway } from "./monitoring.gateway.js";
 import { getAppLogger } from "../../logging/app-logger.js";
+import { attachThrottledErrorLog } from "../../lib/connection-error-throttle.js";
 
 /** jobId → 發起連線綁定（記憶體，重連失效——已知限制，spec Assumptions）。 */
 export type JobBinding = { clientId: string; machineId: string; boundAt: number };
@@ -48,7 +49,16 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
       this.subscriber.on("pmessage", (_pattern, channel, message) =>
         this.handleMessage(channel, message),
       );
-      this.subscriber.on("error", (err) => this.logger.warn(`subscriber error: ${err.message}`));
+      // 轉態節流：斷線時 ioredis 每 100–270 ms 重連一次、每次都發 error，逐則記錄會洗版。
+      attachThrottledErrorLog(this.subscriber, {
+        error: (err, suppressed) =>
+          this.logger.warn(
+            `subscriber error: ${err.message}` +
+              (suppressed > 0 ? `（期間另有 ${suppressed} 則同類錯誤未記）` : ""),
+          ),
+        recovered: (suppressed) =>
+          this.logger.log(`subscriber connection recovered（故障期間共壓掉 ${suppressed} 則錯誤）`),
+      });
       this.logger.log("ai-stream relay subscribed to 'ai-stream:*'");
     } catch (err) {
       this.logger.error(`ai-stream relay init failed: ${(err as Error).message}`);

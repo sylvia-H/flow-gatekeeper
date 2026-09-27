@@ -16,6 +16,7 @@ import type {
 } from "@flow-gatekeeper/contracts";
 import { MACHINE_IDS } from "../telemetry/mock-telemetry.service.js";
 import { AiStreamRelayService } from "../websocket/ai-stream-relay.service.js";
+import { MonitoringGateway } from "../websocket/monitoring.gateway.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 
 /**
@@ -26,6 +27,9 @@ export const ENQUEUE_TIMEOUT_MS = 5_000;
 
 /** 綁定查詢／建立／清理——JobsService 只需要 relay 的這三個能力（測試可注入 fake）。 */
 export type JobBindingStore = Pick<AiStreamRelayService, "bindJobToClient" | "getBinding" | "deleteBinding">;
+
+/** 發起連線的在線／授權查詢——JobsService 只需要 Gateway 的這個能力（測試可注入 fake）。 */
+export type ClientPresence = Pick<MonitoringGateway, "isAuthorized">;
 
 /**
  * api 手上的機台名冊（與 Gateway 過濾訂閱共用 `MACHINE_IDS` 單一來源）。
@@ -53,6 +57,10 @@ class EnqueueTimeoutError extends Error {
  *   也不會再有任何事件，靜默回 200 只會讓前端等到 watchdog 逾時。
  *
  * machineId 不在機台名冊 → 404，在任何綁定與入列之前擋下（見 `KNOWN_MACHINE_IDS`）。
+ *
+ * socketId 不是「在線且已授權」的 WS 連線 → 409（API-4）：AI 串流與 `job/status` 只送已授權
+ * 連線，綁到未授權或已斷線的 clientId 只會讓診斷結果無處可送；不擋的話 `POST /diagnoses` 也會
+ * 成為繞過 `WS_AUTH_SECRET` 的入口。冪等重送同樣檢查（檢查的是本次請求帶的 socketId）。
  */
 @Injectable()
 export class JobsService {
@@ -67,6 +75,7 @@ export class JobsService {
   constructor(
     @InjectQueue(DIAGNOSIS_QUEUE) private readonly queue: Queue<DiagnosisJobPayload>,
     @Inject(AiStreamRelayService) private readonly relay: JobBindingStore,
+    @Inject(MonitoringGateway) private readonly presence: ClientPresence,
   ) {}
 
   async createDiagnosis(body: CreateDiagnosisBody): Promise<CreateDiagnosisResponse> {
@@ -79,6 +88,18 @@ export class JobsService {
         statusCode: 404,
         error: "Not Found",
         message: "machineId 不在機台名冊中",
+      });
+    }
+
+    // 在線／授權檢查先於冪等檢查：重送帶的 socketId 若已斷線或未授權，同樣不該拿到 200。
+    // 限制：檢查的是「本次請求」的 socketId；冪等命中時仍保留第一次綁定的舊 clientId（不改綁），
+    // 故 409 檢查不保證既有綁定仍有效（原連線可能已斷）。web 每次發起都用新 jobId，實務上不觸發。
+    if (!this.presence.isAuthorized(body.socketId)) {
+      this.plog.warn({ jobId, machineId }, "diagnosis rejected: socket offline or unauthorized");
+      throw new ConflictException({
+        statusCode: 409,
+        error: "Conflict",
+        message: "WebSocket 連線不存在或未授權，請重新連線後再發起診斷",
       });
     }
 
