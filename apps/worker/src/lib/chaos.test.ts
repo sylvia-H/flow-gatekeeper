@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseChaosConfig } from "./chaos.js";
+import { parseChaosAllowInProduction, parseChaosConfig, shouldArmChaos } from "./chaos.js";
 
 /** parseChaosConfig 解析決定性（憲章測試門檻；research D6、data-model E3）。 */
 describe("parseChaosConfig", () => {
@@ -46,5 +46,32 @@ describe("parseChaosConfig", () => {
 
   it("僅設 WORKER_CHAOS_AT（無型態）＝關閉，不警告", () => {
     expect(parseChaosConfig({ WORKER_CHAOS_AT: "job" })).toEqual({ config: null, warnings: [] });
+  });
+});
+
+describe("parseChaosAllowInProduction／shouldArmChaos（production 守衛獨立開關）", () => {
+  it("未設定、空值、false → 不放行、無警告", () => {
+    for (const v of [undefined, "", "  ", "false", "FALSE"]) {
+      expect(parseChaosAllowInProduction({ WORKER_CHAOS_ALLOW_IN_PRODUCTION: v })).toEqual({ allow: false, warnings: [] });
+    }
+  });
+
+  it("true（大小寫不拘）→ 放行", () => {
+    expect(parseChaosAllowInProduction({ WORKER_CHAOS_ALLOW_IN_PRODUCTION: "true" }).allow).toBe(true);
+    expect(parseChaosAllowInProduction({ WORKER_CHAOS_ALLOW_IN_PRODUCTION: " TRUE " }).allow).toBe(true);
+  });
+
+  it("非法值 → warn 並視為 false（不放行）", () => {
+    const r = parseChaosAllowInProduction({ WORKER_CHAOS_ALLOW_IN_PRODUCTION: "yes" });
+    expect(r.allow).toBe(false);
+    expect(r.warnings).toHaveLength(1);
+    expect(r.warnings[0]).toContain("yes");
+  });
+
+  it("非 production 一律武裝；production 只在開關放行時武裝", () => {
+    expect(shouldArmChaos(undefined, false)).toBe(true);
+    expect(shouldArmChaos("development", false)).toBe(true);
+    expect(shouldArmChaos("production", false)).toBe(false);
+    expect(shouldArmChaos("production", true)).toBe(true);
   });
 });

@@ -7,6 +7,7 @@ import type { AiProvider, AiStreamResult } from "./ai/provider.js";
 import { buildPrompt, PROMPT_VERSION } from "./ai/prompt.js";
 import { buildDiagnosisSignature } from "./cache/signature.js";
 import type { ProcessorStore } from "./cache/redis-store.js";
+import { isEmptyContext } from "./context/context-builder.js";
 import type { DiagnosisContext } from "./context/context-builder.js";
 import type { DiagnosisRepository } from "./diagnosis-repository.js";
 import type { LivenessTracker } from "./lib/liveness.js";
@@ -80,6 +81,10 @@ const RATE_WINDOW_MS = 60_000;
 const RATE_JITTER_MS = 2000;
 /** 關閉中交回佇列時的延遲：給其他副本（或重啟後的本副本）接手的緩衝。 */
 const CLOSING_REQUEUE_DELAY_MS = 1000;
+
+/** 空脈絡短路的錯誤碼與訊息（前端 humanizeError 對短訊息原文照顯）。 */
+export const NO_CONTEXT_CODE = "no_context";
+export const NO_CONTEXT_MESSAGE = "此機台近期沒有遙測、異常事件或維修紀錄，無資料可供診斷（未呼叫 AI）";
 
 /**
  * 發布 AI 串流事件到 Redis Pub/Sub。參數型別是契約的 `AiStreamEvent`，漏帶 `attempt`
@@ -173,6 +178,16 @@ export function createProcessor(deps: ProcessorDeps) {
       const context = await buildContext({ machineId, windowMinutes });
       touch();
       await job.updateProgress(20);
+
+      // 空脈絡短路：不查 cache、不取鎖、不吃 AI_RPM 額度、不打 LLM。重試結果也不會變 → 不可重試，
+      // 第一次嘗試就通知前端；UnrecoverableError 讓 BullMQ 不退避重試，main.ts 的 failed handler
+      // 依 isTerminalFailure 補寫 trigger(cached:false)——與其他不可重試失敗的稽核一致。
+      // 快取命中率不計這筆（沒有做 cache 查詢），與 context 讀取失敗等 LLM 前的失敗同一語意。
+      if (isEmptyContext(context)) {
+        jl.warn({ code: NO_CONTEXT_CODE }, "空脈絡，不呼叫 LLM（終態，通知前端）");
+        emit({ type: "ai/error", jobId, attempt, code: NO_CONTEXT_CODE, message: NO_CONTEXT_MESSAGE });
+        throw new UnrecoverableError(NO_CONTEXT_MESSAGE);
+      }
       const sig = buildDiagnosisSignature({
         machineId,
         state: context.latestState,
@@ -262,12 +277,14 @@ export function createProcessor(deps: ProcessorDeps) {
         jl.info({ finishReason: out.finishReason, usage: out.usage }, "LLM stream finished");
 
         // 截斷或安全攔截時輸出多半不是完整 JSON；明確歸類為格式失敗並留下原因，比讓
-        // parseResult 丟一個看不出原因的 SyntaxError 好查。安全攔截重試也不會變 → 不可重試。
+        // parseResult 丟一個看不出原因的 SyntaxError 好查。兩者都不可重試：安全攔截重試也不會變；
+        // 截斷代表同一輸入在同一 AI_MAX_OUTPUT_TOKENS 下多半陷入重複輸出，退避重試只會再燒兩次
+        // 上限額度的 token、延後使用者看到失敗。
         if (out.finishReason === "safety") {
           return fail("schema_invalid", "AI 回應遭供應商安全機制攔截（finishReason=safety）", false, null);
         }
         if (out.finishReason === "max_tokens") {
-          return fail("schema_invalid", "AI 回應達輸出上限被截斷（finishReason=max_tokens）", true, null);
+          return fail("schema_invalid", "AI 回應達輸出上限被截斷（finishReason=max_tokens）", false, null);
         }
 
         let result: DiagnosisResult;
@@ -353,8 +370,10 @@ export function createProcessor(deps: ProcessorDeps) {
  * 終態判定（worker `failed` handler 用）：BullMQ 不會再重試這個 job。
  * 除了 attempts 用盡，還包含 `UnrecoverableError`（此時 attemptsMade < attempts）——只看
  * attemptsMade 會漏掉後者，導致最終失敗的 trigger 沒被補寫。
- * stalled 次數用盡的終態不在此列：BullMQ Worker 對它不 emit `failed`，由 api 側 QueueEvents
- * 觀測並通知前端；worker 不補 trigger。
+ * stalled 次數用盡（maxStalledCount）同樣涵蓋在內：BullMQ（5.79+）的 stalled 檢查腳本把 job 標上
+ * deferred failure（"job stalled more than allowable limit"）放回 wait，下一個取到它的 worker 不執行
+ * processor、直接以 `UnrecoverableError` 走 `handleFailed` 並 emit `failed`——本函式因此判 true、
+ * trigger 照常補寫；前端通知仍由 api 側 QueueEvents `failed` 送出。
  */
 export function isTerminalFailure(
   job: { attemptsMade: number; opts: { attempts?: number } },

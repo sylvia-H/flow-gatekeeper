@@ -1,6 +1,6 @@
 import type { WorkerMetrics } from "@flow-gatekeeper/contracts";
 import type { ChildLogger } from "@flow-gatekeeper/shared/logging";
-import { resolveMetricsInterval } from "@flow-gatekeeper/shared/logging";
+import { MAX_METRICS_INTERVAL_MS, MIN_METRICS_INTERVAL_MS, resolveMetricsInterval } from "@flow-gatekeeper/shared/logging";
 import { hitRate } from "./hit-rate.js";
 import { summarizeLatency } from "./latency.js";
 
@@ -64,7 +64,7 @@ export function createMetricsCollector({
   if (fellBackToDefault) {
     logger.warn(
       { invalidMetricsInterval: rawValue, fallbackIntervalMs: intervalMs },
-      `METRICS_INTERVAL_MS="${rawValue ?? ""}" 不合法或低於下限，已回退至 ${intervalMs}ms`,
+      `METRICS_INTERVAL_MS="${rawValue ?? ""}" 不合法（須為 ${MIN_METRICS_INTERVAL_MS}–${MAX_METRICS_INTERVAL_MS} 的整數），已回退至 ${intervalMs}ms`,
     );
   }
 

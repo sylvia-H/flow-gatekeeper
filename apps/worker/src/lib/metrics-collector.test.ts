@@ -197,5 +197,14 @@ describe("createMetricsCollector — 窗內累加與環形緩衝", () => {
       invalidMetricsInterval: "1000",
       fallbackIntervalMs: 60_000,
     });
+    expect(logged[0]?.msg).toContain("須為 5000–2147483647 的整數");
+  });
+
+  it.each(["5000.5", "2147483648"])("非整數或超上限 %s 同樣回退並 warn 寫明範圍", (v) => {
+    const { redis, logger, logged } = stubs();
+    const collector = createMetricsCollector({ redis, key: KEY, logger, env: { METRICS_INTERVAL_MS: v } });
+    expect(collector.intervalMs).toBe(60_000);
+    expect(logged).toHaveLength(1);
+    expect(logged[0]?.msg).toContain("5000–2147483647");
   });
 });

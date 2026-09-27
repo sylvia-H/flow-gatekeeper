@@ -1,6 +1,14 @@
 import { ApiError } from "@google/genai";
 import { describe, expect, it, vi } from "vitest";
-import { classifyGeminiError, GeminiProvider, MISSING_API_KEY_MESSAGE, thinkingConfigFor } from "./gemini-provider.js";
+import {
+  buildGenerateConfig,
+  classifyGeminiError,
+  DEFAULT_GENERATION_OPTIONS,
+  GeminiProvider,
+  MISSING_API_KEY_MESSAGE,
+  thinkingConfigFor,
+} from "./gemini-provider.js";
+import { parseWorkerEnv } from "../lib/env-schema.js";
 import { AiProviderError } from "./provider.js";
 
 describe("thinkingConfigFor", () => {
@@ -13,6 +21,48 @@ describe("thinkingConfigFor", () => {
 
   it.each(["gemini-2.5-pro", "gemini-2.0-flash", "gemini-3-pro-preview", "gemini-2.5-flashy"])("%s → 不送", (m) => {
     expect(thinkingConfigFor(m)).toBeUndefined();
+  });
+});
+
+describe("buildGenerateConfig", () => {
+  const signal = new AbortController().signal;
+
+  it("帶入 maxOutputTokens 與 temperature，並保留 JSON mode、abortSignal、thinking 設定", () => {
+    const schema = { type: "object" };
+    const c = buildGenerateConfig({
+      model: "gemini-2.5-flash",
+      signal,
+      responseJsonSchema: schema,
+      maxOutputTokens: 1024,
+      temperature: 0.1,
+    });
+    expect(c).toEqual({
+      abortSignal: signal,
+      responseMimeType: "application/json",
+      responseJsonSchema: schema,
+      maxOutputTokens: 1024,
+      temperature: 0.1,
+      thinkingConfig: { thinkingBudget: 0 },
+    });
+  });
+
+  it("不支援關 thinking 的模型不送 thinkingConfig；無 schema 不送 responseJsonSchema", () => {
+    const c = buildGenerateConfig({ model: "gemini-2.5-pro", signal, ...DEFAULT_GENERATION_OPTIONS });
+    expect(c.thinkingConfig).toBeUndefined();
+    expect(c).not.toHaveProperty("responseJsonSchema");
+    expect(c.maxOutputTokens).toBe(2048);
+    expect(c.temperature).toBe(0.2);
+  });
+});
+
+describe("生成參數預設值單一來源", () => {
+  it("provider 未帶選項時的預設 = env 全部留空時的解析結果", () => {
+    const r = parseWorkerEnv({});
+    if (!r.ok) throw new Error(r.error);
+    expect(new GeminiProvider("", "gemini-2.5-flash").generation).toEqual({
+      maxOutputTokens: r.env.AI_MAX_OUTPUT_TOKENS,
+      temperature: r.env.AI_TEMPERATURE,
+    });
   });
 });
 

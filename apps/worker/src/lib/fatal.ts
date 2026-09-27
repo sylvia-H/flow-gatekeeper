@@ -25,8 +25,12 @@ import { writeSync } from "node:fs";
 /**
  * `invalidConfig`：bootstrap 最前面的 env 驗證失敗。此時 logger 尚未建立（LOG_* 也可能正是
  * 出錯的變數），沿用同一條同步 stderr 路徑最可靠；exit 1 讓監督者語意與其他致命事件一致。
+ *
+ * `bootstrap`：env 通過後的啟動流程失敗（Mongo 連不上、Redis 未於時限內就緒…），由 entry 的
+ * `bootstrap().catch` 送進來。與 api 的 `fatalExit("bootstrap", err)` 同名，跨 process 查日誌時可
+ * 一併檢索；同樣走 `writeSync`——非同步 pino 寫完前就 `process.exit(1)` 會丟失這唯一一行。
  */
-export type FatalKind = "uncaughtException" | "unhandledRejection" | "invalidConfig";
+export type FatalKind = "uncaughtException" | "unhandledRejection" | "invalidConfig" | "bootstrap";
 
 /** 純函式：組致命訊息（不含 `[worker] ` 前綴，前綴由 log 層統一）。 */
 export function formatFatal(kind: FatalKind, value: unknown): string {

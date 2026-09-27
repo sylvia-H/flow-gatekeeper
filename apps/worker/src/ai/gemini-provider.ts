@@ -1,5 +1,6 @@
 import { ApiError, FinishReason, GoogleGenAI } from "@google/genai";
 import type { GenerateContentConfig, ThinkingConfig } from "@google/genai";
+import { DEFAULT_AI_MAX_OUTPUT_TOKENS, DEFAULT_AI_TEMPERATURE } from "../lib/env-schema.js";
 import { AiProviderError } from "./provider.js";
 import type { AiFinishReason, AiProvider, AiStreamRequest, AiStreamResult, AiUsage } from "./provider.js";
 
@@ -21,6 +22,25 @@ import type { AiFinishReason, AiProvider, AiStreamRequest, AiStreamResult, AiUsa
 export const MISSING_API_KEY_MESSAGE =
   "GEMINI_API_KEY 未設定（apps/worker/.env）：API key not valid or missing";
 
+/**
+ * 生成參數（由 env `AI_MAX_OUTPUT_TOKENS`／`AI_TEMPERATURE` 注入，範圍驗證在 `lib/env-schema.ts`）。
+ * 預設值引用 env-schema 的常數（單一來源），供 smoke 腳本與測試直接 `new GeminiProvider(key, model)`。
+ */
+export interface GeminiGenerationOptions {
+  /**
+   * 輸出 token 上限：JSON mode 偶發的重複迴圈由供應商以 `MAX_TOKENS` 截斷，不必拖到 AI_TIMEOUT_MS。
+   * 注意 thinking token 也計入此上限——`gemini-2.5-pro` 等不能關 thinking 的模型需調高。
+   */
+  maxOutputTokens: number;
+  /** 取樣溫度：結構化診斷要穩定，偏低。 */
+  temperature: number;
+}
+
+export const DEFAULT_GENERATION_OPTIONS: Readonly<GeminiGenerationOptions> = {
+  maxOutputTokens: DEFAULT_AI_MAX_OUTPUT_TOKENS,
+  temperature: DEFAULT_AI_TEMPERATURE,
+};
+
 export class GeminiProvider implements AiProvider {
   readonly id = "gemini";
   // SDK client 延遲到第一次呼叫才建：空金鑰時 `new GoogleGenAI()` 會直接 console.warn，
@@ -30,6 +50,7 @@ export class GeminiProvider implements AiProvider {
   constructor(
     private readonly apiKey: string,
     readonly model: string,
+    readonly generation: Readonly<GeminiGenerationOptions> = DEFAULT_GENERATION_OPTIONS,
   ) {}
 
   async streamDiagnosis(req: AiStreamRequest): Promise<AiStreamResult> {
@@ -45,13 +66,7 @@ export class GeminiProvider implements AiProvider {
     }
     this.client ??= new GoogleGenAI({ apiKey: this.apiKey });
     const ai = this.client;
-    const config: GenerateContentConfig = {
-      abortSignal: signal,
-      responseMimeType: "application/json",
-      ...(responseJsonSchema ? { responseJsonSchema } : {}),
-    };
-    const thinkingConfig = thinkingConfigFor(this.model);
-    if (thinkingConfig) config.thinkingConfig = thinkingConfig;
+    const config = buildGenerateConfig({ model: this.model, signal, responseJsonSchema, ...this.generation });
 
     let text = "";
     let finishReason: AiFinishReason = "other";
@@ -83,6 +98,24 @@ export class GeminiProvider implements AiProvider {
     if (signal.aborted) throw classifyGeminiError(signal.reason, signal);
     return { text, finishReason, usage };
   }
+}
+
+/** 組 `generateContentStream` 的 config（純函式，可單測）。 */
+export function buildGenerateConfig(args: {
+  model: string;
+  signal: AbortSignal;
+  responseJsonSchema?: Record<string, unknown>;
+} & GeminiGenerationOptions): GenerateContentConfig {
+  const config: GenerateContentConfig = {
+    abortSignal: args.signal,
+    responseMimeType: "application/json",
+    maxOutputTokens: args.maxOutputTokens,
+    temperature: args.temperature,
+    ...(args.responseJsonSchema ? { responseJsonSchema: args.responseJsonSchema } : {}),
+  };
+  const thinkingConfig = thinkingConfigFor(args.model);
+  if (thinkingConfig) config.thinkingConfig = thinkingConfig;
+  return config;
 }
 
 /**
