@@ -48,6 +48,8 @@
 
 > 錄製方式：本機清空 `ai-cache:*`／`ai-lock:*` 後，用 Playwright 對著跑在容器裡的真實全棧（api／worker／web／Redis／MongoDB，AI 由 Gemini 2.5 Flash 即時回覆）做一次腳本化操作並錄影，全程無手動剪輯或字卡。想自己重現，見下方「[快速開始](#快速開始)」。
 
+> **版本註記**：影片與海報為 **v1.0.0** 畫面（下方「功能逐項展示」的截圖同樣攝於 v1.0.0 發布前，2026-07-31）；之後的 UI 變更——機台卡片選取態、連線狀態 chip（含 pong 逾時的活性判定）、未授權 chip、Copilot 任務 meta 改標 Attempt `N / 3` 等——以 [`CHANGELOG.md`](CHANGELOG.md) 為準，未重錄。影片刻意**同時**放在 git（`docs/demo/`）與 GitHub Release：Release 供上方連結直接下載，git 內一份供 clone 後離線閱讀 README，兩者維持現狀。
+
 ---
 
 ## 目錄
@@ -114,7 +116,7 @@
 
 ### 1. 即時 fleet 監控台全景 + 背壓量化
 
-打開應用**第一屏即是可操作的監控台**（非 landing page），自動連上 `/ws` 並訂閱 5 台示範機台。整個監控台一次到位：左側 sidebar 依機台群組分區（**Prep／Forming & Baking／Fulfilment**）並在左下以 **Fleet Health** 面板把全隊狀態聚合成 healthy／warning／critical／stale 計數與比例條；主區頂部是「**Fleet monitor · N machines**」標題列，其下為機台卡片（狀態文字徽章、帶單位的遙測、`updated Ns ago` 相對時間戳）；主區底部是 **Event Stream**，記錄最近的門檻跨越／錯誤事件。頂部工具列的 **BackpressureBadge** 即時顯示 `收到數 · 渲染批次數 · 比值`（截圖當下為 `505 msgs · 101 frames · 5:1`；`msgs` 是**遙測資料點數**而非 WS 訊息數，含未渲染即丟棄的筆數。比值隨節拍、機台數與瀏覽器幀率而異，此數字只代表截圖當下，不是固定規格）——把「收很多、只批次渲染少數幾次」的削峰效果直接畫在畫面上，不用開 DevTools；一旁還有 pause／resume、connection chip（含延遲毫秒）與 search。右側為桌機常駐的 AI Copilot 面板（未選機台時為空狀態提示）。
+打開應用**第一屏即是可操作的監控台**（非 landing page），自動連上 `/ws` 並訂閱 5 台示範機台。整個監控台一次到位：左側 sidebar 依機台群組分區（**Prep／Forming & Baking／Fulfilment**）並在左下以 **Fleet Health** 面板把全隊狀態聚合成 healthy／warning／critical／stale 計數與比例條；主區頂部是「**Fleet monitor · N machines**」標題列，其下為機台卡片（狀態文字徽章、帶單位的遙測、`updated Ns ago` 相對時間戳）；主區底部是 **Event Stream**，記錄最近的門檻跨越／錯誤事件。頂部工具列的 **BackpressureBadge** 即時顯示 `收到數 · 渲染批次數 · 比值`（截圖當下為 `505 msgs · 101 frames · 5:1`；`msgs` 是**遙測資料點數**而非 WS 訊息數，含未渲染即丟棄的筆數。比值隨節拍、機台數與瀏覽器幀率而異，此數字只代表截圖當下，不是固定規格。預設節拍〔`MOCK_TELEMETRY_INTERVAL_MS` 50ms、每 tick 一個含全部已訂閱機台的批次〕下，一個 tick 通常就落在一幀內，比值因此**約等於機台數**——主要來自伺服器端「一 tick 一批」，rAF 合併本身約只貢獻 1 倍；節拍調快到一幀內收到多個 tick、或分頁切背景時，rAF 合併的貢獻才會拉開）——把「收到多少資料點、實際渲染幾次」的關係直接畫在畫面上，不用開 DevTools；一旁還有 pause／resume、connection chip（含延遲毫秒）與 search。右側為桌機常駐的 AI Copilot 面板（未選機台時為空狀態提示）。
 
 ![即時 fleet 監控台全景：分組 sidebar、Fleet Health、Event Stream 與背壓比值](docs/screenshots/monitoring-live.png)
 
@@ -160,7 +162,7 @@ sidebar 依前端**靜態對照**把機台分成 **Prep／Forming & Baking／Ful
 
 ![Copilot drawer 進入 active：任務 meta、處理步驟清單與逐字串流](docs/screenshots/copilot-streaming.png)
 
-> 截圖為 006 時的畫面（當時任務 meta 仍顯示 Concurrency；現為 Attempt `N / 3`）。
+> 截圖為 v1.0.0 發布前（2026-07-31 重拍，Feature 009 完成時）的畫面，早於 2026-09 審查修復：當時任務 meta 仍顯示 Concurrency，現為 Attempt `N / 3`。
 
 ### 9. 結構化診斷結果（五區塊）
 
@@ -201,9 +203,9 @@ WebSocket.onmessage ──▶ 只 push 進 buffer（不碰 reactive state）
 ```
 
 - `useHighFrequencyWs` 的 `onmessage` **只**把訊息推進 buffer，絕不直接寫 reactive state（憲章硬規則 #1）。
-- 每一幀（rAF）才把累積的 buffer 一次性提交，把「收 N 筆、只渲染 M 次」的削峰效果做出來。
+- 每一幀（rAF）才把累積的 buffer 一次性提交：一幀內不論收到幾則 WS 訊息都只提交一次，渲染次數以幀率為上限、不隨訊息速率線性成長。
 - buffer 設**上限**，避免分頁切到背景時逐幀暫停、記憶體無限成長。溢位時不再單純截斷最舊，而是**合併**：每台保留「第一筆＋每個 state 轉換點＋最新一筆」，丟掉中間同態的重複值——Event Stream 因此不會漏掉背景期間的 warning／critical（規格見 `apps/web/design/design-spec.md` v0.5）。
-- store 維護 `receivedMessages`（以遙測資料點計，**含** `droppedMessages` 與格式不符的丟棄筆數）與 `renderedBatches` 兩個計數，比值由 `shared/lib/backpressure.ts` 的 `backpressureRatio` 單一實作，**把背壓從抽象說法變成畫面上看得見的比值**——這是整個決策最直接的證據。比值隨節拍與機台數而異，不宣稱固定值。
+- store 維護 `receivedMessages`（以遙測資料點計，**含** `droppedMessages` 與格式不符的丟棄筆數）與 `renderedBatches` 兩個計數，比值由 `shared/lib/backpressure.ts` 的 `backpressureRatio` 單一實作，**把背壓從抽象說法變成畫面上看得見的比值**——這是整個決策最直接的證據。比值隨節拍與機台數而異，不宣稱固定值：預設節拍（50ms、一 tick 一批含全部已訂閱機台）下一幀通常只落一個 tick，比值**約等於機台數**，主要反映伺服器端的逐 tick 批次，rAF 合併只貢獻約 1 倍；rAF 的效果要在一幀內湧入多個 tick（節拍調快、主執行緒忙、分頁回前景時）才明顯。
 - Pause 且連線中時凍結 stale 判定；重連退避在收到 `machine/subscribed`（訂閱成功）才歸零——token 錯誤被 `1008` 關閉的連線也會收到 `system/connected`，若在那時歸零會以約 1 秒週期無限重連；瀏覽器 `online` 事件會立即重連。
 
 ### 🔌 2. 即時通道統一用原生 WebSocket
@@ -256,7 +258,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 
 ### 📐 7. 契約優先的全棧型別安全
 
-- `packages/contracts` 定義即時通道的訊息契約——`asyncapi.yaml`（`info.version` 1.1.0）共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`）——以及 `DiagnosisResultSchema`、`CreateDiagnosisBodySchema`（`POST /diagnoses`）、佇列常數與 `DiagnosisJobPayload`（不含 prompt 版本，改由 worker 自行管理）。
+- `packages/contracts` 定義即時通道的訊息契約——`asyncapi.yaml`（`info.version` 1.2.0）共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`）——以及 `DiagnosisResultSchema`、`CreateDiagnosisBodySchema`（`POST /diagnoses`）、佇列常數與 `DiagnosisJobPayload`（不含 prompt 版本，改由 worker 自行管理）。
 - 需要 runtime 驗證的方向一律 Zod：客戶端控制訊息 `ClientControlMessageSchema`、`AiStreamEventSchema`（含 `attempt`）、`JobStatusSchema`、`WorkerMetricsSchema`；`machine/data` payload 為裸陣列、由 `isTelemetryPoint` 守衛逐點驗證（高頻路徑不逐筆 `safeParse`）。伺服器→客戶端的控制訊息（`SystemConnectedSchema`、`MachineSubscribedSchema`、`PongSchema`、`SystemUnauthorizedSchema`、`SystemMetricsSchema`）與 `TelemetryPointSchema` 也以 Zod 定義、型別由 `z.infer` 推導，供漂移測試做結構比對。
 - web／api／worker 三端**共用同一份**契約，新增 event/payload 一律**先改契約再改各端**；`asyncapi.yaml` 以 Spectral 做契約 lint，另有 asyncapi↔Zod **漂移測試**（`packages/contracts/src/asyncapi-drift.test.ts`，以 Zod 4 內建 `z.toJSONSchema()` 轉出後逐一比對全部 12 則 message 的結構，含 `format`）防止兩份來源分岔。
 - 全棧 strict TypeScript（`noUncheckedIndexedAccess`），避免 `any` 擴散。
@@ -286,7 +288,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 - **瀏覽器只面對單一入口** `http://localhost:8080`：nginx 同時提供 web 靜態產物、並把 `/ws`、`/diagnoses` 同源反向代理至 `api:3000`——api **不對外暴露連接埠**，拓樸關鍵值（`API_PORT`、`REDIS_HOST`、`MONGO_URL`）一律由 compose `environment` 釘死，不受各 app `.env` 檔漂移影響。
 - 開發模式（host 直跑，`dev-up.ps1`）與 demo 容器模式共用**同一份** `docker-compose.yml`，只以 profile 分組切換，不是兩份平行設定；兩者刻意不同時啟動（`redis`／`mongo` 為共用資料層，混跑會互相干擾）。
 - `docker compose --profile demo down -v` 連同 volume 清除，重新 `up` 即回到初始狀態——demo 劇本因此**可重播**，不必擔心殘留狀態污染下一次展示。
-- **運維加固（2026-09 審查修復）**：base image 一律「tag＋digest」雙釘（`node:22.23.3-alpine`、`nginxinc/nginx-unprivileged:1.31.6-alpine`、`redis:7.4.11-alpine`、`mongo:7.0.43`）；建置用 BuildKit cache mount＋`pnpm fetch`＋`install --offline`，runtime image 不帶 packages 的 src／測試；redis／mongo 加 healthcheck，api／worker／seed 以 `service_healthy` 等依賴真正可用；每個服務都有 `deploy.resources.limits` 與 json-file log 輪替（10MB × 3）；redis 設 `maxmemory 256mb`＋`noeviction`（BullMQ 要求）；web 改非 root 的 `nginx-unprivileged`，並加安全 header（CSP 等）、gzip 與靜態資源快取策略。
+- **運維加固（2026-09 審查修復）**：base image 一律「tag＋digest」雙釘（`node:22.23.3-alpine`、`nginxinc/nginx-unprivileged:1.31.6-alpine`、`redis:7.4.11-alpine`、`mongo:7.0.43`）；建置用 BuildKit cache mount＋`pnpm fetch`＋`install --offline`，runtime image 不帶 packages 的 src／測試（`deploy --legacy` 產出的相依版本與 lockfile 一致，2026-09-27 乾淨 cache 實測，見「技術棧」部署列）；redis／mongo 加 healthcheck，api／worker／seed 以 `service_healthy` 等依賴真正可用；每個服務都有 `deploy.resources.limits` 與 json-file log 輪替（10MB × 3）；redis 設 `maxmemory 256mb`＋`noeviction`（BullMQ 要求）；web 改非 root 的 `nginx-unprivileged`，並加安全 header（CSP 等）、gzip 與靜態資源快取策略。
 
 ### 🔭 11. 可觀測性基線（009）
 
@@ -367,7 +369,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | `system/unauthorized` | api → web | 訂閱授權失敗（`WS_AUTH_SECRET` 不符）；前端 TopBar 顯示「未授權」chip，下次訂閱成功（`machine/subscribed`）自動消失。錯誤 token 計入違規，累計 10 次以 `1008` 關閉 |
 | `system/metrics` | api → web | **009**：週期廣播的營運指標摘要（queue 深度、WS 連線數、worker 端 LLM latency／cache 命中率），廣播給所有**已授權**連線（未設 `WS_AUTH_SECRET` 時即所有連線）、與訂閱的機台無關；供 dev-only Metrics Panel 消費。另有 optional `persist: { dropped, failed }`——api 啟動以來累計的歷史寫入遺失紀錄數與 `insertMany` 失敗批數（舊版 api 不帶，讀者須容忍缺席） |
 
-> 所有 WS 訊息都以 `packages/contracts` 的 Zod schema 定義、型別由 `z.infer` 推導（憲章 Principle III）。需 runtime 驗證的 payload 在入口 `safeParse`——來自任意連線者的客戶端控制訊息（`ClientControlMessageSchema`：`ping`、`machine/subscribe`）、`DiagnosisResult`、`AiStreamEvent`、`JobStatus`、`WorkerMetrics`；伺服器→客戶端的純分派控制訊息（`pong`／`system/*`）與高頻的 `machine/data` 則只用 schema 做漂移比對，runtime 走手寫守衛或 `switch(type)` 分派。契約全貌另見 [`asyncapi.yaml`](asyncapi.yaml)（`info.version` 1.1.0，共 12 個 channel），並由 `asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
+> 所有 WS 訊息都以 `packages/contracts` 的 Zod schema 定義、型別由 `z.infer` 推導（憲章 Principle III）。需 runtime 驗證的 payload 在入口 `safeParse`——來自任意連線者的客戶端控制訊息（`ClientControlMessageSchema`：`ping`、`machine/subscribe`）、`DiagnosisResult`、`AiStreamEvent`、`JobStatus`、`WorkerMetrics`；伺服器→客戶端的純分派控制訊息（`pong`／`system/*`）與高頻的 `machine/data` 則只用 schema 做漂移比對，runtime 走手寫守衛或 `switch(type)` 分派。契約全貌另見 [`asyncapi.yaml`](asyncapi.yaml)（`info.version` 1.2.0，共 12 個 channel），並由 `asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
 
 ### 部署與監督拓撲（demo 容器模式，007–009）
 
@@ -419,7 +421,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | **資料庫** | MongoDB 7（telemetry time-series + TTL、errorlogs、maintenanceRecords、diagnoses） |
 | **契約** | `packages/contracts`（Zod 4 單一來源，`z.infer` 推導型別）+ `asyncapi.yaml` |
 | **可觀測性** | pino（結構化 JSON 日誌 + 專屬 metrics child logger）、`GET /healthz` 依賴探針、`system/metrics` 廣播 |
-| **部署 / 監督** | Docker 多階段建置（BuildKit cache mount、`pnpm fetch`＋`install --offline`、`pnpm deploy --legacy --prod` 裁剪 workspace 依賴——pnpm 10 起非 injected workspace 須加 `--legacy`，否則 `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`；base image tag＋digest 雙釘）、`restart: on-failure:5`、redis／mongo healthcheck＋`service_healthy`、資源上限與 log 輪替、Redis heartbeat 存活探針（每實例一把）、`nginx-unprivileged`（web 容器內同源反代 `/ws`、`/diagnoses`，安全 header＋gzip） |
+| **部署 / 監督** | Docker 多階段建置（BuildKit cache mount、`pnpm fetch`＋`install --offline`、`pnpm deploy --legacy --prod` 裁剪 workspace 依賴——pnpm 10 起非 injected workspace 須加 `--legacy`，否則 `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`；**2026-09-27 乾淨 cache 實測**：legacy deploy 仍依共用 lockfile 取版本——全新 cache mount＋`--no-cache` 建置的 api image 內全部 production 套件與 `pnpm-lock.yaml` 逐一相同（139 個套件名；計數方法：image 內 `node_modules/.pnpm` 下 149 個套件目錄（即 deploy log 的 `+149`，不含 `lock.yaml`），扣除 2 個 workspace 套件、合併 peer 後綴變體後為 147 組 name@version、139 個套件名；lockfile 端以 apps/api、packages/contracts、packages/shared 三個 importer 的 production 依賴遞迴展開 `snapshots`，扣除 5 個非 linux-x64 平台的 optional `@msgpackr-extract/*` 後同為 139 個套件名。第二輪審查報告記的 151 恰等於本次 image `node_modules/.pnpm` 的原始項目數（149 個套件目錄＋`lock.yaml`＋內層 `node_modules`），推測報告以此計，差異在計數口徑、不在版本），範圍內較新的 `ws` 8.22.0／`bullmq` 5.81.5 未被選入；它仍需 registry metadata（`--offline` 會 `ERR_PNPM_NO_OFFLINE_META`，故用 `--prefer-offline`），且屬單次觀察、升 pnpm 時需重驗；base image tag＋digest 雙釘）、`restart: on-failure:5`、redis／mongo healthcheck＋`service_healthy`、資源上限與 log 輪替、Redis heartbeat 存活探針（每實例一把）、`nginx-unprivileged`（web 容器內同源反代 `/ws`、`/diagnoses`，安全 header＋gzip） |
 | **語言 / 工具鏈** | Node 22（`.nvmrc`，`engines >=22.12`，Vite 7 需求）、strict TypeScript 5.9、pnpm workspace、ESLint 9、Vitest 4、vue-tsc 3、Spectral（contract lint） |
 | **本機 infra** | Docker Compose：不帶分組起 Redis 7 + MongoDB 7（開發模式）；`demo` profile 起 api／worker／web／seed 全棧受監督容器 |
 
@@ -480,7 +482,7 @@ flow-gatekeeper/
 ├── apps/
 │   ├── api/           # NestJS：WebSocket Gateway、mock producer、POST /diagnoses、Pub/Sub relay、
 │   │   │               #   MetricsService、GET /healthz、seed
-│   │   ├── Dockerfile           # ← 多階段建置（008）：pnpm deploy --legacy --prod 裁剪 workspace 依賴（pnpm 10 需 --legacy）
+│   │   ├── Dockerfile           # ← 多階段建置（008）：pnpm deploy --legacy --prod 裁剪 workspace 依賴（pnpm 10 需 --legacy；實測仍依 lockfile 版本）
 │   │   ├── .env.example        # ← host 直跑（軌道 A）的 env 範本（複製成 apps/api/.env）
 │   │   └── .env.demo.example   # ← demo 容器（軌道 B）的 env 範本（複製成 apps/api/.env.demo）
 │   ├── worker/        # 獨立 process：BullMQ consumer、cache/dedupe、AiProvider(Gemini) streaming、
@@ -689,7 +691,7 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 | `MONGO_URL` / `MONGO_DB` | api · worker | `mongodb://127.0.0.1:27017/flow-gatekeeper` / `flow-gatekeeper` | 歷史層與診斷持久化；**資料庫名以 `MONGO_DB` 為準**（`MONGO_URL` 路徑中的 db 名不被採用） |
 | `WS_AUTH_SECRET` | api | *(空)* | 即時通道訂閱授權；有設時 `ai/*`／`job/status`／`system/metrics` 只送通過 `machine/subscribe` token 的連線、`POST /diagnoses` 的 `socketId` 也須是已授權連線；**本機 live 驗收留空** → 連上即授權、前端免 token 訂閱 |
 | `WS_ALLOWED_ORIGINS` | api | *(空)* | WS upgrade 的 Origin 白名單（逗號分隔，**不要寫預設 port**）；留空＝不檢查；無 Origin 的非瀏覽器 client 一律放行，不在清單內的瀏覽器 upgrade 回 403 |
-| `WS_SEND_HIGH_WATER_BYTES` | api | `1048576` | 單一連線送出緩衝高水位（範圍 65536–268435456）；`bufferedAmount` 超過即略過該筆遙測推送（控制／診斷訊息照送），連續 3 個心跳 tick 超標則 terminate 該連線 |
+| `WS_SEND_HIGH_WATER_BYTES` | api | `1048576` | 單一連線送出緩衝高水位（範圍 65536–268435456）；`bufferedAmount` 超過即略過該筆高頻流推送（遙測批次與 `ai/token`；`ai/done`／`ai/error`／`job/status` 等終態與控制訊息照送，漏掉的 token 由 `ai/done` 補齊），連續 3 個心跳 tick 超標則 terminate 該連線 |
 | `MAX_WS_CONNECTIONS` | api | `500` | 同時 WS 連線數上限（範圍 1–100000）；達上限時 upgrade 回 HTTP 503。有設 `WS_AUTH_SECRET` 時另有未授權連線子上限 = `max(10, floor(20% × MAX_WS_CONNECTIONS))`，達到亦回 503（限制未授權者可佔的總名額；持 token 的新連線池滿時同樣 503） |
 | `WS_AUTH_GRACE_MS` | api | `10000` | 有設 `WS_AUTH_SECRET` 時，連線須在此期限內通過 `machine/subscribe` token，否則以 `1008` 關閉；範圍 1000–60000，超出即拒絕啟動。實際關閉時間 ≤ grace + 授權 sweep 間隔（`min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`）。未設 `WS_AUTH_SECRET` 時不作用 |
 | `WS_HEARTBEAT_MS` | api | `15000` | 伺服器端心跳探活間隔；下限 1000、上限 2147483647，超出即拒絕啟動 |
@@ -746,7 +748,7 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 specify → clarify → plan → checklist → tasks → analyze → implement → 驗收 → merge(--no-ff) 回 develop
 ```
 
-- `/speckit.implement` 期間以 tasks.md 的 **phase 為遞交單位**逐 phase commit，commit 標題標記 phase，讓 git 歷史能還原開發順序。
+- `/speckit-implement` 期間以 tasks.md 的 **phase 為遞交單位**逐 phase commit，commit 標題標記 phase，讓 git 歷史能還原開發順序。
 - merge 回 `develop` 一律 `--no-ff`，保留每個 feature 的收尾點。
 - Conventional Commits 前綴 + **中文描述**。
 
