@@ -64,6 +64,27 @@ const CONSTRAINT_KEYS = [
 const SAFE_INT_BOUND = Number.MAX_SAFE_INTEGER;
 
 /**
+ * 各 `format` 在 Zod 輸出中附帶的內建 regex（format 的實作細節）。以 `z.toJSONSchema` 實際產生
+ * 取得基準，不手抄 regex：Zod 升版改了內建 regex 時基準跟著變，不會誤判成漂移。
+ * `date-time` 收兩種變體（預設只收 `Z`、`offset: true` 另收 `±hh:mm`）。
+ */
+function builtinPattern(schema: z.ZodType): string {
+  const out = z.toJSONSchema(schema, { target: "draft-7" }) as Json;
+  if (typeof out.pattern !== "string") throw new Error("預期 Zod 對此 format 輸出 pattern");
+  return out.pattern;
+}
+const FORMAT_BUILTIN_PATTERNS: Record<string, ReadonlySet<string>> = {
+  "date-time": new Set([builtinPattern(z.iso.datetime()), builtinPattern(z.iso.datetime({ offset: true }))]),
+  uuid: new Set([builtinPattern(z.uuid())]),
+};
+
+/** `pattern` 恰為該節點 `format` 的 Zod 內建 regex 時才可略過；自訂 pattern 一律保留比對。 */
+function isBuiltinFormatPattern(n: Json): boolean {
+  if (typeof n.format !== "string" || typeof n.pattern !== "string") return false;
+  return FORMAT_BUILTIN_PATTERNS[n.format]?.has(n.pattern) ?? false;
+}
+
+/**
  * Zod → JSON Schema。target 選 draft-7：AsyncAPI 2.6 的 Schema Object 是 JSON Schema draft-07
  * 的超集。`io: "input"` 描述「線上可被接受的輸入」：z.object 預設 strip（多餘鍵接受後丟棄），
  * input 模式不輸出 `additionalProperties`，與 asyncapi 未宣告（＝允許額外鍵）等價；
@@ -74,11 +95,11 @@ function fromZod(schema: z.ZodType): unknown {
 }
 
 /**
- * 正規化成只保留「語意」的形狀：型別、enum／const、限制條件（含 `format`）、屬性、required、
- * `additionalProperties`、陣列元素、anyOf／oneOf 分支。略過的只有不影響資料合法性的鍵
+ * 正規化成只保留「語意」的形狀：型別、enum／const、限制條件（含 `format`、`pattern`）、屬性、
+ * required、`additionalProperties`、陣列元素、anyOf／oneOf／allOf 分支。略過的只有不影響資料合法性的鍵
  * （`$schema`、`description` 等）與兩項 Zod 輸出特性：
- * - 有 `format` 時略過 `pattern`：Zod 會把 format 的內建 regex（如 uuid、date-time）一併輸出成
- *   pattern，那是 format 的實作細節，asyncapi 只寫 format 即表達同一限制。
+ * - `pattern` 恰為同節點 `format` 的 Zod 內建 regex 時略過（見 `FORMAT_BUILTIN_PATTERNS`）：那是
+ *   format 的實作細節，asyncapi 只寫 format 即表達同一限制。自訂 pattern（任一端多寫）照常比對。
  * - 安全整數邊界（見 `SAFE_INT_BOUND`）。
  * 有 enum 或 const 時略過 `type`（zod 會輸出 `type: string`，asyncapi 只寫 enum／const，兩者等價）。
  */
@@ -88,7 +109,7 @@ function normalize(node: unknown): unknown {
   const out: Json = {};
   for (const key of CONSTRAINT_KEYS) {
     if (n[key] === undefined) continue;
-    if (key === "pattern" && n.format !== undefined) continue;
+    if (key === "pattern" && isBuiltinFormatPattern(n)) continue;
     if (key === "minimum" && n[key] === -SAFE_INT_BOUND) continue;
     if (key === "maximum" && n[key] === SAFE_INT_BOUND) continue;
     out[key] = n[key];
@@ -97,6 +118,12 @@ function normalize(node: unknown): unknown {
   const branches = [n.anyOf, n.oneOf].find(Array.isArray) as unknown[] | undefined;
   if (branches) {
     out.anyOf = branches.map(normalize).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  }
+  // allOf：Zod 對同一字串疊多個 regex 時會輸出 allOf（且丟掉 format），不比對就會讓多出的限制漏網
+  if (Array.isArray(n.allOf)) {
+    out.allOf = (n.allOf as unknown[])
+      .map(normalize)
+      .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
   }
   if (Array.isArray(n.enum)) {
     out.enum = [...(n.enum as unknown[])].map(String).sort();
@@ -175,6 +202,49 @@ describe("asyncapi.yaml 與 Zod 契約同步", () => {
     expect(normalize(fromZod(z.object({ id: z.uuid() })))).toEqual(
       normalize({ type: "object", required: ["id"], properties: { id: { type: "string", format: "uuid" } } }),
     );
+  });
+
+  it("normalize 只略過 format 的內建 pattern：自訂 pattern 或他種 format 的 regex 仍比對", () => {
+    const dt = FORMAT_BUILTIN_PATTERNS["date-time"];
+    expect(dt?.size).toBe(2);
+    for (const pattern of dt ?? []) {
+      expect(normalize({ type: "string", format: "date-time", pattern })).toEqual(
+        normalize({ type: "string", format: "date-time" }),
+      );
+    }
+    // 自訂 pattern 與 format 並存 → 不略過
+    expect(normalize({ type: "string", format: "date-time", pattern: "^2026" })).not.toEqual(
+      normalize({ type: "string", format: "date-time" }),
+    );
+    // 別種 format 的內建 regex 掛在 date-time 上 → 不略過
+    const [uuidPattern] = [...(FORMAT_BUILTIN_PATTERNS.uuid ?? [])];
+    expect(normalize({ type: "string", format: "date-time", pattern: uuidPattern })).not.toEqual(
+      normalize({ type: "string", format: "date-time" }),
+    );
+  });
+
+  it("mutation：asyncapi 端多一個自訂 pattern 時比對會失敗", () => {
+    const zodSide = normalize(fromZod(SystemMetricsSchema));
+    const documented = structuredClone(resolveRef(components.messages.SystemMetrics?.payload)) as Json;
+    expect(normalize(documented)).toEqual(zodSide);
+    const props = documented.properties as Record<string, Json>;
+    props.collectedAt = { ...props.collectedAt, pattern: "^2026-" };
+    expect(normalize(documented)).not.toEqual(zodSide);
+  });
+
+  it("mutation：Zod 端多一個自訂 regex 時比對會失敗", () => {
+    const documented = normalize(components.messages.SystemMetrics?.payload);
+    expect(normalize(fromZod(SystemMetricsSchema))).toEqual(documented);
+    // format 保留、只換成自訂 pattern（模擬 Zod 輸出單一自訂 pattern 的情形）
+    const zodJson = structuredClone(fromZod(SystemMetricsSchema)) as Json;
+    const props = zodJson.properties as Record<string, Json>;
+    props.collectedAt = { ...props.collectedAt, pattern: "^2026-" };
+    expect(normalize(zodJson)).not.toEqual(documented);
+    // 真的在 Zod 端疊 regex（輸出 allOf）
+    const mutated = SystemMetricsSchema.extend({
+      collectedAt: z.iso.datetime({ offset: true }).regex(/^2026-/),
+    });
+    expect(normalize(fromZod(mutated))).not.toEqual(documented);
   });
 
   it("normalize 會比對 additionalProperties：strict 物件與未宣告者不等價", () => {
