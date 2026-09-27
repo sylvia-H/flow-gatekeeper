@@ -36,7 +36,8 @@ v1.0.0 之後各維護分支的現況摘要見 `docs/Flow-Gatekeeper-SDD-完整�
 
 - **去重鎖 TTL 條件**：worker 啟動時驗證 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`，不成立即拒絕啟動。
   預設值（`AI_DEDUPE_LOCK_SECONDS=45`、`AI_TIMEOUT_MS=30000`）不受影響；自訂 `AI_DEDUPE_LOCK_SECONDS` 低於 35（在 `AI_TIMEOUT_MS=30000` 下）者 MUST 調高。
-- **Docker Engine 25+**：compose 的 api healthcheck 使用 `start_interval`，更舊的 Engine 不認得此鍵。
+- **Docker Engine 25+／Compose 2.20.2+**：compose 的 api healthcheck 使用 `start_interval`，更舊的 Engine 不認得此鍵、更舊的 Compose 會拒絕整份檔案。
+- **跨 process e2e 需 Compose 2.24.4+**：`docker-compose.e2e.yml` 用到 `!reset`／`!override`；只影響 `pnpm test:e2e`，一鍵 demo 本身仍只需 2.20.2+。
 - **`WS_AUTH_SECRET` 語意收緊**：有設時 `system/metrics`、`ai/*`、`job/status` 只送給通過 `machine/subscribe` token 的連線；
   `POST /diagnoses` 的 `socketId` 也必須是在線且已授權的連線。連線須在 `WS_AUTH_GRACE_MS`（預設 10000）內完成授權，否則以 `1008` 關閉。
   未設 `WS_AUTH_SECRET` 時行為不變（連上即授權）。
@@ -62,6 +63,12 @@ v1.0.0 之後各維護分支的現況摘要見 `docs/Flow-Gatekeeper-SDD-完整�
 - **運維**：redis／mongo healthcheck 與 `service_healthy` 依賴、各服務資源上限與 log 輪替、nginx 對 `/diagnoses` 限流（`429`）與 `/ws` 連線數限制、安全 header／CSP／gzip。
 - **README 自動檢查**（`fix/20260927-review02-batch-cd`）：`info.version` 字串與 `asyncapi.yaml` 一致、環境變數表涵蓋兩份 `env-schema.ts` 全部 key。
 - **本檔 `CHANGELOG.md`**（`fix/20260927-review02-batch-cd`）：版本策略、產品變更與 asyncapi 契約版本紀錄。
+- **測試基礎建設**（`fix/20260927-review02-batch-cd`，Batch D；指令與前置見 README「測試與品質門檻」）：
+  - `pnpm test:coverage`／`pnpm check:coverage`：root `vitest.config.ts` 聚合五個套件、`@vitest/coverage-v8` 合併報告，不退步門檻 lines 60％／branches 50％。
+  - `test:integration`（worker、api）：真 Redis／Mongo 整合測試（需 `docker compose up -d`；Redis db 15＋隨機前綴、Mongo 隨機資料庫、測後清理）。
+  - `pnpm test:e2e`：新套件 `tests/e2e` 與 `docker-compose.e2e.yml`，以獨立 compose 專案 `flow-gatekeeper-e2e`（只開 `127.0.0.1:18080`）跑四個跨 process 場景，跑完 `down -v`。
+  - `pnpm test:mutation`：Stryker 變異測試（五個接線層核心檔，`break` 70）與 `nightly-mutation.yml` 排程 workflow。
+- **worker `AI_PROVIDER`**（預設 `gemini`；`gemini`｜`fake`）與 `FAKE_AI_TOKENS`（預設 20）、`FAKE_AI_TOKEN_DELAY_MS`（預設 500）：`fake` 為測試替身，不呼叫 LLM、不需金鑰、輸出固定假診斷逐段串流，**僅供 e2e 與演練**；`NODE_ENV=production` 下允許但啟動 warn，非法值拒絕啟動。
 
 ### Changed
 
@@ -76,6 +83,8 @@ v1.0.0 之後各維護分支的現況摘要見 `docs/Flow-Gatekeeper-SDD-完整�
   redis／mongo `restart: unless-stopped`；web 等 api healthy 才啟動。
 - **契約版本**：`asyncapi.yaml` `info.version` 1.1.0 → **1.2.0**（明細見下方「asyncapi 契約版本」）。
 - **產品版本**（`fix/20260927-review02-batch-cd`）：五份套件 `package.json` 的 `version` 由 `0.1.0` 對齊為 `1.1.0`，root `package.json` 新增 `"version": "1.1.0"`。
+- **Gateway 關閉逾期回收**（`fix/20260927-review02-batch-cd`）：已發 `close(1008)` 但對端不回 close frame 的連線，改由恆常執行的心跳 sweep 在 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 後 terminate——**未設 `WS_AUTH_SECRET` 時（違規累計 10 次的關閉）也生效**，此前只在有密鑰時由授權 sweep 處理。
+- **CI**：`test` 步驟改為 `pnpm test:coverage`（含門檻、上傳 lcov artifact），加 `permissions: contents: read`、`concurrency`、`timeout-minutes: 20`；仍只保留手動觸發。
 
 ### Fixed
 
@@ -95,6 +104,11 @@ v1.0.0 之後各維護分支的現況摘要見 `docs/Flow-Gatekeeper-SDD-完整�
 - compose 的 Redis／Mongo 只綁 127.0.0.1；web 入口預設只綁本機（`WEB_BIND`）；Redis 可經 `REDIS_PASSWORD` 啟用 `requirepass`。
 - `pnpm audit --prod` 歸零（NestJS 11／Express 5 升級後）。
 - chaos 故障注入在 `NODE_ENV=production` 預設拒絕武裝。
+
+### Internal
+
+- 日誌節流器（`LogThrottle`、`ConnectionErrorThrottle`、`ERROR_LOG_THROTTLE_MS`）收進 `@flow-gatekeeper/shared/logging`，api 與 worker 共用一份；worker 連線錯誤節流 key 只用連線名。對外行為不變。
+- Gateway 以 `closeRequestedAt` 為關閉中的單一來源（`isClosing()`／`requestClose()`）；web `useDiagnoseTrigger` 的 `hasClient` 改由 `connectionBlockedReason` 推導。
 
 ## [1.0.0] - 2026-08-05
 

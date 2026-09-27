@@ -497,12 +497,17 @@ flow-gatekeeper/
 ├── packages/
 │   ├── contracts/     # Zod schema 單一來源（events / DiagnosisResult / job payload / SystemMetrics）
 │   │                   #   → z.infer 型別
-│   └── shared/        # 跨端共用工具（遙測門檻等）＋ @flow-gatekeeper/shared/logging 子路徑（pino 等級／間隔解析）
+│   └── shared/        # 跨端共用工具（遙測門檻等）＋ @flow-gatekeeper/shared/logging 子路徑（pino 等級／間隔解析、日誌節流器）
+├── tests/
+│   └── e2e/           # 跨 process e2e（@flow-gatekeeper/e2e）：起 compose 全棧 + fake AiProvider，見 tests/e2e/README.md
 ├── specs/             # 001–009 每條 feature 的 spec / plan / tasks / checklist
 ├── docs/              # ADR、SDD 完整實作指南、design-spec、demo 影片與截圖
 ├── scripts/           # dev-up.ps1（一鍵起全棧）、demo-reset.ps1（清 AI 快取）
 ├── asyncapi.yaml      # 即時通道契約（Spectral lint）
 ├── docker-compose.yml # Redis 7 + MongoDB 7（不帶分組）＋ demo profile：api/worker/web/seed 全棧受監督容器
+├── docker-compose.e2e.yml # 只給 tests/e2e 用的 override（獨立專案名、18080、AI_PROVIDER=fake）
+├── vitest.config.ts   # 只給 test:coverage：test.projects 聚合五個套件、合併覆蓋率與門檻
+├── stryker.config.mjs # 變異測試（test:mutation）範圍與門檻
 ├── .env.example       # 環境設定「總覽指引」（非載入檔；指向各 app 的 .env.example）
 ├── .nvmrc             # Node 版本單一來源（22）；CI、engines 與 Dockerfile 對齊
 └── .specify/memory/   # 專案憲章 constitution.md（工程原則單一來源）
@@ -527,7 +532,7 @@ flow-gatekeeper/
 
 **前置需求**：Node.js 22（版本以 repo 根的 `.nvmrc` 為準，root `engines` 要求 `>=22.12`（Vite 7 的最低需求）；用 nvm／fnm 可直接讀它）、pnpm 10（`packageManager` 釘選 `pnpm@10.34.5`）、Docker Desktop（跑 Redis 7 + MongoDB 7）、一組 Gemini API key（選用，僅診斷會用到；留空也能跑，見「[注意事項](#注意事項)」）。
 
-> PATH 上沒有 `pnpm` 時，先執行一次 `corepack enable`（Node 內建，依 root `package.json` 的 `packageManager` 取得對應 pnpm）。`corepack pnpm <指令>` 只適用於**單一套件**指令（如 `corepack pnpm --filter @flow-gatekeeper/api test`、`corepack pnpm -r test`）；root 的 `check`／`lint`／`typecheck`／`test`／`build` 內部會再呼叫 `pnpm`，而 pnpm 執行 script 時**不會**把自己加進 PATH，未 `corepack enable` 時會以「`pnpm` 不是內部或外部命令」失敗——此時改用 `corepack pnpm -r <script>`，或先 `corepack enable`。`scripts/dev-up.ps1` 同樣呼叫裸 `pnpm`，執行前也要先 `corepack enable`。
+> PATH 上沒有 `pnpm` 時，先執行一次 `corepack enable`（Node 內建，依 root `package.json` 的 `packageManager` 取得對應 pnpm）。`corepack pnpm <指令>` 只適用於**單一套件**指令（如 `corepack pnpm --filter @flow-gatekeeper/api test`、`corepack pnpm -r test`）；root 的 `check`／`check:coverage`／`lint`／`typecheck`／`test`／`build`／`test:e2e` 內部會再呼叫 `pnpm`，而 pnpm 執行 script 時**不會**把自己加進 PATH，未 `corepack enable` 時會以「`pnpm` 不是內部或外部命令」失敗——此時改用 `corepack pnpm -r <script>`（`test:e2e` 則用 `corepack pnpm --filter @flow-gatekeeper/e2e test:e2e`），或先 `corepack enable`。`test:coverage`（直接呼叫 `vitest`）與 `test:mutation`（直接呼叫 `stryker`）不經裸 `pnpm`，`corepack pnpm test:coverage` 即可。`scripts/dev-up.ps1` 同樣呼叫裸 `pnpm`，執行前也要先 `corepack enable`。
 
 ```powershell
 # 1) 安裝所有 workspace（乾淨 clone 不需先 build packages：typecheck／test／worker、web dev 經 exports 的
@@ -616,8 +621,11 @@ docker compose --profile demo down -v    # 連同資料清除的重設（清 vol
 
 ```powershell
 pnpm check
+pnpm check:coverage  # 同 check，但以 test:coverage 取代 test（合併覆蓋率 + 不退步門檻；CI 走這條）
 pnpm build   # 選用：走一次 production 建置路徑（packages build → apps 依 dist 編譯），CI 最後一步也會跑
 ```
+
+整合測試（真 Redis／Mongo）、跨 process e2e 與變異測試不在 `pnpm check` 內，指令與前置見「[測試與品質門檻](#測試與品質門檻)」。
 
 ---
 
@@ -670,7 +678,7 @@ api 或 worker 連續快速失敗（如設定錯誤導致啟動即崩潰）時�
 - **依賴就緒順序**：redis／mongo 各有 healthcheck（mongo `start_period` 40s），api／worker／seed 以 `service_healthy` 等待——冷啟動時 api 顯示 `starting`／尚未建立屬正常，不會白白消耗 `on-failure:5` 的額度。
 - **連接埠被佔用**：入口 `8080`（或 `6379`／`27017`）已被 host 上其他行程佔用時，compose 會以 **bind 失敗訊息指名該埠**中止——改 `docker-compose.yml` 的 `ports` 一行即可（只改中間的 host 埠；前端走同源相對路徑，改埠不需重建映像）。
 - **祕密缺漏（`GEMINI_API_KEY` 留空）**：**任何環境**（開發模式與 demo 容器皆同）都允許留空，全棧**照常啟動、不擋任何服務**，worker 啟動時只記一則 warn；遙測、背壓比值、監督與可觀測性都正常，僅 AI 診斷失敗——每筆診斷**立即**以 `provider_error` 失敗、**不重試**（不會白等 3 輪退避），畫面訊息會**指名金鑰**（「AI 服務金鑰無效或未授權——請確認 `apps/worker/.env` 的 `GEMINI_API_KEY`…」），而非通用失敗語。這是刻意設計，讓沒有 Gemini 帳號的評估者仍看得到系統跑起來。
-- **設定錯誤即拒絕啟動（fail-fast）**：api 與 worker 啟動時以 Zod 驗證環境變數——數值變數**留空＝套用預設**，但設成 0、負數、小數或非數字即列出錯誤並以非零碼結束（例外：`AI_TEMPERATURE` 為 0–2 的實數，接受小數與 0，超出範圍才拒絕；worker 另驗 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`）。demo 容器因此會進入 `restart: on-failure:5` 並在 5 次後停止，`docker compose logs <服務名>` 可看到是哪個變數錯。（009 的 `LOG_LEVEL`／`METRICS_INTERVAL_MS`／`HEALTH_PROBE_TIMEOUT_MS` 維持「回退預設＋warn」語意，不在此列。）
+- **設定錯誤即拒絕啟動（fail-fast）**：api 與 worker 啟動時以 Zod 驗證環境變數——數值變數**留空＝套用預設**，但設成 0、負數、小數或非數字即列出錯誤並以非零碼結束（例外：`AI_TEMPERATURE` 為 0–2 的實數，接受小數與 0，超出範圍才拒絕；`FAKE_AI_TOKEN_DELAY_MS` 接受 0；worker 另驗 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`）。demo 容器因此會進入 `restart: on-failure:5` 並在 5 次後停止，`docker compose logs <服務名>` 可看到是哪個變數錯。（009 的 `LOG_LEVEL`／`METRICS_INTERVAL_MS`／`HEALTH_PROBE_TIMEOUT_MS` 維持「回退預設＋warn」語意，不在此列。）
 - **`POST /diagnoses` 的回應碼**：`201` 已入列；`400` body 不符契約（只回 issue 路徑與代碼，不回顯原始輸入）；`404` `machineId` 格式合法但不在名冊（`mixer-01`、`press-02`、`pack-03`、`oven-04`、`sorter-05`；body message「此機台不在名冊中」，前端顯示同句），不入列；`415` Content-Type 不是 `application/json`；`409` 同一 `jobId` 已用於另一台機台、或該 `jobId` 已入列過而綁定已失效（請以新 `jobId` 重發）、或 `socketId` 對應的 WebSocket 連線不在線或未授權（body `{"statusCode":409,"error":"Conflict","message":"WebSocket 連線不存在或未授權，請重新連線後再發起診斷"}`；前端顯示後端 message 原句，無 message 時顯示「連線已中斷或未授權，請等待重連後再試」）；檢查順序為名冊 `404` → 連線在線／授權 `409` → `jobId` 冪等；`503` 入列逾時（5 秒）或 Redis 不可用；經一鍵 demo 的 nginx 入口時另有 `429`——nginx 對 `/diagnoses` 以來源 IP 限流 10 r/m、burst 5，超限直接回 429、不到 api。同 `jobId` 重送且綁定仍在時回同一結果、**不改綁**到新連線。手動測試時 `socketId` 必須是**目前在線**連線的 `clientId`（從 `/ws` 的 `system/connected` 取得；設了 `WS_AUTH_SECRET` 時該連線還須先以正確 token 完成 `machine/subscribe`），否則回 `409`、不入列。
 - 環境設定於**執行時**由 compose `env_file` 注入，祕密不烘入 image。demo 的 api／seed 讀 **`apps/api/.env.demo`**（與 host 軌道 A 的 `apps/api/.env` 刻意分開，避免 dev 的 `WS_AUTH_SECRET`／`API_PORT` 滲入 demo）；worker 讀 `apps/worker/.env`。拓樸關鍵值 `API_PORT`（釘 3000，與 nginx 反代目標對齊）、`REDIS_HOST`／`MONGO_URL`（容器網路位址）由 compose `environment` 覆蓋釘死、不受 env 檔漂移；worker 另釘 `WORKER_INSTANCE_ID=""`（一律用 hostname，多副本共用 `apps/worker/.env` 也不會撞 id）與 `LOG_PRETTY=false`（映像不含 pino-pretty）；host 直跑照舊用 `.env` 的 `127.0.0.1`，兩模式互不干擾。
 - **致命錯誤語意（let it crash）**：行程遇非預期致命錯誤（api／worker 的 `uncaughtException`／`unhandledRejection`）會**同步**寫出一則明確標示「致命」的訊息後**立即 `exit(1)`**，由監督者以乾淨行程重啟。開發模式下沒有監督者——行程停在等待檔案變更，需修改檔案或手動重啟；這是文件化的已知差異，不是 bug。
@@ -706,6 +714,9 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 | `AI_TIMEOUT_MS` | worker | `30000` | 單次 AI streaming 逾時；以 `AbortSignal` 真正中止底層串流 |
 | `AI_MAX_OUTPUT_TOKENS` | worker | `2048` | Gemini `maxOutputTokens`；正整數、≤ 65536。thinking token 也計入此上限；輸出被截斷視為**不可重試**的 `schema_invalid`（重試同一 prompt 只會再被截斷）。不能關 thinking 的模型（`gemini-2.5-pro`、3.x）建議 ≥ 8192，低於此值 worker 啟動會 warn；本值與 `AI_TEMPERATURE` 都不進快取簽章 |
 | `AI_TEMPERATURE` | worker | `0.2` | Gemini 取樣溫度，範圍 0–2 |
+| `AI_PROVIDER` | worker | `gemini` | AI provider 選擇：`gemini`（正式唯一 provider）／`fake`（**測試替身**：不呼叫 LLM、不需金鑰，輸出固定假診斷並逐段串流；仍經 `DiagnosisResultSchema` 驗證、照常進 cache 與 Pub/Sub）。**`fake` 僅供跨 process e2e 與演練**——`NODE_ENV=production` 下仍允許但啟動時記一則 warn；非法值（如 `openai`）拒絕啟動 |
+| `FAKE_AI_TOKENS` | worker | `20` | fake provider 把診斷 JSON 切成幾段送出（1–1000）；`AI_PROVIDER=gemini` 時不作用 |
+| `FAKE_AI_TOKEN_DELAY_MS` | worker | `500` | fake provider 相鄰兩段的延遲（0–60000 ms，可為 0）；`(FAKE_AI_TOKENS − 1) × FAKE_AI_TOKEN_DELAY_MS ≥ AI_TIMEOUT_MS` 時啟動 warn（每筆都會逾時）。`AI_PROVIDER=gemini` 時不作用 |
 | `WORKER_CHAOS` | worker | *(空＝關閉)* | 故障注入型態，`uncaught`／`rejection`；非法值 warn 後視為關閉。**僅供演練**（見「崩潰迴圈防護」） |
 | `WORKER_CHAOS_AT` | worker | `startup` | 注入時點：`startup`（bootstrap 後約 2 秒，演練崩潰迴圈）／`job`（下一筆 job 處理中） |
 | `WORKER_CHAOS_ALLOW_IN_PRODUCTION` | worker | `false` | `NODE_ENV=production`（容器映像內建）時 chaos 預設拒絕武裝，設 `true` 才放行；非法值 warn 後視為 `false`。容器內演練時與上兩個變數同時設，演練後三者都清空 |
@@ -720,7 +731,7 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 > **200 `healthy`**，Redis 或 Mongo 任一失聯回 **503 `unhealthy`** 且 body 逐依賴列出 `status`／
 > `latencyMs`／`error`。容器 healthcheck 即由它判定就緒。
 
-> **數值變數的驗證**：`API_PORT`／`REDIS_PORT`／`WS_HEARTBEAT_MS`／`WS_SEND_HIGH_WATER_BYTES`／`MAX_WS_CONNECTIONS`／`WS_AUTH_GRACE_MS`／`MOCK_TELEMETRY_INTERVAL_MS`／`TELEMETRY_TTL_SECONDS`（api）與 worker 的 `AI_*`／`WORKER_CONCURRENCY`／`REDIS_COMMAND_TIMEOUT_MS` 留空＝預設、非法即拒絕啟動（fail-fast）——整數變數拒絕 0、負數與小數，唯 `AI_TEMPERATURE` 接受 0–2 的小數；表中註明「回退預設」的 009 變數則維持 warn 不中止。
+> **數值變數的驗證**：`API_PORT`／`REDIS_PORT`／`WS_HEARTBEAT_MS`／`WS_SEND_HIGH_WATER_BYTES`／`MAX_WS_CONNECTIONS`／`WS_AUTH_GRACE_MS`／`MOCK_TELEMETRY_INTERVAL_MS`／`TELEMETRY_TTL_SECONDS`（api）與 worker 的 `AI_*`／`FAKE_AI_*`／`WORKER_CONCURRENCY`／`REDIS_COMMAND_TIMEOUT_MS` 留空＝預設、非法即拒絕啟動（fail-fast）——整數變數拒絕 0、負數與小數，唯 `AI_TEMPERATURE` 接受 0–2 的小數、`FAKE_AI_TOKEN_DELAY_MS` 接受 0；`AI_PROVIDER` 只接受 `gemini`／`fake`；表中註明「回退預設」的 009 變數則維持 warn 不中止。
 
 > **祕密衛生**（憲章硬規則 #7）：只提交各處的 `.env.example`；`.env`、API key、token **絕不**進版控（`.gitignore` 已忽略所有 `.env`、放行 `.env.example`）。`GEMINI_API_KEY` 只存在於 `apps/worker/.env`。
 
@@ -735,7 +746,12 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
   - _即時層_：訂閱過濾、`errorlog` 狀態轉換去重、`ws-message` 分派、指數退避 `backoff`、`stale` 判定。
   - _006 前端保真_：`fleet-health` 聚合不變量（四類之和＝total）、`events` 去重＋50 筆上限、`machine-groups` 分組與 fallback、`machine-search` 過濾比對、`telemetry-format` 單位、進度條純函式不變量。
   - _2026-09 審查修復補強_：asyncapi↔Zod 漂移測試、客戶端控制訊息／`POST /diagnoses` 契約、`useHighFrequencyWs`（14 支，含溢位合併、退避歸零、pump 例外不中斷）、worker `processor`（去重 double-check、限流延後、重試與 `attempt` 語意）、env fail-fast、telemetry 有上限 buffer／單一 in-flight。
-- **一鍵全檢**：`pnpm check` = 契約 lint → typecheck → lint → test（乾淨 clone 免先 build packages）。CI（目前僅手動觸發）在四道檢查後再跑一次 `pnpm build`，Node 版本讀 `.nvmrc`。
+  - _review02 Batch D 斷言面補齊_（第二輪審查 TQ-4～TQ-9）：`processor` 事件序列與重試分支、`job-status-relay`、`HistoryService` 計數協調、pino logger 包裝、web 元件測試（`CopilotDrawer`、`MachineNodeCard`、`MetricsPanel`、metrics store）、fake provider 與 `AI_PROVIDER` env 驗證。
+- **覆蓋率門檻**：`pnpm test:coverage`（= `vitest run --coverage`）以 root `vitest.config.ts` 的 `test.projects` 一次跑五個套件（shared、contracts、worker、api、web；`tests/e2e` 不納入），以 `@vitest/coverage-v8` 產出合併報告（`coverage/`，text-summary＋lcov）。門檻 **lines 60％／branches 50％**，定位是「不退步」而非追數字；Batch D 補測試後實測總計約 lines 81％、branches 76％（2026-09-28 本機實測 81.4％／76.4％，94 個測試檔 976 支；首次落地時約 67％／65％），數字隨測試增減浮動、以 CI 輸出為準。`main.ts` 入口刻意納入分母，bootstrap 本體由 e2e 覆蓋。
+- **整合測試（真 Redis／Mongo）**：`pnpm --filter @flow-gatekeeper/worker test:integration`、`pnpm --filter @flow-gatekeeper/api test:integration`（各自的 `vitest.integration.config.ts`，只收 `src/integration/**/*.int.test.ts`，不進 `pnpm test`／覆蓋率）。**前置**：repo 根 `docker compose up -d`；連不上即明確失敗、不靜默 skip。隔離：Redis 用 db 15（`INTEGRATION_REDIS_DB` 可改）＋每輪隨機 key 前綴、Mongo 每輪隨機資料庫，測後清理，不碰 db 0 與正式資料庫。涵蓋：worker——Lua compare-and-del 鎖、兩副本並發去重（LLM 只呼叫一次）、鎖 TTL 到期換手、限流窗 `INCR`＋首次 `EXPIRE` 原子性、cache／lock TTL、畸形 cache 即 DEL、`diagnoses` 索引建立與 Mongo 錯誤碼 85／86／11000 的退回路徑；api——time-series TTL 以 `collMod` 更新、errorlogs TTL 漂移修正、`HistoryService` 的 `writeOnce`／flush 計數協調。
+- **跨 process e2e**：`pnpm test:e2e`（= `pnpm --filter @flow-gatekeeper/e2e test:e2e`，套件在 `tests/e2e`）。以獨立 compose 專案 `flow-gatekeeper-e2e`（`docker-compose.yml`＋`docker-compose.e2e.yml`）起全棧，只對外開 `127.0.0.1:18080`、worker 用 `AI_PROVIDER=fake`，以原生 `ws` client 走 nginx 入口驗四個場景：訂閱 → `POST /diagnoses` → `job/status`／`ai/token`／`ai/done` 事件序列、cache 命中、`409`（不在線 socketId）／`404`（名冊外機台）、worker `SIGKILL` 後 stalled 重派；跑完 `down -v`（映像保留）。不需 `GEMINI_API_KEY`、不讀開發者自己的 `.env`，可與 demo／dev infra 並存。**前置**：Docker Engine 25+、**Compose 2.24.4+**（override 用到 `!reset`／`!override`；一鍵 demo 本身仍只需 2.20.2+）。細節見 [`tests/e2e/README.md`](tests/e2e/README.md)。
+- **變異測試**：`pnpm test:mutation`（= `stryker run`，設定 `stryker.config.mjs`）只變異五個接線層核心檔（worker `processor.ts`、api `monitoring.gateway.ts`／`job-status-relay.service.ts`、web `useHighFrequencyWs.ts`／`copilot-reducer.ts`），`break` 門檻 70（看總分）；報告輸出 `reports/mutation/`。每日由 `.github/workflows/nightly-mutation.yml` 執行（GitHub 的 schedule 只從預設分支 `main` 觸發，故 workflow 在 `main` 排程、實際 checkout `develop`；本檔須隨 release 進 `main` 才會開始排程），亦可手動觸發。首跑總分約 72；`monitoring.gateway`（66.5）與 `processor`（62.7）單檔低於 70，列為追蹤項目。
+- **一鍵全檢**：`pnpm check` = 契約 lint → typecheck → lint → test（乾淨 clone 免先 build packages）；`pnpm check:coverage` 同序但以 `test:coverage` 取代 `test`。CI（`.github/workflows/ci.yml`，目前僅手動觸發）依序跑契約 lint → typecheck → lint → `test:coverage`（含覆蓋率門檻，並上傳 lcov artifact）→ `pnpm build`，Node 版本讀 `.nvmrc`；workflow 設最小權限 `permissions: contents: read`、同分支 `concurrency` 取消舊 run、`timeout-minutes: 20`。變異測試另走 nightly workflow，整合測試與 e2e 目前只在本機跑。
 - 每條 feature 的 spec 都帶**量化 Success Criteria（SC）**與**可重播 demo**，讓每個賣點都能被獨立驗收。
 
 ---
@@ -785,6 +801,7 @@ specify → clarify → plan → checklist → tasks → analyze → implement �
 - **重連不 rebind**：Gateway 每次連線派新 `clientId`，「任務 → 連線」綁定以記憶體 Map 實作；重連會使進行中任務綁定失效——前端把它收尾為「中斷 + Retry」，不做跨重連續傳（正式做法可改存 Redis）。`POST /diagnoses` 以同一 `jobId` 重送也**不會改綁**到新連線（防止他人把診斷結果改送到自己的連線），需以新 `jobId` 重新發起。
 - **診斷結果目前沒有讀取端點**：`diagnoses` 確實落 MongoDB、結果也進 Redis 快取，但 HTTP 只有 `POST /diagnoses` 與 `GET /healthz`，前端**無法**在重連後取回某個 `jobId` 的完整結果；目前唯一的「取回」是按 Retry 重新發起，若簽章相同且快取未過期（`AI_CACHE_TTL_SECONDS`，預設 10 分鐘）會秒回並標 Cached。`GET /diagnoses/:jobId` 與重連 rebind 列為 roadmap 012（串流韌性）。
 - **Gateway 單實例**（worker 已可多實例：heartbeat／metrics key 帶實例識別、api 掃描合併）：Gateway 訂閱表與 `jobId` 路由都在行程內記憶體，目前不跨多 server 水平擴展；要擴展時訂閱表需外置 Redis、`psubscribe ai-stream:*` 需改精準 channel subscribe（見 [ADR-002 §6.1](docs/adr-002-productionization-scope.md)、ADR-001 §6）。
+- **worker 崩潰後的重派有長時間靜默**：e2e 實測 worker 被 `SIGKILL` 後，BullMQ 要等 job lock（30 秒）過期、再經 stalled 檢查（每 30 秒，先標記、下一輪才搬回 wait）才重派，約 **92 秒**內前端收不到任何事件，超過前端 45 秒的無進展 watchdog（任務先被收尾為 failed）；重派後 `ai/*` 的 `attempt` 仍為 1、`seq` 從 0 重播。relay 監聽 `stalled` 與等待者 keepalive 列為 roadmap 012-lite（見 [ADR-002 §6.5](docs/adr-002-productionization-scope.md)）。
 - **AI token 串流為 at-most-once**：Redis Pub/Sub 是 fire-and-forget，Gateway 重啟或前端斷線期間的 token 會永久丟失（最終診斷結果仍會落 MongoDB 與快取，但如上一條所述目前沒有讀取端點，斷線的那一方看不到它，只能 Retry）；升級路徑為 Redis Streams + consumer group 續傳，見 [ADR-002 §6.2](docs/adr-002-productionization-scope.md)。
 - **REST 診斷入口開發階段免授權**：`POST /diagnoses` 無身分驗證；rate limit 只在一鍵 demo 的 nginx 入口（每來源 IP 10 r/m、burst 5，超限回 `429`；Docker Desktop 下實為全體共用一桶，見「注意事項」），開發模式直連 api 時沒有（已有 Zod 輸入驗證、只收 `application/json` 以強制跨站請求先過 CORS preflight、jobId 冪等）；即時通道訂閱仍走 `WS_AUTH_SECRET`（本身也只是靜態共享字串，非正式 JWT/OIDC），另有可選的 Origin 白名單。正式環境的 REST 認證與握手階段驗證升級不在範圍，見 [ADR-002 §6.3](docs/adr-002-productionization-scope.md)。
 - **telemetry 丟棄計數**：已以 `system/metrics` 的 optional `persist: { dropped, failed }`（api 啟動以來累計）廣播；逐類明細（`droppedPoints`／`failedPoints`／`droppedErrorLogs`）仍只出現在（30 秒節流的）api error log。
