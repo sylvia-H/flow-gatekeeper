@@ -288,7 +288,7 @@ components:
           collectedAt:
             type: string
             format: date-time
-            description: API-side settlement time; freshness is judged against this, not client receive time.
+            description: API-side settlement time, for display and audit only. Clients MUST judge freshness by their own receive time (not this field) to stay immune to clock skew; see web metrics.store.
           queue:
             type: object
             required: [waiting, active, failed]

@@ -132,6 +132,7 @@ asyncapi `info.version` 1.2.0，向後相容的 minor：
 - **數值下限**：`system/metrics` 的 `windowMs`（`minimum: 1`）與 `queue.waiting`／`queue.active`／`queue.failed`、`wsConnections`（`minimum: 0`）共五處補上 `minimum`。
 - **新增消費端義務**：`ai/token`／`ai/done`／`ai/error` 的 `attempt` 說明——stalled 重派（worker 崩潰）不會增加 `attemptsMade`，
   因此**同一 attempt 內**也可能再次收到 `seq` 0；消費端 MUST 把 `seq` 0 視為新一次執行並清空已累積的串流文字。
+- **語意更正（CT-4）**：`system/metrics.collectedAt` 的描述由「新鮮度以此判定」改為「僅供顯示與稽核；新鮮度以消費端收訊時刻判定」，與 web `metrics.store` 自 `a85509d` 起的實作一致（避免時鐘偏差）。結構未變。
 - **runtime 接受範圍收窄**（隨 Zod 4 升級，asyncapi 結構未變）：時間戳（如 `WorkerMetrics.snapshotAt`）改以
   `z.iso.datetime({ offset: true })` 驗證 RFC 3339；UUID 欄位改 `z.uuid()`（檢查 RFC 4122 版本位）。生產端 `toISOString()`／`randomUUID()` 皆通過。
 - **HTTP 契約**：`POST /diagnoses` 的 400 回應 `issues[].code` 由 `invalid_string` 變 `invalid_format`；新增 **404**（`machineId` 不在名冊）；
