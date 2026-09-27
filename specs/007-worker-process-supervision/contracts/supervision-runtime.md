@@ -17,6 +17,7 @@
 |------|--------|------|------|
 | `WORKER_CHAOS` | `uncaught` \| `rejection` | （未設定＝關閉） | 故障注入型態；非法值 warn 後視為關閉。**僅供演練，預設 MUST 關閉** |
 | `WORKER_CHAOS_AT` | `startup` \| `job` | `startup` | 注入時點：bootstrap 後約 2s／下一筆 job active 期間 |
+| `WORKER_CHAOS_ALLOW_IN_PRODUCTION` | `true` \| `false`（不分大小寫） | `false` | production 守衛的明確開關：`NODE_ENV=production`（容器 image 內建）時 chaos **預設拒絕武裝**（只記一則 error），設 `true` 才放行；非法值 warn 後視為 `false`。容器內演練時與上兩個變數同時設定，演練後三者一併清空 |
 
 **容器內連線覆蓋**（compose `environment`，優先於 `env_file`）：`REDIS_HOST=redis`、`MONGO_URL=mongodb://mongo:27017/flow-gatekeeper`——host 直跑模式照舊用 `.env` 的 `127.0.0.1`，兩模式互不干擾。
 
@@ -48,8 +49,10 @@ healthcheck:
 [worker] <kind>（致命，worker 將結束交由監督者重啟）：<detail>
 ```
 
-- `<kind>` ∈ `uncaughtException` | `unhandledRejection`；`<detail>`＝Error 的 `stack ?? message`，非 Error 值一律 `String(value)`。
-- **bootstrap 失敗**（FR-003 的第三種致命來源）不套 `formatFatal`（kind 枚舉不含之），沿用既有 `bootstrap().catch` 記錄格式 `[worker] bootstrap failed: <detail>` 後 `exit(1)`——監督語意與上表 exit code `1` 相同（依退避重啟）。
+- `<kind>` ∈ `uncaughtException` | `unhandledRejection` | `invalidConfig` | `bootstrap`；`<detail>`＝Error 的 `stack ?? message`，非 Error 值一律 `String(value)`。一律同步寫 stderr 後 `exit(1)`。
+  - `invalidConfig`：bootstrap 最前面的 env 驗證失敗（此時 logger 尚未建立）。
+  - `bootstrap`：env 通過後的啟動流程失敗（Mongo 連不上、Redis 未於時限內就緒…），由 `bootstrap().catch` 送入；與 api 的 `fatalExit("bootstrap", err)` 同名，跨 process 可一併檢索。
+- **bootstrap 失敗**（FR-003 的第三種致命來源）原先不套 `formatFatal`、沿用 `[worker] bootstrap failed: <detail>` 格式；已變更為上述 `bootstrap` kind，監督語意不變（exit code `1`、依退避重啟）。
 - 判讀「致命 → 重啟」：上述 log 之後，容器重啟、worker 重新輸出 `worker ready, consuming queue ...`（既有 log），以 `docker logs --timestamps` 對照先後（FR-004）。
 
 ## 6. 運維指令契約（README「雙模式」章節 MUST 涵蓋）

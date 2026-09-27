@@ -232,16 +232,17 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 
 ### 🚦 4. 佇列削峰與失敗韌性（BullMQ + Redis）
 
-- `POST /diagnoses` 只負責驗證、入列並立即回 jobId，**耗時工作全在獨立 worker**——API process 不做 long-running 診斷。body 以 `CreateDiagnosisBodySchema` 驗證（`machineId` `^[a-z0-9-]{1,32}$`、`socketId` 必須是 uuid、`requestedBy` ≤ 64 字），`jobId` 由前端 `crypto.randomUUID()` 產生並作 idempotency key（同 jobId 重送回同一結果、**不改綁**連線）。狀態碼：`201` 成功、`400` 不符契約、`415` 非 JSON、`409` jobId 衝突或綁定已失效、`503` 入列逾時（5 秒）或 Redis 不可用。
+- `POST /diagnoses` 只負責驗證、入列並立即回 jobId，**耗時工作全在獨立 worker**——API process 不做 long-running 診斷。body 以 `CreateDiagnosisBodySchema` 驗證（`machineId` `^[a-z0-9-]{1,32}$`、`socketId` 必須是 uuid、`requestedBy` ≤ 64 字），`jobId` 由前端 `crypto.randomUUID()` 產生並作 idempotency key（同 jobId 重送回同一結果、**不改綁**連線）。狀態碼：`201` 成功、`400` 不符契約、`404` `machineId` 不在名冊（`mixer-01`、`press-02`、`pack-03`、`oven-04`、`sorter-05`）、`415` 非 JSON、`409` jobId 衝突或綁定已失效、`503` 入列逾時（5 秒）或 Redis 不可用；一鍵 demo 經 nginx 時另有 `429`（每來源 IP 每分鐘 10 次、burst 5；Docker Desktop 下實為全體共用一桶，見「注意事項」）。
 - LLM 限流：worker 在**取得去重鎖且 cache 仍未命中**、真的要打 LLM 時，才對 Redis 固定窗 `ai-rpm:<分鐘序號>` 計數；超過 `AI_RPM`（預設 8）即 `moveToDelayed` 延後到下一窗（不消耗 attempts）；延後（含重試退避）期間 api 把 QueueEvents 的 `delayed` 以 `job/status: waiting` 轉發並每 15 秒補送一次，前端 45 秒無進展 watchdog 不會把仍在排隊的 job 誤判為逾時。cache 命中與等待他人結果的 job 不吃額度——這取代了先前只能計 job 啟動數的 BullMQ limiter。`WORKER_CONCURRENCY`（預設 2）與限流是獨立維度。
-- `attempts`（預設 3）+ 指數退避；單次 AI streaming 以 `AbortSignal.timeout(AI_TIMEOUT_MS)`（預設 **30 秒**）**真正中止**底層串流，逾時後不再有殭屍 token。非最終嘗試的失敗**不**送 `ai/error`（只交 BullMQ 重試），最終嘗試或不可重試錯誤（金鑰無效、請求格式錯）才送；所有 `ai/*` 事件帶 `attempt`，前端換輪即清空串流文字；worker 崩潰後 stalled 重派不遞增 `attempt`，前端以同一輪再收到 `seq` 0 判定為重播並同樣清空。最終失敗時 api 另送一則 `ai/error(worker_failed)` 作安全網。
+- `attempts`（預設 3）+ 指數退避；單次 AI streaming 以 `AbortSignal.timeout(AI_TIMEOUT_MS)`（預設 **30 秒**）**真正中止**底層串流，逾時後不再有殭屍 token。非最終嘗試的失敗**不**送 `ai/error`（只交 BullMQ 重試），最終嘗試或不可重試錯誤（金鑰無效、請求格式錯、空脈絡 `no_context`）才送；所有 `ai/*` 事件帶 `attempt`，前端換輪即清空串流文字；worker 崩潰後 stalled 重派不遞增 `attempt`，前端以同一輪再收到 `seq` 0 判定為重播並同樣清空。最終失敗時 api 另送一則 `ai/error(worker_failed)` 作安全網。
+- 空脈絡短路：worker 組完脈絡後，若**窗口內無 telemetry、最近一筆 state 為 `unknown`（從未有遙測）、窗口內無 errorlog、也無維修紀錄**，直接送 `ai/error(no_context)`——不查快取、不取鎖、不吃 `AI_RPM` 額度、**不打 LLM**，且不可重試（`UnrecoverableError`，第一次嘗試即通知前端；trigger 照常補寫）。典型來源是不存在的 `machineId`；名冊內持續有遙測的機台不會觸發。
 - worker 崩潰／停擺時，API 與即時通道**不崩潰**；worker 恢復後積壓任務可被消化。
 
 ### 💰 5. Cache-aside + dedupe lock（成本守門）
 
 - worker 呼叫 LLM **前**先以「機台／當前嚴重度／近期錯誤類型／prompt 版本（worker 的 `PROMPT_VERSION`）／provider id＋模型」組出的簽章查 Redis 快取（`Cache before API`，憲章硬規則 #5）；快取讀回一律 `safeParse`，不合 schema 即刪除並視為 miss。
 - 命中直接回傳並標 `cached: true`，**不呼叫 LLM、不重複寫入 `diagnoses`**（只記一筆輕量觸發稽核，`diagnosisTriggers` 保留 30 天）。
-- 同簽章以 `ai-lock:<sig>`（具過期時間、`randomUUID` 鎖值、Lua compare-and-del 只刪自己的鎖）去重：同情境同時湧入多筆，**只有一筆真正打 LLM**，等待者搶到鎖後會**再查一次 cache** 才決定是否呼叫；啟動時驗證 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS`，確保鎖不會比 LLM 呼叫先過期。持鎖者逾時／崩潰不會讓後續永久卡死。
+- 同簽章以 `ai-lock:<sig>`（具過期時間、`randomUUID` 鎖值、Lua compare-and-del 只刪自己的鎖）去重：同情境同時湧入多筆，**只有一筆真正打 LLM**，等待者搶到鎖後會**再查一次 cache** 才決定是否呼叫；啟動時驗證 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`（5 秒餘裕），確保鎖不會比 LLM 呼叫先過期。持鎖者逾時／崩潰不會讓後續永久卡死。
 - 寫入順序為**先 insert `diagnoses`（`jobId` unique）再寫 cache**：寫 cache 失敗而重試時，第二次 insert 撞 unique 即視為成功，不會出現「命中快取但診斷從未落庫」。
 
 ### ✅ 6. Schema 驗證的 AI 輸出 + LLM provider 抽象
@@ -357,11 +358,11 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | `job/status` | api → web | 診斷任務狀態（`waiting`／`active`／`completed`／`failed` + `progress`） |
 | `ai/token` | api → web | **串流** AI token 區塊（`seq` 保序、逐段 append；帶 `attempt`，換輪或同輪 `seq` 重回 0 即清空） |
 | `ai/done` | api → web | 最終診斷結果（含 `cached` 旗標、`attempt` 與通過驗證的 `result`；前端再驗一次 schema） |
-| `ai/error` | api → web | AI 供應商／worker 錯誤（`code` + 可讀 `message` + `attempt`）；只在最終嘗試或不可重試時送出，api 對最終失敗另補一則 `worker_failed` 作安全網 |
+| `ai/error` | api → web | AI 供應商／worker 錯誤（`code` + 可讀 `message` + `attempt`）；只在最終嘗試或不可重試時送出，api 對最終失敗另補一則 `worker_failed` 作安全網；空脈絡（無遙測／errorlog／維修紀錄）時 worker 不打 LLM、直接送 `no_context` |
 | `ping` / `pong` | 雙向 | 應用層心跳；`pong` 逾時即 close 觸發重連，並由 RTT 導出延遲 ms |
 | `system/connected` | api → web | 連線確認並派發 `clientId`（重連即換新，用於收尾中斷任務） |
 | `system/unauthorized` | api → web | 訂閱授權失敗（`WS_AUTH_SECRET` 不符） |
-| `system/metrics` | api → web | **009**：週期廣播的營運指標摘要（queue 深度、WS 連線數、worker 端 LLM latency／cache 命中率），廣播給所有已連線 client、與訂閱狀態無關；供 dev-only Metrics Panel 消費 |
+| `system/metrics` | api → web | **009**：週期廣播的營運指標摘要（queue 深度、WS 連線數、worker 端 LLM latency／cache 命中率），廣播給所有已連線 client、與訂閱狀態無關；供 dev-only Metrics Panel 消費。另有 optional `persist: { dropped, failed }`——api 啟動以來累計的歷史寫入遺失紀錄數與 `insertMany` 失敗批數（舊版 api 不帶，讀者須容忍缺席） |
 
 > 所有 WS 訊息都以 `packages/contracts` 的 Zod schema 定義、型別由 `z.infer` 推導（憲章 Principle III）。需 runtime 驗證的 payload 在入口 `safeParse`——來自任意連線者的客戶端控制訊息（`ClientControlMessageSchema`：`ping`、`machine/subscribe`）、`DiagnosisResult`、`AiStreamEvent`、`JobStatus`、`WorkerMetrics`；伺服器→客戶端的純分派控制訊息（`pong`／`system/*`）與高頻的 `machine/data` 則只用 schema 做漂移比對，runtime 走手寫守衛或 `switch(type)` 分派。契約全貌另見 [`asyncapi.yaml`](asyncapi.yaml)（`info.version` 1.1.0，共 12 個 channel），並由 `asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
 
@@ -521,7 +522,7 @@ flow-gatekeeper/
 
 **前置需求**：Node.js 22（版本以 repo 根的 `.nvmrc` 為準，root `engines` 要求 `>=22.12`（Vite 7 的最低需求）；用 nvm／fnm 可直接讀它）、pnpm 10（`packageManager` 釘選 `pnpm@10.34.5`）、Docker Desktop（跑 Redis 7 + MongoDB 7）、一組 Gemini API key（選用，僅診斷會用到；留空也能跑，見「[注意事項](#注意事項)」）。
 
-> PATH 上沒有 `pnpm` 時，先執行一次 `corepack enable`（Node 內建，依 root `package.json` 的 `packageManager` 取得對應 pnpm），或以 `corepack pnpm <指令>` 代替 `pnpm <指令>`。
+> PATH 上沒有 `pnpm` 時，先執行一次 `corepack enable`（Node 內建，依 root `package.json` 的 `packageManager` 取得對應 pnpm）。`corepack pnpm <指令>` 只適用於**單一套件**指令（如 `corepack pnpm --filter @flow-gatekeeper/api test`、`corepack pnpm -r test`）；root 的 `check`／`lint`／`typecheck`／`test`／`build` 內部會再呼叫 `pnpm`，而 pnpm 執行 script 時**不會**把自己加進 PATH，未 `corepack enable` 時會以「`pnpm` 不是內部或外部命令」失敗——此時改用 `corepack pnpm -r <script>`，或先 `corepack enable`。`scripts/dev-up.ps1` 同樣呼叫裸 `pnpm`，執行前也要先 `corepack enable`。
 
 ```powershell
 # 1) 安裝所有 workspace（乾淨 clone 不需先 build packages：typecheck／test／worker、web dev 經 exports 的
@@ -577,7 +578,8 @@ Copy-Item apps/worker/.env.example   apps/worker/.env
 docker compose --profile demo up -d --build
 #   ⚠ 首次啟動需建置三個映像，視網路與機器約需數分鐘——這是預期行為，不是卡住
 #   ⚠ Dockerfile 使用 RUN --mount=type=cache，需 BuildKit；舊版 Docker 請先設 $env:DOCKER_BUILDKIT=1
-#   → 對外入口仍是 8080（web 容器內改由非 root 的 nginx 監聽 8080，compose 對映 8080:8080）
+#   → 對外入口仍是 8080（web 容器內改由非 root 的 nginx 監聽 8080），預設只綁 127.0.0.1；
+#     要讓同網段其他機器連進來示範，先 $env:WEB_BIND="0.0.0.0"（或寫進 repo 根 .env）再 up（見「注意事項」）
 
 # 3) 判讀「全部就緒」（見下），然後開單一入口
 #   http://localhost:8080
@@ -649,19 +651,22 @@ api 或 worker 連續快速失敗（如設定錯誤導致啟動即崩潰）時�
   docker compose logs <服務名>       # 看崩潰原因
   ```
 - **復原手段**：先排除故障根因，再 `docker compose --profile demo up -d <服務名>` 重新拉起（重建容器並歸零重試計數；容器成功運行超過 10 秒後 Docker 也會自動重置失敗計數）。
+- **worker 致命注入演練（`WORKER_CHAOS`）在容器內需另設 `WORKER_CHAOS_ALLOW_IN_PRODUCTION=true`**：worker 映像內建 `NODE_ENV=production`，chaos 守衛在 production 預設拒絕武裝（只記一則 error）。演練時於 `apps/worker/.env` 同時設 `WORKER_CHAOS=uncaught`（或 `rejection`）、`WORKER_CHAOS_AT=job`（或 `startup`）與 `WORKER_CHAOS_ALLOW_IN_PRODUCTION=true`，`docker compose --profile demo up -d worker` 重建；**演練後三個變數都清空**再重建。劇本見指南 §16.3 第 5 列與 `specs/007-worker-process-supervision/quickstart.md` 場景 3／4；變數語意見下方「環境變數」表。
 - **要演練「崩潰自癒」給人看**：MUST 用 **in-process kill** 觸發真實崩潰——`docker exec <api 容器名> pkill -KILL -f "dist/main.js"`。**不要用 `docker kill <容器>`**：那是「經 daemon 對容器下的手動停止」，Docker 會抑制所有 restart policy，容器停在 `exited` 不會自動重啟（只有行程自身非零退出才算 failure）。
 
 ### 注意事項
 
 - **兩模式擇一運行、不要混跑**：`redis`／`mongo` 為兩模式共用，同時啟動兩模式會使資料層互相干擾、演練與驗收不可判讀（8080 與 5173 雖不互撞，但那不是安全的理由）。切換時先 `docker compose --profile demo down` 再走另一軌。
 - **Redis／Mongo 只綁 `127.0.0.1`**：`docker-compose.yml` 把 `6379`／`27017` 發佈在 `127.0.0.1`，同網段其他主機連不到（兩者預設皆無認證）。
+- **demo 入口 8080 預設也只綁 `127.0.0.1`**：demo 無認證（`.env.demo` 的 `WS_AUTH_SECRET`／`WS_ALLOWED_ORIGINS` 刻意留空），綁所有介面等於把監控台與會打 LLM 的 `POST /diagnoses` 交給同網段任何人。要對外示範時在 host shell 或 repo 根 `.env` 設 `WEB_BIND=0.0.0.0` 再 `up`；示範完移除。nginx 另對 `/diagnoses` 以來源 IP 限流（每分鐘 10 次、可瞬間多 5 次，超過回 `429`），作為無認證時的配額煞車。注意「來源 IP」是 nginx 看到的位址：Docker Desktop（Windows／macOS）或啟用 userland-proxy 時，所有連線的來源都是 docker gateway，實際上是**全體共用同一個 10 r/m 桶**——`WEB_BIND=0.0.0.0` 多人同時示範會互相卡到 429；只有 Linux 直連（iptables DNAT、保留原始來源 IP）時才是真正的每 IP 限流。
+- **infra 自動回復**：redis／mongo 為 `restart: unless-stopped`——被 OOM kill 或意外退出會自動拉起，手動 `docker compose stop` 則維持停止（故障演練不受影響）。web 以 `service_healthy` 等 api 就緒才啟動。
 - **啟用 Redis 認證（選用）**：在 repo **根目錄 `.env`** 設 `REDIS_PASSWORD=<值>`——compose 讀它並以 `--requirepass` 啟動 redis，redis 健康探針以 `REDISCLI_AUTH` 同步帶密碼；兩種模式（開發模式的 `docker compose up -d` 與 demo）都適用。啟用後 **api 與 worker 都讀 `REDIS_PASSWORD`**，`apps/api/.env`（demo 為 `apps/api/.env.demo`）與 `apps/worker/.env` MUST 填同一個值——三處不一致時佇列與 `/healthz` 一起失效：只設 `apps/*/.env` 而根 `.env`／shell 沒設 → redis 未啟用認證，api／worker 對無密碼 Redis 送 AUTH 被拒；反之 shell 裡殘留同名全域變數（或根 `.env` 有值）而 app 端留空 → redis 悄悄啟用認證，api／worker 全部 NOAUTH。（根 `.env` 只給 compose 插值用，app 行程不讀它；已知取捨：密碼會出現在 redis 容器的行程參數中。）
 - **資源上限與日誌輪替**：demo 各服務有記憶體／CPU 上限（redis 384m、mongo 1g、api 512m、worker 512m、seed 256m、web 128m），日誌每服務 10MB × 3 輪替；redis `maxmemory 256mb`＋`noeviction`，滿載時寫入報錯（顯性浮現），不會悄悄淘汰 BullMQ 的 key。
 - **依賴就緒順序**：redis／mongo 各有 healthcheck（mongo `start_period` 40s），api／worker／seed 以 `service_healthy` 等待——冷啟動時 api 顯示 `starting`／尚未建立屬正常，不會白白消耗 `on-failure:5` 的額度。
-- **連接埠被佔用**：入口 `8080`（或 `6379`／`27017`）已被 host 上其他行程佔用時，compose 會以 **bind 失敗訊息指名該埠**中止——改 `docker-compose.yml` 的 `ports` 一行即可（前端走同源相對路徑，改埠不需重建映像）。
+- **連接埠被佔用**：入口 `8080`（或 `6379`／`27017`）已被 host 上其他行程佔用時，compose 會以 **bind 失敗訊息指名該埠**中止——改 `docker-compose.yml` 的 `ports` 一行即可（只改中間的 host 埠；前端走同源相對路徑，改埠不需重建映像）。
 - **祕密缺漏（`GEMINI_API_KEY` 留空）**：**任何環境**（開發模式與 demo 容器皆同）都允許留空，全棧**照常啟動、不擋任何服務**，worker 啟動時只記一則 warn；遙測、背壓比值、監督與可觀測性都正常，僅 AI 診斷失敗——每筆診斷**立即**以 `provider_error` 失敗、**不重試**（不會白等 3 輪退避），畫面訊息會**指名金鑰**（「AI 服務金鑰無效或未授權——請確認 `apps/worker/.env` 的 `GEMINI_API_KEY`…」），而非通用失敗語。這是刻意設計，讓沒有 Gemini 帳號的評估者仍看得到系統跑起來。
-- **設定錯誤即拒絕啟動（fail-fast）**：api 與 worker 啟動時以 Zod 驗證環境變數——數值變數**留空＝套用預設**，但設成 0、負數、小數或非數字即列出錯誤並以非零碼結束（worker 另驗 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS`）。demo 容器因此會進入 `restart: on-failure:5` 並在 5 次後停止，`docker compose logs <服務名>` 可看到是哪個變數錯。（009 的 `LOG_LEVEL`／`METRICS_INTERVAL_MS`／`HEALTH_PROBE_TIMEOUT_MS` 維持「回退預設＋warn」語意，不在此列。）
-- **`POST /diagnoses` 的回應碼**：`201` 已入列；`400` body 不符契約（只回 issue 路徑與代碼，不回顯原始輸入）；`415` Content-Type 不是 `application/json`；`409` 同一 `jobId` 已用於另一台機台、或該 `jobId` 已入列過而綁定已失效（請以新 `jobId` 重發）；`503` 入列逾時（5 秒）或 Redis 不可用。同 `jobId` 重送且綁定仍在時回同一結果、**不改綁**到新連線。手動測試時 `socketId` 必須是 uuid（例如 `00000000-0000-4000-8000-000000000000`），沒有對應連線時串流無人接收，但 job 照跑、照樣落庫與進快取。
+- **設定錯誤即拒絕啟動（fail-fast）**：api 與 worker 啟動時以 Zod 驗證環境變數——數值變數**留空＝套用預設**，但設成 0、負數、小數或非數字即列出錯誤並以非零碼結束（例外：`AI_TEMPERATURE` 為 0–2 的實數，接受小數與 0，超出範圍才拒絕；worker 另驗 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`）。demo 容器因此會進入 `restart: on-failure:5` 並在 5 次後停止，`docker compose logs <服務名>` 可看到是哪個變數錯。（009 的 `LOG_LEVEL`／`METRICS_INTERVAL_MS`／`HEALTH_PROBE_TIMEOUT_MS` 維持「回退預設＋warn」語意，不在此列。）
+- **`POST /diagnoses` 的回應碼**：`201` 已入列；`400` body 不符契約（只回 issue 路徑與代碼，不回顯原始輸入）；`404` `machineId` 格式合法但不在名冊（`mixer-01`、`press-02`、`pack-03`、`oven-04`、`sorter-05`），不入列；`415` Content-Type 不是 `application/json`；`409` 同一 `jobId` 已用於另一台機台、或該 `jobId` 已入列過而綁定已失效（請以新 `jobId` 重發）；`503` 入列逾時（5 秒）或 Redis 不可用；經一鍵 demo 的 nginx 入口時另有 `429`——nginx 對 `/diagnoses` 以來源 IP 限流 10 r/m、burst 5，超限直接回 429、不到 api。同 `jobId` 重送且綁定仍在時回同一結果、**不改綁**到新連線。手動測試時 `socketId` 必須是 uuid（例如 `00000000-0000-4000-8000-000000000000`），沒有對應連線時串流無人接收，但 job 照跑、照樣落庫與進快取。
 - 環境設定於**執行時**由 compose `env_file` 注入，祕密不烘入 image。demo 的 api／seed 讀 **`apps/api/.env.demo`**（與 host 軌道 A 的 `apps/api/.env` 刻意分開，避免 dev 的 `WS_AUTH_SECRET`／`API_PORT` 滲入 demo）；worker 讀 `apps/worker/.env`。拓樸關鍵值 `API_PORT`（釘 3000，與 nginx 反代目標對齊）、`REDIS_HOST`／`MONGO_URL`（容器網路位址）由 compose `environment` 覆蓋釘死、不受 env 檔漂移；worker 另釘 `WORKER_INSTANCE_ID=""`（一律用 hostname，多副本共用 `apps/worker/.env` 也不會撞 id）與 `LOG_PRETTY=false`（映像不含 pino-pretty）；host 直跑照舊用 `.env` 的 `127.0.0.1`，兩模式互不干擾。
 - **致命錯誤語意（let it crash）**：行程遇非預期致命錯誤（api／worker 的 `uncaughtException`／`unhandledRejection`）會**同步**寫出一則明確標示「致命」的訊息後**立即 `exit(1)`**，由監督者以乾淨行程重啟。開發模式下沒有監督者——行程停在等待檔案變更，需修改檔案或手動重啟；這是文件化的已知差異，不是 bug。
 
@@ -669,30 +674,36 @@ api 或 worker 連續快速失敗（如設定錯誤導致啟動即崩潰）時�
 
 ## 環境變數
 
-env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**唯一例外**是 `REDIS_PASSWORD`——`docker compose` 會從 host shell 或根目錄 `.env` 插值讀取，用來啟用 Redis 認證，見「[注意事項](#注意事項)」）：`apps/api/.env` 由 `apps/api/src/main.ts` 明確載入本層檔、`apps/worker/.env` 由 worker 以 `dotenv/config`（cwd）載入本層檔、`apps/web/.env` 由 Vite 以 `apps/web/` 為 env 根目錄載入（**僅** `VITE_METRICS_PANEL` 這一個開關，前端仍不持有任何祕密）。各處以其 `.env.example` 為準：
+env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外**是 `REDIS_PASSWORD` 與 `WEB_BIND`——`docker compose` 會從 host shell 或根目錄 `.env` 插值讀取，分別用來啟用 Redis 認證與決定 demo 入口的綁定位址，見「[注意事項](#注意事項)」）：`apps/api/.env` 由 `apps/api/src/main.ts` 明確載入本層檔、`apps/worker/.env` 由 worker 以 `dotenv/config`（cwd）載入本層檔、`apps/web/.env` 由 Vite 以 `apps/web/` 為 env 根目錄載入（**僅** `VITE_METRICS_PANEL` 這一個開關，前端仍不持有任何祕密）。各處以其 `.env.example` 為準：
 
 | 變數 | 所在 app | 預設 | 說明 |
 | --- | --- | --- | --- |
 | `API_PORT` | api | `3000` | API / Gateway 埠（web 埠 5173 由 vite 決定） |
 | `REDIS_HOST` / `REDIS_PORT` | api · worker | `127.0.0.1` / `6379` | BullMQ / cache / Pub/Sub（連線分離） |
 | `REDIS_PASSWORD` | api · worker · **root `.env`（compose）** | *(空)* | Redis `requirepass`；留空＝未啟用。在 repo 根 `.env` 設值即由 compose 以 `--requirepass` 啟用 Redis 認證（健康探針同步帶密碼）；啟用後 **api（`apps/api/.env` 或 `.env.demo`）與 worker（`apps/worker/.env`）必須填同一個值**，三處一致 |
+| `WEB_BIND` | **root `.env`（compose）** | `127.0.0.1` | 一鍵 demo 入口 8080 的 host 綁定位址（compose 插值，與 `REDIS_PASSWORD` 同樣讀 host shell 或 repo 根 `.env`）；要讓同網段其他機器連進來示範時設 `0.0.0.0`。demo 無認證，示範完請移除 |
 | `REDIS_COMMAND_TIMEOUT_MS` | worker | `5000` | cache／pub 一般指令逾時；Redis 斷線時命令在此時間內 reject，job 才走錯誤與重試路徑 |
 | `MONGO_URL` / `MONGO_DB` | api · worker | `mongodb://127.0.0.1:27017/flow-gatekeeper` / `flow-gatekeeper` | 歷史層與診斷持久化；**資料庫名以 `MONGO_DB` 為準**（`MONGO_URL` 路徑中的 db 名不被採用） |
 | `WS_AUTH_SECRET` | api | *(空)* | 即時通道訂閱授權；**本機 live 驗收留空** → 前端免 token 訂閱 |
 | `WS_ALLOWED_ORIGINS` | api | *(空)* | WS upgrade 的 Origin 白名單（逗號分隔，**不要寫預設 port**）；留空＝不檢查；無 Origin 的非瀏覽器 client 一律放行，不在清單內的瀏覽器 upgrade 回 403 |
-| `WS_HEARTBEAT_MS` | api | `15000` | 伺服器端心跳探活間隔 |
-| `MOCK_TELEMETRY_INTERVAL_MS` | api | `50` | 遙測產生節拍（拉到 5ms 可把吞吐放大 ~10×；單次量測示例：26 秒收近 1.9 萬筆而僅批次渲染約 1,600 次，實際數字隨機器與幀率而異） |
-| `TELEMETRY_TTL_SECONDS` | api | `604800` | 時序遙測保存期（7 天，可調小做 demo）；collection 已存在時以 `collMod` 更新，改值重啟即生效 |
+| `WS_HEARTBEAT_MS` | api | `15000` | 伺服器端心跳探活間隔；下限 1000、上限 2147483647，超出即拒絕啟動 |
+| `MOCK_TELEMETRY_INTERVAL_MS` | api | `50` | 遙測產生節拍（拉到 5ms 可把吞吐放大 ~10×；單次量測示例：26 秒收近 1.9 萬筆而僅批次渲染約 1,600 次，實際數字隨機器與幀率而異）；下限 5、上限 2147483647，超出即拒絕啟動 |
+| `TELEMETRY_TTL_SECONDS` | api | `604800`（demo 範本 `.env.demo.example` 為 `86400`） | 時序遙測保存期（dev 7 天；demo 1 天，避免長跑撐大 `mongo-data` volume）；collection 已存在時以 `collMod` 更新，改值重啟即生效 |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` | **worker** | *(空)* / `gemini-2.5-flash` | LLM provider（包在 `AiProvider` 後）；**只有 worker 需要**。任何環境皆可留空——每筆診斷立即以 `provider_error` 失敗、不重試 |
 | `AI_RPM` | worker | `8` | 每分鐘**實際 LLM 呼叫**上限（取鎖且 cache 未命中才計數的 Redis 固定窗 `ai-rpm:<分鐘>`；超過即延後到下一窗、不消耗重試次數） |
 | `WORKER_CONCURRENCY` | worker | `2` | 同時處理的 job 數（BullMQ concurrency） |
 | `WORKER_INSTANCE_ID` | worker | *(空＝hostname)* | 組成 `worker:heartbeat:<id>`／`metrics:worker:<id>`；只允許英數字與 `. _ -`（≤ 128），不合法即拒絕啟動。demo 容器由 compose 釘為空字串（一律 hostname），本值只對 host 直跑生效；同機直跑多個 worker 時才手動設不同值 |
 | `AI_CACHE_TTL_SECONDS` | worker | `600` | 診斷快取有效期 |
-| `AI_DEDUPE_LOCK_SECONDS` | worker | `45` | 同簽章去重鎖有效期；必須 `× 1000 ≥ AI_TIMEOUT_MS`，否則 worker 拒絕啟動 |
+| `AI_DEDUPE_LOCK_SECONDS` | worker | `45` | 同簽章去重鎖有效期；必須 `× 1000 ≥ AI_TIMEOUT_MS + 5000`（5 秒餘裕涵蓋結果寫入與收尾），否則 worker 拒絕啟動 |
 | `AI_TIMEOUT_MS` | worker | `30000` | 單次 AI streaming 逾時；以 `AbortSignal` 真正中止底層串流 |
+| `AI_MAX_OUTPUT_TOKENS` | worker | `2048` | Gemini `maxOutputTokens`；正整數、≤ 65536。thinking token 也計入此上限；輸出被截斷視為**不可重試**的 `schema_invalid`（重試同一 prompt 只會再被截斷） |
+| `AI_TEMPERATURE` | worker | `0.2` | Gemini 取樣溫度，範圍 0–2 |
+| `WORKER_CHAOS` | worker | *(空＝關閉)* | 故障注入型態，`uncaught`／`rejection`；非法值 warn 後視為關閉。**僅供演練**（見「崩潰迴圈防護」） |
+| `WORKER_CHAOS_AT` | worker | `startup` | 注入時點：`startup`（bootstrap 後約 2 秒，演練崩潰迴圈）／`job`（下一筆 job 處理中） |
+| `WORKER_CHAOS_ALLOW_IN_PRODUCTION` | worker | `false` | `NODE_ENV=production`（容器映像內建）時 chaos 預設拒絕武裝，設 `true` 才放行；非法值 warn 後視為 `false`。容器內演練時與上兩個變數同時設，演練後三者都清空 |
 | `LOG_LEVEL` | api · worker | `info` | 結構化日誌等級（`trace`/`debug`/`info`/`warn`/`error`/`fatal`）；**無法辨識的值回退 `info` 並記一則警告**，不中止行程 |
 | `LOG_PRETTY` | api · worker | 由 `NODE_ENV` 推導 | 人類可讀輸出；dev 預設開、`NODE_ENV=production` 預設關（逐行 JSON）。設 `true`/`false` 可顯式覆寫——但**容器內無效**：`pino-pretty` 不隨映像部署，故 compose 於 worker 釘死 `LOG_PRETTY=false`，api 的 `.env.demo` 亦不帶此變數 |
-| `METRICS_INTERVAL_MS` | api · worker | `60000` | 指標摘要結算間隔；**下限 5000**，低於下限或非數值一律**回退預設 60000** 並記一則警告（不 clamp 到下限） |
+| `METRICS_INTERVAL_MS` | api · worker | `60000` | 指標摘要結算間隔；須為 **5000–2147483647 的整數**，否則一律**回退預設 60000** 並記一則警告（不 clamp 到邊界） |
 | `METRICS_LOG_LEVEL` | api · worker | `info` | 指標摘要專屬等級，**獨立於 `LOG_LEVEL`**——`LOG_LEVEL=warn` 時摘要仍會輸出 |
 | `HEALTH_PROBE_TIMEOUT_MS` | api | `2000` | `GET /healthz` 對**每個**依賴探測的獨立逾時；逾時即判該依賴 `down`（不拋錯）。留空、非數值或非正數一律**回退預設 2000** 並記一則警告（否則逾時為 0／NaN 會讓依賴恆判 `down`、端點恆 503） |
 | `VITE_METRICS_PANEL` | **web** | dev `true` / production build `false` | dev 指標面板開關（唯讀、預設收合）。⚠️ **MUST 放 `apps/web/.env`（非 repo 根 `.env`）**——`apps/web/vite.config.ts` 未設 `envDir`，Vite 的 env 根目錄是 `apps/web/`，放根目錄讀不到 |
@@ -701,7 +712,7 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**唯一�
 > **200 `healthy`**，Redis 或 Mongo 任一失聯回 **503 `unhealthy`** 且 body 逐依賴列出 `status`／
 > `latencyMs`／`error`。容器 healthcheck 即由它判定就緒。
 
-> **數值變數的驗證**：`API_PORT`／`REDIS_PORT`／`WS_HEARTBEAT_MS`／`MOCK_TELEMETRY_INTERVAL_MS`／`TELEMETRY_TTL_SECONDS`（api）與 worker 的 `AI_*`／`WORKER_CONCURRENCY`／`REDIS_COMMAND_TIMEOUT_MS` 留空＝預設、非法即拒絕啟動（fail-fast）；表中註明「回退預設」的 009 變數則維持 warn 不中止。
+> **數值變數的驗證**：`API_PORT`／`REDIS_PORT`／`WS_HEARTBEAT_MS`／`MOCK_TELEMETRY_INTERVAL_MS`／`TELEMETRY_TTL_SECONDS`（api）與 worker 的 `AI_*`／`WORKER_CONCURRENCY`／`REDIS_COMMAND_TIMEOUT_MS` 留空＝預設、非法即拒絕啟動（fail-fast）——整數變數拒絕 0、負數與小數，唯 `AI_TEMPERATURE` 接受 0–2 的小數；表中註明「回退預設」的 009 變數則維持 warn 不中止。
 
 > **祕密衛生**（憲章硬規則 #7）：只提交各處的 `.env.example`；`.env`、API key、token **絕不**進版控（`.gitignore` 已忽略所有 `.env`、放行 `.env.example`）。`GEMINI_API_KEY` 只存在於 `apps/worker/.env`。
 
@@ -767,8 +778,8 @@ specify → clarify → plan → checklist → tasks → analyze → implement �
 - **診斷結果目前沒有讀取端點**：`diagnoses` 確實落 MongoDB、結果也進 Redis 快取，但 HTTP 只有 `POST /diagnoses` 與 `GET /healthz`，前端**無法**在重連後取回某個 `jobId` 的完整結果；目前唯一的「取回」是按 Retry 重新發起，若簽章相同且快取未過期（`AI_CACHE_TTL_SECONDS`，預設 10 分鐘）會秒回並標 Cached。`GET /diagnoses/:jobId` 與重連 rebind 列為 roadmap 012（串流韌性）。
 - **Gateway 單實例**（worker 已可多實例：heartbeat／metrics key 帶實例識別、api 掃描合併）：Gateway 訂閱表與 `jobId` 路由都在行程內記憶體，目前不跨多 server 水平擴展；要擴展時訂閱表需外置 Redis、`psubscribe ai-stream:*` 需改精準 channel subscribe（見 [ADR-002 §6.1](docs/adr-002-productionization-scope.md)、ADR-001 §6）。
 - **AI token 串流為 at-most-once**：Redis Pub/Sub 是 fire-and-forget，Gateway 重啟或前端斷線期間的 token 會永久丟失（最終診斷結果仍會落 MongoDB 與快取，但如上一條所述目前沒有讀取端點，斷線的那一方看不到它，只能 Retry）；升級路徑為 Redis Streams + consumer group 續傳，見 [ADR-002 §6.2](docs/adr-002-productionization-scope.md)。
-- **REST 診斷入口開發階段免授權**：`POST /diagnoses` 無身分驗證與 rate limit（已有 Zod 輸入驗證、只收 `application/json` 以強制跨站請求先過 CORS preflight、jobId 冪等）；即時通道訂閱仍走 `WS_AUTH_SECRET`（本身也只是靜態共享字串，非正式 JWT/OIDC），另有可選的 Origin 白名單。正式環境的 REST 認證與握手階段驗證升級不在範圍，見 [ADR-002 §6.3](docs/adr-002-productionization-scope.md)。
-- **telemetry 丟棄計數尚未進 `system/metrics`**：Mongo 故障時的 `droppedPoints`／`failedPoints`／`droppedErrorLogs` 目前只出現在（30 秒節流的）api error log，Metrics Panel 看不到。
+- **REST 診斷入口開發階段免授權**：`POST /diagnoses` 無身分驗證；rate limit 只在一鍵 demo 的 nginx 入口（每來源 IP 10 r/m、burst 5，超限回 `429`；Docker Desktop 下實為全體共用一桶，見「注意事項」），開發模式直連 api 時沒有（已有 Zod 輸入驗證、只收 `application/json` 以強制跨站請求先過 CORS preflight、jobId 冪等）；即時通道訂閱仍走 `WS_AUTH_SECRET`（本身也只是靜態共享字串，非正式 JWT/OIDC），另有可選的 Origin 白名單。正式環境的 REST 認證與握手階段驗證升級不在範圍，見 [ADR-002 §6.3](docs/adr-002-productionization-scope.md)。
+- **telemetry 丟棄計數**：已以 `system/metrics` 的 optional `persist: { dropped, failed }`（api 啟動以來累計）廣播；逐類明細（`droppedPoints`／`failedPoints`／`droppedErrorLogs`）仍只出現在（30 秒節流的）api error log。
 - **示範機台固定為 5 台**：`mixer-01`、`press-02`、`pack-03`、`oven-04`、`sorter-05`；遙測由 mock producer 以決定性規律產生（含週期性 warning/critical 尖峰），以滿足可重播驗收。
 - **可觀測性僅止於基線**：只有結構化日誌 + `/healthz` + 指標入 log／廣播，沒有 Prometheus/Grafana 儀表板、沒有 tracing、沒有告警規則——這些刻意不做，理由見 [ADR-002 §7](docs/adr-002-productionization-scope.md)。
 
