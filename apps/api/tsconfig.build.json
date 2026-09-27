@@ -7,5 +7,5 @@
     // contracts 與 shared（兩者皆用各自的 tsconfig.build.json），不經巢狀 pnpm——PATH 只有 corepack 時也能跑。
     "customConditions": []
   },
-  "exclude": ["src/**/*.test.ts", "src/**/*.check.ts"]
+  "exclude": ["src/**/*.test.ts", "src/**/*.check.ts", "src/**/test-support/**"]
 }

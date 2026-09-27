@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { Logger } from "@nestjs/common";
+import { silenceNestLogger } from "../test-support/nest-logger.js";
 import { MongoClient } from "mongodb";
 import type { Db } from "mongodb";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -32,7 +32,7 @@ type IndexInfo = { name?: string; key: Record<string, unknown>; expireAfterSecon
 
 describe.runIf(process.env.FG_INTEGRATION === "1")("HistoryService TTL 維護 × 真 Mongo（整合）", () => {
   let client: MongoClient;
-  let originalLogger: unknown;
+  let restoreLogger: () => void = () => undefined;
   const dbNames: string[] = [];
 
   function freshDbName(): string {
@@ -66,9 +66,7 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("HistoryService TTL 維護 ×
 
   beforeAll(async () => {
     // Nest Logger 的 log／warn 在此只是雜訊；斷言一律讀回 Mongo 實際狀態。
-    // overrideLogger(false) 會把 staticInstanceRef 設為 undefined；afterAll 以原值還原（只設 logLevels 還原不了）。
-    originalLogger = Reflect.get(Logger, "staticInstanceRef");
-    Logger.overrideLogger(false);
+    restoreLogger = silenceNestLogger();
     client = new MongoClient(MONGO_URL, { serverSelectionTimeoutMS: 3000 });
     try {
       await client.connect();
@@ -88,7 +86,7 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("HistoryService TTL 維護 ×
       for (const name of dbNames) await client.db(name).dropDatabase();
     } finally {
       await client?.close();
-      Reflect.set(Logger, "staticInstanceRef", originalLogger);
+      restoreLogger();
     }
   });
 

@@ -1,4 +1,4 @@
-import { compose, listContainers, PROJECT } from "./compose.js";
+import { compose, PROJECT } from "./compose.js";
 
 /**
  * e2e 全域生命週期：起一組乾淨的全棧（build → up --wait），所有場景跑完後 `down -v`。
@@ -24,10 +24,9 @@ async function down(): Promise<void> {
 export async function setup(): Promise<void> {
   if (!process.env.E2E) return;
 
-  // 無條件 down -v：容器已移除、volume 仍在時（例如 E2E_KEEP 後手動 down 未加 -v），listContainers()
-  // 看不到殘留，redis（appendonly）的舊診斷 cache 卻會讓場景 1 直接命中 cache。
-  const leftovers = (await listContainers()).length;
-  log(leftovers > 0 ? `偵測到 ${PROJECT} 殘留容器，先 down -v 清掉` : `先 down -v 清掉 ${PROJECT} 可能殘留的 volume`);
+  // 無條件 down -v：容器已移除、volume 仍在時（例如 E2E_KEEP 後手動 down 未加 -v），redis（appendonly）
+  // 的舊診斷 cache 會讓場景 1 直接命中 cache；不先查殘留（多一次 compose 呼叫卻不改變行為）。
+  log(`先 down -v 清掉 ${PROJECT} 可能殘留的容器／volume`);
   await down();
 
   log("build 映像（worker／api／web，標記 :e2e）…");

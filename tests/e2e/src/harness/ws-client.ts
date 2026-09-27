@@ -65,13 +65,13 @@ export class E2eClient {
 
   private constructor(private readonly ws: WebSocket) {
     ws.on("message", (data: RawData) => this.onMessage(data));
+    // 常駐 error listener 從建構起就在：沒有 listener 時 EventEmitter 會直接 throw（未捕捉例外讓 vitest worker 崩潰）。
+    // ws 在 error 之後必定接著 emit close，waiter 的失敗由 watchClose 的 close handler 統一處理。
+    ws.on("error", () => undefined);
   }
 
-  /** open 之後才掛：連線中途被關（api 重啟、nginx 斷線）時讓所有 pending waiter 立即失敗並帶上 code／reason。 */
+  /** 連線中途被關（api 重啟、nginx 斷線）時讓所有 pending waiter 立即失敗並帶上 code／reason。 */
   private watchClose(): void {
-    // 常駐 error listener：沒有 listener 時 EventEmitter 會直接 throw（未捕捉例外讓 vitest worker 崩潰）。
-    // ws 在 error 之後必定接著 emit close，waiter 的失敗由下方 close handler 統一處理。
-    this.ws.on("error", () => undefined);
     this.ws.on("close", (code: number, reason: Buffer) => {
       this.closedReason = `WebSocket 已關閉（code ${code}${reason.length > 0 ? `，reason: ${reason.toString("utf8")}` : ""}）`;
       const pending = this.waiters;
@@ -84,17 +84,21 @@ export class E2eClient {
   static async connect(timeoutMs = 10_000): Promise<E2eClient> {
     const ws = new WebSocket(WS_URL);
     const client = new E2eClient(ws);
+    // 握手階段也要有逾時：nginx 收了 TCP 但 upstream 不回 upgrade 時 open／error 都不會觸發，
+    // 沒有計時器就會掛到 vitest 逾時且 socket 不會被 terminate。
     await new Promise<void>((resolve, reject) => {
-      const onOpen = () => {
-        ws.off("error", onError);
+      const timer = setTimeout(() => {
+        ws.terminate();
+        reject(new Error(`WebSocket 握手逾時（${timeoutMs} ms）：${WS_URL}`));
+      }, timeoutMs);
+      ws.once("open", () => {
+        clearTimeout(timer);
         resolve();
-      };
-      const onError = (err: Error) => {
-        ws.off("open", onOpen);
+      });
+      ws.once("error", (err: Error) => {
+        clearTimeout(timer);
         reject(err);
-      };
-      ws.once("open", onOpen);
-      ws.once("error", onError);
+      });
     });
     client.watchClose();
     try {

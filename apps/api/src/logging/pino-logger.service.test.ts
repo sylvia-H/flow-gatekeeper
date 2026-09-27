@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { overrideNestLogger } from "../test-support/nest-logger.js";
 import { Logger } from "@nestjs/common";
 import type { FlowLogger } from "@flow-gatekeeper/shared/logging";
 import { PinoLoggerService } from "./pino-logger.service.js";
@@ -33,12 +34,11 @@ function setup() {
  * 跑完還原原本的 static instance，避免影響同檔其他測試。
  */
 function withNestLogger(service: PinoLoggerService, run: () => void): void {
-  const original: unknown = Reflect.get(Logger, "staticInstanceRef");
-  Logger.overrideLogger(service);
+  const restore = overrideNestLogger(service);
   try {
     run();
   } finally {
-    Reflect.set(Logger, "staticInstanceRef", original);
+    restore();
   }
 }
 
