@@ -22,7 +22,11 @@ import { writeSync } from "node:fs";
  * pino 的寫入同樣是非同步的，改用它會直接破壞上述保證；MUST NOT 被後續 review 當作漏改而修正。
  */
 
-export type FatalKind = "uncaughtException" | "unhandledRejection";
+/**
+ * `invalidConfig`：bootstrap 最前面的 env 驗證失敗。此時 logger 尚未建立（LOG_* 也可能正是
+ * 出錯的變數），沿用同一條同步 stderr 路徑最可靠；exit 1 讓監督者語意與其他致命事件一致。
+ */
+export type FatalKind = "uncaughtException" | "unhandledRejection" | "invalidConfig";
 
 /** 純函式：組致命訊息（不含 `[worker] ` 前綴，前綴由 log 層統一）。 */
 export function formatFatal(kind: FatalKind, value: unknown): string {

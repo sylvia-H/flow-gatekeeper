@@ -1,6 +1,7 @@
 import "dotenv/config";
 import IORedis from "ioredis";
-import { redisConnectionOptions } from "./redis.js";
+import { bullmqConnectionOptions } from "./redis.js";
+import { parseRedisEnv } from "./lib/env-schema.js";
 import { HEARTBEAT_KEY, isHeartbeatFresh } from "./lib/heartbeat.js";
 
 /**
@@ -16,7 +17,8 @@ const WATCHDOG_MS = 4000;
 setTimeout(() => process.exit(1), WATCHDOG_MS);
 
 const redis = new IORedis({
-  ...redisConnectionOptions(),
+  // 探針只驗 Redis 子集：Redis 設定不合法本身就代表不健康（parse 拋錯 → 浮空例外 → 非零退出）。
+  ...bullmqConnectionOptions(parseRedisEnv(process.env)),
   connectTimeout: 3000,
   maxRetriesPerRequest: 1,
   retryStrategy: () => null, // 短命探針不重連：失敗即判不健康
