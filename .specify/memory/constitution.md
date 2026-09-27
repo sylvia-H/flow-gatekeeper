@@ -1,6 +1,57 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.4.1 → 1.5.0
+Rationale: (1) Principle III 的「型別來源分層」已過時——自 fix/20260927-research-review 與
+upgrade/20260927-tech-stack 起，packages/contracts 的 12 則 WS message（machine/subscribe、
+machine/data、job/status、ai/token、ai/done、ai/error、ping、system/connected、
+machine/subscribed、pong、system/unauthorized、system/metrics）全部以 Zod schema 定義、型別由
+z.infer 推導，且 packages/contracts/src/asyncapi-drift.test.ts 的覆蓋率測試要求 asyncapi 每則
+message 都有對應 Zod schema 做結構比對；照舊文「控制訊息 MAY 直接以 TS 型別定義」退回手寫 TS
+會讓該測試失敗。保留「型別來源分層」小標（specs/003、009 的工件以此名引用），內容改為：全部 WS
+message（現 12 則）與 POST /diagnoses 的 request／成功 response MUST 以 Zod 定義於 contracts、
+型別由 z.infer 推導，WS message MUST 納入 asyncapi 漂移比對；明列三個例外——(a) GET /healthz
+回應為 api 內部型別、不進契約；(b) Nest 產生的 HTTP 錯誤 body 不另定 schema，錯誤碼語意 MUST 記於
+asyncapi／CHANGELOG；(c) 非 WS／HTTP 的跨 process 傳輸型別（BullMQ job data 等）SHOULD 以 Zod
+定義並在消費端 safeParse。runtime 是否 safeParse 依來源信任度決定。移除 1.4.1 賦予的 MAY 屬收緊；
+依收斂後範圍現況合規，例外 (c) 的 DiagnosisJobPayload 仍為 TS 型別，追蹤於 roadmap 010-lite
+（第二輪報告 CT-8）。依版本政策與 Governance 擴充一併以 MINOR 處理。
+(2) Governance 新增兩條 MUST（第二輪審查 DOC-C1／C3／D13）：跨 feature／跨分支決策 MUST 在
+該分支收尾前回補真實來源（README／指南／ADR／CHANGELOG），Agent memory 不算落地——由
+CLAUDE.md 提升至憲章層，並把適用範圍從「SDD 流程任一階段」擴充到 fix／upgrade／docs 維護分支；
+契約變更 MUST 升 asyncapi.yaml info.version 並記 CHANGELOG，release 前 MUST 通過此檢查。
+屬新增治理規則、實質擴充指引，依版本政策以 MINOR（1.5.0）處理。
+
+Modified principles:
+- III. 契約優先與全棧型別安全 — 「型別來源分層」改寫（小標保留）：WS message 與 POST /diagnoses
+  request／成功 response 一律 Zod + z.infer、WS message 納入漂移比對；明列例外 (a)(b)(c)；
+  runtime 驗證與否依來源信任度
+- I. 規格驅動開發 — `/speckit.implement` 寫法統一為 `/speckit-implement`（措辭，非語意）
+
+Added governance rules:
+- 真實來源回補（跨 feature／跨分支，含維護分支）
+- 契約升版與 CHANGELOG
+
+Templates requiring updates:
+- ✅ .specify/templates/plan-template.md（Constitution Check gate 為泛用，未引用 Principle III
+  舊措辭或憲章版本號，無需變更）
+- ✅ .specify/templates/spec-template.md（無 constitution 專屬內容，無需變更）
+- ✅ .specify/templates/tasks-template.md（無 constitution 專屬內容，無需變更）
+- ✅ .specify/templates/checklist-template.md（無 constitution 專屬內容，無需變更）
+- ✅ CLAUDE.md（「跨 Feature 決策 MUST 回補真實來源」註明已收錄於憲章 Governance、範圍擴及
+  維護分支；新增「維護分支（fix／upgrade／docs）」小節含契約升版規則；release 步驟 1 補
+  package.json version／CHANGELOG 一致性；`/speckit-*` 寫法統一）
+
+Follow-up TODOs:
+- ✅ CHANGELOG.md 已由 Batch C 建立，結構符合本憲章引用（「版本策略」段、`[Unreleased]` 頂端條目、
+  「asyncapi 契約版本」小節）
+- ⏳ 例外 (c)：`DiagnosisJobPayload`（packages/contracts/src/jobs.ts）Zod 化並於 worker 消費端
+  safeParse，追蹤於 roadmap 010-lite（第二輪報告 CT-8）
+- ℹ️ specs/003 的 data-model.md／contracts/jobs.contract.md／plan.md／research.md 與 specs/009 的
+  工件仍以 1.4.1 措辭（「MAY 以 TS 定義」）引用「型別來源分層」；小標仍在、不懸空，屬歷史工件，
+  現況以本憲章為準
+
+----- Prior amendment (1.4.0 → 1.4.1) -----
 Version change: 1.4.0 → 1.4.1
 Rationale: 釐清 Principle III 的「型別來源分層」——需 runtime 驗證的 payload（如
 DiagnosisResult、AI 結果）MUST 用 Zod + z.infer；純做型別分派的傳輸／控制訊息（WebSocket
@@ -84,7 +135,7 @@ fast-forward 方式併入，使每個 feature 的收尾點在 git 歷史中可�
 commit 訊息格式以 `CLAUDE.md` 為準。
 
 同一 branch MUST NOT 混入多個大型 feature。MUST NOT 同時手貼完整 code 又執行
-`/speckit.implement`（兩者會互相覆蓋）。
+`/speckit-implement`（兩者會互相覆蓋）。
 
 **理由**：SDD 讓規格、計畫、任務與實作可追溯且一致；繞過流程會讓 reference code
 與真實產出分歧，破壞可審查性與可維護性。
@@ -108,11 +159,27 @@ commit 訊息格式以 `CLAUDE.md` 為準。
 `packages/contracts` 是通訊契約的唯一來源，新增 event/payload MUST 先改契約，再改
 API/worker/web，MUST NOT 在各端另寫平行型別定義。
 
-**型別來源分層**：需要 runtime 驗證的 payload（如 `DiagnosisResult`、AI 結果）MUST 以 Zod
-schema 定義並由 `z.infer` 推導型別（呼應 Principle V 的 `DiagnosisResultSchema.parse()`）；
-純做型別分派的傳輸／控制訊息（WebSocket envelope、`ping`/`pong`、`system/connected`、
-`machine/subscribed`、`system/unauthorized` 等 discriminated union）MAY 直接以 TypeScript
-型別定義，惟仍 MUST 以 `packages/contracts` 為單一來源、MUST NOT 另寫平行定義。
+**型別來源分層**：
+
+- **三端契約**——全部 WebSocket message（現 12 則，含 `ping`/`pong`、`system/connected`、
+  `machine/subscribed`、`system/unauthorized` 等控制訊息）與 `POST /diagnoses` 的 request body／
+  成功 response：MUST 以 Zod schema 定義於 `packages/contracts`，型別 MUST 由 `z.infer` 推導，
+  MUST NOT 以手寫 TypeScript 型別另立定義。WebSocket message MUST 納入 `asyncapi.yaml` 與 Zod
+  schema 的漂移比對（`packages/contracts/src/asyncapi-drift.test.ts`：asyncapi 的每則 message 都須有
+  對應 schema 做結構比對，漏列即測試失敗）；`POST /diagnoses` 的契約變化 MUST 記於 `CHANGELOG.md`
+  的契約小節，日後寫進 `asyncapi.yaml` 結構時同樣 MUST 納入漂移比對。
+- **例外 (a)**：`GET /healthz` 的回應是 api 內部型別、不進契約（運維探針，非三端契約）。
+- **例外 (b)**：由 NestJS exception 產生的 HTTP 錯誤 body（400／404／409／415／503 等）不另定
+  schema，但各錯誤碼的語意 MUST 記於 `asyncapi.yaml`／`CHANGELOG.md`。
+- **例外 (c)**：非 WebSocket／HTTP 的跨 process 傳輸型別（BullMQ job data 等）SHOULD 以 Zod 定義
+  並在消費端 `safeParse`；不論是否已 Zod 化，仍 MUST 以 `packages/contracts` 為單一來源、MUST NOT
+  在各端另寫平行定義。現況 `DiagnosisJobPayload`（`packages/contracts/src/jobs.ts`）仍為 TS 型別，
+  列為 roadmap 010-lite 待補。
+
+**Runtime 驗證**：是否在收端執行 `parse`／`safeParse` 依來源信任度決定——來自外部或不受信任的
+輸入（client 送進 Gateway 的訊息、HTTP request body、LLM 回傳）MUST 在 runtime 驗證；需要 runtime
+驗證的 payload（如 `DiagnosisResult`、AI 結果）呼應 Principle V 的 `DiagnosisResultSchema.parse()`。
+受信任的內部來源可只取其型別，惟屬上述三端契約者 schema 本身仍 MUST 存在，作為契約與漂移比對的依據。
 
 全棧 MUST 使用 strict TypeScript，並避免 `any` 擴散。
 
@@ -209,5 +276,14 @@ lock 等暫態用途。
   - **PATCH**：釐清、措辭與錯字等非語意修正。
 - **合規審查**：所有 PR / review MUST 驗證是否符合本憲章；複雜度 MUST 有正當理由。
   日常開發的操作層指引以 `CLAUDE.md` 為輔，但其內容 MUST NOT 與本憲章相牴觸。
+- **真實來源回補**：SDD feature 分支任一階段、以及 fix／upgrade／docs 等維護分支中修正或
+  新定的決策，若影響該分支以外的範圍，MUST 在該分支收尾（merge 回 `develop`）前寫入專案真實
+  來源——`README.md`、`docs/Flow-Gatekeeper-SDD-完整實作指南.md`、`docs/adr-*.md`、
+  `CHANGELOG.md`（涉及非協商原則時則修訂本憲章），並同步修訂既有內容消除矛盾。只寫進 Agent
+  memory、或只留在 spec／tasks／審查報告等分支工件，MUST NOT 視為已落地。對應文件、回補時
+  不重寫歷史等操作細節以 `CLAUDE.md` 為準。
+- **契約升版**：`packages/contracts` 的 message／payload 有變更時，MUST 升 `asyncapi.yaml`
+  的 `info.version` 並在 `CHANGELOG.md` 的契約小節記錄；release 前 MUST 通過此檢查。版本
+  策略（產品版本與契約版本各自獨立）以 `CLAUDE.md` 為準。
 
-**Version**: 1.4.1 | **Ratified**: 2026-06-30 | **Last Amended**: 2026-06-30
+**Version**: 1.5.0 | **Ratified**: 2026-06-30 | **Last Amended**: 2026-09-27
