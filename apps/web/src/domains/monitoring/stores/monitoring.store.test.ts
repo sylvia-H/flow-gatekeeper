@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { effectScope, watchEffect } from "vue";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
-import { useMonitoringStore } from "./monitoring.store.js";
+import { AUTH_ERROR_MESSAGE, useMonitoringStore } from "./monitoring.store.js";
 
 function point(machineId: string, state: MachineState): TelemetryPoint {
   return {
@@ -275,5 +275,72 @@ describe("monitoring store — Pause 期間凍結 stale 時鐘", () => {
     store.tickNow();
     store.setConnectionStatus("reconnecting");
     expect(store.fleetHealth.healthy).toBe(0);
+  });
+});
+
+describe("monitoring store — 連線真的活著（WEB-3）與授權錯誤（AR-S7）", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("isLive：open→system/connected→machine/subscribed 三者齊備才為 true", () => {
+    const store = useMonitoringStore();
+    expect(store.isLive).toBe(false);
+    store.setConnectionStatus("connected");
+    expect(store.isLive).toBe(false);
+    store.setClientId("c1");
+    expect(store.isLive).toBe(false); // connected 後、subscribed 前（約 1 RTT 空窗）
+    expect(store.everConnected).toBe(true);
+    store.setAuthorized(true);
+    expect(store.isLive).toBe(true);
+  });
+
+  it("收到 system/unauthorized → isLive=false 並記錄 authError", () => {
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.setClientId("c1");
+    store.setAuthorized(false);
+    expect(store.isLive).toBe(false);
+    expect(store.subscribed).toBe(false);
+    expect(store.authError).toBe(AUTH_ERROR_MESSAGE);
+  });
+
+  it.each(["reconnecting", "disconnected"] as const)(
+    "離開 connected（%s）即清空 clientId、isLive=false；everConnected 保留供橫幅判斷",
+    (status) => {
+      const store = useMonitoringStore();
+      store.setConnectionStatus("connected");
+      store.setClientId("c1");
+      store.setAuthorized(true);
+      store.setConnectionStatus(status);
+      expect(store.clientId).toBeNull();
+      expect(store.subscribed).toBe(false);
+      expect(store.isLive).toBe(false);
+      expect(store.everConnected).toBe(true);
+    },
+  );
+
+  it("重連後收到新的 system/connected → isLive 恢復且 clientId 為新值", () => {
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.setClientId("c1");
+    store.setAuthorized(true);
+    store.setConnectionStatus("reconnecting");
+    store.setConnectionStatus("connected");
+    expect(store.isLive).toBe(false); // 新 socket open 但尚未派發 clientId
+    store.setClientId("c2");
+    expect(store.isLive).toBe(false); // 新連線尚未重新訂閱
+    store.setAuthorized(true);
+    expect(store.isLive).toBe(true);
+    expect(store.clientId).toBe("c2");
+  });
+
+  it("setAuthorized(false) 記錄可顯示的授權錯誤；setAuthorized(true) 清除", () => {
+    const store = useMonitoringStore();
+    expect(store.authError).toBeNull();
+    store.setAuthorized(false);
+    expect(store.authError).toBe(AUTH_ERROR_MESSAGE);
+    store.setAuthorized(true);
+    expect(store.authError).toBeNull();
   });
 });

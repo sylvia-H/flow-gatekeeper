@@ -20,6 +20,17 @@ class FakeWebSocket extends EventTarget {
 
   readyState = FakeWebSocket.CONNECTING;
   readonly sent: unknown[] = [];
+  /** 每個 listener 註冊時帶的 AbortSignal（沒帶為 undefined），供斷言 listener 已被解除。 */
+  readonly listenerSignals: (AbortSignal | undefined)[] = [];
+
+  override addEventListener(
+    type: string,
+    callback: EventListenerOrEventListenerObject | null,
+    options?: AddEventListenerOptions | boolean,
+  ): void {
+    this.listenerSignals.push(typeof options === "object" ? options.signal : undefined);
+    super.addEventListener(type, callback, options);
+  }
 
   constructor(readonly url: string) {
     super();
@@ -371,6 +382,42 @@ describe("useHighFrequencyWs — 心跳與重連", () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
   });
 
+  it("網路靜默斷線（close 後瀏覽器不派發 close 事件）：pong 逾時立即轉 reconnecting 並在退避後重連（WEB-2）", () => {
+    const { spies } = mount({ heartbeatMs: 1_000, pongTimeoutMs: 500 });
+    const first = FakeWebSocket.latest();
+    first.serverOpen();
+    first.serverSend({ type: "system/connected", clientId: "c1" });
+    // 靜默斷線：close() 只進 CLOSING，close 事件遲遲不到
+    vi.spyOn(first, "close").mockImplementation(() => {
+      first.readyState = FakeWebSocket.CLOSING;
+    });
+    expect(spies.onStatus).toHaveBeenLastCalledWith("connected");
+
+    vi.advanceTimersByTime(1_000 + 500); // ping 後未回 pong
+    expect(first.close).toHaveBeenCalled();
+    expect(spies.onStatus).toHaveBeenLastCalledWith("reconnecting"); // 不等 close 事件
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    // 舊 socket 的 listener 全數解除（open／message／close／error 四個 signal 皆已 abort）
+    expect(first.listenerSignals).toHaveLength(4);
+    expect(first.listenerSignals.every((signal) => signal?.aborted === true)).toBe(true);
+
+    vi.advanceTimersByTime(1_000); // attempt 0 的退避（抖動已歸零）
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    const second = FakeWebSocket.latest();
+
+    // 舊 socket 遲來的 close／message 事件：listener 已解除，不排第二次重連、不進 buffer
+    first.readyState = FakeWebSocket.CLOSED;
+    first.dispatchEvent(new Event("close"));
+    first.serverSend([pt("stale")]);
+    vi.advanceTimersByTime(5_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(spies.onBatch).not.toHaveBeenCalled();
+
+    second.serverOpen();
+    expect(spies.onStatus).toHaveBeenLastCalledWith("connected");
+    expect(second.listenerSignals.some((signal) => signal?.aborted === true)).toBe(false);
+  });
+
   it("有回 pong 則不重連，並回報 RTT", () => {
     const onLatency = vi.fn();
     mount({ heartbeatMs: 1_000, pongTimeoutMs: 500, onLatency });
@@ -470,6 +517,22 @@ describe("useHighFrequencyWs — 心跳與重連", () => {
     // 原本排定的退避計時器已取消，不會再多開一條
     vi.advanceTimersByTime(5_000);
     expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+});
+
+describe("useHighFrequencyWs — 訂閱授權結果（AR-S7）", () => {
+  it("system/unauthorized → onAuthResult(false)；machine/subscribed → onAuthResult(true)", () => {
+    const onAuthResult = vi.fn();
+    const { spies } = mount({ onAuthResult });
+    const ws = FakeWebSocket.latest();
+    ws.serverOpen();
+    ws.serverSend({ type: "system/unauthorized" });
+    expect(onAuthResult).toHaveBeenLastCalledWith(false);
+    ws.serverSend({ type: "machine/subscribed", machineIds: ["mixer-01"] });
+    expect(onAuthResult).toHaveBeenLastCalledWith(true);
+    expect(onAuthResult).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(FRAME);
+    expect(spies.onBatch).not.toHaveBeenCalled(); // 控制訊息不進遙測 buffer
   });
 });
 

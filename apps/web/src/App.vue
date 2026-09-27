@@ -68,7 +68,7 @@ const selectedLabel = computed(() =>
 );
 // 診斷觸發走共用入口（TopBar／卡片 icon／drawer 同一份邏輯），clientId 只從 monitoring store 讀。
 const trigger = useDiagnoseTrigger();
-const { canDiagnoseSelected: canDiagnose, hasClient } = trigger;
+const { canDiagnoseSelected: canDiagnose, connectionBlockedReason } = trigger;
 
 function onDiagnose(): void {
   if (store.selectedMachineId !== null) trigger.diagnose(store.selectedMachineId);
@@ -106,7 +106,7 @@ const banner = computed(() => {
         cls: "border-warn-border bg-warn-bg text-warn-fg",
       };
     case "disconnected":
-      return store.clientId === null
+      return !store.everConnected
         ? { text: "Connecting…", cls: "border-subtle bg-elevated text-fg-muted" }
         : {
             text: "Disconnected — 顯示最後已知資料，資料可能過時",
@@ -143,6 +143,8 @@ const handle = useHighFrequencyWs({
   // US4：pause 時 pump 跳過 flush（續存 buffer）；pong RTT 回報 store.latencyMs。
   isPaused: () => store.paused,
   onLatency: store.setLatency,
+  // 訂閱授權結果（system/unauthorized 不再靜默忽略，TopBar 顯示授權 chip）。
+  onAuthResult: store.setAuthorized,
   // 溢位合併與入口剔除的筆數計入背壓計量（BackpressureBadge 另列 dropped）。
   onDrop: store.recordDropped,
   // 診斷事件分流交 copilot.store（憲章 IV／FR-017：不進遙測 buffer）。
@@ -253,7 +255,7 @@ const handle = useHighFrequencyWs({
         :machine-label="selectedLabel"
         :summary="store.selectedMachine"
         :can-diagnose="canDiagnose"
-        :has-client="hasClient"
+        :connection-blocked-reason="connectionBlockedReason"
         @diagnose="onDiagnose"
         @retry="onRetry"
         @cancel="onCancel"

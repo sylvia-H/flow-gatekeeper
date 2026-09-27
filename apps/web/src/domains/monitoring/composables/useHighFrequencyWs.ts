@@ -23,7 +23,8 @@ const BATCH_ERROR_LOG_INTERVAL_MS = 10_000;
  * `buffer.splice(0)` 後透過 `onBatch` 一次交給 store，使 reactive 提交次數遠少於訊息數。
  * 控制訊息 MUST NOT 混入 telemetry buffer（分流處理）。
  *
- * 韌性：ping/pong 心跳（pong 逾時→close），onclose 非手動關閉→指數退避重連，onerror→close；
+ * 韌性：ping/pong 心跳（pong 逾時→直接視為斷線、立即退避重連，不等瀏覽器 close 事件），
+ * onclose 非手動關閉→指數退避重連，onerror→close；
  * 每次（重）連線的 `system/connected` 皆觸發 `onConnected`，使 App 重訂閱。
  */
 export interface UseHighFrequencyWsOptions {
@@ -45,6 +46,11 @@ export interface UseHighFrequencyWsOptions {
    * MUST NOT 進遙測 buffer——否則會延遲顯示並污染背壓比值量測（見 ws-message.ts 分派註解）。
    */
   onMetrics?: (metrics: SystemMetrics) => void;
+  /**
+   * 選用：訂閱授權結果——`machine/subscribed` 回 true、`system/unauthorized` 回 false。
+   * 交 store.setAuthorized，讓「連得上但沒有資料」的授權失敗在畫面上看得見。
+   */
+  onAuthResult?: (authorized: boolean) => void;
   /** 選用：pong 到達時回報 ping→pong RTT（ms）→ store.setLatency。 */
   onLatency?: (ms: number) => void;
   /**
@@ -63,7 +69,7 @@ export interface UseHighFrequencyWsOptions {
   maxBufferSize?: number;
   /** 心跳週期（ms），預設 15000。 */
   heartbeatMs?: number;
-  /** pong 逾時（ms），逾時未回即 close 觸發重連，預設 5000。 */
+  /** pong 逾時（ms），逾時未回即視為斷線並進入退避重連，預設 5000。 */
   pongTimeoutMs?: number;
 }
 
@@ -88,6 +94,8 @@ export function useHighFrequencyWs(
   let buffer: TelemetryPoint[] = [];
   let rafId: number | null = null;
   let ws: WebSocket | null = null;
+  /** 現役 socket 的 listener 一次解除用；retireSocket 時 abort。 */
+  let socketListeners: AbortController | null = null;
 
   let manualClose = false;
   let attempt = 0;
@@ -190,7 +198,22 @@ export function useHighFrequencyWs(
     }
   }
 
-  /** 週期送 ping；每次 ping 起 pongTimer，逾時未收 pong 即 close 觸發重連。 */
+  /**
+   * 解除現役 socket：先清引用並 abort 其 listener，再 close。舊 socket 之後遲來的
+   * close／message 事件因此不會再被處理，不會排出第二次重連或把舊資料灌進 buffer。
+   */
+  function retireSocket(): void {
+    const socket = ws;
+    ws = null;
+    socketListeners?.abort();
+    socketListeners = null;
+    socket?.close();
+  }
+
+  /**
+   * 週期送 ping；每次 ping 起 pongTimer。逾時未收 pong 直接視為斷線：網路靜默中斷時
+   * 瀏覽器的 close 事件可能數十秒後才到，期間不能讓狀態停在 connected（WEB-2）。
+   */
   function startHeartbeat(): void {
     clearHeartbeat();
     heartbeatTimer = setInterval(() => {
@@ -198,7 +221,10 @@ export function useHighFrequencyWs(
       send({ type: "ping" });
       clearPongTimer();
       pongTimer = setTimeout(() => {
-        ws?.close(); // 逾時未回 pong → close → onclose → 重連
+        pongTimer = null;
+        clearHeartbeat();
+        retireSocket();
+        scheduleReconnect();
       }, pongTimeoutMs);
     }, heartbeatMs);
   }
@@ -267,7 +293,13 @@ export function useHighFrequencyWs(
         if (lastPingAt > 0) options.onLatency?.(Date.now() - lastPingAt);
         clearPongTimer(); // 心跳確認
         break;
-      // machine/subscribed／system/unauthorized：忽略。
+      case "machine/subscribed":
+        options.onAuthResult?.(true);
+        break;
+      case "system/unauthorized":
+        // 不再靜默忽略：否則使用者只看到「連上了卻沒有資料」，不知道是授權失敗（AR-S7）。
+        options.onAuthResult?.(false);
+        break;
       default:
         break;
     }
@@ -278,28 +310,49 @@ export function useHighFrequencyWs(
     // 舊連線的心跳一併清掉：`online` 快速重連可能發生在舊 socket 的 close 事件到達之前，
     // 舊的 heartbeat／pongTimer 若續跑，會以 `ws?.close()` 把剛建立的新 socket 關掉。
     clearHeartbeat();
+    socketListeners?.abort();
+    const listeners = new AbortController();
+    socketListeners = listeners;
+    const { signal } = listeners;
     const socket = new WebSocket(url);
     ws = socket;
-    // 每個 listener 先確認自己仍是現役 socket：`online` 快速重連可能在舊 socket 尚在 CLOSING
-    // 時就建立新連線，舊 socket 遲來的 close 若照常處理，會再排一次重連、疊出第二條連線。
-    socket.addEventListener("open", () => {
-      if (socket !== ws) return;
-      onStatus("connected");
-      startHeartbeat();
-    });
-    socket.addEventListener("message", (event: MessageEvent) => {
-      if (socket !== ws) return;
-      handleMessage(event);
-    });
-    socket.addEventListener("close", () => {
-      if (socket !== ws) return;
-      clearHeartbeat();
-      scheduleReconnect(); // 手動關閉時 ws 已先被清成 null，走不到這裡
-    });
-    socket.addEventListener("error", () => {
-      if (socket !== ws) return;
-      socket.close(); // 交給 onclose 統一處理
-    });
+    // listener 綁在 signal 上，retireSocket 時一次解除；另外每個 listener 仍先確認自己是現役
+    // socket：`online` 快速重連可能在舊 socket 尚在 CLOSING 時就建立新連線，舊 socket 遲來的
+    // close 若照常處理，會再排一次重連、疊出第二條連線。
+    socket.addEventListener(
+      "open",
+      () => {
+        if (socket !== ws) return;
+        onStatus("connected");
+        startHeartbeat();
+      },
+      { signal },
+    );
+    socket.addEventListener(
+      "message",
+      (event: MessageEvent) => {
+        if (socket !== ws) return;
+        handleMessage(event);
+      },
+      { signal },
+    );
+    socket.addEventListener(
+      "close",
+      () => {
+        if (socket !== ws) return;
+        clearHeartbeat();
+        scheduleReconnect(); // 手動關閉或 pong 逾時已先 retireSocket，走不到這裡
+      },
+      { signal },
+    );
+    socket.addEventListener(
+      "error",
+      () => {
+        if (socket !== ws) return;
+        socket.close(); // 交給 onclose 統一處理
+      },
+      { signal },
+    );
   }
 
   /**
@@ -344,9 +397,7 @@ export function useHighFrequencyWs(
     if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", onVisibilityChange);
     }
-    const socket = ws;
-    ws = null; // 先解除現役身分，socket 的 close 事件就不會再排重連
-    socket?.close();
+    retireSocket(); // 先解除現役身分與 listener，socket 的 close 事件就不會再排重連
     buffer = [];
     pendingOverflow = 0;
     pendingInvalid = 0;

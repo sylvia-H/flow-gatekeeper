@@ -21,7 +21,8 @@ const props = defineProps<{
   machineLabel: string;
   summary: MachineLive | null;
   canDiagnose: boolean;
-  hasClient: boolean;
+  /** 連線面不可診斷的原因（停用 tooltip）；null＝連線就緒。 */
+  connectionBlockedReason: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -189,7 +190,7 @@ watch(
           type="button"
           class="flex w-full items-center justify-center gap-2 rounded-control bg-accent px-3 py-2 text-sm font-medium text-canvas hover:bg-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="!canDiagnose"
-          :title="hasClient ? undefined : '尚未連線，請待連線後再診斷'"
+          :title="connectionBlockedReason ?? undefined"
           @click="emit('diagnose')"
         >
           <Stethoscope class="h-4 w-4" aria-hidden="true" />
@@ -291,7 +292,7 @@ watch(
           type="button"
           class="flex w-full items-center justify-center gap-2 rounded-control bg-accent px-3 py-2 text-sm font-medium text-canvas hover:bg-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="!canDiagnose"
-          :title="hasClient ? undefined : '尚未連線，請待連線後再重試'"
+          :title="connectionBlockedReason ?? undefined"
           @click="emit('retry')"
         >
           <RotateCcw class="h-4 w-4" aria-hidden="true" />

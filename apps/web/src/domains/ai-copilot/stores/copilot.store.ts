@@ -7,7 +7,29 @@ import {
   type CopilotEvent,
   type CopilotJobState,
 } from "../lib/copilot-reducer.js";
-import { DiagnoseRequestError, NETWORK_ERROR_MESSAGE, postDiagnose } from "../lib/diagnose-api.js";
+import {
+  DiagnoseRequestError,
+  NETWORK_ERROR_MESSAGE,
+  UNAUTHORIZED_DIAGNOSE_MESSAGE,
+  postDiagnose,
+} from "../lib/diagnose-api.js";
+
+/** `diagnose`／`retry` 的選用參數。 */
+export interface DiagnoseOptions {
+  requestedBy?: string;
+  /**
+   * 失敗當下讀取即時通道的授權錯誤（monitoring store `authError`）。409 且有值時改顯示
+   * 「未授權」句，而不是「請等待重連」——未授權時重連不會自己好。以 getter 傳入，store 之間不互相匯入。
+   */
+  authError?: () => string | null;
+}
+
+/** 把 POST 失敗轉成使用者看得懂的句子。 */
+function failureMessage(err: unknown, options: DiagnoseOptions | undefined): string {
+  if (!(err instanceof DiagnoseRequestError)) return NETWORK_ERROR_MESSAGE;
+  if (err.status === 409 && options?.authError?.()) return UNAUTHORIZED_DIAGNOSE_MESSAGE;
+  return err.message;
+}
 
 /**
  * ai-copilot store（contracts/copilot-store）——薄殼負責副作用（fetch、事件路由、重連收尾），
@@ -107,7 +129,7 @@ export const useCopilotStore = defineStore("copilot", () => {
   async function diagnose(
     machineId: string,
     socketId: string | null,
-    requestedBy?: string,
+    options?: DiagnoseOptions,
   ): Promise<void> {
     if (!canDiagnose(machineId, socketId !== null && socketId !== "")) return;
     const jobId = newJobId();
@@ -115,7 +137,7 @@ export const useCopilotStore = defineStore("copilot", () => {
     touch(machineId);
     inFlight.value.add(machineId);
     try {
-      await postDiagnose(jobId, machineId, socketId as string, requestedBy);
+      await postDiagnose(jobId, machineId, socketId as string, options?.requestedBy);
     } catch (err) {
       const current = stateFor(machineId);
       if (current.status === "active" && current.jobId === jobId) {
@@ -125,7 +147,7 @@ export const useCopilotStore = defineStore("copilot", () => {
           jobId,
           streamText: current.streamText,
           // 已知失敗帶可讀中文；其他未預期例外（理論上只剩網路層）給固定句，不露出英文原文。
-          error: err instanceof DiagnoseRequestError ? err.message : NETWORK_ERROR_MESSAGE,
+          error: failureMessage(err, options),
         });
         lastActivityAt.value.delete(machineId);
       }
@@ -140,8 +162,12 @@ export const useCopilotStore = defineStore("copilot", () => {
    * 由 canDiagnose 去重擋下。
    * 命中後端快取時照常顯示 Cached、不繞過快取（Clarifications CHK038）。
    */
-  async function retry(machineId: string, socketId: string | null): Promise<void> {
-    await diagnose(machineId, socketId);
+  async function retry(
+    machineId: string,
+    socketId: string | null,
+    options?: DiagnoseOptions,
+  ): Promise<void> {
+    await diagnose(machineId, socketId, options);
   }
 
   /**
