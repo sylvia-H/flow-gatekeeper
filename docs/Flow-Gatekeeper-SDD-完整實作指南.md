@@ -3324,7 +3324,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **斷言面補齊**（報告 TQ-4～TQ-9）：`processor` 事件序列與重試分支、`job-status-relay`、`HistoryService`、pino logger 包裝、web 元件測試（`CopilotDrawer`、`MachineNodeCard`、`MetricsPanel`、metrics store）。
   - **CI**：`ci.yml` 改為契約 lint → typecheck → lint → `test:coverage`（含門檻、上傳 lcov）→ build，加 `permissions: contents: read`、`concurrency`、`timeout-minutes: 20`；仍只保留 `workflow_dispatch`。
 - **code-review findings（6 項，行為與結構收斂）**：
-  - Gateway「已發 close(1008) 但對端不回 close frame」的逾期回收由授權 sweep 移到恆常執行的心跳 sweep（門檻 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，terminate reason `close-not-honoured`），**未設 `WS_AUTH_SECRET` 時違規關閉也適用**。
+  - Gateway「已發 close(1008) 但對端不回 close frame」的逾期回收改由恆常執行的心跳 sweep 負責（門檻 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，terminate reason `close-not-honoured`），**未設 `WS_AUTH_SECRET` 時違規關閉也適用**；有設密鑰時授權 sweep 仍保留同一檢查（共用 `reapUnhonouredClose`），檢查頻率不受 `WS_HEARTBEAT_MS` 設多大牽制（final-review 補回）。
   - Gateway 以 `closeRequestedAt` 為「關閉中」的單一來源（`isClosing()`），違規與授權逾期共用唯一關閉入口 `requestClose()`，移除重複的 `closing` 旗標。
   - web `useDiagnoseTrigger`：`hasClient` 改由 `connectionBlockedReason` 推導，連線把關條件只寫一處。
   - 日誌節流器收進 `@flow-gatekeeper/shared/logging`（`packages/shared/src/logging/throttle.ts`）：`LogThrottle`、`ConnectionErrorThrottle` 與共用節流窗常數 `ERROR_LOG_THROTTLE_MS`（30 s），api 與 worker 不再各抄一份；api `lib/connection-error-throttle.ts` 只留 ioredis 事件接線。

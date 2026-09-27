@@ -153,6 +153,7 @@ type GatewayInternals = {
   clients: Map<string, { socket: WebSocket; alive: boolean; connectedAt: number; closeRequestedAt?: number }>;
   sweepDeadConnections(): void;
   sweepAuthGrace(): void;
+  unauthorizedCount: number;
 };
 
 function internals(gateway: MonitoringGateway): GatewayInternals {
@@ -845,6 +846,33 @@ describe("MonitoringGateway：出口閘門（背壓、授權、違規、連線�
     expect(warn).toHaveBeenCalledWith({ clientId: stubborn.clientId }, "close frame not received, terminating");
   });
 
+  it("有密鑰＋心跳極長：授權 sweep 本身也會回收停在 CLOSING 的連線（不必等心跳 sweep）", async () => {
+    // 心跳 2^31-1 → 門檻 = min(心跳, 授權期限) = 授權期限；心跳 sweep 實際上永遠輪不到。
+    const { port, gateway } = await startGateway({ secret: "s3cret", authGraceMs: 10_000, heartbeatMs: 2 ** 31 - 1 });
+    const warn = warnSpy(gateway);
+    const stubborn = await openClient(port);
+    const socket = serverSocket(gateway, stubborn.clientId);
+    const closeSpy = stallClose(socket);
+    age(gateway, stubborn.clientId, 10_000);
+    internals(gateway).sweepAuthGrace();
+    expect(closeSpy).toHaveBeenCalledWith(1008, "authorization timeout");
+    const state = internals(gateway).clients.get(stubborn.clientId);
+    if (!state || state.closeRequestedAt === undefined) throw new Error("closeRequestedAt 未設定");
+    // 未逾期：授權 sweep 不回收。
+    state.closeRequestedAt -= 9_000;
+    internals(gateway).sweepAuthGrace();
+    expect(gateway.connectionCount).toBe(1);
+    // 逾期：授權 sweep 直接 terminate，未授權名額隨之釋放。
+    state.closeRequestedAt -= 1_000;
+    const closed = waitClose(stubborn.ws);
+    internals(gateway).sweepAuthGrace();
+    expect(gateway.connectionCount).toBe(0);
+    expect(internals(gateway).unauthorizedCount).toBe(0);
+    expect(await closed).toBe(1006);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith({ clientId: stubborn.clientId }, "close frame not received, terminating");
+  });
+
   /** 讓 server 端 close() 停在 CLOSING（見 `stallClose`），再累計違規到上限觸發 1008。 */
   async function violateWithStalledClose(
     gateway: MonitoringGateway,
@@ -887,13 +915,21 @@ describe("MonitoringGateway：出口閘門（背壓、授權、違規、連線�
   });
 
   it("無密鑰＋onModuleInit：心跳計時器本身會回收違規後停在 CLOSING 的連線", async () => {
-    const { port, gateway } = await startGateway({ init: true, intervalMs: 1_000, heartbeatMs: 150 });
+    // 門檻 = min(心跳 1 s, 授權期限 150 ms) = 150 ms。心跳間隔刻意取 1 s：ping→pong 往返只需在 1 s 內
+    // 完成，CI 事件迴圈延遲不致讓連線先以 heartbeat-timeout 被回收；CLOSING 後關閉逾期檢查優先於心跳逾時，
+    // reason 必為 close-not-honoured。最長約 2 個心跳間隔。
+    const { port, gateway } = await startGateway({
+      init: true,
+      intervalMs: 1_000,
+      heartbeatMs: 1_000,
+      authGraceMs: 150,
+    });
     const warn = warnSpy(gateway);
     const client = await openClient(port);
-    const closed = waitClose(client.ws);
+    const closed = waitClose(client.ws, 5_000);
     await violateWithStalledClose(gateway, client);
     expect(await closed).toBe(1006);
     expect(gateway.connectionCount).toBe(0);
     expect(warn).toHaveBeenCalledWith({ clientId: client.clientId }, "close frame not received, terminating");
-  });
+  }, 10_000);
 });
