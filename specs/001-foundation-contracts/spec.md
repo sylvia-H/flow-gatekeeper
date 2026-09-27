@@ -4,7 +4,12 @@
 
 **Created**: 2026-06-30
 
-**Status**: Draft
+**Status**: 已完成（v1.0.0；2026-06-30 以 `4307a04` 併入 develop）；之後變更見指南 §15.6「v1.0.0 之後的現況摘要」
+
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - Clarifications：「contracts 僅含 6 條 WebSocket 通道事件型別與 `DiagnosisResultSchema`（Zod）」→ 控制訊息、`machine/data`、`job/status`、`ai/*`、`system/metrics` 與 `POST /diagnoses` body／response 已全面 Zod 化（Zod 4），並有 asyncapi↔Zod 漂移測試；`asyncapi.yaml` 已多次升版，現況以其 `info.version` 為準。
+> - Assumptions：「Node 20 LTS+」→ Node 22（`.nvmrc`、`engines.node >=22.12`）、pnpm 10；packages `exports` 另加 `development` condition，乾淨 clone 免 build 即可 typecheck／test。
 
 **Input**: User description: "建立 flow-gatekeeper 的 monorepo 基礎、即時通訊契約、環境設定與本機 infra"
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BoundedBuffer, LogThrottle, SingleFlight, withDeadline } from "./telemetry-buffer.js";
+import { BoundedBuffer, SingleFlight, withDeadline } from "./telemetry-buffer.js";
 
 describe("BoundedBuffer", () => {
   it("未滿時全數保留、drain 依放入順序取出並清空", () => {
@@ -42,26 +42,6 @@ describe("BoundedBuffer", () => {
   it("容量必須是正整數", () => {
     expect(() => new BoundedBuffer<number>(0)).toThrow(RangeError);
     expect(() => new BoundedBuffer<number>(1.5)).toThrow(RangeError);
-  });
-});
-
-describe("LogThrottle", () => {
-  it("同 key 在間隔內只放行第一則，下次放行時回報被壓掉的次數", () => {
-    const t = new LogThrottle(30_000);
-    expect(t.hit("telemetry", 0)).toEqual({ suppressed: 0 });
-    expect(t.hit("telemetry", 1_000)).toBeNull();
-    expect(t.hit("telemetry", 29_999)).toBeNull();
-    expect(t.hit("telemetry", 30_000)).toEqual({ suppressed: 2 });
-    // 放行後計數歸零、重新計時
-    expect(t.hit("telemetry", 30_001)).toBeNull();
-    expect(t.hit("telemetry", 60_000)).toEqual({ suppressed: 1 });
-  });
-
-  it("不同 key 各自節流", () => {
-    const t = new LogThrottle(30_000);
-    expect(t.hit("telemetry", 0)).not.toBeNull();
-    expect(t.hit("errorlogs", 10)).not.toBeNull();
-    expect(t.hit("telemetry", 20)).toBeNull();
   });
 });
 

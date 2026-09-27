@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FAKE_DIAGNOSIS_TEXT_LENGTH } from "../ai/fake-provider.js";
 import { MIN_OUTPUT_TOKENS_WITH_THINKING, thinkingCapability } from "./model-capabilities.js";
 
 /**
@@ -26,6 +27,10 @@ export const LOCK_TTL_MARGIN_MS = 5000;
 /** 生成參數預設值（單一來源：env 留空時的預設，也是 `GeminiProvider` 未帶選項時的預設）。 */
 export const DEFAULT_AI_MAX_OUTPUT_TOKENS = 2048;
 export const DEFAULT_AI_TEMPERATURE = 0.2;
+
+/** fake provider 預設：20 段 × 500ms ≈ 10s 串流，足以在 e2e 中途 kill worker。 */
+export const DEFAULT_FAKE_AI_TOKEN_DELAY_MS = 500;
+export const DEFAULT_FAKE_AI_TOKENS = 20;
 
 const emptyToUndefined = (v: unknown): unknown =>
   typeof v === "string" && v.trim() === "" ? undefined : v;
@@ -88,6 +93,22 @@ export const WorkerEnvSchema = RedisEnvSchema.extend({
   /** 每分鐘「實際 LLM 呼叫」上限（取鎖且 cache 仍未命中後才計數，見 processor）。 */
   AI_RPM: positiveInt(8),
   WORKER_CONCURRENCY: positiveInt(2),
+  /**
+   * LLM provider 選擇：`gemini`（預設、唯一的正式 provider）／`fake`（**測試替身**，固定假診斷、
+   * 以可設定延遲逐段串流，供跨 process e2e 與演練；見 `ai/fake-provider.ts`）。
+   * production 下允許 fake（不會崩潰，只輸出假診斷），但啟動時 warn。
+   */
+  AI_PROVIDER: z.preprocess(emptyToUndefined, z.enum(["gemini", "fake"]).default("gemini")),
+  /** fake provider 相鄰 token 的延遲（毫秒，0–60000）；AI_PROVIDER=gemini 時不作用。 */
+  FAKE_AI_TOKEN_DELAY_MS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().min(0).max(60_000).default(DEFAULT_FAKE_AI_TOKEN_DELAY_MS),
+  ),
+  /** fake provider 把診斷 JSON 切成幾段送出（1–1000）；AI_PROVIDER=gemini 時不作用。 */
+  FAKE_AI_TOKENS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().positive().max(1000).default(DEFAULT_FAKE_AI_TOKENS),
+  ),
 }).superRefine((env, ctx) => {
   // 鎖必須活得比一次 LLM 呼叫**加上收尾**久：否則持鎖者還在串流或寫庫時鎖已過期，等待者搶到鎖
   // 再打一次 LLM，去重直接失效。compare-and-del 只能保證「不刪別人的鎖」，擋不住這種重複呼叫。
@@ -114,13 +135,31 @@ export function parseWorkerEnv(raw: Record<string, string | undefined>): WorkerE
   const parsed = WorkerEnvSchema.safeParse(raw);
   if (!parsed.success) return { ok: false, error: formatIssues(parsed.error) };
   const warnings: string[] = [];
-  if (!parsed.data.GEMINI_API_KEY) {
+  if (parsed.data.AI_PROVIDER === "fake") {
+    const { NODE_ENV, FAKE_AI_TOKENS, FAKE_AI_TOKEN_DELAY_MS, AI_TIMEOUT_MS } = parsed.data;
+    warnings.push(
+      "AI_PROVIDER=fake：AI 診斷改由測試替身輸出固定假結果（不呼叫 LLM），僅供 e2e／演練" +
+        (NODE_ENV === "production" ? "——目前 NODE_ENV=production，正式環境請移除此設定" : ""),
+    );
+    // 串流總長（首段不延遲）超過逾時上限時，每筆診斷都會 ai_timeout——設定錯誤但不致命，只 warn。
+    // 實際段數以假診斷 JSON 字元數為上限（splitIntoChunks 不會切出空段），與 provider 行為一致。
+    const chunks = Math.min(FAKE_AI_TOKENS, FAKE_DIAGNOSIS_TEXT_LENGTH);
+    const streamMs = (chunks - 1) * FAKE_AI_TOKEN_DELAY_MS;
+    if (streamMs >= AI_TIMEOUT_MS) {
+      warnings.push(
+        `fake provider 串流約 ${streamMs}ms（(min(FAKE_AI_TOKENS, ${FAKE_DIAGNOSIS_TEXT_LENGTH}) − 1) × FAKE_AI_TOKEN_DELAY_MS）≥ AI_TIMEOUT_MS（${AI_TIMEOUT_MS}ms）：` +
+          "每筆診斷都會逾時",
+      );
+    }
+  } else if (!parsed.data.GEMINI_API_KEY) {
     // 任何環境都允許留空：沒有 Gemini 帳號的評估者仍能看到遙測與背壓兩個賣點。缺金鑰不會
     // 拖到重試用盡——provider 會丟不可重試錯誤，每筆診斷立即以友善的金鑰訊息失敗。
     warnings.push("GEMINI_API_KEY 未設定：每筆 AI 診斷將立即以 provider_error 失敗（不重試）");
   }
-  const { GEMINI_MODEL, AI_MAX_OUTPUT_TOKENS } = parsed.data;
+  const { AI_PROVIDER, GEMINI_MODEL, AI_MAX_OUTPUT_TOKENS } = parsed.data;
+  // fake provider 不呼叫 Gemini，GEMINI_MODEL 不作用；此時 warn 只會誤導。
   if (
+    AI_PROVIDER === "gemini" &&
     thinkingCapability(GEMINI_MODEL) === "always-on" &&
     AI_MAX_OUTPUT_TOKENS < MIN_OUTPUT_TOKENS_WITH_THINKING
   ) {

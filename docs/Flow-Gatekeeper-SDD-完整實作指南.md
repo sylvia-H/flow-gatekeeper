@@ -43,13 +43,13 @@ Spec Kit 的價值是把規格、計畫、任務、驗收與實作串成流程�
 
 ```text
 建立 branch
-  -> /speckit.specify
-  -> /speckit.clarify
-  -> /speckit.plan
-  -> /speckit.checklist
-  -> /speckit.tasks
-  -> /speckit.analyze
-  -> /speckit.implement
+  -> /speckit-specify
+  -> /speckit-clarify
+  -> /speckit-plan
+  -> /speckit-checklist
+  -> /speckit-tasks
+  -> /speckit-analyze
+  -> /speckit-implement
   -> 手動/自動驗收
   -> commit / merge
 ```
@@ -58,8 +58,8 @@ Spec Kit 的價值是把規格、計畫、任務、驗收與實作串成流程�
 
 > **如何使用本指南的程式碼區塊**
 > 文件內的 `asyncapi.yaml`、`contracts`、service、hook 等完整 code，定位是 **「期望產出 / reference 附錄」**，不是要你手貼進 repo 後就跳過 Spec Kit。
-> 正式流程仍走 `/speckit.specify -> clarify -> plan -> tasks -> implement`，讓 agent 生成實作，再拿本指南的 reference 對齊（檔名、契約、行為、驗收條件）。
-> 如果你又手貼完整 code、又跑 `/speckit.implement`，兩邊會互相覆蓋，也正好變成你想避免的半 vibe coding。把這些區塊當「驗收的標準答案」即可。
+> 正式流程仍走 `/speckit-specify -> clarify -> plan -> tasks -> implement`，讓 agent 生成實作，再拿本指南的 reference 對齊（檔名、契約、行為、驗收條件）。
+> 如果你又手貼完整 code、又跑 `/speckit-implement`，兩邊會互相覆蓋，也正好變成你想避免的半 vibe coding。把這些區塊當「驗收的標準答案」即可。
 
 ### 1.2 Streaming 與 job status 是兩條流
 
@@ -246,7 +246,7 @@ flow-gatekeeper/
 | 工具 | 建議版本 | 用途 | 確認指令 |
 | --- | --- | --- | --- |
 | Git | 最新穩定版 | branch、commit、Spec Kit feature flow | `git -v` |
-| Node.js | 22（以 repo 根 `.nvmrc` 為準；root `engines` 要求 `>=22.12`（Vite 7／plugin-vue 6 的最低需求），CI 與 Dockerfile 同源） | web/api/worker runtime | `node -v` |
+| Node.js | 22（以 repo 根 `.nvmrc` 為準，CI 同讀此檔；root `engines` 要求 `>=22.12`（Vite 7／plugin-vue 6 的最低需求）；Dockerfile 另釘 `node:22.23.3-alpine`，同屬 22 線且滿足 engines，三者關係見 §15.6 技術棧升級小節） | web/api/worker runtime | `node -v` |
 | pnpm | 10（以 root `package.json` 的 `packageManager` 為準，現釘 `pnpm@10.34.5`；`corepack enable` 自動取得） | monorepo workspace | `pnpm -v` |
 | Docker Desktop | 最新穩定版 | Redis + MongoDB | `docker -v` |
 | uv | 最新穩定版 | 安裝 Spec Kit CLI | `uv --version` |
@@ -280,7 +280,7 @@ corepack enable   # 依 root package.json 的 packageManager 取得對應 pnpm�
 pnpm -v
 ```
 
-使用 Node 22（版本單一來源為 repo 根的 `.nvmrc`，CI 以 `node-version-file: .nvmrc` 讀取、Dockerfile 用 `node:22.23.3-alpine`（tag＋digest 雙釘））。若你用 nvm/nvs/fnm，先切好版本再初始化專案。PATH 上沒有 `pnpm` 時，可一律改用 `corepack pnpm <指令>`。
+使用 Node 22（版本單一來源為 repo 根的 `.nvmrc`，CI 以 `node-version-file: .nvmrc` 讀取、Dockerfile 用 `node:22.23.3-alpine`（tag＋digest 雙釘）；root `engines.node` 要求 `>=22.12`，本機 22 線請用 22.12 以上）。若你用 nvm/nvs/fnm，先切好版本再初始化專案。PATH 上沒有 `pnpm` 時，可一律改用 `corepack pnpm <指令>`。
 
 > 由來：起草時建議 Node 24 LTS、CI 範例寫 Node 20，三處不一致；2026-09-27 審查修復統一為 22 並以 `.nvmrc` 為單一來源（已落地）。
 
@@ -364,15 +364,15 @@ specify init flow-gatekeeper --integration claude --script ps
 Spec Kit 初始化後，Claude Code 應能使用：
 
 ```text
-/speckit.constitution
-/speckit.specify
-/speckit.clarify
-/speckit.plan
-/speckit.checklist
-/speckit.tasks
-/speckit.analyze
-/speckit.implement
-/speckit.converge
+/speckit-constitution
+/speckit-specify
+/speckit-clarify
+/speckit-plan
+/speckit-checklist
+/speckit-tasks
+/speckit-analyze
+/speckit-implement
+/speckit-converge
 ```
 
 每個正式 feature 都建議走完整流程。小型補丁可省略部分步驟，但本 side project 是要展示 SDD 能力，所以請保留完整紀錄。
@@ -410,7 +410,7 @@ git checkout -b 002-realtime-gateway-history
 在 Claude Code 執行：
 
 ```text
-/speckit.constitution
+/speckit-constitution
 ```
 
 貼上：
@@ -457,7 +457,7 @@ Branch：
 git checkout -b 001-foundation-contracts
 ```
 
-### 6.1 `/speckit.specify` prompt
+### 6.1 `/speckit-specify` prompt
 
 ```text
 建立 flow-gatekeeper 的 monorepo 基礎、即時通訊契約、環境設定與本機 infra。
@@ -480,7 +480,7 @@ git checkout -b 001-foundation-contracts
 - contracts 可被 API、worker、web import。
 ```
 
-### 6.2 `/speckit.plan` 技術要點
+### 6.2 `/speckit-plan` 技術要點
 
 請讓 agent 明確採用：
 
@@ -654,7 +654,7 @@ packages:
 
 ### 6.8 `asyncapi.yaml`
 
-> **現況註記**：下面是 001 起草時的 reference。現行 `asyncapi.yaml` 為 `info.version: 1.1.0`、共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`），`ai/*` 帶 `attempt`、`machine/subscribe` 帶長度上限；並由 `packages/contracts/src/asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
+> **現況註記**：下面是 001 起草時的 reference。現行 `asyncapi.yaml` 為 `info.version: 1.2.0`（各版變更見 repo 根 `CHANGELOG.md`）、共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`），`ai/*` 帶 `attempt`、`machine/subscribe` 帶長度上限；並由 `packages/contracts/src/asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
 
 ```yaml
 asyncapi: 2.6.0
@@ -1011,7 +1011,7 @@ jobs:
       - uses: pnpm/action-setup@v4   # 版本讀 root package.json 的 packageManager
       - uses: actions/setup-node@v5
         with:
-          node-version-file: .nvmrc   # Node 版本單一來源（22），與 engines、Dockerfile 對齊
+          node-version-file: .nvmrc   # Node 版本單一來源（22）；須滿足 engines >=22.12，Dockerfile 另釘 22.23.3
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm contract:lint
@@ -1071,7 +1071,7 @@ git checkout main
 git checkout -b 002-realtime-gateway-history
 ```
 
-### 7.1 `/speckit.specify` prompt
+### 7.1 `/speckit-specify` prompt
 
 ```text
 建立 flow-gatekeeper 的 NestJS realtime gateway 與 MongoDB history layer。
@@ -1358,7 +1358,7 @@ app.get(MonitoringGateway).attach(app.getHttpServer());
 > - **授權**：有設 `WS_AUTH_SECRET` 時，`ai/*`、`job/status`、`system/metrics` 只送通過 `machine/subscribe` token 的連線；未設時連上即授權。錯誤 token 仍回 `system/unauthorized`。
 > - **違規關閉**：同一連線畸形訊息（無法解析、schema 不符）或錯誤 token 累計 10 次，以 close code `1008` 關閉；有設 `WS_AUTH_SECRET` 時，連線在 `WS_AUTH_GRACE_MS`（預設 10000）內未通過 token 也以 `1008` 關閉（由獨立的授權 sweep 檢查，間隔 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，實際關閉時間 ≤ grace + 該間隔）。
 > - **心跳**：伺服器端探活改為帶 nonce 的協定層 ping，pong 必須原樣帶回才算存活；未經請求或 nonce 不符的 pong 不算（瀏覽器與 `ws` 自動回應）。應用層 `ping`→`pong` 訊息仍保留供前端量 RTT。
-> - **慢 client 與連線上限**：`bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES`（預設 1 MiB）即略過該筆遙測推送（控制／診斷訊息照送），連續 3 個心跳 tick 超標則 terminate；連線數達 `MAX_WS_CONNECTIONS`（預設 500）時 upgrade 回 HTTP 503；有設 `WS_AUTH_SECRET` 時，未授權連線另有子上限 `max(10, floor(20% × MAX_WS_CONNECTIONS))`，達到亦回 503（限制未授權者可佔的總名額，持 token 的新連線池滿時同樣 503）。背壓略過的高頻流除遙測批次外也含 `ai/token`（終態由 `ai/done` 補齊）。
+> - **慢 client 與連線上限**：`bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES`（預設 1 MiB）即略過高頻流推送（遙測批次與 `ai/token`；`ai/done`／`ai/error`／`job/status` 等終態與控制訊息照送，漏掉的 token 由 `ai/done` 補齊），連續 3 個心跳 tick 超標則 terminate；連線數達 `MAX_WS_CONNECTIONS`（預設 500）時 upgrade 回 HTTP 503；有設 `WS_AUTH_SECRET` 時，未授權連線另有子上限 `max(10, floor(20% × MAX_WS_CONNECTIONS))`，達到亦回 503（限制未授權者可佔的總名額，持 token 的新連線池滿時同樣 503）。
 > - **relay 日誌**：Redis／QueueEvents 錯誤日誌改為轉態節流——轉態（正常↔故障）時各記一則，故障期間每 30 秒至多一則，斷線期間不刷屏。
 > - 見 §15.6「第二輪審查修復」。
 
@@ -1447,7 +1447,7 @@ git checkout main
 git checkout -b 003-bullmq-ai-streaming
 ```
 
-### 8.1 `/speckit.specify` prompt
+### 8.1 `/speckit-specify` prompt
 
 ```text
 建立 flow-gatekeeper 的 BullMQ 診斷任務、獨立 worker process、AI streaming、Redis cache-aside、MongoDB diagnosis persistence。
@@ -2106,9 +2106,9 @@ Tailwind token 設定。做完這一階段，後續 feature 才有「唯一視�
 
 **與 constitution / CLAUDE.md 的關係**：CLAUDE.md 明訂視覺真實來源是
 `apps/web/design/design-spec.md` 與 `apps/web/design/refs/*.png`——不是 `docs/design-spec.md`。
-本專案的完整規格目前放在 `docs/design-spec.md`（v0.3），本階段的第一件事就是把它落地到
+起草時本專案的完整規格放在 `docs/design-spec.md`（v0.3），本階段的第一件事就是把它落地到
 `apps/web/design/`，之後 **以 `apps/web/design/design-spec.md` 為單一 canonical 檔**，避免兩處
-內容分岔。（見下方 9.1 的「single source」註記。）
+內容分岔。（見下方 9.1 的「single source」註記；**已落地**，canonical 現為 v0.6，見 9.1 橫幅。）
 
 > ⚠️ **不要重寫這一段的規格細節。** `docs/design-spec.md` 已經有完整的 token、Tailwind
 > `theme.extend`（§5）、component states（§7）、interaction states（§8）、file mapping（§9）、
@@ -2117,12 +2117,16 @@ Tailwind token 設定。做完這一階段，後續 feature 才有「唯一視�
 
 ### 9.1 建立設計資料夾並落地 design-spec
 
-環境為 Windows / PowerShell，**以 PowerShell 為主**：
+> ⛔ **本步驟已於 Feature 004 前完成，勿再執行**：`apps/web/design/design-spec.md` 已是 canonical（現況 v0.6，
+> 版本紀錄見該檔），`docs/design-spec.md` 是 v0.3 歷史起點且已加移轉橫幅；再執行下方的 `Copy-Item`／`cp`
+> 會用舊檔**覆蓋** canonical，把之後所有 token 回寫（v0.4–v0.6）一併抹掉。以下指令區塊僅保留作歷史 reference。
+
+環境為 Windows / PowerShell，**以 PowerShell 為主**（歷史 reference，勿再執行）：
 
 ```powershell
 New-Item -ItemType Directory -Force apps/web/design/refs
 
-# 把完整規格落地為前端 canonical 檔（首次交接時執行一次）
+# 把完整規格落地為前端 canonical 檔（首次交接時執行一次；已執行過，現在再跑會覆蓋 canonical）
 Copy-Item docs/design-spec.md apps/web/design/design-spec.md
 ```
 
@@ -2300,13 +2304,14 @@ import './styles/tailwind.css';
 驗收清單以 **design-spec §12** 為 canonical（`refs` 三張圖存在、token 與 Tailwind 一致、
 component states 齊全、第一屏是監控台、未用 Argo CD 官方素材等）。本階段另外補查 Tailwind 落地：
 
-- `apps/web/design/design-spec.md` 已落地，且與 `docs/design-spec.md` 未分岔（見 9.1）。
+- canonical 為 `apps/web/design/design-spec.md`；`docs/design-spec.md` 只保留 v0.3 歷史（開頭有移轉橫幅），允許與 canonical 分岔（見 9.1）。
+  （起草時此項為「已落地，且與 `docs/design-spec.md` 未分岔」；v0.4 起 token 只回寫 canonical，已變更。）
 - `apps/web/design/refs/{layout,node-states,copilot-drawer}.png` 三張都存在且可開啟。
 - `apps/web/tailwind.config.ts` 的 `theme.extend` 與 design-spec §5 逐項一致（無自行新增/改動色票）。
 - `apps/web/postcss.config.js` 與 CSS 進入點就緒，`pnpm --filter web build` 通過。
 - 前端 component 引用 token class，不散落 hex（此點在 Feature 004 元件落地時持續把關）。
 
-**分支與 commit（本階段不是 `/speckit.implement`，回到「只在使用者要求時才 commit」的預設）**：
+**分支與 commit（本階段不是 `/speckit-implement`，回到「只在使用者要求時才 commit」的預設）**：
 
 - 不在 `develop` 直接 commit。二選一：
   1. 開一條短命分支（如 `design/003-handoff`）承接本階段產出，完成後 `--no-ff` 併回 `develop`；或
@@ -2328,7 +2333,7 @@ git checkout main
 git checkout -b 004-frontend-ws-gatekeeper
 ```
 
-### 10.1 `/speckit.specify` prompt
+### 10.1 `/speckit-specify` prompt
 
 ```text
 在 apps/web 實作 monitoring domain 與高頻 WebSocket gatekeeper。
@@ -2556,7 +2561,7 @@ git checkout main
 git checkout -b 005-copilot-ui-design
 ```
 
-### 11.1 `/speckit.specify` prompt
+### 11.1 `/speckit-specify` prompt
 
 ```text
 在 apps/web 實作 AI Copilot drawer。
@@ -2622,7 +2627,7 @@ git merge 005-copilot-ui-design
 
 ## 12. Feature 006：監控台前端保真補完（Monitoring Console Fidelity）
 
-> **狀態：初步規劃**（尚未 `/speckit.specify`）。本節只記錄方向與待澄清問題，作為開 feature 前的
+> **狀態：初步規劃**（尚未 `/speckit-specify`）。本節只記錄方向與待澄清問題，作為開 feature 前的
 > 起草；正式流程仍走 `specify -> clarify -> plan -> checklist -> tasks -> analyze -> implement -> 驗收 -> merge`。
 > 下面的 prompt 與 code 皆為草案，最終以 spec/tasks 為準。
 >
@@ -2689,7 +2694,7 @@ git checkout develop
 git checkout -b 006-monitoring-console-fidelity
 ```
 
-### 12.4 `/speckit.specify` prompt（草案）
+### 12.4 `/speckit-specify` prompt（草案）
 
 ```text
 在 apps/web 把 design-spec（layout.png / node-states.png / copilot-drawer.png）已定義、但 004/005 漏做或沒對齊的前端項目補齊。全部前端-only，只消費現有 telemetry 與診斷資料，不動 packages/contracts 與後端。
@@ -2712,7 +2717,7 @@ git checkout -b 006-monitoring-console-fidelity
 - 不新增 packages/contracts 的 event/payload，不改後端。
 ```
 
-### 12.5 待 `/speckit.clarify` 決定的關鍵問題
+### 12.5 待 `/speckit-clarify` 決定的關鍵問題
 
 1. **EVENT STREAM 的事件來源**（US3，最重要，決定會不會破壞「不動契約」的護欄）：
    - （推薦）**前端衍生**：沿用 004 store 已收到的 telemetry，在 state 轉換為 warning／critical 時由
@@ -2771,7 +2776,7 @@ fleetHealth(state): { healthy: number; warning: number; critical: number } {
 - **全域**：四 viewport 無溢出／重疊／layout shift；手機版依 §6.2 退化；高頻下 DevTools Performance
   無新的 long task；`git diff` 不含 `packages/contracts` 與 `apps/api`／`apps/worker` 變更（守住護欄）。
 
-commit（依 `/speckit.implement` 的 phase-by-phase 規則，標記 phase；同一 phase 拆多個 commit 時
+commit（依 `/speckit-implement` 的 phase-by-phase 規則，標記 phase；同一 phase 拆多個 commit 時
 type 可不同——US1 的卡片對齊屬 `fix`，其餘能力增量屬 `feat`）：
 
 ```bash
@@ -2891,7 +2896,7 @@ git checkout develop
 git checkout -b 007-worker-process-supervision   # 或依當時排定的 feature 編號
 ```
 
-### 13.6 待 `/speckit.clarify` 決定的關鍵問題
+### 13.6 待 `/speckit-clarify` 決定的關鍵問題
 
 > 原藍圖的第一題「監督者選型」已由 ADR-002 定案為容器化（見 13.3），不再是 clarify 議題。
 
@@ -3040,7 +3045,7 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
 - HTTPS／網域／反向代理的生產級配置——demo 仍走 `http://localhost`。
 - 任何執行語意變更（背壓、queue、streaming 行為一律不動）。
 
-### 14.3 待 `/speckit.clarify` 決定的關鍵問題（✅ 四題皆已定案）
+### 14.3 待 `/speckit-clarify` 決定的關鍵問題（✅ 四題皆已定案）
 
 1. **web 伺服方式** → **定案：`nginx:alpine`**（伺服靜態檔並順帶同源反代 `/ws`、`/diagnoses`；一個容器兩件事、零應用程式碼）。（2026-09 改為 `nginx-unprivileged`，仍是 nginx、定案精神不變。）
 2. **前端的 WS/API URL 注入** → **已失去適用前提**：clarify 定案入口拓樸為「單一入口 + 同源相對路徑」，前端產物**不內嵌任何後端絕對位址**，故「build-time env vs runtime config」這個選擇題**不再存在**（同源即無位址可注入，FR-009）。後續 feature MUST NOT 據此問題重新設計注入機制。
@@ -3103,7 +3108,7 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
   後端送來的指標，方向是 server → client；「web 端 log 上報」（client → server）仍明確不做。
 - 修改任何寫入語意（fire-and-forget 維持，只是明文化）。——009 範圍內遵守；寫入語意之後於 2026-09-27 審查修復另行變更，見 §15.6。
 
-### 15.3 待 `/speckit.clarify` 決定的關鍵問題（✅ 四題皆已定案）
+### 15.3 待 `/speckit-clarify` 決定的關鍵問題（✅ 四題皆已定案）
 
 1. **日誌欄位約定** → **定案**：關聯鍵一律 camelCase、與 `packages/contracts` 逐字一致
    （`jobId`／`machineId`／`clientId`），且 **MUST NOT 再把關聯鍵內嵌進訊息字串**（同一筆事件只能有一個
@@ -3164,19 +3169,36 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 > **012 串流韌性**（Redis Streams＋last-id 續傳、重連以 jobId rebind、新增 `GET /diagnoses/:jobId`）；
 > 另有 **010 資料層單一來源＋ingestion 邊界**（原列的「順手遷移 `@google/genai`」已在審查修復中完成）。
 > 三者皆未排程，立案時仍走完整 SDD。
+>
+> **已變更（2026-09-27 第二輪審查）**：roadmap 修訂為 **010-lite → 012-lite → 011**（`docs/20260927-research-review02.md` §5.4）；
+> 012-lite 改為優先採 BullMQ `returnvalue`＋`GET /diagnoses/:jobId`＋`stalled` 監聽，Redis Streams 降為備選。延後項總表見 ADR-002 §6.5。
 
-### 15.6 2026-09-27 審查修復（已落地的現況摘要）
+### 15.6 v1.0.0 之後的現況摘要
 
-009 之後以 `fix/20260927-research-review` 分支修正審查報告（`docs/20260927-research-review.md`）列出的 P0／P1。
-這不是一條 SDD feature，但改動了多處跨 feature 的行為，現況摘要如下（各章 reference code 保留，另以「已變更」註記指回本節）：
+本節彙整 **v1.0.0（`3e94ac2`）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況。這些分支都不是 SDD feature，
+但改動了多處跨 feature 的行為；各章 reference code 保留，另以「已變更」註記指回本節。依 `develop` 的 merge 順序
+（`git log --oneline --first-parent --merges 3e94ac2..HEAD` 核對）：
+
+| 順序 | 分支 | merge commit | 內容 | 本節小節 |
+| --- | --- | --- | --- | --- |
+| 1 | `fix/20260927-research-review` | `a8ef62a` | 第一輪審查（`docs/20260927-research-review.md`）P0～P2 修復，16 個 commit | 第一輪審查修復 |
+| — | （直接 commit 於 `develop`） | `eab5db4` | 第一輪審查報告移除已修復項目 | — |
+| 2 | `upgrade/20260927-tech-stack` | `6be71c6` | 技術棧升級，17 個 commit | 技術棧升級 |
+| 3 | `docs/20260927-research-review02` | `63b6f66` | 新增第二輪審查報告 `docs/20260927-research-review02.md` | — |
+| 4 | `fix/20260927-research-review02` | `898ccfc` | 第二輪審查 Batch A／B 修復 | 第二輪審查修復 |
+| 5 | `fix/20260927-review02-batch-cd` | 待併回 | 第二輪報告 Batch C（文件與 release 準備）、Batch D（測試基礎建設），外加 6 項 code-review findings | Batch C／D |
+
+之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。
+
+**第一輪審查修復**（`fix/20260927-research-review`，報告 `docs/20260927-research-review.md`）：
 
 - **契約**：`ClientControlMessageSchema`、`CreateDiagnosisBodySchema`／`ResponseSchema`、`AiStreamEventSchema`
   （`ai/*` 帶 `attempt`）、`JobStatusSchema`、`WorkerMetricsSchema` 全面 Zod 化；`machine/data` 為裸陣列、
-  以 `isTelemetryPoint` 守衛；`DiagnosisJobPayload` 移除 `promptVersion`；`asyncapi.yaml` 升 1.1.0，
+  以 `isTelemetryPoint` 守衛；`DiagnosisJobPayload` 移除 `promptVersion`；`asyncapi.yaml` 升 1.1.0（現為 1.2.0，見第二輪修復段與 repo 根 `CHANGELOG.md`），
   並有 asyncapi↔Zod 漂移測試。
 - **建置**：packages `exports` 加 `development` condition，乾淨 clone 免 build 即可 typecheck／test；
   worker／web dev 即時吃 packages src，api `start:dev` 先以 `tsc` build packages（改 packages 後需重跑）；
-  Node 統一 22（`.nvmrc`、`engines >=22`、CI 讀 `.nvmrc`）；CI 補 `pnpm build`。
+  Node 統一 22（`.nvmrc`、`engines >=22`、CI 讀 `.nvmrc`；**已變更**：`engines` 已收緊為 `>=22.12`、pnpm 升 10，見下方技術棧升級小節）；CI 補 `pnpm build`。
 - **api**：Gateway 輸入加固（`safeParse`、error listener、`maxPayload` 16 KiB、Origin 白名單
   `WS_ALLOWED_ORIGINS`、`machineIds` 與名冊取交集）；`uncaughtException`／`unhandledRejection` 同步寫
   JSON fatal log 後 `exit(1)`；env Zod fail-fast；讀 `REDIS_PASSWORD`；Redis 連線分 blocking／command；
@@ -3224,7 +3246,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - base image tag＋digest 雙釘（`node:22.23.3-alpine`、`nginxinc/nginx-unprivileged:1.31.6-alpine`、`redis:7.4.11-alpine`、
     `mongo:7.0.43`）；升版流程：`docker buildx imagetools inspect <image>:<tag>` 取新 digest，tag 與 digest 一起改。
   - 建置：BuildKit `RUN --mount=type=cache`＋`pnpm fetch`＋`pnpm install --offline --filter <app>...`；`pnpm deploy --legacy --prefer-offline`
-    （legacy deploy 不讀 lockfile、需要 registry metadata；pnpm 10 起非 injected workspace 須加 `--legacy`，否則 `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`）。全棧 demo 需 BuildKit（Docker 23+ 預設）。
+    （legacy deploy 會跑一次解析、需要 registry metadata，**但版本仍依共用 lockfile**——2026-09-27 乾淨 cache 實測 api image 全部 production 套件與 `pnpm-lock.yaml` 逐一相同（計數方法與數字見 README「技術棧」部署列），見 ADR-002 §6.5；撰寫時曾寫「不讀 lockfile」，已更正。pnpm 10 起非 injected workspace 須加 `--legacy`，否則 `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`）。全棧 demo 需 BuildKit（Docker 23+ 預設）。
   - web runtime 改 `nginx-unprivileged`（uid 101），容器內 `listen 8080`、compose `8080:8080`（對外入口不變；現況為 `${WEB_BIND:-127.0.0.1}:8080:8080`，預設只綁本機）；`server_tokens off`、
     `X-Content-Type-Options`、`X-Frame-Options DENY`、`Referrer-Policy`、CSP（`default-src 'self'`、`connect-src 'self'`——CSP3 的 `'self'` 已涵蓋同源 ws/wss；要相容舊 Safari 再加回 `ws: wss:`、
     `frame-ancestors 'none'` 等）、gzip、`/assets/` `immutable` 一年、`index.html` `no-cache`。
@@ -3232,12 +3254,43 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
     qs ≥6.16.0、body-parser ≥1.20.6、postcss ≥8.5.23、nanoid ≥3.3.18）使 `pnpm audit --prod` 由 19 項（9 high）降至 3 項（0 high，
     餘 file-type 與 `@nestjs/core` 需升主版本；**已變更**：2026-09 技術棧升級改用 NestJS 11（Express 5）＋`@nestjs/bullmq` 12 後 `pnpm audit --prod` 歸零，multer／qs／body-parser 三項 override 因 Express 5 相依鏈已自帶修補版而移除，現況見 root `package.json` 的 `pnpm.overrides`）；`.gitignore` 補 `*.tsbuildinfo`、`.vite/`。
 
-**第二輪審查修復**（`fix/20260927-research-review02`，報告 `docs/20260927-research-review02.md`）：
+**技術棧升級**（`upgrade/20260927-tech-stack`，merge `6be71c6`；依據為該分支 commit、root／各套件 `package.json` 與
+`docs/20260927-research-review.md` §4 表）：
+
+- **後端框架**：NestJS 10 → **11.2.6**（預設 **Express 5**，express 5.2.1）、`@nestjs/bullmq` 10 → **12.0.0**、`@nestjs/cli` 11；
+  本專案只有 `/diagnoses` 與 `/healthz` 兩條路由、無萬用字元路由，Express 5 路由語法變更不需改程式。`pnpm audit`（全量與 `--prod`）**歸零**，
+  multer／qs／body-parser 三項 override 移除（現存 override 只剩 postcss、nanoid）。BullMQ 5／ioredis 5／mongodb 6 維持。
+- **前端工具鏈**：Vite 5 → **7.3.6**（刻意不升 8／Rolldown）、`@vitejs/plugin-vue` **6**、vue-tsc **3**、Vue `~3.5` patch、Pinia 2 → **3**、
+  eslint-plugin-vue **10**（eslint 本體維持 9）；Tailwind 3 維持（v4 視覺回歸風險高、收益低）。`vite.config.ts` 不需改動；Vite 6 起
+  `resolve.conditions` 依 `NODE_ENV` 展開，dev 讀 packages `src`、`vite build` 讀 `dist`。
+- **測試**：vitest 2 → **4.1.11**（全套件；移除 critical advisory）；vitest 4 預設不排除 `dist`，各套件 `vitest.config.ts` 補 `exclude`。
+- **Zod 3 → 4.6.5**：
+  - 移除 `zod-to-json-schema`，漂移測試與 Gemini `responseJsonSchema` 改用內建 `z.toJSONSchema`（Gemini schema 逐鍵相同、prompt sha256 不變，故 `PROMPT_VERSION` 未升）。
+  - 驗證加嚴：`z.uuid()`（RFC 4122 版本位）、時間戳改 `z.iso.datetime({ offset: true })` 對齊 RFC 3339；生產端 `randomUUID()`／`toISOString()` 皆通過。
+  - 外部可見變化：`POST /diagnoses` 的 400 回應 `issues[].code` 由 `invalid_string` 變 **`invalid_format`**（repo 內無消費者）。
+  - **接受的代價**：web bundle 約 190 kB → **224.32 kB（gzip 75.62 kB）**，來自 Zod 4 classic 本體（方法鏈 API tree-shake 差、預設載 en locale）；
+    `events.ts` 的 schema 建構已標 `@__PURE__`。後續選項為 web 改用 **`zod/mini`**（審查報告 02 §5.5 實測 Zod 部分 gzip 約 29.7 → 9.4 kB），
+    需改寫 contracts 撰寫 API，屬跨 feature 決策，立案前須走 ADR；目前未排程。
+- **契約**：五個控制訊息型別（`TelemetryPoint`、`SystemConnected`、`MachineSubscribed`、`Pong`、`SystemMetrics`，另含 `SystemUnauthorized`）
+  由手寫 TS 改為 Zod schema＋`z.infer`，export 名稱不變；asyncapi 漂移測試擴為 12 則 message 與 3 個 `components.schemas` 全數結構比對，
+  並有覆蓋率測試（新增 message 漏列即紅），`format` 不再略過；`system/metrics` 驗證規則上收契約，web 改用 `SystemMetricsSchema`。
+  高頻 `machine/data` 仍只走手寫 `isTelemetryPoint`（硬規則 1）。此分支未改 wire 結構，`info.version` 當時維持 1.1.0（第二輪審查 DOC-2 認定驗證加嚴與 `invalid_format` 仍屬契約變更，已併入 1.2.0，見下方第二輪修復段）。
+- **套件管理與 Node**：pnpm 9.0.0 → **10.34.5**（root `packageManager` 附 sha512 hash）；pnpm 10 預設不跑依賴 lifecycle scripts，
+  `onlyBuiltDependencies` 明列 esbuild、msgpackr-extract，其餘列入 `ignoredBuiltDependencies`。pnpm 10 的 `pnpm deploy` 對非 injected
+  workspace 須加 **`--legacy`**（api／worker Dockerfile 已改）。root `engines.node` 由 `>=22` 收緊為 **`>=22.12`**（Vite 7／plugin-vue 6 最低需求）。
+  Node 版本三者關係：repo 根 `.nvmrc` 為 **`22`**（開發與 CI 的版本單一來源，CI 以 `node-version-file` 讀取），Dockerfile 釘
+  **`node:22.23.3-alpine`**（tag＋digest）作可重現建置，root `engines.node >=22.12` 是最低可用門檻——`.nvmrc` 解析出的 22 線最新版與
+  Dockerfile 的 22.23.3 都滿足它。
+- **建置**：`packages/shared` 補 `tsconfig.build.json` 排除測試檔。
+
+**第二輪審查修復**（`fix/20260927-research-review02`，merge `898ccfc`，報告 `docs/20260927-research-review02.md`）：
+
+- **契約版本**：`asyncapi.yaml` 的 `info.version` 已升 **1.2.0**（向後相容的 minor：涵蓋技術棧升級帶來的驗證加嚴與 `invalid_format`、本輪新增的 optional `system/metrics.persist` 等），各版變更明細見 repo 根 `CHANGELOG.md`。
 
 - **api Gateway**：
   - 授權：有設 `WS_AUTH_SECRET` 時 `ai/*`、`job/status`、`system/metrics` 只送已授權連線；未設時連上即授權。
   - 違規（畸形訊息、錯誤 token）累計 10 次以 `1008` 關閉；有 `WS_AUTH_SECRET` 時 `WS_AUTH_GRACE_MS`（預設 10000，1000–60000）內未授權亦 `1008`；心跳改為帶 nonce 的協定層 ping，pong 須原樣帶回。
-  - 慢 client：`WS_SEND_HIGH_WATER_BYTES`（預設 1048576，65536–268435456）超標略過遙測推送（控制／診斷訊息照送）、連續 3 tick 超標 terminate；
+  - 慢 client：`WS_SEND_HIGH_WATER_BYTES`（預設 1048576，65536–268435456）超標略過高頻流推送（遙測批次與 `ai/token`；`ai/done`／`ai/error`／`job/status` 等終態與控制訊息照送，漏掉的 token 由 `ai/done` 補齊）、連續 3 tick 超標 terminate；
     `MAX_WS_CONNECTIONS`（預設 500，1–100000）達上限 upgrade 回 503；有 `WS_AUTH_SECRET` 時未授權連線子上限 `max(10, floor(20% × MAX_WS_CONNECTIONS))`。
   - 授權期限改由獨立 sweep 檢查（間隔 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`），不再受心跳間隔拖長。
   - `POST /diagnoses`：檢查順序為名冊 `404` → `socketId` 在線／已授權（否則 `409`，中文 message）→ `jobId` 冪等；既有 `409` 條件不變。
@@ -3252,6 +3305,37 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   `restart: unless-stopped`；web `depends_on: api: service_healthy`；api／worker 加 `files: ["dist"]`、worker build 排除
   `smoke-gemini.ts`、`.dockerignore` 補 `**/` 前綴；demo `TELEMETRY_TTL_SECONDS` 改 86400；五套件 test 移除 `--passWithNoTests`。
   root 聚合 script 內的裸 `pnpm` 需先 `corepack enable`（README 已註明）。
+
+**Batch C／D**（`fix/20260927-review02-batch-cd`，merge 待併回 `develop` 時填；報告 `docs/20260927-research-review02.md` §6）：
+
+- **Batch C（文件與 release 準備）**：
+  - 契約：`asyncapi.yaml` 的 `info.version` 已升 **1.2.0**（明細見上方第二輪修復段與 `CHANGELOG.md`「asyncapi 契約版本」）；新增 repo 根 `CHANGELOG.md`（版本策略：產品版本與契約版本兩條獨立演進）。
+  - 產品版本：六份 `package.json`（root 新增 `version`、五套件由 `0.1.0` 對齊）預定 **1.1.0**，release 時與 tag、CHANGELOG 條目一致。
+  - 憲章升 **1.5.0**：Principle III「型別來源分層」改為全部 WS message 與 `POST /diagnoses` 一律 Zod＋`z.infer`；Governance 新增「跨 feature／跨分支決策 MUST 回補真實來源（涵蓋維護分支）」與「契約變更 MUST 升 `info.version` 並記 CHANGELOG」。`CLAUDE.md` 補「維護分支」小節。
+  - 本節由「2026-09 修復摘要」改名為「v1.0.0 之後的現況摘要」並加上維護分支表；ADR-002 新增 §6.5「已知未做與延後項」表。
+  - specs 001–008 補狀態與「已變更」橫幅；第一輪報告數字更正後凍結為歷史快照。
+  - 文件一致性自動檢查：`packages/contracts/src/docs-contract-version.test.ts`（README／指南／CHANGELOG 的 `info.version` 現況宣稱＝`asyncapi.yaml`）、api／worker 各一支 `readme-env-table.test.ts`（README 環境變數表涵蓋 `env-schema.ts` 全部 key、反向不留幽靈變數）。
+- **Batch D（測試基礎建設）**——指令、前置與門檻以 README「測試與品質門檻」為準：
+  - **覆蓋率**：root `vitest.config.ts` 以 `test.projects` 聚合五個套件，`pnpm test:coverage`（`@vitest/coverage-v8`，合併報告）；不退步門檻 lines 60％／branches 50％；CI 以它取代 `pnpm test` 並上傳 lcov。2026-09-28 實測總計 lines 約 81％、branches 約 76％。
+  - **整合測試**：worker／api 各有 `vitest.integration.config.ts` 與 `test:integration`，需 `docker compose up -d`；Redis db 15＋隨機前綴、Mongo 隨機資料庫、測後清理。涵蓋 Lua compare-and-del 鎖、並發去重、鎖換手、限流 `INCR`／`EXPIRE`、cache／lock TTL、`collMod`、Mongo 錯誤碼 85／86／11000、`HistoryService.writeOnce` 計數協調。實測修正一則認知：Mongo 7 允許**不同名**的非 unique 與 unique `{ jobId: 1 }` 索引並存（此時重複資料撞 11000 而非 85），`diagnosis-repository.ts` 註解已更正。
+  - **跨 process e2e**：新套件 `tests/e2e`（`@flow-gatekeeper/e2e`，`pnpm test:e2e`）＋`docker-compose.e2e.yml`：獨立專案 `flow-gatekeeper-e2e`、只開 `127.0.0.1:18080`、env 一律用已提交範本、worker `AI_PROVIDER=fake`；四場景（訂閱→POST→事件序列、cache 命中、409／404、worker `SIGKILL` 後 stalled 重派），跑完 `down -v`。需 Compose 2.24.4+（`!reset`／`!override`）；一鍵 demo 本身仍 2.20.2+。
+  - **fake AiProvider**：`apps/worker/src/ai/fake-provider.ts` 實作 `AiProvider`（硬規則 4），固定假診斷逐段串流；由 `AI_PROVIDER`（`gemini`｜`fake`，預設 `gemini`）、`FAKE_AI_TOKENS`（20，1–1000）、`FAKE_AI_TOKEN_DELAY_MS`（500，0–60000）控制，production 下允許但啟動 warn、非法值拒絕啟動。`id`／`model` 進快取簽章，不與 gemini 快取互相命中。
+  - **變異測試**：`stryker.config.mjs` 只變異五個接線層核心檔、`break` 70；`.github/workflows/nightly-mutation.yml` 每日由 `main` 排程、checkout `develop`。首跑總分約 72，`monitoring.gateway`（66.5）與 `processor`（62.7）單檔低於 70，列追蹤。
+  - **斷言面補齊**（報告 TQ-4～TQ-9）：`processor` 事件序列與重試分支、`job-status-relay`、`HistoryService`、pino logger 包裝、web 元件測試（`CopilotDrawer`、`MachineNodeCard`、`MetricsPanel`、metrics store）。
+  - **CI**：`ci.yml` 改為契約 lint → typecheck → lint → `test:coverage`（含門檻、上傳 lcov）→ build，加 `permissions: contents: read`、`concurrency`、`timeout-minutes: 20`；仍只保留 `workflow_dispatch`。
+- **code-review findings（6 項，行為與結構收斂）**：
+  - Gateway「已發 close(1008) 但對端不回 close frame」的逾期回收：**現況為逐連線計時器**——`requestClose()` 發出 close 時掛 `setTimeout(min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)).unref()`，到期即以 `close-not-honoured` terminate，對端正常回 close 時由 `cleanup` 清掉計時器；**未設 `WS_AUTH_SECRET` 時違規關閉也適用**，且不依賴心跳或授權 sweep 的檢查間隔（`f2d9cb0`）。演進：`12dcdd5` 先把回收放在心跳 sweep，final-review（`620d4b6`）補回授權 sweep 共用檢查，final-review-2 再改為逐連線計時器並移除兩個 sweep 的回收分支。
+  - Gateway 以逐連線 `closeTimer` 為「關閉中」的單一來源（`isClosing()` 由其推導），違規與授權逾期共用唯一關閉入口 `requestClose()`，移除重複的 `closing` 旗標（原以 `closeRequestedAt` 時戳表示，`f2d9cb0` 改為計時器）。
+  - web `useDiagnoseTrigger`：`hasClient` 改由 `connectionBlockedReason` 推導，連線把關條件只寫一處。
+  - 日誌節流器收進 `@flow-gatekeeper/shared/logging`（`packages/shared/src/logging/throttle.ts`）：`LogThrottle`、`ConnectionErrorThrottle` 與共用節流窗常數 `ERROR_LOG_THROTTLE_MS`（30 s），api 與 worker 不再各抄一份；api `lib/connection-error-throttle.ts` 只留 ioredis 事件接線。
+  - worker 連線錯誤節流的 key 只用連線名、不含錯誤內容（`createThrottledErrorReporter().error(conn, log)`），key 集合有界。
+  - `docker-compose.yml` 的 healthcheck `start_interval` 註解補上 Compose CLI 2.20.2+ 需求（與 README 前置需求一致）。
+- **最終兩段式審查（2026-09-28）**：全支 `develop..HEAD` 收尾前分兩段審查，修正共 9 個 commit（標 `[final-review]`／`[final-review-2]`），逐項判定見報告附錄 C.9。
+  - **第一段**：乾淨 Opus 5.5 跑 `/code-review xhigh develop..HEAD`，13 項 findings、修 9 項（6 commit：`620d4b6`、`67a7f0b`、`3e1436a`、`591b380`、`c3cf2ba`、`0348a35`），統籌者另補漏 1 commit（`aadbe96`）。主要修正：Gateway 授權 sweep 補回關閉逾期回收（後被第二段取代）；worker `findJobIdIndex` 在同鍵 unique 與非 unique 索引並存時**優先認 unique**，不誤 drop 既有索引；`AI_PROVIDER=fake` 時略過 `GEMINI_MODEL` thinking 警告；e2e harness 起全棧前無條件 `down -v`、ws-client 常駐 error listener、整合測試完整還原 Nest Logger；nightly mutation timeout 放寬到 180 分（推估值，待 runner 實測收斂）；`tests/e2e/package.json` 移除 `version` 維持「六份 package.json 對齊 tag」。補漏：契約 `system/metrics.collectedAt` 語意改為僅供顯示與稽核、新鮮度以收訊時刻判定（報告 CT-4）；`apps/api/.env.demo.example` 補 `METRICS_INTERVAL_MS`／`METRICS_LOG_LEVEL`（DOC-11）；README 明寫 `AI_TIMEOUT_MS` MUST 小於前端 45 秒 watchdog。
+  - **第二段**：Fable 5.1 對上述 fix commit 跑 `/code-review high`，8 項 findings 全修（`f2d9cb0`、`11223ca`）：關閉逾期回收改為**逐連線計時器**（見上方 code-review findings 第一點）；`packages/contracts` `collectedAt` 註解與 asyncapi 同步；api 新增 `src/test-support/nest-logger.ts`（`overrideNestLogger`／`silenceNestLogger`）取代三處手抄；e2e ws-client 握手階段加逾時並 terminate。
+  - **未修、待決**：`AI_PROVIDER=fake` 在 production 只 warn、是否改為須 opt-in 旗標（需使用者決策）；`@vitest/coverage-v8` 釘死而 `vitest` 用 caret，下次升級相依時統一；兩項重構類建議。報告第二輪其餘未排程項已集中到 ADR-002 §6.5.1。
+  - **收尾數字**（2026-09-28 實跑）：`pnpm test:coverage` 94 檔 982 測試通過，lines 81.52％、branches 76.56％；整合測試 27（worker 20＋api 7）；e2e 5 場景；契約 lint／typecheck／lint／`pnpm -r build` 全綠。
+- **e2e 實測發現（留給 012-lite）**：worker 被 `SIGKILL` 後，BullMQ 需等 job lock（30 s）過期、再經 stalled 檢查（每 30 s，先標記、下一輪才搬回 wait），重派的 `waiting`／第二次 `active` 約在 kill 後 **92 秒**才出現、`completed` 約 101 秒；這段期間前端**收不到任何事件**，已超過前端 45 秒無進展 watchdog。stalled 重派**不遞增** `attemptsMade`，重跑的 `ai/*` `attempt` 維持 1、`seq` 從 0 重播。這是審查報告 AR-1／AR-3（relay 未監聽 `stalled`、等待者無 keepalive）的實測佐證，處理排入 roadmap 012-lite（ADR-002 §6.5）。
 
 ---
 
@@ -3375,15 +3459,15 @@ uv tool install specify-cli --from git+https://github.com/github/spec-kit.git@vX
 specify init flow-gatekeeper --integration claude
 
 # feature flow
-/speckit.constitution
-/speckit.specify
-/speckit.clarify
-/speckit.plan
-/speckit.checklist
-/speckit.tasks
-/speckit.analyze
-/speckit.implement
-/speckit.converge
+/speckit-constitution
+/speckit-specify
+/speckit-clarify
+/speckit-plan
+/speckit-checklist
+/speckit-tasks
+/speckit-analyze
+/speckit-implement
+/speckit-converge
 
 # env（PowerShell；每個 app 各一份，不要複製根目錄 .env.example——那是總覽說明）
 Copy-Item apps/api/.env.example    apps/api/.env
@@ -3403,7 +3487,15 @@ pnpm typecheck
 pnpm lint
 pnpm test
 pnpm check      # = contract:lint → typecheck → lint → test
+pnpm check:coverage   # 同上，test 換成 test:coverage（CI 走這條）
 pnpm build      # 選用：production 建置路徑
+
+# 進階測試（review02 Batch D；前置與門檻見 README「測試與品質門檻」）
+pnpm test:coverage                                   # 五套件合併覆蓋率，門檻 lines 60／branches 50
+pnpm --filter @flow-gatekeeper/worker test:integration   # 需 docker compose up -d
+pnpm --filter @flow-gatekeeper/api test:integration      # 需 docker compose up -d
+pnpm test:e2e                                        # 起獨立 compose 專案 flow-gatekeeper-e2e；需 Compose 2.24.4+
+pnpm test:mutation                                   # Stryker 五核心檔，break 70
 
 # run
 pnpm --filter api seed

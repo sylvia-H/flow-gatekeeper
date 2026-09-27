@@ -6,12 +6,8 @@ import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { AppConfigService } from "../config/config.service.js";
 import { detectErrorTransitions } from "../../lib/errorlog-transition.js";
 import type { ErrorLogDoc } from "../../lib/errorlog-transition.js";
-import {
-  BoundedBuffer,
-  LogThrottle,
-  SingleFlight,
-  withDeadline,
-} from "../../lib/telemetry-buffer.js";
+import { ERROR_LOG_THROTTLE_MS, LogThrottle } from "@flow-gatekeeper/shared/logging";
+import { BoundedBuffer, SingleFlight, withDeadline } from "../../lib/telemetry-buffer.js";
 import {
   NAMESPACE_EXISTS,
   classifyInsertFailure,
@@ -33,8 +29,6 @@ const TELEMETRY_BUFFER_CAPACITY = 5_000;
 const ERRORLOG_BUFFER_CAPACITY = 1_000;
 /** onModuleDestroy 等待進行中寫入的上限（正常路徑 main.ts 已先 flush，這裡只收尾）。 */
 const DESTROY_IDLE_DEADLINE_MS = 3_000;
-/** 同類寫入錯誤 log 的節流間隔。 */
-const ERROR_LOG_THROTTLE_MS = 30_000;
 /**
  * errorlogs 保存期（30 天）。errorlog 量小、是給人看的異常軌跡，保存期刻意比 telemetry 長；
  * 目前寫死於此、未開環境變數（設定集中處 AppConfigService 不在這次修改範圍內）。

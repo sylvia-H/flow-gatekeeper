@@ -53,37 +53,7 @@ export class BoundedBuffer<T> {
   }
 }
 
-/**
- * 錯誤 log 節流：同一個 key 在 `intervalMs` 內只放行一則，其餘累計次數，
- * 下一則放行時一併回報被壓掉幾次。
- *
- * 存在理由：Mongo 故障時每次 flush 都會失敗，不節流就是每秒一行 error、json-file 不輪替
- * 的情況下會把磁碟吃掉；但完全吞掉又會讓人不知道故障仍在持續，所以附上累計數。
- */
-export class LogThrottle {
-  private readonly state = new Map<string, { lastAt: number; suppressed: number }>();
-
-  constructor(private readonly intervalMs: number) {}
-
-  /**
-   * 回傳 `null` 表示本次應壓掉；否則回傳自上次放行以來被壓掉的次數（首次為 0）。
-   */
-  hit(key: string, now: number): { suppressed: number } | null {
-    const entry = this.state.get(key);
-    if (!entry) {
-      this.state.set(key, { lastAt: now, suppressed: 0 });
-      return { suppressed: 0 };
-    }
-    if (now - entry.lastAt < this.intervalMs) {
-      entry.suppressed += 1;
-      return null;
-    }
-    const suppressed = entry.suppressed;
-    entry.lastAt = now;
-    entry.suppressed = 0;
-    return { suppressed };
-  }
-}
+// 錯誤 log 節流器 `LogThrottle` 已收進 `@flow-gatekeeper/shared/logging`（api／worker 共用一份）。
 
 /**
  * 單一 in-flight 的非同步執行閘：同時只允許一個 `run` 在跑；正在跑時再呼叫會直接回傳

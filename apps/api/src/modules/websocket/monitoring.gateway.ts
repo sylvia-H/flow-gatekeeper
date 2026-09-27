@@ -20,8 +20,7 @@ import { HistoryService } from "../history/history.service.js";
 import { filterPointsForSubscription } from "../../lib/subscription-filter.js";
 import { isOriginAllowed, parseAllowedOrigins } from "../../lib/ws-origin.js";
 import { safeEqualString } from "../../lib/safe-equal.js";
-import { LogThrottle } from "../../lib/telemetry-buffer.js";
-import { CONNECTION_ERROR_LOG_THROTTLE_MS } from "../../lib/connection-error-throttle.js";
+import { ERROR_LOG_THROTTLE_MS, LogThrottle } from "@flow-gatekeeper/shared/logging";
 import {
   DEFAULT_MAX_WS_CONNECTIONS,
   DEFAULT_WS_AUTH_GRACE_MS,
@@ -110,11 +109,19 @@ type ClientState = {
   /** 連續幾個心跳 tick `bufferedAmount` 超過高水位。 */
   overHighWaterTicks: number;
   violations: number;
-  /** 已因違規／授權逾期發出 close，等待 'close' 事件清理；期間的訊息一律忽略。 */
-  closing: boolean;
-  /** 發出 close(1008) 的時刻：對端不回 close frame 時，下一輪授權 sweep 直接 terminate，不讓其再佔名額。 */
-  closeRequestedAt?: number;
+  /**
+   * 因違規／授權逾期發出 close(1008) 時掛上的逐連線計時器（見 `requestClose`）；有值即「關閉中」
+   * （見 `isClosing`），期間的訊息一律忽略。對端在 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 內回
+   * close frame → 'close' 事件進 `cleanup` 清掉此計時器；逾期未回 → 計時器以 `close-not-honoured`
+   * terminate。
+   */
+  closeTimer?: ReturnType<typeof setTimeout>;
 };
+
+/** 已發出 close、等待對端回 close frame 的連線（單一來源：`closeTimer`）。 */
+function isClosing(state: ClientState): boolean {
+  return state.closeTimer !== undefined;
+}
 
 type ViolationReason = "invalid-json" | "schema" | "unauthorized";
 
@@ -145,7 +152,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   // context，故此類事件改走底層 pino child logger 直接呼叫（contracts/log-fields.md §2）。
   private readonly plog = getAppLogger().child({ context: MonitoringGateway.name });
   // key 為固定的事件種類（不含 clientId）：key 集合有界、不隨連線數成長。
-  private readonly warnThrottle = new LogThrottle(CONNECTION_ERROR_LOG_THROTTLE_MS);
+  private readonly warnThrottle = new LogThrottle(ERROR_LOG_THROTTLE_MS);
   private wss?: WebSocketServer;
   private producerTimer?: ReturnType<typeof setInterval>;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
@@ -156,6 +163,8 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   private sendHighWaterBytes = DEFAULT_WS_SEND_HIGH_WATER_BYTES;
   private maxConnections = DEFAULT_MAX_WS_CONNECTIONS;
   private authGraceMs = DEFAULT_WS_AUTH_GRACE_MS;
+  /** 發出 close 後等待對端 close frame 的上限：`min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，於 attach 算定。 */
+  private closeDeadlineMs = DEFAULT_WS_AUTH_GRACE_MS;
   private droppedSends = 0;
 
   constructor(
@@ -206,6 +215,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     this.sendHighWaterBytes = options.sendHighWaterBytes ?? DEFAULT_WS_SEND_HIGH_WATER_BYTES;
     this.maxConnections = options.maxConnections ?? DEFAULT_MAX_WS_CONNECTIONS;
     this.authGraceMs = options.authGraceMs ?? DEFAULT_WS_AUTH_GRACE_MS;
+    this.closeDeadlineMs = Math.min(this.config.wsHeartbeatMs, this.authGraceMs);
     this.wss = new WebSocketServer({
       server,
       path: "/ws",
@@ -284,7 +294,6 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
       alive: true,
       overHighWaterTicks: 0,
       violations: 0,
-      closing: false,
     };
     this.clients.set(clientId, state);
     if (!state.authorized) this.unauthorizedCount += 1;
@@ -313,7 +322,8 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   }
 
   private handleMessage(clientId: ClientId, raw: string): void {
-    if (this.clients.get(clientId)?.closing !== false) return; // 已離線或正因違規關閉
+    const state = this.clients.get(clientId);
+    if (!state || isClosing(state)) return; // 已離線或正因違規關閉
     let json: unknown;
     try {
       json = JSON.parse(raw);
@@ -389,18 +399,36 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
       reason === "unauthorized" ? "unauthorized subscribe" : "ignored client message",
     );
     if (state.violations < WS_MAX_VIOLATIONS) return false;
-    state.closing = true;
-    state.closeRequestedAt = Date.now();
     this.throttledWarn(
       "violation-close",
       { clientId, violations: state.violations },
       "too many client violations, closing with 1008",
     );
-    state.socket.close(1008, "policy violation");
+    this.requestClose(clientId, state, 1008, "policy violation");
     return true;
   }
 
-  /** 同類 warn 每 `CONNECTION_ERROR_LOG_THROTTLE_MS` 至多一則，並帶出期間被壓掉的則數。 */
+  /**
+   * 發出 close 並掛逐連線計時器（違規與授權逾期的唯一關閉入口）；之後的訊息一律忽略。
+   *
+   * 對端滿 `closeDeadlineMs`＝`min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 仍未回 close frame 即 terminate
+   * （reason `close-not-honoured`）。不靠計時器也不會無限佔名額——ws 的 `close()` 會同步進入 CLOSING 並
+   * 啟動內建 closeTimer（約 30 s），CLOSING 後 `ping()` 不會真的送出、心跳 sweep 也會以 heartbeat-timeout
+   * 回收；逐連線計時器提供與 sweep 間隔、是否設密鑰、`WS_HEARTBEAT_MS` 設多大都無關的精確上限，
+   * 並讓日誌可與半死連線區分。`WS_AUTH_GRACE_MS` 恆有值（預設 10 s），無密鑰時同樣可作門檻。
+   * `unref()`：此計時器不應阻止行程結束。
+   */
+  private requestClose(clientId: ClientId, state: ClientState, code: number, reason: string): void {
+    const deadlineMs = this.closeDeadlineMs;
+    state.closeTimer = setTimeout(() => {
+      this.plog.warn({ clientId, closeDeadlineMs: deadlineMs }, "close frame not received, terminating");
+      this.terminate(clientId, "close-not-honoured");
+    }, deadlineMs);
+    state.closeTimer.unref();
+    state.socket.close(code, reason);
+  }
+
+  /** 同類 warn 每 `ERROR_LOG_THROTTLE_MS` 至多一則，並帶出期間被壓掉的則數。 */
   private throttledWarn(key: string, fields: Record<string, unknown>, msg: string): void {
     const out = throttledFields(this.warnThrottle, key, fields);
     if (out) this.plog.warn(out, msg);
@@ -427,7 +455,7 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
    * 心跳探活掃描：上一輪未回帶正確 nonce 的 pong 者判定失效並回收（涵蓋網路硬中斷的半死連線）；
    * `bufferedAmount` 連續 `WS_SLOW_CONSUMER_TICKS` 輪超過高水位者視為慢讀者回收；其餘標記為
    * 待驗證並送 `ping(nonce)`。回收上限約 2 × WS_HEARTBEAT_MS（SC-005）。授權期限不在此檢查
-   * （見 `sweepAuthGrace`）。
+   * （見 `sweepAuthGrace`）；已發 close 者的逾期回收由逐連線計時器負責（見 `requestClose`）。
    */
   private sweepDeadConnections(): void {
     for (const [clientId, state] of this.clients) {
@@ -464,28 +492,19 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
    * 授權期限掃描（有設密鑰時由 attach 以 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 間隔驅動）：
    * 逾 `WS_AUTH_GRACE_MS` 仍未授權者以 1008 關閉。不另開每連線 timer，故實際關閉時間介於
    * 期限～期限 + 一個掃描間隔，最長約 2 × WS_AUTH_GRACE_MS（與心跳間隔設多大無關）。
-   * 已發出 close 但對端遲不回 close frame 者，再過一個期限即 terminate（否則可多佔 ws closeTimeout 約 30 s）。
+   * 已發 close 者跳過；其逾期回收由逐連線計時器負責（見 `requestClose`）。
    */
   private sweepAuthGrace(): void {
     if (!this.config.wsAuthSecret) return;
     const now = Date.now();
     for (const [clientId, state] of this.clients) {
-      if (state.closing) {
-        // 已發出 close 但對端不回 close frame（ws 預設 closeTimeout 約 30 s）：不讓它再佔名額，直接 terminate。
-        if (state.closeRequestedAt !== undefined && now - state.closeRequestedAt >= this.authGraceMs) {
-          this.terminate(clientId, "close-not-honoured");
-        }
-        continue;
-      }
-      if (state.authorized || now - state.connectedAt < this.authGraceMs) continue;
-      state.closing = true;
-      state.closeRequestedAt = now;
+      if (isClosing(state) || state.authorized || now - state.connectedAt < this.authGraceMs) continue;
       this.throttledWarn(
         "auth-grace-expired",
         { clientId, authGraceMs: this.authGraceMs },
         "websocket not authorized within grace period, closing with 1008",
       );
-      state.socket.close(1008, "authorization timeout");
+      this.requestClose(clientId, state, 1008, "authorization timeout");
     }
   }
 
@@ -500,6 +519,8 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     const state = this.clients.get(clientId);
     if (!state) return; // 冪等：避免 terminate→close 重複清理/記錄
     this.clients.delete(clientId);
+    // 對端已回 close frame（或已被 terminate）：撤掉逾期計時器，不讓它之後再 terminate 一條已清理的連線。
+    if (state.closeTimer) clearTimeout(state.closeTimer);
     if (!state.authorized) this.unauthorizedCount -= 1;
     this.plog.info({ clientId, reason }, "client disconnected");
   }

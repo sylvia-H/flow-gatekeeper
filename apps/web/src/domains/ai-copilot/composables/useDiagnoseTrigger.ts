@@ -35,13 +35,14 @@ export function useDiagnoseTrigger(): DiagnoseTrigger {
   const monitoring = useMonitoringStore();
   const copilot = useCopilotStore();
 
-  const hasClient = computed(() => monitoring.isLive && monitoring.authError === null);
   const options = { authError: () => monitoring.authError };
+  // 連線把關條件只寫這一處；`hasClient` 由它推導，兩者不會各自改條件而漂移。
   const connectionBlockedReason = computed<string | null>(() => {
     if (monitoring.authError !== null) return UNAUTHORIZED_DIAGNOSE_MESSAGE;
     if (!monitoring.isLive) return CONNECTION_NOT_READY_MESSAGE;
     return null;
   });
+  const hasClient = computed(() => connectionBlockedReason.value === null);
   const canDiagnoseSelected = computed(() =>
     copilot.canDiagnose(monitoring.selectedMachineId, hasClient.value),
   );

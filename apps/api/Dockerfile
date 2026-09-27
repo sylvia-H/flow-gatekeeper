@@ -58,9 +58,13 @@ RUN pnpm --filter @flow-gatekeeper/contracts build \
 # workspace 套件的 "files": ["dist"] 使 contracts/shared 只帶 dist（不帶 src、*.test.ts）。
 # pnpm 10 的 deploy 預設只接受 inject-workspace-packages=true 的 workspace（否則 ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE）；
 # 本專案不 inject（dev 期 typecheck／vitest 經 development condition 直接讀 workspace src），故加 --legacy 沿用舊版 deploy。
-# legacy deploy 不讀 lockfile、會重新解析版本，需要 registry metadata——用 --offline 會因
-# metadata 快取不在場而失敗（ERR_PNPM_NO_OFFLINE_META），故改 --prefer-offline：tarball 仍從
-# store（cache mount）取，只有 metadata 走網路。
+# legacy deploy 會跑一次解析流程、需要 registry metadata——用 --offline 會因 metadata 快取不在場而失敗
+# （ERR_PNPM_NO_OFFLINE_META，2026-09-27 實測重現），故用 --prefer-offline：tarball 仍從 store（cache mount）取，
+# 只有 metadata 走網路。解析結果仍以共用 lockfile 為準（log 會印「Shared workspace lockfile detected」）：
+# 2026-09-27 以全新 cache mount + --no-cache 建置 api image 實測（pnpm 10.34.5），image 內全部 production 套件與
+# pnpm-lock.yaml 的 production 依賴閉包逐一相同（139 個套件名：node_modules/.pnpm 的 149 個目錄扣 2 個 workspace
+# 套件、合併 peer 變體與多版本；lockfile 端扣 5 個非 linux-x64 optional），範圍內已有的較新版（ws 8.22.0、bullmq 5.81.5）未被選入。
+# 這是單次觀察而非 pnpm 文件保證——升 pnpm 版本時 MUST 以同法重驗（見 README「部署／監督」）。
 RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm --filter @flow-gatekeeper/api deploy --legacy --prod --prefer-offline --store-dir /root/.local/share/pnpm/store /out
 

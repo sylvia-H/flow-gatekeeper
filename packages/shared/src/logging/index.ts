@@ -175,3 +175,5 @@ export {
   MIN_METRICS_INTERVAL_MS,
   resolveMetricsInterval,
 } from "./interval.js";
+export type { ThrottleDecision } from "./throttle.js";
+export { ConnectionErrorThrottle, ERROR_LOG_THROTTLE_MS, LogThrottle } from "./throttle.js";

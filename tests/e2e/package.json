@@ -1,0 +1,20 @@
+{
+  "name": "@flow-gatekeeper/e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test:e2e": "vitest run --mode e2e"
+  },
+  "dependencies": {
+    "@flow-gatekeeper/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "~22",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.11",
+    "ws": "^8.18.0"
+  }
+}

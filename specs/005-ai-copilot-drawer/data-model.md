@@ -1,5 +1,12 @@
 # Phase 1 Data Model — AI Copilot Drawer
 
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - 轉移表：idle→active「`jobId`＝POST 回傳」、守衛「有 clientId 且非 active」→ `jobId` 前端產生、送出前先建 pending；守衛改為共用連線閘門（已 `machine/subscribed`、未斷線、未收 `system/unauthorized`）＋in-flight 去重。
+> - 轉移表：`streamText += text` → 依 `attempt` 換輪時清空重來。
+> - 轉移表：`ai/done` → completed 前另做一次 schema 驗證。
+> - Diagnose 可用性只看選取與 active → 另受上述連線閘門限制。
+
 前端呈現狀態（記憶體，非持久化）。持久化實體（diagnoses、triggers）屬 003，不在此。型別以 `packages/contracts` 為單一來源，本檔僅描述**前端衍生的呈現狀態**，不新增通訊契約。
 
 ## 實體：`CopilotJobState`（每台一份）

@@ -34,3 +34,7 @@ Thumbs.db
 # 工具快取：tsc 增量建置資訊與 Vite 的依賴預打包快取（皆可重建，且內容因機器而異）
 *.tsbuildinfo
 .vite/
+
+# Stryker 變異測試：sandbox 暫存目錄與報告輸出（皆可重建）
+/.stryker-tmp/
+/reports/

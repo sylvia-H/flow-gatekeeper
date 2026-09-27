@@ -120,7 +120,10 @@ export const SystemMetricsSchema = /* @__PURE__ */ z.object({
    * 但前者輸出 JSON Schema 的 `minimum: 1`、與 asyncapi 同形（後者輸出 `exclusiveMinimum: 0`）。
    */
   windowMs: z.number().int().min(1),
-  /** api 結算時間（RFC 3339，同 `timestamp`）——前端新鮮度判定以此為基準，非收訊時間。 */
+  /**
+   * api 結算時間（RFC 3339，同 `timestamp`）——**僅供顯示與稽核**。新鮮度判定 MUST 以消費端自己的收訊時刻為準
+   * （web `metrics.store` 自 `a85509d` 起如此），不用此欄位，以免受 api／瀏覽器時鐘偏差影響（CT-4，asyncapi 1.2.0 同步更正）。
+   */
   collectedAt: z.iso.datetime({ offset: true }),
   queue: z.object({
     waiting: z.number().int().nonnegative(),

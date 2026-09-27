@@ -1,0 +1,63 @@
+# 跨 process e2e 專用 override（review02 §6 Batch D）——只給 tests/e2e 的 harness 用，不是 demo 設定。
+#
+#   docker compose -p flow-gatekeeper-e2e -f docker-compose.yml -f docker-compose.e2e.yml --profile demo up -d --build --wait
+#
+# 一律搭配獨立專案名 `-p flow-gatekeeper-e2e`：容器、網路、volume 都帶此前綴，與使用者的 demo／dev infra
+# （專案名 flow-gatekeeper）完全隔離，`down -v` 只清 e2e 自己的 volume。需要 Compose 2.24.4+（`!reset`／`!override`）。
+#
+# 與 demo 的差異（每一項都是為了「可重現、不打擾開發機」）：
+# - redis／mongo 不對外開埠：開發機上的 dev infra 已佔用 6379／27017；e2e 只經 web 入口測試，不需要直連。
+# - web 對外改 127.0.0.1:18080：避開 demo 的 8080，兩者可同時存在。
+# - env_file 一律指向已提交的 *.example 範本：不讀開發者自己的 apps/worker/.env、apps/api/.env.demo
+#   （可能留有 GEMINI_API_KEY、WORKER_CHAOS、WS_AUTH_SECRET 等會改變行為的值）；檔案不存在也能跑。
+# - redis 強制不啟用密碼：root .env 或 shell 若殘留 REDIS_PASSWORD，會讓 redis 啟用認證而範本 env 留空 → NOAUTH。
+# - worker 改用 fake AiProvider（AI_PROVIDER=fake，測試替身，見 apps/worker/src/ai/fake-provider.ts）：
+#   20 段 × 500ms ≈ 10s 串流，足以在中途 kill worker；不需金鑰、不耗配額。
+# - 映像改標 :e2e：不覆寫使用者 demo 的 :local 映像。
+# - healthcheck 加 start_interval：`--wait` 不必等滿第一個 30s interval。
+services:
+  redis:
+    ports: !reset []
+    environment:
+      REDIS_PASSWORD: ""
+
+  mongo:
+    ports: !reset []
+    healthcheck:
+      start_interval: 2s
+
+  worker:
+    image: flow-gatekeeper-worker:e2e
+    env_file: !override
+      - apps/worker/.env.example
+    environment:
+      AI_PROVIDER: fake
+      FAKE_AI_TOKENS: "20"
+      FAKE_AI_TOKEN_DELAY_MS: "500"
+      # 縮短逾時與去重鎖：kill 場景中死掉的持鎖者留下的 ai-lock 要等 TTL 過期，重派的 job 才能取鎖。
+      # 仍滿足 AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000；fake 串流約 9.5s < 15s。
+      AI_TIMEOUT_MS: "15000"
+      AI_DEDUPE_LOCK_SECONDS: "20"
+      REDIS_PASSWORD: ""
+    healthcheck:
+      start_interval: 2s
+
+  api:
+    image: flow-gatekeeper-api:e2e
+    env_file: !override
+      - apps/api/.env.demo.example
+    environment:
+      REDIS_PASSWORD: ""
+      WS_AUTH_SECRET: ""
+
+  seed:
+    image: flow-gatekeeper-api:e2e
+    env_file: !override
+      - apps/api/.env.demo.example
+
+  web:
+    image: flow-gatekeeper-web:e2e
+    ports: !override
+      - "127.0.0.1:18080:8080"
+    healthcheck:
+      start_interval: 2s

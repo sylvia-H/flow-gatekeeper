@@ -7,6 +7,7 @@
 | 與前輪關係 | 前輪 `docs/20260927-research-review.md` 審 `main` @ `3e94ac2`（v1.0.0）。本輪三個目標：(a) 驗證前輪宣稱「已修復」與升級是否屬實、有無回歸；(b) 找前輪未發現的缺陷；(c) 給架構級優化方向。**前輪已列且本輪無新證據的殘留項不重複**（前輪 §1.1–§3.3 仍以前輪為準） |
 | 方法 | 8 個獨立審查 agent（Opus 5.5）分面向平行審查：api、worker、web、contracts／shared／asyncapi、infra／CI、測試與程式品質、文件與 SDD 流程、跨 process 架構；全程唯讀，由統籌者（Fable 5.1）交叉比對、去重、抽查證據後統整。實測項目標「實測」，推論項目標「推理」 |
 | 全套檢查（實跑） | `contract:lint` 0 error；`-r typecheck` 5/5；`-r lint` 0 error 0 warning；`-r test` **583 passed / 0 failed**（shared 16、contracts 113、api 155、worker 136、web 163，wall 35 s）；web build 224.32 kB（gzip 75.62 kB）；`pnpm audit` 0。**前輪與升級分支的宣稱數字全部屬實** |
+| 複查狀態 | 2026-09-28 附錄 C：Batch A～D 與 code-review findings 修復完成度逐項複查，見附錄 C |
 | Finding 編號 | 本文採穩定 ID（`API-`／`WK-`／`WEB-`／`CT-`／`INF-`／`TQ-`／`DOC-`／`AR-`），行號會隨修改漂移，引用時以 ID 為準 |
 | 各面向完整報告 | 統籌者 scratchpad `review02/{api,worker,web,contracts,infra,tests-quality,docs-process,architecture}.md`（含全部 `file:line` 證據、重現腳本與變異測試記錄；未納入 repo） |
 
@@ -194,7 +195,7 @@
 | web | AR-A7／AR-模組 | 機台名冊實際有**五份**（web 內三份），前輪記三份；web `shared/` 反向匯入 `domains/` 有四處（`useDiagnoseTrigger`、`TopBar.vue`、`MetricsPanel.vue`、`AppLayout.vue`），前輪只列一處 | |
 | contracts | CT-5 | 漂移測試 `normalize` 漏洞：date-time 兩種變體無法區分（Zod 端退回 Z-only 抓不到）；`multipleOf`／`uniqueItems`／`propertyNames`／`additionalItems` 等鍵不比對（建議白名單反轉成黑名單）；enum 被 `.map(String)`；`anyOf` 與 `oneOf` 並存只比第一個；不驗 channel 方向 | `asyncapi-drift.test.ts:36-57,76-79,118,129` |
 | contracts | CT-9 | 註解宣稱「依 RFC 3339」但 `z.iso.datetime({offset:true})` 拒收小寫 `t`/`z` 與閏秒（**實測**）；生產端一律 `toISOString()` 無實害 | `datetime.test.ts:6-8`、`events.ts:35` |
-| contracts | CT-10 | web lint 禁令的 `ImportExpression` 選擇器只涵蓋 `pino|socket.io`，動態 `import("@flow-gatekeeper/shared/logging")` 不會被擋；`pino-pretty` 未列 | `eslint.config.js:164` |
+| contracts | CT-10 | web lint 禁令的 `ImportExpression` 選擇器只涵蓋 `pino\|socket.io`，動態 `import("@flow-gatekeeper/shared/logging")` 不會被擋；`pino-pretty` 未列 | `eslint.config.js:164` |
 | contracts | CT-12 補充 | `SystemConnected.clientId` 是 `z.string()` 而 `CreateDiagnosisBody.socketId` 是 `z.uuid()`，Gateway 若改用非 UUID clientId，POST 回 400 而前端顯示「前端版本可能過舊」 | `events.ts:94`、`http.ts:22` |
 | infra | INF-7 | `ignoredBuiltDependencies` 的 `@nestjs/core` 是 NestJS 10 遺留（11.2.6 已無 install script）；`lucide-vue-next@0.454.0` 已 deprecated（改 `@lucide/vue`）；`eslint@9.39.4` 已標「no longer supported」（9 線 EOL，前輪決定維持 9 的新證據）；`pnpm dedupe --check` 不通過（`@vue/compiler-dom`／`@vue/shared` 3.5.39 vs 3.5.43）；`postcss`／`nanoid` override 已是不起作用的下限；`ioredis` 兩份（5.11.1／bullmq 釘 5.10.1）無害 | `package.json:18,30-40` |
 | infra | INF-8 | CI 無 `permissions:`、`timeout-minutes`、`concurrency`；actions 只釘 tag 未釘 SHA；`ci.yml:18` 註解「node:22-alpine」已過時（實為 `22.23.3@sha256`）；缺 `pnpm audit --prod --audit-level=high`、`docker compose config -q`、image smoke（恢復 CI 時一併補） | `.github/workflows/ci.yml` |
@@ -349,3 +350,295 @@ API-2 背壓 + pong nonce、API-4 授權集合、API-6 違規計數、前輪 §1
 | §5.4 roadmap 010→011→012 | 修訂為 010-lite→012-lite→011，Streams 改 `returnvalue` |
 | §2.2「測試基礎建設」只列缺測模組 | 補強：問題在斷言面（24/39 變異存活），非模組覆蓋 |
 | 表頭「17 commit」「9 commit」「224.77 kB」 | 實為 16、17、224.32（DOC-R1～R3） |
+
+---
+
+## 附錄 C：修復完成度複查（2026-09-28，基準 develop `898ccfc` → `fix/20260927-review02-batch-cd` HEAD `11223ca`）
+
+### C.1 複查方法與範圍
+
+- 範圍：本報告 §2（P1）、§3（P2，3.1–3.7 每個 ID）、§4（Low 表每個 ID）、§5.3／§5.4／§5.5 建議、§6 Batch A～D 每一小項、§7「不必做的事」，以及收尾前的兩段式最終審查（C.9）。
+- 對象：`fix/20260927-research-review02`（12 個 commit，已 `--no-ff` 併入 develop `898ccfc`，完成 Batch A／B）＋`fix/20260927-review02-batch-cd`（`develop..HEAD` 25 個 commit：Batch C／D 與 6 項 code-review findings 16 個，最終兩段式審查修正 9 個；HEAD `11223ca`）。
+- 方法：唯讀。每項以 grep／讀碼／`git log -- <path>` 核對現行程式與文件，**不以 commit 訊息為準**；commit hash 只作出處標註。測試數字為 2026-09-28 01:35 本機實跑（`test:coverage`、`test:integration`、`test:e2e`）；mutation 取首跑紀錄（`8412812`、README），本次未重跑。
+- 判定：**已修**（附證據）／**部分**（說明剩餘）／**未修—列入後續**（附追蹤位置）／**不適用**。初稿中「未修—無追蹤」（repo 真實來源查無延後紀錄）的項目，已於本附錄定稿時全數補進 ADR-002 §6.5.1 backlog，改判「未修—列入後續」並標追蹤位置。
+
+### C.2 P1（§2）逐項
+
+| ID | 項目 | 判定 | 證據／說明 |
+| --- | --- | --- | --- |
+| CT-1／API-1／WK-1 | Redis 認證失敗時密碼明文進日誌 | 已修 | `packages/shared/src/logging/index.ts` 加 `redact` 路徑（`err.command.args` 等）＋ err serializer 遞迴剝除 `command.args`，附單元測試（`333311f`）；api／worker Redis、BullMQ 連線錯誤轉態節流（`333311f`、`3a57b4a`），節流器後收進 `packages/shared/src/logging/throttle.ts`（`12dcdd5`） |
+| WEB-1 | 機台卡片選取態幾乎不可見 | 已修 | 色票改巢狀 `surface.inset`（`bg-surface-inset`，`apps/web/tailwind.config.ts`）；選取改 `.machine-card[data-selected='true']`，置於 `@tailwind utilities` 之後、不用 ring／box-shadow（避開 critical pulse）（`apps/web/src/styles/tailwind.css`，`dfad62b`）。報告要求的 Playwright 截圖**刻意以 CSS cascade 測試取代**（`MachineNodeCard.css.test.ts`，用專案 tailwind config 編出 CSS 求 cascade），另有元件測試（`303893e`） |
+| AR-1／WK-2／AR-3 | 「完成」只靠 `ai/done`、等待／首 token 前無事件、`stalled` 未監聽 | 未修—列入後續 | relay 仍無 `stalled` 監聽、`job/status.result` 仍未填、processor 仍回 `void`。追蹤：ADR-002 §6.5「結果讀取與完成語意」列、roadmap **012-lite**。e2e 實測佐證：worker SIGKILL 後約 92 s 無事件才重派、`attemptsMade` 不遞增（README「已知限制」、`tests/e2e/README.md` 場景 3）。修法第 4 點「文件寫明 `AI_TIMEOUT_MS` 必須小於前端 watchdog」**已修**：README `AI_TIMEOUT_MS` 列明寫 MUST 小於前端 45 秒 watchdog 並預留鎖等待時間（`aadbe96`）；`AI_TIMEOUT_MS` 仍無上限的執行期驗證（隨 AR-A1，ADR-002 §6.5.1） |
+| TQ-1～TQ-3 | 三類使用者可見錯誤可無聲上線 | 已修 | TQ-1：`processor.test.ts` 斷言 `ofType("ai/token").map(e=>e.seq)` 連號（`3a57b4a`）。TQ-2：Gateway harness 可呼叫 `onModuleInit()`，補 FR-004／FR-009／SC-005、慢讀者、未授權測試（`bd46116`）。TQ-3：`useHighFrequencyWs.test.ts` 分流與退避測試（`dfad62b`，退避歸零點後改 `machine/subscribed`，`fd58add`） |
+| DOC-2 | asyncapi 契約版本未升版 | 已修 | 契約版本升至 1.2.0；新增 `CHANGELOG.md`（含 HTTP `invalid_format`、0.1.0→1.1.0 跳號說明）（`ef5d494`）；README／指南同步（`4c9350b`、`dcc74ee`）；`docs-contract-version.test.ts` 自動檢查（`d7a2924`） |
+
+### C.3 P2（§3）逐項
+
+**3.1 免授權入口濫用鏈**
+
+| ID | 判定 | 證據／說明 |
+| --- | --- | --- |
+| INF-2 | 已修 | `docker-compose.yml` `"${WEB_BIND:-127.0.0.1}:8080:8080"`；`apps/web/nginx.conf` `/diagnoses` `limit_req` 10r/m burst 5 → 429、`/ws` `limit_conn` 20（`8353993`、`bd46116`）。Docker Desktop 下每 IP 退化為全域一桶，已列 ADR-002 §6.5 |
+| API-3／WK-5 | 已修 | `jobs.service.ts` 名冊外 `NotFoundException`（404，`333311f`）；worker 空脈絡短路送不可重試 `ai/error(no_context)`（`processor.ts` `NO_CONTEXT_CODE`，`3a57b4a`） |
+| API-4／AR-F2／WEB-3 | 已修 | Gateway `ClientState.authorized`，`ai/*`／`job/status`／`system/metrics` 只送已授權；`POST /diagnoses` 綁定前驗在線＋已授權否則 409（`bd46116`）；web「連線真的活著」閘門（`c3bc9bb`、`fd58add`）；ADR-002 §6.3 記代價。殘餘：HTTP 端點本身仍免身分驗證、web 無供給 WS token 途徑（ADR-002 §6.5） |
+| API-2 | 已修 | `WS_SEND_HIGH_WATER_BYTES` 超標略過高頻流（遙測＋`ai/token`）、連續 3 tick terminate；心跳 ping 帶 nonce（`bd46116`、`cf6599f`、`add2f73`）。`droppedSendCount` 未進 `system/metrics`（ADR-002 §6.5，後續） |
+| API-6 | 已修 | 每連線違規 10 次 `close(1008)`、`timingSafeEqual`、warn 30 s 抽樣（`bd46116`）。已發 1008 但對端不回 close frame 者：**現況由逐連線計時器回收**——`requestClose()` 掛 `setTimeout(min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)).unref()`，到期以 `close-not-honoured` terminate，對端正常回 close 時 `cleanup` 清計時器，有無 `WS_AUTH_SECRET` 皆適用、不依賴任何 sweep 間隔（`f2d9cb0`）。演進：`add2f73` 授權 sweep → `12dcdd5` 心跳 sweep → `620d4b6` 兩個 sweep 共用 → `f2d9cb0` 逐連線計時器定案 |
+
+**3.2 AI 管線語意**
+
+| ID | 判定 | 證據／說明 |
+| --- | --- | --- |
+| WK-4／AR-F4 | 未修—列入後續 | worker 無 `findByJobId`，`callLlmAndReply` 前不以 jobId 查 `diagnoses`；LLM 成功後步驟失敗仍重打 LLM、`diagnoses`／cache 可能不一致（§5.2 FMEA 列為未處理）。追蹤：ADR-002 §6.5.1（012-lite 立案時併入） |
+| WK-3 | 已修 | `AI_MAX_OUTPUT_TOKENS`（2048）、`AI_TEMPERATURE`（0.2），`max_tokens` 改不可重試（`processor.ts`，`3a57b4a`）；thinking 模型上限警告（`cf6599f`），`AI_PROVIDER=fake` 時略過此警告（`3e1436a`） |
+| WK-6 | 未修—列入後續 | `apps/worker/src/ai/smoke-gemini.ts` 仍直接 `generateContent`（非 stream）、未走 `GeminiProvider`／`responseJsonSchema`，金鑰仍 `trim()`；本輪兩分支只把它從 build 排除。追蹤：ADR-002 §6.5.1 |
+| AR-A9／API-7（錯誤碼） | 未修—列入後續 | 契約無 `AiErrorCode`；`job-status-relay.service.ts` `handleFailed` 仍把 `failedReason` 原文作 `message` 下發。追蹤：ADR-002 §6.5.1、roadmap **010-lite** |
+
+**3.3 跨 process 設定與時鐘耦合**
+
+| ID | 判定 | 證據／說明 |
+| --- | --- | --- |
+| CT-2 | 已修 | `METRICS_INTERVAL_MS` 須為 5000–2^31-1 安全整數、不合法回退；api 出口非 production `SystemMetricsSchema.parse` 自檢（`333311f`、`cf6599f`） |
+| API-8／AR-A2 | 未修—列入後續 | `WorkerMetricsSchema`（`packages/contracts/src/metrics.ts`）仍無 `windowMs`。追蹤：ADR-002 §6.5.1、roadmap **010-lite** |
+| DOC-11 | 已修 | `apps/api/.env.demo.example` 補 `METRICS_INTERVAL_MS`（註明須與 worker 相同）與 `METRICS_LOG_LEVEL`（`aadbe96`） |
+| AR-A1 | 未修—列入後續 | 逾時常數仍三端各一份（README 已明文 `AI_TIMEOUT_MS` 與 watchdog 關係，但無執行期驗證）。追蹤：ADR-002 §6.5 `protocolVersion` 列（連同 watchdog 門檻下發）、§6.5.1、roadmap 010-lite |
+| CT-4 | 已修 | `asyncapi.yaml` `system/metrics.collectedAt` 描述改為「僅供顯示與稽核、新鮮度以收訊時刻判定」，與 web `metrics.store` 一致，CHANGELOG 契約 1.2.0 記錄（`aadbe96`）；`packages/contracts/src/events.ts` 註解同步（`11223ca`）。屬措辭更正，併入 1.2.0 未另升版 |
+
+**3.4 前端**
+
+| ID | 判定 | 證據／說明 |
+| --- | --- | --- |
+| WEB-2 | 已修 | pong 逾時直接 `retireSocket` 並立即退避重連，測試模擬「close 不派發」（`c3bc9bb`，`useHighFrequencyWs.test.ts` WEB-2 案例） |
+| WEB-4 | 未修—列入後續 | 行動版關 sheet 後點同卡片不重開。追蹤：ADR-002 §6.5 WEB-4 列 |
+| WEB-10 | 未修—列入後續 | 同 §2.3；roadmap 012-lite（等待者 keepalive） |
+
+**3.5 運維**
+
+| ID | 判定 | 證據／說明 |
+| --- | --- | --- |
+| INF-1 | 已修 | 新增 `WORKER_CHAOS_ALLOW_IN_PRODUCTION`（`apps/worker/src/lib/chaos.ts`，`3a57b4a`）；指南 §16.3、007 quickstart／supervision-runtime、README 同步（`dc26992`、`8bd494f`）；`isProductionEnv` 三端共用（`add2f73`） |
+| INF-6／CT-3／DOC-1 | 已修（查證結案） | 2026-09-27 乾淨 cache＋`--no-cache` 建置 api image，production 套件與 lockfile 逐一相同、無漂移；Dockerfile 註解、README 部署列、指南 §15.6、ADR-002 §6.5 對齊實況（`4c9350b`、`dcc74ee`）。只實測 api image；升 pnpm 大版需重驗 |
+| INF-3／WK-12（含 INF-9） | 已修 | api／worker `package.json` `"files": ["dist"]`；worker `tsconfig.build.json` 排除 `smoke-gemini.ts`；`.dockerignore` 補 `**/` 前綴（`8353993`） |
+| INF-4／INF-5 | 已修 | redis／mongo `restart: unless-stopped`；web `depends_on: api: condition: service_healthy`（`8353993`） |
+
+**3.6 測試基礎建設**
+
+| ID | 判定 | 證據／說明 |
+| --- | --- | --- |
+| TQ-4 | 已修 | 進度里程碑序列、trigger `cached`、metrics 次數、liveness begin／end 斷言（`ec33298`，processor 測試 28→35 支） |
+| TQ-5 | 已修 | FakeClock 注入 `now`／`sleep`，去除真實睡眠與 50 ms 輪詢，deadline 邊界確定性測試（`ec33298`） |
+| TQ-6 | 已修 | `JobStatusRelayService` 以 EventEmitter 替身驅動 QueueEvents 全事件＋`sweepOrphans`（`db7a000`） |
+| TQ-7 | 已修 | `HistoryService` 計數協調單元測試（`db7a000`）＋真 Mongo `writeOnce` 整合測試（`85895aa`）；整合測試改以 `src/test-support/nest-logger.ts` 靜音並完整還原 Nest Logger（`591b380`、`11223ca`） |
+| TQ-8 | 已修 | `metrics.store` empty／disconnected／stale／live 四態與邊界（`db7a000`） |
+| TQ-9 | 已修 | `PinoLoggerService` 參數拆解與 stack 判斷（含 T013 回歸）（`db7a000`） |
+| TQ-10 | 已修 | worker bootstrap 失敗走 `writeSync` fatal（`3a57b4a`），fatal 寫入加 try/catch（`cf6599f`） |
+| TQ-11／CT-12 | 已修 | Gateway `send` 型別改 `ServerMessage`，契約聯集改 `TelemetryPoint[]`（`bd46116`） |
+| TQ-13 | 已修 | cache／lock／rpm TTL 逐項斷言（`ec33298`）＋真 Redis TTL 整合測試（`85895aa`） |
+| CT-8 | 未修—列入後續 | `DiagnosisJobPayload` 仍只有 TS 型別。憲章 1.5.0 Principle III 明列為例外並指向 roadmap 010-lite（`2e14383`）；003 data-model 橫幅同註（`e600346`） |
+
+**3.7 文件與流程**
+
+| ID | 判定 | 證據／說明 |
+| --- | --- | --- |
+| DOC-3／C2 | 已修 | 指南 §15.6 改名「v1.0.0 之後的現況摘要」、加維護分支表、補技術棧升級小節、`engines >=22.12`（`dcc74ee`） |
+| DOC-8 | 已修 | ADR-002 新增 §6.5 延後項表（連線上限已落地、`/livez`、`protocolVersion`、Mongo auth、INF-6、FR-021 殘餘、單實例狀態等），§6.1 補 10 處狀態清單（`dcc74ee`）；本附錄定稿時再補 §6.5.1 未排程 backlog |
+| DOC-5 | 已修 | 指南 §9.1 標「⛔ 本步驟已於 Feature 004 前完成，勿再執行」（`dcc74ee`） |
+| DOC-6 | 已修 | `apps/api/.env.example`／`.env.demo.example` 的 memory 引用改指 `specs/004` research R3 與 README（`2e14383`；grep 已無 `memory` 字樣） |
+| DOC-7 | 已修 | README 環境變數表補 `WORKER_CHAOS`／`WORKER_CHAOS_AT`／`WORKER_CHAOS_ALLOW_IN_PRODUCTION`（`dc26992`）；`readme-env-table.test.ts` 防漂移（`d7a2924`） |
+| DOC-R1～R4 | 已修 | 前輪報告更正 16／17 commit（附實算指令）、224.77 標複審前、`pnpm outdated` 標升級前快照，表頭標「歷史快照」與基準 commit（`e600346`） |
+| DOC-G1 | 已修（以規則收斂） | CLAUDE.md 新增「維護分支」小節禁止直接 commit `develop`（`2e14383`）；前輪報告 §7 補流程紀錄（`e600346`）；既有歷史依「不改寫歷史」保留。`develop` 領先 `origin/develop` 屬 push 決策，非本輪修復範圍 |
+| DOC-C1／C3 | 已修 | HEAD 的 CLAUDE.md 已刪「見最上層『執行動作』原則」懸空引用（`develop` 版仍有，併回後消失）；新增維護分支小節、跨 feature 回補涵蓋維護分支、`/speckit-*` 統一；治理 MUST 收進憲章 1.5.0 Governance（`2e14383`） |
+| DOC-S1 | 已修 | 001–008 `spec.md` Status 改「已完成（v1.0.0；日期＋merge hash）」；001–007 spec／data-model 共 14 份加「已變更」橫幅（`e600346`） |
+| DOC-D13 | 已修 | 憲章 1.5.0 Principle III 收斂為 WS message 與 `POST /diagnoses` MUST Zod，列三項例外（`2e14383`）。`specs/009` 工件仍引用 1.4.1「MAY 以 TS」措辭，屬歷史工件，憲章 Sync Impact Report 已註明 |
+
+### C.4 Low（§4）逐項
+
+下表「未修—列入後續」者，追蹤位置皆為 ADR-002 §6.5.1 對應面向列（另有標註者除外）。
+
+| 面向 | ID | 判定 | 證據／說明 |
+| --- | --- | --- | --- |
+| api | API-5 | 已修 | `MIN_WS_HEARTBEAT_MS` 1000、`MIN_MOCK_TELEMETRY_INTERVAL_MS` 5 上下限（`apps/api/src/lib/env-schema.ts`，`333311f`） |
+| api | API-7 | 未修—列入後續 | `main.ts` 未停用 `x-powered-by`、body 上限未調；畸形 JSON 400 回顯未處理 |
+| api | API-9 | 未修—列入後續 | 啟動韌性不對稱未處理 |
+| api | AR-S6 | 未修—列入後續 | `jobs.service.ts` `getJobCounts("waiting","active","failed")` 仍不含 `delayed` |
+| api | AR-S7 | 已修 | `system/unauthorized` 於 TopBar 顯示「未授權」chip（`c3bc9bb`，design-spec §7.2.2 `1bdf5a3`） |
+| api | API-10 | 未修—列入後續 | Gateway 仍逐 client `JSON.stringify`；`MetricsService` 仍 `SCAN metrics:worker:*` |
+| worker | WK-7 | 未修—列入後續 | `context-builder.ts` `latestState` 查詢仍無時間界；查詢仍串行 |
+| worker | WK-8 | 未修—列入後續 | 簽章仍缺 `windowMinutes`；`topErrorCodes` 命名未改 |
+| worker | WK-9 | 未修—列入後續 | `PROMPT_VERSION` 仍手動、prompt 內嵌 schema |
+| worker | WK-10 | 部分 | `recordLatency` 移到 safety／max_tokens 判斷之後、只記完整回應（`cf6599f`）；`usage.outputTokens` 仍只取 `candidatesTokenCount`，未含 `thoughtsTokenCount`（餘項列入後續） |
+| worker | WK-11 | 未修—列入後續 | `prompt.ts` 插入 `e.message`／`m.summary` 仍無長度上限與資料邊界 |
+| worker | TQ-L16 | 未修—列入後續 | `mapFinishReason` 仍 `default → "other"`，`RECITATION` 等照常 parse，無 exhaustive 檢查 |
+| web | WEB-5／CT-7 | 未修—列入後續 | `events.ts` 註解「web 執行期只用 `SystemMetricsSchema`」仍在；`@__PURE__` 仍只標 `events.ts` |
+| web | WEB-6／CT-11 | 未修—列入後續 | api `start:dev` 仍先 tsc build packages、worker 跑 src，兩軌錯開不變 |
+| web | WEB-7 | 未修—列入後續（已記錄現況） | `MetricsPanel.vue` 仍整塊 `role="status"`；`MetricsPanel.test.ts` 以「【WEB-7 尚未修】」測試記錄現況（`303893e`） |
+| web | WEB-8 | 未修—列入後續 | Fleet Health 本輪只改色票名（`dfad62b`），重算頻率未處理 |
+| web | WEB-9 | 未修—列入後續 | `useResizeDrag.ts` `localStorage` 讀寫仍無 try/catch、無鍵盤操作 |
+| web | WEB-12 | 已修（文件）；指標重定義列 011 | README 背壓比值改「不宣稱固定值、約等於機台數」說明，`.env.example` 同步（`4c9350b`、`2e14383`）；badge 指標重定義依 §5.4 屬 roadmap 011 |
+| web | AR-A7／AR-模組 | 部分 | 名冊收斂為契約 `MACHINE_IDS`（`packages/contracts/src/machines.ts`，api／web 共用，`cf6599f`、`add2f73`）；`useDiagnoseTrigger` 移入 `domains/ai-copilot` 並加 `layering.test.ts`（`dfad62b`）。`shared/components` 的 TopBar／MetricsPanel／AppLayout 仍反向匯入 `domains/`，layering 測試只守 `composables`／`lib`（餘項列入後續） |
+| contracts | CT-5 | 未修—列入後續 | 漂移測試 `normalize` 本輪未改（白名單未反轉、date-time 變體不區分） |
+| contracts | CT-9 | 未修—列入後續 | `datetime.test.ts` 仍宣稱依 RFC 3339（生產端無實害） |
+| contracts | CT-10 | 未修—列入後續 | `eslint.config.js` `ImportExpression` 仍只涵蓋 `pino\|socket.io` |
+| contracts | CT-12 補充 | 未修—列入後續 | `SystemConnected.clientId` 仍 `z.string()`、`socketId` 仍 `z.uuid()` |
+| infra | INF-7 | 未修—列入後續 | `ignoredBuiltDependencies` 仍列 `@nestjs/core`；`lucide-vue-next@^0.454.0`、`eslint@^9` 未動 |
+| infra | INF-8 | 部分 | `ci.yml` 已加 `permissions`、`concurrency`、`timeout-minutes: 20`，Node 註解對齊（`8a1c3b6`）；actions 仍只釘 tag、未加 `pnpm audit`／`compose config -q`／image smoke（餘項列入後續；報告本即標「恢復 CI 時一併補」） |
+| infra | INF-10 | 部分 | README 註明 root script 裸 `pnpm` 需 `corepack enable`（`dc26992`）；`scripts/dev-up.ps1` 仍呼叫裸 `pnpm`（餘項列入後續） |
+| infra | INF-11 | 未修—列入後續 | `.github/` 無 dependabot／renovate |
+| infra | INF-12 | 未修—列入後續 | builder 仍選入 root 全套 dev 相依 |
+| infra | INF-13 | 部分 | README／指南說明 `.nvmrc`／Dockerfile／`engines` 三者關係（`dcc74ee`）；`.nvmrc` 仍為浮動 `22`（餘項列入後續） |
+| 品質 | TQ-L2 | 已修 | 五套件 test script 移除 `--passWithNoTests`（`8353993`） |
+| 品質 | TQ-L3／L4 | 未修—列入後續 | `tsconfig.build.json` 仍 exclude 不存在的 `*.check.ts`；四份 `vitest.config.ts` 註解未改 |
+| 品質 | TQ-L5／L6 | 未修—列入後續 | worker `main.ts` 仍 `import "dotenv/config"`（cwd 相依），「side-effect-free」註解未改 |
+| 品質 | TQ-L7 | 未修—列入後續 | `isConnectedMessage` 仍只有測試使用 |
+| 品質 | TQ-L8／L9 | 未修—列入後續 | `ai-stream-relay.service.ts` 仍在 `psubscribe` resolve 前記「subscribed」、Nest `Logger` 與 pino 混用、init catch 仍 `(err as Error).message` |
+| 品質 | TQ-L10／L11 | 部分 | production 判準 `isProductionEnv`（`add2f73`）與日誌節流器（`12dcdd5`）已收進 shared；「帶時限等待」四份實作（`withDeadline`／`HealthService.probe`／`withTimeout`／`abortable`）仍在，`AppConfigService` 仍呼叫 `resolveMetricsInterval` 兩次（餘項列入後續） |
+| 品質 | TQ-12 | 未修—列入後續 | api／worker `isIndexConflict` 語意差異未處理（整合測試已涵蓋 85／86／11000 行為，`85895aa`）。相關：worker `findJobIdIndex` 在同鍵 unique 與非 unique 並存時已改為優先認 unique（`67a7f0b`），但兩端 `isIndexConflict` 未合併 |
+| 品質 | TQ-L13～L15 | 未修—列入後續 | L13：「同檔 FR-004 撞號」在 specs 內查無；實際是程式碼註解引用 FR-004 未標 feature（`copilot-reducer.ts` 指 005、`telemetry-format.ts`／`.test.ts` 指 006），未改。L15：`telemetry-coalesce.ts` 的 `!`、`chaos.ts` 的 `as` 仍在。L14 未清查 |
+| 品質 | TQ-L17／L18 | 未修—列入後續 | 整合測試與 `pino-logger.service.test.ts` 已改用共用 helper `apps/api/src/test-support/nest-logger.ts`（`11223ca`），但其餘 api 單元測試仍輸出 Nest 彩色 log；`diagnose-api.ts` jobId 不一致分支仍無測試 |
+| 文件 | DOC-9～D15 | 已修 | README 截圖／demo 標明「v1.0.0 發布前畫面」、兩份影片保留理由（`4c9350b`）；`.env.example` 背壓比值措辭（`2e14383`）；六份 `package.json` 對齊 1.1.0、CHANGELOG 版本策略（`ef5d494`）；`tests/e2e/package.json` 移除 `version`，維持「六份對齊 tag」（`0348a35`） |
+
+### C.5 §6 Batch A～D 逐項
+
+| Batch | 小項 | 分支／commit | 判定 |
+| --- | --- | --- | --- |
+| A-1 | CT-1 redact＋測試＋Redis 錯誤節流 | review02：`333311f`、`3a57b4a` | 已修 |
+| A-2 | WEB-1 色票改名＋選取態順序＋截圖回歸 | review02：`dfad62b`；batch-cd：`303893e` | 已修（Playwright 以 CSS cascade 測試替代） |
+| A-3 | CT-2 驗證；API-5 下限 | review02：`333311f` | 已修 |
+| A-4 | INF-2 `WEB_BIND`＋`limit_req`；INF-4／5 | review02：`8353993` | 已修 |
+| A-5 | API-3／WK-5；WK-3 | review02：`333311f`、`3a57b4a` | 已修 |
+| A-6 | INF-3 `files`＋`.dockerignore`；INF-1 | review02：`8353993`、`3a57b4a`、`dc26992` | 已修 |
+| A-7 | TQ-1／TQ-3；TQ-L2；TQ-10 | review02：`3a57b4a`、`dfad62b`、`8353993` | 已修 |
+| A-8 | 前輪 §7 第 2 步小修（healthcheck／seed env、TTL 與 `persist`、root script、§3.1 b／e、§3.3 a／b／c） | review02：`333311f`、`3a57b4a`、`dfad62b`、`dc26992` | 已修（root script 以 README 註明處理） |
+| B-1 | API-2 背壓＋pong nonce | review02：`bd46116`、`cf6599f`、`add2f73` | 已修 |
+| B-2 | API-4 授權集合（含 409） | review02：`bd46116` | 已修 |
+| B-3 | API-6 違規計數＋`timingSafeEqual` | review02：`bd46116`；batch-cd：`12dcdd5`、`620d4b6`、`f2d9cb0`（關閉逾期回收，定案為逐連線計時器） | 已修 |
+| B-4 | 前輪 §1.1 連線數上限 | review02：`bd46116`、`cf6599f` | 已修 |
+| B-5 | WEB-2／WEB-3「連線真的活著」 | review02：`c3bc9bb`、`fd58add`；batch-cd：`12dcdd5`（單一條件來源） | 已修 |
+| B-6 | 慢讀者與未授權整合測試、TQ-2 harness | review02：`bd46116` | 已修 |
+| C-1 | DOC-2 升 1.2.0＋changelog | batch-cd：`ef5d494`、`4c9350b`；CT-4 措辭併入 1.2.0（`aadbe96`） | 已修 |
+| C-2 | DOC-3 §15.6 改名與升級摘要、`engines` | batch-cd：`dcc74ee` | 已修 |
+| C-3 | DOC-8 ADR-002 §6「已知未做」表 | batch-cd：`dcc74ee`；§6.5.1 backlog 於本附錄定稿時補 | 已修 |
+| C-4 | DOC-5／6／7、INF-6 註解對齊 | batch-cd：`dcc74ee`、`2e14383`、`4c9350b`（DOC-7 已於 review02 `dc26992`） | 已修 |
+| C-5 | DOC-R1～R4、DOC-S1 | batch-cd：`e600346` | 已修 |
+| C-6 | DOC-C1／C3／D13、憲章 1.5.0 | batch-cd：`2e14383` | 已修 |
+| C-7 | CHANGELOG、v1.1.0 版號與 `package.json` 策略、demo 連結決策＋DOC-9 | batch-cd：`ef5d494`、`4c9350b`、`0348a35` | 已修 |
+| C-8 | 兩個文件一致性自動檢查 | batch-cd：`d7a2924` | 已修 |
+| D-1 | TQ-4／TQ-5 processor 全欄位與注入時間 | batch-cd：`ec33298` | 已修 |
+| D-2 | TQ-6 relay 事件驅動 | batch-cd：`db7a000` | 已修 |
+| D-3 | coverage-v8＋root `test.projects`＋門檻 60／50 | batch-cd：`9bc0029`、`8a1c3b6` | 已修（最終實測 lines 81.52％／branches 76.56％） |
+| D-4 | 真 Redis 整合（Lua、並發去重、鎖換手、TQ-13） | batch-cd：`85895aa` | 已修 |
+| D-5 | 真 Mongo 整合（collMod、85／86／11000、`writeOnce`） | batch-cd：`85895aa`、`67a7f0b` | 已修（順帶更正 Mongo 7 索引並存認知；最終審查再修 `findJobIdIndex` 同鍵並存時優先認 unique、不誤 drop 舊索引，附真 Mongo 回歸測試） |
+| D-6 | 跨 process e2e（fake `AiProvider`、seq／attempt、worker kill） | batch-cd：`635c79c`（`docker-compose.e2e.yml`、`tests/e2e`、`fake-provider.ts`）；harness 韌性 `591b380`、`11223ca` | 已修；實測發現列 012-lite |
+| D-7 | Stryker 五核心檔 nightly、門檻 70 | batch-cd：`8412812`、`c3cf2ba`（timeout 60→180 分） | 部分：已常態化；首跑總分 72.0 過線，`monitoring.gateway` 66.5／`processor` 62.7 單檔低於 70（量測時 TQ-4～TQ-6 測試尚未到位），列追蹤、待 nightly 重測；180 分為推估值（ADR-002 §6.5.1） |
+| D-8 | web 元件測試（CopilotDrawer／MetricsPanel／MachineNodeCard） | batch-cd：`9bc0029`、`303893e` | 已修 |
+| code-review | 6 項 findings（Gateway 關閉逾期回收、關閉中單一來源、`useDiagnoseTrigger` 單一條件來源、節流器收 shared、compose `start_interval` 註解等） | batch-cd：`12dcdd5`；關閉逾期回收與單一來源於最終審查改為逐連線 `closeTimer`（`620d4b6`→`f2d9cb0`） | 已修；另 3 項未指派（web 無 WS token 途徑、nginx 每 IP 限流退化、healthcheck 載整份 zod schema）列 ADR-002 §6.5 |
+
+### C.6 §5.3／§5.4／§5.5 建議與 §7「不必做」核對
+
+**§5.3 模組邊界**
+
+| 建議 | 判定 | 說明 |
+| --- | --- | --- |
+| Gateway 拆 `WsConnectionRegistry`／`SubscriptionService`／`TelemetryPipeline`／`JobRoutingRegistry` | 未修—列入後續 | `modules/websocket/` 結構未變。`JobRoutingRegistry` 列 ADR-002 §6.5（單實例狀態列，roadmap 010-lite）；其餘三個拆分列 §6.5.1 |
+| 門檻與 `deriveMachineState` 移進 contracts，shared 只留 logging | 未修—列入後續 | `packages/shared/src/telemetry-thresholds.ts` 仍在 shared；shared 另新增 `env.ts`（`isProductionEnv`）。追蹤：ADR-002 §6.5.1 |
+| web 新增 `src/app/` 殼層＋eslint 禁 `shared/`→`domains/` | 部分 | 無 `src/app/`；以 vitest `layering.test.ts` 守 `shared/composables`／`lib`（非 eslint），`shared/components` 三處反向匯入仍在（ADR-002 §6.5.1 web 列） |
+
+**§5.4 roadmap**
+
+| 建議 | 判定 | 說明 |
+| --- | --- | --- |
+| 順序改 010-lite → 012-lite → 011 | 已修（文件） | 指南 §15.5「已變更」註記、ADR-002 §6.2／§6.5 已回補（`dcc74ee`）。三者皆未立案，依 SDD 另開 feature |
+
+**§5.5 技術棧選型**
+
+| 建議 | 判定 | 說明 |
+| --- | --- | --- |
+| 維持／不要動（ioredis 5、Tailwind 3、TS 5、NestJS 11、BullMQ 5、Zod 4 classic 後端等） | 符合 | 版本未變動 |
+| `zod/mini`（web） | 未修—列入後續 | 指南 §15.6 技術棧升級小節記為「屬跨 feature 決策，立案前須走 ADR；目前未排程」 |
+| 統一 dotenv 載入 | 未修—列入後續 | 同 TQ-L5／L6；ADR-002 §6.5.1 |
+| Gemini 429 改 `moveToDelayed` | 未修—列入後續 | `moveToDelayed` 只用於 `AI_RPM` 限流；ADR-002 §6.5.1 |
+| Mongo 對診斷的硬相依明確化 | 未修—列入後續 | 與 AR-A9 錯誤碼同源（010-lite `AiErrorCode` 可涵蓋一部分）；ADR-002 §6.5.1 |
+| `lucide-vue-next` → `@lucide/vue`；eslint 9 → 10 | 未修—列入後續 | 同 INF-7；ADR-002 §6.5.1 |
+| asyncapi 改由 Zod 產生 | 未修—列入後續 | 仍為手寫 asyncapi＋漂移測試；ADR-002 §6.5.1 |
+
+**§7 不必做的事（確認未違反）**
+
+| 條目 | 結果 |
+| --- | --- |
+| INF-6 不引入 SBOM 簽章／registry 推送 | 未違反：只以乾淨 cache build 比對 |
+| API-2 不引入 Socket.IO 或訊息佇列 | 未違反：高水位＋`terminate()`，無 socket.io 相依 |
+| AR-A9 不引入 i18n | 未違反（AR-A9 本身尚未做） |
+| 不現在做 Redis Streams | 未違反：程式碼無自行 `XADD`／`XREAD` |
+| WK-7 不換時序資料庫 | 未違反（WK-7 本身尚未做） |
+| 不一次補齊 39 個變異 | 未違反：Stryker 只跑五個接線層核心檔 |
+| 不為 dependabot 恢復 CI push／PR 觸發 | 未違反：`ci.yml` 仍只 `workflow_dispatch`；`nightly-mutation.yml` 為 schedule＋手動，不隨 push 執行；未引入 dependabot |
+
+### C.7 未修與後續清單
+
+| 項目 | 追蹤位置 |
+| --- | --- |
+| AR-1／WK-2／AR-3、WEB-10（完成語意、`stalled`、keepalive、`GET /diagnoses/:jobId`）；e2e 實測 SIGKILL 後約 92 s 無事件、`attemptsMade` 不遞增 | ADR-002 §6.5；roadmap **012-lite** |
+| WK-4（LLM 成功後步驟失敗重打 LLM、無 `findByJobId`） | ADR-002 §6.5.1；012-lite 立案時併入 |
+| AR-A1（逾時常數；`AI_TIMEOUT_MS` 無執行期上限驗證）、`protocolVersion`、名冊下發 | ADR-002 §6.5／§6.5.1；roadmap **010-lite** |
+| API-8／AR-A2（`WorkerMetrics.windowMs`）、AR-A9（`AiErrorCode`） | ADR-002 §6.5.1；roadmap **010-lite** |
+| CT-8（`DiagnosisJobPayload` Zod 化）、`JobRoutingRegistry` | 憲章 1.5.0 例外；ADR-002 §6.5；roadmap **010-lite** |
+| WEB-4 | ADR-002 §6.5 |
+| `droppedSendCount` 未進 `system/metrics` | ADR-002 §6.5（可併入 011） |
+| web 無 WS token 途徑、nginx 每 IP 限流退化、healthcheck 載整份 zod schema（code-review 未指派 3 項） | ADR-002 §6.5 |
+| FR-021 HTTP 端點仍免身分驗證、`/livez`／`/readyz`、Mongo 認證 | ADR-002 §6.3／§6.5 |
+| WEB-12 背壓指標重定義 | roadmap **011** |
+| `zod/mini` | 指南 §15.6（須走 ADR，未排程） |
+| Stryker 單檔低於 70（gateway 66.5、processor 62.7） | README「測試與品質門檻」、指南 §15.6 Batch D（列追蹤） |
+| WK-6；Low 的 API-7、API-9、AR-S6、API-10、WK-7～WK-9、WK-10 餘項、WK-11、TQ-L16、WEB-5～WEB-9、AR-模組餘項、CT-5、CT-9、CT-10、CT-12 補充、INF-7、INF-8 餘項、INF-10 餘項、INF-11～INF-13（INF-13 為餘項）、TQ-L3～L9、TQ-L10／L11 餘項、TQ-12、TQ-L13～L15、TQ-L17／L18；§5.3 Gateway 其餘拆分、shared 拆包；§5.5 dotenv 統一、Gemini 429、Mongo 硬相依、lucide、eslint 10、asyncapi 由 Zod 產生 | ADR-002 §6.5.1 backlog（本附錄定稿時補入） |
+| 最終審查未修：`AI_PROVIDER=fake` 在 production 只 warn（是否改 opt-in，需使用者決策）、`@vitest/coverage-v8` 釘死 vs `vitest` caret、nightly 180 分為推估值 | ADR-002 §6.5.1 backlog；兩項重構類建議見 C.9 |
+
+### C.8 統計
+
+**判定統計**（以本附錄表格列數計；合併 ID 算一列；初稿「無追蹤」者已改判「列入後續」）
+
+| 區段 | 已修 | 部分 | 未修—列入後續 | 小計 |
+| --- | --- | --- | --- | --- |
+| §2 P1 | 4 | 0 | 1 | 5 |
+| §3 P2 | 33 | 0 | 8 | 41 |
+| §4 Low | 5 | 6 | 28 | 39 |
+| §6 Batch A～D＋code-review | 30 | 1 | 0 | 31 |
+| 合計 | 72 | 7 | 37 | 116 |
+
+- P1＋P2（46 列）：已修 37、未修—列入後續 9。較初稿（基準 `73eefb5`）新增已修 2 列：CT-4、DOC-11（`aadbe96`；DOC-11 原與 API-8／AR-A2 合併一列，定稿拆為獨立列，故 P2 由 40 列變 41 列）；WK-4、WK-6 由「無追蹤」改列 ADR-002 §6.5.1。
+- §5.3／§5.4／§5.5（11 列，另計）：已修（文件）1、符合 1、部分 1、未修—列入後續 8。§7 七條皆未違反。
+- 無「不適用／推翻」項；TQ-L13 的描述與實況不符（非 specs 撞號，而是程式碼註解未標 feature），判為未修並更正描述。
+
+**全套檢查數字**（2026-09-28 01:35 本機實跑，HEAD `11223ca`）
+
+| 項目 | 數字 | 來源 |
+| --- | --- | --- |
+| 單元測試＋覆蓋率（`test:coverage`） | 94 檔 **982 passed**；lines **81.52％**、branches **76.56％**（門檻 60／50）；對照 review02 併入時 885、報告撰寫時 583 | 本機實跑。初稿階段 5 次 `-r test` 中首跑 worker 曾出現 1 支偶發失敗（當次未擷取測試名稱，其後全綠），疑為並行負載下的時序敏感測試，建議另查 |
+| 整合測試（`test:integration`） | **27** 通過（worker 20＋api 7） | 本機實跑，需 `docker compose up -d` |
+| e2e（`test:e2e`） | **5/5** 場景通過（1 happy path、2 cache 命中、3 worker SIGKILL 重派、4a 409、4b 404），`E2E_EXIT=0` | 本機實跑（最終審查修正後重跑） |
+| mutation（Stryker 五核心檔） | 總分 72.0（break 70）；`monitoring.gateway` 66.5、`processor` 62.7 | 首跑紀錄（`8412812`、README）；首跑時 TQ-4～TQ-6 測試尚未到位，本次未重跑 |
+| 契約 lint／typecheck／lint／`pnpm -r build` | 全綠 | 本機實跑 |
+| INF-6 乾淨 cache 實測 | legacy deploy 仍依 lockfile，無漂移（只測 api image） | ADR-002 §6.5、README 部署列 |
+
+### C.9 最終兩段式審查（2026-09-28）
+
+收尾前對 `develop..HEAD` 分兩段審查，修正共 9 個 commit（標 `[final-review]`／`[final-review-2]`）。
+
+| 段 | 審查者／範圍 | findings | 修復 | commit | 未修 |
+| --- | --- | --- | --- | --- | --- |
+| 第一段 | 乾淨 Opus 5.5，`/code-review xhigh develop..HEAD` | 13 | 9 項（6 commit；另統籌者補漏 1 commit） | `620d4b6`、`67a7f0b`、`3e1436a`、`591b380`、`c3cf2ba`、`0348a35`；補漏 `aadbe96` | #2 `AI_PROVIDER=fake` 在 production 只 warn，是否改 opt-in 旗標（需使用者決策）；#8 `@vitest/coverage-v8` 釘死 vs `vitest` caret（下次升級相依時統一）；#12、#13 重構類建議（共 4 項未修；#3 nightly timeout 已放寬計入已修，但 180 分為推估值） |
+| 第二段 | Fable 5.1，`/code-review high` 審第一段的 fix commit | 8 | 8（全修） | `f2d9cb0`、`11223ca` | 無 |
+
+**第一段修正**
+
+- Gateway 授權 sweep 補回關閉逾期回收（`620d4b6`）：`12dcdd5` 只放在心跳 sweep，心跳設很大時停在 CLOSING 的連線仍佔未授權子池；同時消除心跳測試時序假紅。本機制之後被第二段的逐連線計時器取代。
+- `findJobIdIndex` 同鍵並存時優先認 unique（`67a7f0b`）：Mongo 7 允許不同名的 unique 與非 unique `{ jobId: 1 }` 並存，原本取第一個會誤判「尚無 unique」而 drop＋重建；附真 Mongo 回歸測試。
+- `AI_PROVIDER=fake` 時略過 `GEMINI_MODEL` thinking／`AI_MAX_OUTPUT_TOKENS` 警告（`3e1436a`）。
+- e2e harness 韌性（`591b380`）：起全棧前無條件 `down -v`（避免殘留 volume 帶入舊 cache）、ws-client 常駐 error listener、握手逾時 terminate；整合測試以原值還原 Nest Logger。
+- nightly mutation timeout 60→180 分（`c3cf2ba`）；`tests/e2e/package.json` 移除 `version`，維持「六份 package.json 對齊 tag」（`0348a35`）。
+- 統籌者補漏（`aadbe96`）：CT-4 asyncapi `collectedAt` 語意更正、DOC-11 demo env 範本補指標變數、README 明寫 `AI_TIMEOUT_MS` MUST 小於前端 45 秒 watchdog。
+
+**第二段修正**
+
+- Gateway 關閉逾期回收改為**逐連線計時器**（`f2d9cb0`）：`requestClose` 掛 `setTimeout(min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)).unref()`，逾期以 `close-not-honoured` terminate，`cleanup` 清計時器，門檻在 attach 算一次；移除心跳 sweep 與授權 sweep 的回收分支；`ClientState` 改持 `closeTimer`、`isClosing` 由其推導。測試改 fake timers，涵蓋四種心跳／授權期限組合皆在 min 到期回收並釋放名額，以及對端正常回 close 時計時器被清。
+- `packages/contracts/src/events.ts` `collectedAt` 註解同步 CT-4；api 新增 `src/test-support/nest-logger.ts`（`overrideNestLogger`／`silenceNestLogger`，不進 dist）取代三處手抄 `staticInstanceRef`；e2e ws-client 握手逾時與 error listener 收斂、global-setup 移除只影響日誌的呼叫（`11223ca`）。
+
+真實來源回補：指南 §15.6「Batch C／D」小節（最終兩段式審查摘要、逐連線計時器現況）、CHANGELOG `[Unreleased]`（Gateway 關閉逾期回收、`jobId` 索引、fake 警告）、ADR-002 §6.5.1（未排程 backlog）。

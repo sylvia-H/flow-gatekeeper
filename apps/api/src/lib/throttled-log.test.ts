@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LogThrottle } from "./telemetry-buffer.js";
+import { LogThrottle } from "@flow-gatekeeper/shared/logging";
 import { throttledFields } from "./throttled-log.js";
 
 describe("throttledFields", () => {

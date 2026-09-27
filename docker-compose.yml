@@ -186,8 +186,9 @@ services:
     # 依賴任一 down 即回 503 → exit 1 → unhealthy。008 原以 /ws 握手收到 system/connected 為準
     # （證明 Gateway 已 attach），該做法只驗行程與通道、驗不到依賴，008 clarify 已把此端點劃歸 009。
     # test 指令不變（映像的第二進入點 dist/healthcheck.js），只有該檔內容改走 HTTP。
-    # start_interval：start_period 內改每 2 秒探一次（需 Docker Engine 25+；更舊的 Engine 不認得此鍵），
-    # api 一就緒即轉 healthy，web（depends_on service_healthy）不必等滿第一個 30s interval 才啟動。
+    # start_interval：start_period 內改每 2 秒探一次。需 Docker Engine 25+（更舊的 Engine 不認得此鍵）
+    # 且 Compose CLI 2.20.2+（更舊的 Compose 會拒絕整份檔案：`Additional property start_interval is not allowed`，
+    # 前置需求同 README）；api 一就緒即轉 healthy，web（depends_on service_healthy）不必等滿第一個 30s interval 才啟動。
     healthcheck:
       test: ["CMD", "node", "dist/healthcheck.js"]
       interval: 30s

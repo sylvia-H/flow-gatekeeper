@@ -51,8 +51,12 @@ export default tseslint.config(
           allowDefaultProject: [
             "apps/*/vite.config.ts",
             "apps/*/vitest.config.ts",
+            "apps/*/vitest.integration.config.ts",
             "apps/*/tailwind.config.ts",
             "packages/*/vitest.config.ts",
+            // root 的 vitest／stryker 設定（test:coverage、test:mutation 的入口）也不在任何套件 tsconfig 內。
+            "vitest.config.ts",
+            "stryker.config.mjs",
           ],
           defaultProject: "tsconfig.base.json",
         },

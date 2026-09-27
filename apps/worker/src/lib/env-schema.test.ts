@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LOCK_TTL_MARGIN_MS, parseRedisEnv, parseWorkerEnv } from "./env-schema.js";
+import { FAKE_DIAGNOSIS_TEXT_LENGTH } from "../ai/fake-provider.js";
 
 describe("parseWorkerEnv", () => {
   it("全部未設定 → 預設值，並對缺金鑰 warn", () => {
@@ -133,5 +134,71 @@ describe("WORKER_INSTANCE_ID", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toContain("WORKER_INSTANCE_ID");
+  });
+});
+
+describe("AI_PROVIDER 與 fake provider 參數（review02 Batch D e2e）", () => {
+  it("未設定 → gemini；fake 參數取預設 20 段 × 500ms", () => {
+    const r = parseWorkerEnv({});
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.env.AI_PROVIDER).toBe("gemini");
+    expect(r.env.FAKE_AI_TOKENS).toBe(20);
+    expect(r.env.FAKE_AI_TOKEN_DELAY_MS).toBe(500);
+    expect(r.warnings.some((w) => w.includes("AI_PROVIDER=fake"))).toBe(false);
+  });
+
+  it("AI_PROVIDER=fake：warn 測試替身、不再 warn 缺 GEMINI_API_KEY；延遲可設 0", () => {
+    const r = parseWorkerEnv({ AI_PROVIDER: "fake", FAKE_AI_TOKEN_DELAY_MS: "0", FAKE_AI_TOKENS: "5" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.env.AI_PROVIDER).toBe("fake");
+    expect(r.env.FAKE_AI_TOKEN_DELAY_MS).toBe(0);
+    expect(r.env.FAKE_AI_TOKENS).toBe(5);
+    expect(r.warnings.some((w) => w.includes("AI_PROVIDER=fake"))).toBe(true);
+    expect(r.warnings.some((w) => w.includes("GEMINI_API_KEY"))).toBe(false);
+  });
+
+  it("NODE_ENV=production 仍允許 fake，但 warn 明示正式環境應移除", () => {
+    const r = parseWorkerEnv({ AI_PROVIDER: "fake", NODE_ENV: "production" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.warnings.some((w) => w.includes("NODE_ENV=production"))).toBe(true);
+  });
+
+  it("fake 串流總長 ≥ AI_TIMEOUT_MS → warn（每筆都會逾時）", () => {
+    const r = parseWorkerEnv({ AI_PROVIDER: "fake", FAKE_AI_TOKENS: "11", FAKE_AI_TOKEN_DELAY_MS: "3000" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.warnings.some((w) => w.includes("每筆診斷都會逾時"))).toBe(true);
+  });
+
+  it("AI_PROVIDER=fake 時不做 GEMINI_MODEL 的 thinking 檢查（Gemini 不作用，warn 只會誤導）", () => {
+    const r = parseWorkerEnv({ AI_PROVIDER: "fake", GEMINI_MODEL: "gemini-2.5-pro", AI_MAX_OUTPUT_TOKENS: "2048" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.warnings.some((w) => w.includes("thinking"))).toBe(false);
+  });
+
+  it("warn 的段數以假診斷 JSON 字元數為上限（FAKE_AI_TOKENS 過大不會誤報逾時）", () => {
+    // 1000 段 × 100ms 若照字面算是 99.9s ≥ 30s；實際只會切成 FAKE_DIAGNOSIS_TEXT_LENGTH 段
+    expect(FAKE_DIAGNOSIS_TEXT_LENGTH).toBeLessThan(300);
+    const r = parseWorkerEnv({ AI_PROVIDER: "fake", FAKE_AI_TOKENS: "1000", FAKE_AI_TOKEN_DELAY_MS: "100" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.warnings.some((w) => w.includes("每筆診斷都會逾時"))).toBe(false);
+  });
+
+  it.each([
+    ["AI_PROVIDER", "openai"],
+    ["FAKE_AI_TOKENS", "0"],
+    ["FAKE_AI_TOKENS", "1001"],
+    ["FAKE_AI_TOKEN_DELAY_MS", "-1"],
+    ["FAKE_AI_TOKEN_DELAY_MS", "60001"],
+  ])("%s=%s → 啟動失敗", (key, value) => {
+    const r = parseWorkerEnv({ [key]: value });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain(key);
   });
 });

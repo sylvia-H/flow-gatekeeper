@@ -4,7 +4,14 @@
 
 **Created**: 2026-07-02
 
-**Status**: Draft
+**Status**: 已完成（v1.0.0；2026-07-03 以 `db3902b` 併入 develop）；之後變更見指南 §15.6「v1.0.0 之後的現況摘要」
+
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - FR-003／FR-008 帶 `socketId` 觸發、active 期間禁用重送 → Diagnose 只在連線就緒時可按（`system/connected` 且已 `machine/subscribed`、未斷線、未收到 `system/unauthorized`），卡片 icon 等所有入口共用同一閘門；`jobId` 前端產生、送出前先建 pending；in-flight 去重；fetch 15 秒逾時。
+> - FR-005／FR-006 串流文字 append → `ai/*` 帶 `attempt`，重試換輪時清空串流文字；`ai/done` 另有二次 schema 防線。
+> - FR-007 錯誤呈現 → `409`（WebSocket 連線不存在或未授權）顯示可讀訊息；非最終嘗試不會收到 `ai/error`，最終失敗由 api 補送 `worker_failed`。
+> - FR-016 無障礙 → StreamingPanel 不再逐 token 朗讀；行動版改 dialog＋focus trap。
 
 **Input**: User description: "在 apps/web 實作 AI Copilot drawer。範圍：使用 design-spec token 與 refs/copilot-drawer.png 視覺；顯示 selected machine 的 diagnosis job 狀態；job/status 事件更新 progress（waiting/active/completed/failed）；ai/token 事件 append streaming text；ai/done 顯示 severity、summary、likely causes、evidence、suggestedActions；ai/error 顯示錯誤與 retry；同一 machine active job 期間 disable duplicate submit；Cache hit 顯示 cached badge。成功條件：點 Diagnose 後 drawer 立刻進入 active；token 逐段顯示，不等 done；done 後 structured result 正確渲染；failed 可 retry；desktop/mobile 不溢出。"
 

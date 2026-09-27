@@ -4,7 +4,15 @@
 
 **Created**: 2026-06-30
 
-**Status**: Draft
+**Status**: 已完成（v1.0.0；2026-07-01 以 `918b9e3` 併入 develop）；之後變更見指南 §15.6「v1.0.0 之後的現況摘要」
+
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - FR-010／Assumptions：「落地採批次、fire-and-forget」→ 有上限 buffer（5000）＋每秒批次＋單一 in-flight，溢位丟最舊並計數；`system/metrics` 新增 optional `persist: { dropped, failed }`。
+> - FR-003／SC-006 訂閱授權 → 有設 `WS_AUTH_SECRET` 時 `ai/*`、`job/status`、`system/metrics` 只送已授權連線；`WS_AUTH_GRACE_MS` 內未授權、或違規（畸形訊息、錯誤 token）累計 10 次，皆以 `1008` 關閉。
+> - FR-007 心跳 → 伺服器探活改為帶 nonce 的協定層 ping，pong 須原樣帶回；授權期限由獨立 sweep 檢查。
+> - （原 spec 未涵蓋，現已實作）輸入與資源邊界：Origin 白名單 `WS_ALLOWED_ORIGINS`、`safeParse`、`maxPayload` 16 KiB、`machineIds` 與名冊取交集；背壓高水位 `WS_SEND_HIGH_WATER_BYTES`（略過高頻流推送（遙測批次與 `ai/token`），控制訊息與 `job/status`／`ai/done`／`ai/error` 照送；連續 3 tick 超標 terminate）；`MAX_WS_CONNECTIONS` 連線上限（upgrade 回 503）與未授權子上限。
+> - FR-009／Clarifications：TTL 可由 `TELEMETRY_TTL_SECONDS` 調整 → 既存 collection 以 `collMod` 更新 TTL（改值真的生效）；errorlogs 另有 30 天 TTL。
 
 **Input**: User description: "建立 flow-gatekeeper 的 NestJS realtime gateway 與 MongoDB history layer。範圍：WebSocket Gateway 支援 client connect/disconnect、ping/pong heartbeat、machine subscribe/unsubscribe；Mock telemetry producer 每 10-50ms 產生 machine telemetry；Gateway 只把 telemetry 推給訂閱該 machineId 的 client；MongoDB 建立 telemetry time-series collection，TTL 7 天；建立 errorlogs、maintenanceRecords collections 與 seed script；當 telemetry 達到 warning/critical threshold 時寫入 errorlogs。"
 

@@ -150,9 +150,10 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 /** Gateway 內部的單一連線狀態（僅測試用：模擬慢讀者需要改寫 server 端 socket 的 bufferedAmount）。 */
 type GatewayInternals = {
-  clients: Map<string, { socket: WebSocket; alive: boolean; connectedAt: number; closeRequestedAt?: number }>;
+  clients: Map<string, { socket: WebSocket; alive: boolean; connectedAt: number; closeTimer?: unknown }>;
   sweepDeadConnections(): void;
   sweepAuthGrace(): void;
+  unauthorizedCount: number;
 };
 
 function internals(gateway: MonitoringGateway): GatewayInternals {
@@ -273,6 +274,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  // 個別測試可能開了 fake timers（關閉逾期回收）；一律先還原，收尾的 server.close 才等得到真計時器。
+  vi.useRealTimers();
   // 先收尾再斷言：斷言失敗會中止 afterEach，若排在前面，mock 與 ws server／timer 會洩漏到後續測試。
   // 監聽與 exit 計數要等收尾做完才拆：關閉 ws server 期間若拋出或觸發致命守門 exit(1)，
   // 正是「優雅關閉被誤報成崩潰」，必須仍被下面兩個斷言抓到。
@@ -801,20 +804,111 @@ describe("MonitoringGateway：出口閘門（背壓、授權、違規、連線�
     slow.ws.close();
   });
 
-  it("授權逾期發出 close 後對端不回 close frame → 再過一個期限即 terminate，不再佔名額", async () => {
-    const { port, gateway } = await startGateway({ secret: "s3cret", authGraceMs: 60_000 });
-    const stubborn = await openClient(port);
-    const socket = serverSocket(gateway, stubborn.clientId);
-    socket.close = () => undefined; // 模擬 close frame 送出後對端不回應：連線停在 OPEN
-    age(gateway, stubborn.clientId, 60_000);
-    internals(gateway).sweepAuthGrace();
-    expect(gateway.connectionCount).toBe(1);
-    const state = internals(gateway).clients.get(stubborn.clientId);
-    if (!state || state.closeRequestedAt === undefined) throw new Error("closeRequestedAt 未設定");
-    state.closeRequestedAt -= 60_000;
-    const closed = waitClose(stubborn.ws);
-    internals(gateway).sweepAuthGrace();
-    expect(gateway.connectionCount).toBe(0);
-    expect(await closed).toBe(1006);
+  /**
+   * 模擬「close frame 已送出、對端卻遲不回應」：真實 ws 的 `close()` 會同步進入 CLOSING，但在對端回
+   * close frame（或內建 closeTimer 約 30 s 到期）前不會發出 'close' 事件。此處把 server 端 socket 的
+   * `close()` 換成「只把 readyState 設為 CLOSING、不送 frame、不觸發事件」，重現該中間態；CLOSING 下
+   * `ping()` 走 ws 的 sendAfterClose、不會真的送出（與真實行為一致）。回傳 close 的 spy。
+   */
+  function stallClose(socket: WebSocket): ReturnType<typeof vi.fn> {
+    const closeSpy = vi.fn(() => {
+      Object.defineProperty(socket, "readyState", { configurable: true, get: () => WebSocket.CLOSING });
+    });
+    socket.close = closeSpy;
+    return closeSpy;
+  }
+
+  function warnSpy(gateway: MonitoringGateway): ReturnType<typeof vi.spyOn> {
+    return vi.spyOn((gateway as unknown as { plog: { warn: (...args: unknown[]) => void } }).plog, "warn");
+  }
+
+  function infoSpy(gateway: MonitoringGateway): ReturnType<typeof vi.spyOn> {
+    return vi.spyOn((gateway as unknown as { plog: { info: (...args: unknown[]) => void } }).plog, "info");
+  }
+
+  const HUGE_MS = 2 ** 31 - 1;
+
+  /** 以 setImmediate（未被假造）輪詢等待條件成立，不推進 fake 時鐘；上限約 2000 輪。 */
+  async function untilTrue(cond: () => boolean): Promise<void> {
+    for (let i = 0; i < 2_000; i += 1) {
+      if (cond()) return;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    throw new Error("condition not met");
+  }
+
+  /**
+   * 關閉逾期回收：`requestClose` 掛逐連線計時器，於 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)` 到期即
+   * terminate。以 fake timers（只假 setTimeout／clearTimeout／Date；socket I/O 與 vi.waitFor 仍走真實）
+   * 精確驗證到期點——心跳／授權 sweep 都不手動驅動，證明回收不依賴任何 sweep 的間隔。
+   */
+  it.each([
+    { name: "無密鑰＋極大心跳", secret: "", heartbeatMs: HUGE_MS, authGraceMs: 5_000, deadline: 5_000 },
+    { name: "無密鑰＋極大授權期限", secret: "", heartbeatMs: 15_000, authGraceMs: HUGE_MS, deadline: 15_000 },
+    { name: "有密鑰（心跳較短）", secret: "s3cret", heartbeatMs: 15_000, authGraceMs: 60_000, deadline: 15_000 },
+    { name: "有密鑰＋極大心跳", secret: "s3cret", heartbeatMs: HUGE_MS, authGraceMs: 10_000, deadline: 10_000 },
+  ])(
+    "$name：close 後對端不回 close frame（CLOSING 停滯）→ 於 min(心跳, 授權期限)=$deadline ms 到期即以 close-not-honoured terminate、釋放名額",
+    async ({ secret, heartbeatMs, authGraceMs, deadline }) => {
+      const { port, gateway } = await startGateway({ secret, heartbeatMs, authGraceMs });
+      const warn = warnSpy(gateway);
+      const info = infoSpy(gateway);
+      const client = await openClient(port);
+      const socket = serverSocket(gateway, client.clientId);
+      const closeSpy = stallClose(socket);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+
+      if (secret) {
+        // 有密鑰：走授權逾期路徑（未通過 token 的連線過了期限）。
+        age(gateway, client.clientId, authGraceMs);
+        internals(gateway).sweepAuthGrace();
+        expect(closeSpy).toHaveBeenCalledWith(1008, "authorization timeout");
+        internals(gateway).sweepAuthGrace(); // 已在關閉中：不重複發 close
+        expect(closeSpy).toHaveBeenCalledTimes(1);
+      } else {
+        // 無密鑰：走違規累計路徑。
+        for (let i = 0; i < WS_MAX_VIOLATIONS; i += 1) client.ws.send("{not json");
+        // 不用 vi.waitFor：fake timers 開啟時它每輪會自動 advanceTimersByTime，會把逾期計時器提前推到期。
+        await untilTrue(() => closeSpy.mock.calls.length > 0);
+        expect(closeSpy).toHaveBeenCalledWith(1008, "policy violation");
+      }
+      expect(socket.readyState).toBe(WebSocket.CLOSING);
+      expect(internals(gateway).clients.get(client.clientId)?.closeTimer).toBeDefined();
+
+      vi.advanceTimersByTime(deadline - 1);
+      expect(gateway.connectionCount).toBe(1);
+
+      const closed = waitClose(client.ws);
+      vi.advanceTimersByTime(1);
+      expect(gateway.connectionCount).toBe(0);
+      expect(internals(gateway).unauthorizedCount).toBe(0);
+      expect(warn).toHaveBeenCalledWith(
+        { clientId: client.clientId, closeDeadlineMs: deadline },
+        "close frame not received, terminating",
+      );
+      expect(info).toHaveBeenCalledWith({ clientId: client.clientId, reason: "close-not-honoured" }, "client disconnected");
+      vi.useRealTimers();
+      expect(await closed).toBe(1006);
+    },
+  );
+
+  it("對端正常回 close frame → 'close' 事件清掉逾期計時器，到期也不會 terminate", async () => {
+    const { port, gateway } = await startGateway({ heartbeatMs: 15_000, authGraceMs: 5_000 });
+    const warn = warnSpy(gateway);
+    const info = infoSpy(gateway);
+    const client = await openClient(port);
+    const closed = waitClose(client.ws);
+    // 先開 fake timers：requestClose 掛的逾期計時器才受 advanceTimersByTime 控制。
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const pendingBefore = vi.getTimerCount();
+    for (let i = 0; i < WS_MAX_VIOLATIONS; i += 1) client.ws.send("{not json");
+    expect(await closed).toBe(1008); // 真實 ws：client 自動回 close frame
+    await untilTrue(() => gateway.connectionCount === 0);
+    expect(info).toHaveBeenCalledWith({ clientId: client.clientId, reason: "close" }, "client disconnected");
+    // 逾期計時器已被 cleanup 清掉：到期後不會再 terminate、也不會記 close-not-honoured。
+    vi.advanceTimersByTime(5_000);
+    expect(warn).not.toHaveBeenCalledWith(expect.anything(), "close frame not received, terminating");
+    expect(info).not.toHaveBeenCalledWith(expect.objectContaining({ reason: "close-not-honoured" }), expect.anything());
+    expect(vi.getTimerCount()).toBe(pendingBefore);
   });
 });

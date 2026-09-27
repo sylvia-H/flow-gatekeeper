@@ -13,6 +13,7 @@ if (process.env.NODE_ENV === "production") {
 // 不排除就會把舊 dist 的測試也跑一遍（重複計數、且測的是過期產物）。補回 dist 排除以維持 vitest 2 的語意。
 export default defineConfig({
   test: {
-    exclude: [...configDefaults.exclude, "**/dist/**"],
+    // 整合測試（src/integration/**/*.int.test.ts）需要真 Redis／Mongo，由 vitest.integration.config.ts 另跑（pnpm test:integration）。
+    exclude: [...configDefaults.exclude, "**/dist/**", "**/integration/**"],
   },
 });

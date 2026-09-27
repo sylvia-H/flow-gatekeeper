@@ -4,7 +4,17 @@
 
 **Created**: 2026-07-01
 
-**Status**: Draft
+**Status**: 已完成（v1.0.0；2026-07-01 以 `3aeb394` 併入 develop）；之後變更見指南 §15.6「v1.0.0 之後的現況摘要」
+
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - FR-003／Assumptions：BullMQ `limiter`（`max=AI_RPM`）→ **取鎖後** Redis 固定窗 `ai-rpm:<分鐘>`＋`moveToDelayed`，已不使用 BullMQ limiter；cache 命中與等待者不吃額度。
+> - FR-006 去重鎖 → 取鎖後 double-check cache、`randomUUID` 鎖值＋Lua compare-and-del；啟動驗證 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`。
+> - FR-020／Clarifications：「逾時轉 `ai/error` 並依重試處理」→ `AbortSignal.timeout(AI_TIMEOUT_MS)` 交給 SDK；非最終嘗試不送 `ai/error`、所有事件帶 `attempt`；不可重試錯誤轉 `UnrecoverableError`；最終失敗由 api 補送 `ai/error(worker_failed)`；空脈絡短路為 `ai/error(no_context)`。
+> - FR-005 簽章中的「prompt 版本」→ 不再經 job payload 傳遞，由 worker 自管 `PROMPT_VERSION`；簽章含 provider id＋model＋`PROMPT_VERSION`。
+> - Assumptions：Gemini provider（`plan.md:19` 的 `@google/generative-ai`）→ 已遷移 `@google/genai`，走 `responseJsonSchema` 原生 structured output；`AiProvider` 新形狀（`id`／`model`／`signal`／`finishReason`／`usage`、`AiProviderError{retryable}`）；`GEMINI_API_KEY` 任何環境皆可留空（缺席即 `provider_error` 不重試）。
+> - FR-021 `POST /diagnoses` 開放 → 仍不要求授權，但改為 Zod 驗證＋冪等（前端產生 `jobId`）：名冊外 `404` → `socketId` 不在線或未授權 `409` → `jobId` 冪等；另有 `400`／`415`／`503`，一鍵 demo 經 nginx 有 `429`。
+> - 憲章 1.5.0 Principle III 已改為「WS message 與 `POST /diagnoses` MUST Zod；非 WS／HTTP 的跨 process 型別（BullMQ job data）SHOULD Zod 並在消費端 `safeParse`」→ 現況 `DiagnosisJobPayload` 仍為手寫 TS 型別，列 roadmap 010-lite（第二輪報告 CT-8）。
 
 **Input**: User description: "建立 flow-gatekeeper 的 BullMQ 診斷任務、獨立 worker process、AI streaming、Redis cache-aside、MongoDB diagnosis persistence。範圍：API 提供 POST /diagnoses 建立 diagnosis job；BullMQ queue 使用 Redis，設定 limiter、attempts、exponential backoff；Worker 獨立 process 消化 job；Worker 先用 prompt signature 查 Redis ai-cache；Cache miss 才呼叫 LLM provider streaming；Worker 每個 token publish 到 Redis Pub/Sub channel ai-stream:<jobId>；Gateway 訂閱 ai-stream:*，把 token/done/error 轉發給對應 client；Worker 讀 MongoDB 最近 telemetry/errorlogs/maintenanceRecords 組 prompt；Final diagnosis 寫入 MongoDB diagnoses collection。成功條件：連續觸發 20 個 diagnosis request 不超過 AI_RPM；Cache hit 回傳 cached:true 且不呼叫 LLM；Worker 掛掉時 API/Gateway 不崩潰；前端可看到 token streaming 與 job status。"
 

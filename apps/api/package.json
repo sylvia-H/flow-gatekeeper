@@ -1,6 +1,6 @@
 {
   "name": "@flow-gatekeeper/api",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "files": [
@@ -12,7 +12,8 @@
     "seed": "tsx --conditions=development src/scripts/seed.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@flow-gatekeeper/contracts": "workspace:*",
