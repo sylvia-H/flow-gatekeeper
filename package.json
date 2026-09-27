@@ -7,16 +7,21 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "build": "pnpm -r build",
+    "build:packages": "pnpm --filter @flow-gatekeeper/contracts --filter @flow-gatekeeper/shared build",
     "contract:lint": "spectral lint asyncapi.yaml",
     "check": "pnpm contract:lint && pnpm typecheck && pnpm lint && pnpm test"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
     "@stoplight/spectral-cli": "^6.15.0",
+    "@types/node": "~22",
     "eslint": "^9.13.0",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.11.0",
     "vitest": "^2.1.0"
   },
-  "packageManager": "pnpm@9.0.0"
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=22"
+  }
 }

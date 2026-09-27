@@ -15,10 +15,15 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          # 與 Dockerfile（node:22-alpine）、root engines 同一來源：.nvmrc
+          node-version-file: .nvmrc
           cache: pnpm
+      # 不需先 build packages/*：typecheck／test 透過 exports 的 "development" condition 直接吃 src。
       - run: pnpm install --frozen-lockfile
       - run: pnpm contract:lint
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
+      # 最後走一次 production 建置路徑（customConditions: [] → 解析 dist），
+      # 補上 typecheck 改吃 src 後不再覆蓋到的「packages build → apps 依 dist 編譯」這段。
+      - run: pnpm build

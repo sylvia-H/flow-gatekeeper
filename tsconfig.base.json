@@ -4,6 +4,10 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    // 開發期（typecheck／IDE）讓 workspace 套件的 exports 走 "development" condition 直接指向 src，
+    // 乾淨 clone 不必先 build packages/*，且改了 contracts 原始碼會立刻被各 app 檢查到（不會拿舊 dist 型別靜默放過）。
+    // 各 app 的 tsconfig.build.json 會覆寫為 []，讓 production 編譯照舊解析 dist。
+    "customConditions": ["development"],
     "lib": ["ES2022"],
     "strict": true,
     "noImplicitAny": true,

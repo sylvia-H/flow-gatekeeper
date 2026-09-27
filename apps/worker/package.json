@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "start:dev": "tsx watch src/main.ts",
-    "smoke:gemini": "tsx src/ai/smoke-gemini.ts",
+    "start:dev": "tsx watch --conditions=development src/main.ts",
+    "smoke:gemini": "tsx --conditions=development src/ai/smoke-gemini.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests"

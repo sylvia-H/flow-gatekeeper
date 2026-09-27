@@ -1,6 +1,13 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
+// Vite 依 NODE_ENV 自動選 development／production condition：dev 與 vitest（mode=test）吃 packages src、build 吃 dist。
+// vitest 必須永遠對 packages src 測試（與 apps/api、apps/worker 的 vitest.config 一致）：若 shell 帶著
+// NODE_ENV=production 跑測試，Vite 會改吃可能過時或不存在的 dist 而假綠／假紅，故僅在 vitest 下把它壓回 test。
+if (process.env.VITEST && process.env.NODE_ENV === "production") {
+  process.env.NODE_ENV = "test";
+}
+
 export default defineConfig({
   plugins: [vue()],
   server: {
