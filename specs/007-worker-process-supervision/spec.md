@@ -4,7 +4,14 @@
 
 **Created**: 2026-07-06
 
-**Status**: Draft
+**Status**: 已完成（v1.0.0；2026-07-13 以 `ea5e393` 併入 develop）；之後變更見指南 §15.6「v1.0.0 之後的現況摘要」
+
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - FR-008 故障注入旗標 → production（`NODE_ENV=production`，worker 映像內建）預設拒絕武裝，需另設 `WORKER_CHAOS_ALLOW_IN_PRODUCTION=true`（指南 §16.3 第 5 列）。
+> - FR-003 致命記錄 → 以 `writeSync(fd 2)` 同步寫出；致命 kind 補 `invalidConfig`（env 驗證失敗）與 `bootstrap`（`bootstrap().catch`）。
+> - Key Entities：存活訊號 → 每實例一把 `worker:heartbeat:<instanceId>`（`metrics:worker:<instanceId>` 同理），healthcheck 只看自身實例；heartbeat 依處理槽進度判斷卡死。
+> - Edge Cases：啟動時 infra 未就緒 → compose 改 `depends_on: condition: service_healthy`（redis／mongo 皆有 healthcheck）。
 
 **Input**: User description: "007-worker-process-supervision"（依 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §13 方向藍圖與 `docs/adr-002-productionization-scope.md` 既定決策起草）
 

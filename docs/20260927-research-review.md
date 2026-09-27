@@ -2,12 +2,13 @@
 
 | 項目 | 內容 |
 | --- | --- |
+| **本文性質** | **歷史快照**，基準 commit `3e94ac2`（審查對象）→ `a8ef62a`（修復）→ `6be71c6`（升級）；數字若與第二輪報告 `docs/20260927-research-review02.md` 附錄 B 不一致，以第二輪為準 |
 | 審查日期 | 2026-09-27 |
 | 審查對象 | `main` @ `3e94ac2`（v1.0.0，Feature 001–009 全數併入） |
 | 方法 | 6 個獨立審查 agent（Opus 5.5）分面向平行檢視，由統籌者交叉比對、去重、排序後統整 |
-| 修復狀態 | **P0～P2 缺陷已於同日由 `fix/20260927-research-review`（17 個 commit）修復並 `--no-ff` 併入 `develop`（`a8ef62a`）**。修復後由 3 個獨立驗收 agent 逐項核對（比較基準 `1cfc8c0..a8ef62a`），P0 六項全部經實測重現「修復前會崩／修復後不會」確認 |
-| 修復後檢查 | `contract:lint`／`-r typecheck`／`-r lint` 全綠；`-r test` 524 個測試通過（shared 16、contracts 58、api 155、worker 132、web 163）；乾淨 clone 不 build 直接 typecheck／test 全綠；`pnpm audit --prod` 由 19 項降至 3 項 moderate（全部經 `@nestjs/bullmq@10` 帶入） |
-| 升級狀態 | **§4 技術棧升級已於同日由 `upgrade/20260927-tech-stack`（9 個 commit）完成**：pnpm 10.34.5、NestJS 11.2.6（Express 5、`@nestjs/bullmq` 12）、Vite 7.3.6、plugin-vue 6、vue-tsc 3、vitest 4.1.11、Pinia 3、Vue 3.5 patch、eslint-plugin-vue 10、Zod 4.6.5（移除 `zod-to-json-schema`）、五個控制訊息型別 Zod 化納入漂移比對、shared 補 `tsconfig.build.json`、`engines.node >=22.12`。由獨立驗收 agent 做靜態檢查、乾淨 clone、全棧 demo（`--profile demo`）與 dev 軌道執行期驗證後併回 `develop` |
+| 修復狀態 | **P0～P2 缺陷已於同日由 `fix/20260927-research-review`（16 個非 merge commit；原記 17，2026-09-27 以 `git log --oneline --no-merges a8ef62a^1..a8ef62a^2` 實算更正）修復並 `--no-ff` 併入 `develop`（`a8ef62a`）**。修復後由 3 個獨立驗收 agent 逐項核對（比較基準 `1cfc8c0..a8ef62a`），P0 六項全部經實測重現「修復前會崩／修復後不會」確認 |
+| 修復後檢查 | `contract:lint`／`-r typecheck`／`-r lint` 全綠；`-r test` 524 個測試通過（shared 16、contracts 58、api 155、worker 132、web 163）；乾淨 clone 不 build 直接 typecheck／test 全綠；`pnpm audit --prod` 由 19 項降至 3 項 moderate（全部經 `@nestjs/bullmq@10` 帶入；修復當下數字，升級後已歸零，見下列「升級後檢查」） |
+| 升級狀態 | **§4 技術棧升級已於同日由 `upgrade/20260927-tech-stack`（17 個非 merge commit；原記 9，以 `git log --oneline --no-merges 6be71c6^1..6be71c6^2` 實算更正）完成**：pnpm 10.34.5、NestJS 11.2.6（Express 5、`@nestjs/bullmq` 12）、Vite 7.3.6、plugin-vue 6、vue-tsc 3、vitest 4.1.11、Pinia 3、Vue 3.5 patch、eslint-plugin-vue 10、Zod 4.6.5（移除 `zod-to-json-schema`）、五個控制訊息型別 Zod 化納入漂移比對、shared 補 `tsconfig.build.json`、`engines.node >=22.12`。由獨立驗收 agent 做靜態檢查、乾淨 clone、全棧 demo（`--profile demo`）與 dev 軌道執行期驗證後併回 `develop` |
 | 升級後檢查 | 驗收後另以 `/code-review high` 對整支分支複審，7 項 findings 修正 6 項（時間戳改 `z.iso.datetime({ offset: true })` 對齊 RFC 3339、`system/metrics` 驗證規則上收契約並同步 asyncapi `minimum`、漂移測試只略過內建 format pattern 並比對 `allOf`、`toGeminiNode` 冗餘分支、文件矛盾回補、`@__PURE__` 標記）。最終：`-r test` **583** 個（shared 16、contracts 113、api 155、worker 136、web 163）；`pnpm audit` 全量與 `--prod` **皆為 0**；乾淨 clone 免 build 全綠；三個 Docker image 重建成功並全 healthy；web bundle 224.32 kB（gzip 75.62 kB） |
 | 本文現況 | **已修復項目已自本文移除**，只保留「部分修復」「未修復」「修復後新發現的殘留」與尚未執行的架構級建議。原始完整審查內容見 git 歷史 `fd34905` |
 | 相關 | ADR-001、ADR-002（§3／§6／§7 已回補現況）、`CLAUDE.md`、實作指南 §15.6、`README.md` |
@@ -146,6 +147,8 @@
 
 ## 4. 技術棧升級（尚未執行部分）
 
+> **升級前快照**（2026-09-27，基準 `a8ef62a`），**非現況**；現況見第二輪報告 `docs/20260927-research-review02.md` §5.5 與 root `package.json`。
+
 實測 `pnpm outdated -r`（2026-09-27，current → latest）：NestJS 10.4.22 → 12.1（11 於 2025-01 發布）；`@nestjs/bullmq` 10.2.3 → 12.0；vite 5.4.21 → 8.3.1；`@vitejs/plugin-vue` 5 → 6；tailwindcss 3.4.19 → 4.3.3；zod 3.25.76 → 4.6.5；vitest 2.1.9 → 5.0.2；pinia 2.3.1 → 4.0.3；eslint 9.39 → 10.11；eslint-plugin-vue 9 → 10；vue-tsc 2.2 → 3.3；typescript 5.9.3 → 7.0.2；bullmq 5.79 → 6.3.9；ioredis 5.11 → 6.0；mongodb 6.21 → 7.6；pino 9 → 10；dotenv 16 → 18。
 
 | 項目 | 建議 | 理由 | 狀態 |
@@ -154,7 +157,7 @@
 | pnpm 9.0.0 | 升 10.x 並附 hash | Node 24 上 9.0.0 install 崩潰 | **已完成**：10.34.5；`onlyBuiltDependencies`（esbuild、msgpackr-extract）明列；Dockerfile 改 `deploy --legacy`（見 §3.2 c） |
 | Vite 5 / vitest 2 / plugin-vue 5 / vue-tsc 2 | 升（一起綁） | vitest 2.1.9 critical、vite 5.4.21 fs.deny CVE | **已完成**：Vite 7.3.6（不升 8）、vitest 4.1.11（不升 5）、plugin-vue 6.0.9、vue-tsc 3.3.11；`engines.node` 收緊 `>=22.12`；vitest 4 預設不排除 dist，各套件 `vitest.config.ts` 補 `exclude` |
 | Vue 3.5 / Pinia 2 | Pinia 順手升；Vue 更新 patch、等 3.6 穩定 | gatekeeper 與框架無關 | **已完成**：Vue `~3.5.43`、Pinia 3.0.4、eslint-plugin-vue 10.11.1（eslint 本體維持 9） |
-| Zod 3.25 | 升 4，漂移測試改用內建 `z.toJSONSchema` | 拿掉 `zod-to-json-schema` | **已完成**：4.6.5；`z.uuid()`／`z.iso.datetime()` 加嚴（生產端 `randomUUID()`／`toISOString()` 皆通過）；Gemini `responseJsonSchema` 逐鍵相同、prompt sha256 不變故 `PROMPT_VERSION` 未升。**接受的代價**：web bundle 190 → 224.77 kB（gzip 62.9 → 75.8 kB，+20%），來自 Zod 4 classic 本體（方法鏈 API tree-shake 差、預設載 en locale）；改 `zod/mini` 可降至約 8 kB gzip 但需改寫 contracts 撰寫 API 與 locale 設定，屬跨 feature 決策，列為後續選項。**外部可見變化**：400 回應 `issues[].code` 由 `invalid_string` 變 `invalid_format`（repo 內無消費者） |
+| Zod 3.25 | 升 4，漂移測試改用內建 `z.toJSONSchema` | 拿掉 `zod-to-json-schema` | **已完成**：4.6.5；`z.uuid()`／`z.iso.datetime()` 加嚴（生產端 `randomUUID()`／`toISOString()` 皆通過）；Gemini `responseJsonSchema` 逐鍵相同、prompt sha256 不變故 `PROMPT_VERSION` 未升。**接受的代價**：web bundle 190 → 224.77 kB（gzip 62.9 → 75.8 kB，+20%）（複審前；最終 224.32 kB，見表頭），來自 Zod 4 classic 本體（方法鏈 API tree-shake 差、預設載 en locale）；改 `zod/mini` 可降至約 8 kB gzip 但需改寫 contracts 撰寫 API 與 locale 設定，屬跨 feature 決策，列為後續選項。**外部可見變化**：400 回應 `issues[].code` 由 `invalid_string` 變 `invalid_format`（repo 內無消費者） |
 | `@google/generative-ai` | 換 `@google/genai` | | **已完成** |
 | BullMQ 5／ioredis 5／mongodb 6 | 維持 | 皆為各自 major 最新線；bullmq 6 與 ioredis 6 剛發布、breaking 未查證 | 不排程 |
 | Tailwind 3.4 | **暫緩** | v4 CSS-first 對 token 化更貼合，但 `@tailwind`→`@import`、`theme()`、尺度更名需先處理；視覺回歸風險高、收益低 | 不排程 |
@@ -219,6 +222,8 @@ api 同時是 Gateway、mock telemetry producer、BullMQ producer、Pub/Sub 轉�
 4. **010–012 roadmap** 依 SDD 流程另開 feature。
 5. **§6.5 SDD 精簡**與 feature 收尾清單，於下一個 feature 起草時一併處理。
 
+> 流程紀錄：`develop` 有三次直接 commit（`97dd0c5`、`1cfc8c0`、`eab5db4`）與 008 的 phase commit 格式不合規，已於 CLAUDE.md 維護分支規則明文，不改寫歷史。
+
 ---
 
 ## 8. 通過驗證、無問題的項目（修復後回歸確認仍成立）
@@ -235,5 +240,5 @@ api 同時是 Gateway、mock telemetry producer、BullMQ producer、Pub/Sub 轉�
 ## 附錄：驗收方法
 
 - 比較基準 `1cfc8c0..a8ef62a`；3 個驗收 agent 分別負責 api／運維、worker／AI、web／contracts，逐項讀 diff 與現行檔案，不以 commit 訊息為據。
-- 實測：乾淨 clone（`git archive` + `install --frozen-lockfile --offline`，不 build）typecheck／lint／test 全綠；Gateway PoC 以真實 `MonitoringGateway` + fatal handler 送七種畸形輸入，行程存活且新連線可訂閱；web build 191 kB（gzip 63 kB）。
+- 實測：乾淨 clone（`git archive` + `install --frozen-lockfile --offline`，不 build）typecheck／lint／test 全綠；Gateway PoC 以真實 `MonitoringGateway` + fatal handler 送七種畸形輸入，行程存活且新連線可訂閱；web build 191 kB（gzip 63 kB）（修復當下、升級前的數字）。
 - 原始審查（含全部已修復項目的 `file:line` 證據）見 git 歷史 `fd34905`。

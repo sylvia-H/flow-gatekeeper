@@ -1,5 +1,10 @@
 # Phase 1 Data Model: Monitoring Console Fidelity
 
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - §5：「meta 全為靜態常數、不呈現動態 attempt 計數」→ 現顯示 Attempt `N / 3`，attempt 取自 `ai/*` 事件。
+> - §6 `paused` → Pause 且連線中時一併凍結 stale 判定。
+
 **全部為前端衍生／呈現型別**，存於 `apps/web` 記憶體（Pinia store 與純函式）。**不新增 `packages/contracts`**（FR-023）：契約型別（`MachineState`、`TelemetryPoint`、`JobStatus` 等）僅**消費**。下列型別皆定義在 `apps/web/src/domains/monitoring/lib/*` 或 `monitoring.store.ts`。
 
 ---

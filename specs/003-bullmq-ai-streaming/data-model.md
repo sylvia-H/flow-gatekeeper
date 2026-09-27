@@ -1,5 +1,15 @@
 # Phase 1 Data Model: 診斷任務佇列、AI 串流診斷與 Redis 快取
 
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - §1.1：`DiagnosisJobPayload.promptVersion` → 已移除，worker 自管 `PROMPT_VERSION`（見 `packages/contracts/src/jobs.ts` 註解）。
+> - §1.1：`jobId` 由 api `randomUUID` → 由前端產生並作 idempotency key。
+> - §2：`ai-lock:<sig>` `finally` DEL → `randomUUID` 鎖值＋Lua compare-and-del；另新增 `ai-rpm:<分鐘>` 固定窗限流 key（取代 BullMQ limiter）。
+> - §2：簽章輸入含 payload 的 `promptVersion` → 改含 provider id＋model＋worker 的 `PROMPT_VERSION`。
+> - §3.2 寫入 → 先 insert `diagnoses`（`jobId` unique）再 set cache，cache 讀回 `safeParse`；`diagnosisTriggers` TTL 30 天。
+> - §5／§6：失敗即 `ai/error` → 非最終嘗試不送 `ai/error`，`ai/*` 皆帶 `attempt`；最終失敗由 api 補送 `ai/error(worker_failed)`；另有 `no_context`、輸出截斷視為不可重試 `schema_invalid`。
+> - §1.1「依型別來源分層以 TS 定義（憲章 III）」：憲章 1.5.0 Principle III 已改為「WS message 與 `POST /diagnoses` MUST Zod；非 WS／HTTP 的跨 process 型別（BullMQ job data）SHOULD Zod 並在消費端 `safeParse`」→ 現況 `DiagnosisJobPayload` 仍為手寫 TS 型別，列 roadmap 010-lite（第二輪報告 CT-8）；該小標在憲章中保留、內容已改，本檔引用仍有效。
+
 本檔描述 003 涉及的資料形狀：契約型別（api↔worker）、Redis 暫態鍵、MongoDB 集合，以及 job 狀態
 轉換。契約型別以 `packages/contracts` 為單一來源；WS 事件（`ai/*`、`job/status`）沿用 001 既有
 定義，不重複。
