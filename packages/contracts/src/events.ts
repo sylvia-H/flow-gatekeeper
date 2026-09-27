@@ -32,7 +32,8 @@ export type MachineState = (typeof MACHINE_STATES)[number];
 export const TelemetryPointSchema = z.object({
   type: z.literal("machine/data"),
   machineId: z.string(),
-  timestamp: z.iso.datetime(),
+  /** RFC 3339（對齊 asyncapi `format: date-time`）：須含秒，接受 `Z` 或 `±hh:mm` 時區。 */
+  timestamp: z.iso.datetime({ offset: true }),
   telemetry: z.object({
     temperature: z.number(),
     vibration: z.number(),
@@ -111,8 +112,8 @@ export const SystemMetricsSchema = z.object({
   type: z.literal("system/metrics"),
   /** 本則摘要涵蓋的時間窗（＝`METRICS_INTERVAL_MS`）；前端過期門檻由此推導，不得硬編。 */
   windowMs: z.number().int(),
-  /** api 結算時間（ISO-8601）——前端新鮮度判定以此為基準，非收訊時間。 */
-  collectedAt: z.iso.datetime(),
+  /** api 結算時間（RFC 3339，同 `timestamp`）——前端新鮮度判定以此為基準，非收訊時間。 */
+  collectedAt: z.iso.datetime({ offset: true }),
   queue: z.object({
     waiting: z.number().int(),
     active: z.number().int(),

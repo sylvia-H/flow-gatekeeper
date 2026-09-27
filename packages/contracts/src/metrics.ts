@@ -9,10 +9,12 @@ import { z } from "zod";
  */
 export const WorkerMetricsSchema = z.object({
   /**
-   * worker 端結算時間（ISO-8601，`toISOString()` 產生），供判讀快照新鮮度。以 `z.iso.datetime()`
-   * 驗證以對齊 asyncapi 的 `format: date-time`；無法解析的時間戳在入口即視為畸形快照。
+   * worker 端結算時間（ISO-8601，`toISOString()` 產生），供判讀快照新鮮度。以
+   * `z.iso.datetime({ offset: true })` 驗證以對齊 asyncapi 的 `format: date-time`（RFC 3339：須含秒、
+   * 接受 `Z` 或 `±hh:mm` 時區）；Zod 預設只收 `Z` 結尾，比 RFC 3339 嚴，故明確開 offset。
+   * 無法解析的時間戳在入口即視為畸形快照。
    */
-  snapshotAt: z.iso.datetime(),
+  snapshotAt: z.iso.datetime({ offset: true }),
   llmLatency: z.object({
     /** 窗內 LLM 呼叫樣本數。 */
     count: z.number().int().nonnegative(),
