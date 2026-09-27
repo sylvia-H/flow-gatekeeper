@@ -3,13 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "start:dev": "tsc -p ../../packages/contracts/tsconfig.build.json && tsc -p ../../packages/shared/tsconfig.build.json && nest start --watch",
     "seed": "tsx --conditions=development src/scripts/seed.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "dependencies": {
     "@flow-gatekeeper/contracts": "workspace:*",

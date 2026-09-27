@@ -8,7 +8,7 @@
     "build": "vite build",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "dependencies": {
     "@flow-gatekeeper/contracts": "workspace:*",
