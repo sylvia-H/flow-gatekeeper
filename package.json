@@ -4,13 +4,17 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "lint": "eslint eslint.config.js && pnpm -r lint",
+    "lint": "eslint eslint.config.js vitest.config.ts stryker.config.mjs && pnpm -r lint",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "test:coverage": "vitest run --coverage",
+    "test:mutation": "stryker run",
+    "test:e2e": "pnpm --filter @flow-gatekeeper/e2e test:e2e",
     "build": "pnpm -r build",
     "build:packages": "pnpm --filter @flow-gatekeeper/contracts --filter @flow-gatekeeper/shared build",
     "contract:lint": "spectral lint asyncapi.yaml",
-    "check": "pnpm contract:lint && pnpm typecheck && pnpm lint && pnpm test"
+    "check": "pnpm contract:lint && pnpm typecheck && pnpm lint && pnpm test",
+    "check:coverage": "pnpm contract:lint && pnpm typecheck && pnpm lint && pnpm test:coverage"
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
