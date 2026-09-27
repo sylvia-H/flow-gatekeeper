@@ -108,8 +108,9 @@ export const SystemUnauthorizedSchema = /* @__PURE__ */ z.object({ type: z.liter
 
 /**
  * system/metrics：伺服器週期廣播的營運指標摘要。
- * 廣播給**所有已連線 client**、與 `machine/subscribe` 訂閱狀態無關——這是系統層級的健康訊號，
- * 不屬於任何一台機台，沒訂閱機台的畫面也需要它。
+ * 廣播給**所有已授權 client**（未設 `WS_AUTH_SECRET` 時即所有已連線 client；有設時為通過
+ * `machine/subscribe` token 檢查者），與訂閱了哪些機台無關——這是系統層級的健康訊號，
+ * 不屬於任何一台機台，訂閱空集合的畫面也需要它。
  */
 export const SystemMetricsSchema = /* @__PURE__ */ z.object({
   type: z.literal("system/metrics"),
@@ -129,6 +130,20 @@ export const SystemMetricsSchema = /* @__PURE__ */ z.object({
   wsConnections: z.number().int().nonnegative(),
   /** worker 快照缺席、過期或畸形時為 `null`（降級輸出，api 仍廣播自己那一半）。 */
   worker: WorkerMetricsSchema.nullable(),
+  /**
+   * api 歷史寫入路徑（telemetry／errorlogs 落 Mongo）的有損預算，皆為 api 行程啟動以來的**累計值**
+   * （counter，不隨週期歸零；增量由讀者自行相減）。
+   * - `dropped`：遺失的紀錄數——buffer 滿丟最舊的遙測點、寫入失敗不重試的遙測點、被丟棄的 errorlog 合計。
+   * - `failed`：`insertMany` 失敗的批次數（telemetry 與 errorlogs 合計）。
+   *
+   * optional：舊版 api 不帶此欄位，讀者 MUST 容忍缺席。
+   */
+  persist: z
+    .object({
+      dropped: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+    })
+    .optional(),
 });
 
 export type SystemConnected = z.infer<typeof SystemConnectedSchema>;
@@ -145,11 +160,17 @@ export type ServerControlMessage =
   | SystemUnauthorized
   | SystemMetrics;
 
-/** 伺服器→客戶端的所有訊息 `type`（`machine/data` 以陣列整批送出，但 `type` 仍取自其元素）。 */
-export type ServerMessage = TelemetryPoint | JobStatus | AiStreamEvent | ServerControlMessage;
+/**
+ * 伺服器→客戶端的單一 WS frame（Gateway `send()` 的出口型別）。`machine/data` 以
+ * `TelemetryPoint[]` **整批**送出（一個 frame 是一個陣列），其餘訊息皆為單一物件。
+ */
+export type ServerMessage = TelemetryPoint[] | JobStatus | AiStreamEvent | ServerControlMessage;
 
-/** WS 上所有訊息 `type` 字面值的聯集。 */
-export type WsMessageType = ServerMessage["type"] | ClientControlMessage["type"];
+/** WS 上所有訊息 `type` 字面值的聯集（`machine/data` 取自批次陣列的元素）。 */
+export type WsMessageType =
+  | TelemetryPoint["type"]
+  | Exclude<ServerMessage, TelemetryPoint[]>["type"]
+  | ClientControlMessage["type"];
 
 /**
  * WS 訊息 `type` 的 runtime 清單，供契約漂移測試與 asyncapi 比對。

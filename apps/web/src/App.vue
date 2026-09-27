@@ -12,8 +12,9 @@ import { useMetricsStore } from "./domains/monitoring/stores/metrics.store.js";
 import { useCopilotStore } from "./domains/ai-copilot/stores/copilot.store.js";
 import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFrequencyWs.js";
 import { useResizeDrag } from "./shared/composables/useResizeDrag.js";
-import { useDiagnoseTrigger } from "./shared/composables/useDiagnoseTrigger.js";
-import { KNOWN_MACHINE_IDS, machineLabel } from "./domains/monitoring/lib/machine-labels.js";
+import { useDiagnoseTrigger } from "./domains/ai-copilot/composables/useDiagnoseTrigger.js";
+import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
+import { machineLabel } from "./domains/monitoring/lib/machine-labels.js";
 import { MACHINE_GROUPS, machineGroup } from "./domains/monitoring/lib/machine-groups.js";
 import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.js";
 
@@ -68,7 +69,7 @@ const selectedLabel = computed(() =>
 );
 // 診斷觸發走共用入口（TopBar／卡片 icon／drawer 同一份邏輯），clientId 只從 monitoring store 讀。
 const trigger = useDiagnoseTrigger();
-const { canDiagnoseSelected: canDiagnose, hasClient } = trigger;
+const { canDiagnoseSelected: canDiagnose, connectionBlockedReason } = trigger;
 
 function onDiagnose(): void {
   if (store.selectedMachineId !== null) trigger.diagnose(store.selectedMachineId);
@@ -84,7 +85,7 @@ function onCancel(): void {
 }
 
 // US5 主區標題列機台數（N＝固定名冊長度；不含 Graph/拓樸切換，僅標題）。
-const machineCount = computed(() => KNOWN_MACHINE_IDS.length);
+const machineCount = computed(() => MACHINE_IDS.length);
 
 // US6 sidebar 分組：直接依 MACHINE_GROUPS 順序分區，成員經 search 過濾；過濾後為空的群組略去
 // 標題（FR-017、Edge Cases）。roster 5 台皆已分組（machine-groups 測試保證），故無需 Ungrouped 桶。
@@ -106,7 +107,7 @@ const banner = computed(() => {
         cls: "border-warn-border bg-warn-bg text-warn-fg",
       };
     case "disconnected":
-      return store.clientId === null
+      return !store.everConnected
         ? { text: "Connecting…", cls: "border-subtle bg-elevated text-fg-muted" }
         : {
             text: "Disconnected — 顯示最後已知資料，資料可能過時",
@@ -143,6 +144,8 @@ const handle = useHighFrequencyWs({
   // US4：pause 時 pump 跳過 flush（續存 buffer）；pong RTT 回報 store.latencyMs。
   isPaused: () => store.paused,
   onLatency: store.setLatency,
+  // 訂閱授權結果（system/unauthorized 不再靜默忽略，TopBar 顯示授權 chip）。
+  onAuthResult: store.setAuthorized,
   // 溢位合併與入口剔除的筆數計入背壓計量（BackpressureBadge 另列 dropped）。
   onDrop: store.recordDropped,
   // 診斷事件分流交 copilot.store（憲章 IV／FR-017：不進遙測 buffer）。
@@ -158,7 +161,7 @@ const handle = useHighFrequencyWs({
     handle.send({
       type: "machine/subscribe",
       token: "",
-      machineIds: [...KNOWN_MACHINE_IDS],
+      machineIds: [...MACHINE_IDS],
     });
   },
 });
@@ -253,7 +256,7 @@ const handle = useHighFrequencyWs({
         :machine-label="selectedLabel"
         :summary="store.selectedMachine"
         :can-diagnose="canDiagnose"
-        :has-client="hasClient"
+        :connection-blocked-reason="connectionBlockedReason"
         @diagnose="onDiagnose"
         @retry="onRetry"
         @cancel="onCancel"

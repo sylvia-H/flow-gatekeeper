@@ -5,6 +5,7 @@ import {
   useMetricsStore,
   type MetricsStatus,
 } from "../../domains/monitoring/stores/metrics.store.js";
+import { persistView } from "../../domains/monitoring/lib/metrics-view.js";
 
 /**
  * dev 指標面板（009 US3／FR-008a）——**唯讀**：只呈現 `system/metrics` 的最新快照，
@@ -111,6 +112,9 @@ const hitRateText = computed(() => {
   return rate === null || rate === undefined ? "—" : `${Math.round(rate * 100)}%`;
 });
 
+/** 遙測落地累計（api 啟動以來）；舊版 api 不帶 `persist` 時兩格皆為「—」。 */
+const persist = computed(() => persistView(snapshot.value));
+
 /** 快照年齡（秒）——距上次收訊多久（單一本地時鐘，見 metrics.store 的說明）。 */
 const ageText = computed(() =>
   metrics.ageMs === null ? "—" : `${Math.max(0, Math.round(metrics.ageMs / 1000))}s ago`,
@@ -197,6 +201,10 @@ const windowText = computed(() =>
                 }}）
               </span>
             </dd>
+          </div>
+          <div class="flex items-baseline justify-between gap-2">
+            <dt class="text-fg-muted">Persist（dropped/failed）</dt>
+            <dd class="font-mono text-fg">{{ persist.dropped }}/{{ persist.failed }}</dd>
           </div>
           <p v-if="snapshot.worker === null" class="pt-1 text-fg-subtle">
             worker 指標缺席（快照不存在／過期／畸形）——api 側兩項仍為即時值。

@@ -119,6 +119,23 @@ export async function buildDiagnosisContext(args: {
   return { machineId, windowMinutes, latestState, telemetry, recentErrors, topErrorCodes, maintenance };
 }
 
+/**
+ * 空脈絡判定（純函式）：沒有任何遙測（窗口內無樣本、也沒有最近一筆 state）、窗口內無異常事件、
+ * 也沒有維修紀錄。此時 prompt 裡只剩機台名，LLM 只能憑空編造診斷——典型來源是不存在的
+ * machineId（每個亂數 id 都 cache miss、必打 LLM）。processor 據此短路、不呼叫 LLM。
+ *
+ * 刻意把 `latestState` 也納入：機台窗口內沒資料但仍有歷史 state（例如模擬器剛停），
+ * 至少還有「目前狀態」可據以診斷，不視為空。
+ */
+export function isEmptyContext(context: DiagnosisContext): boolean {
+  return (
+    context.telemetry === null &&
+    context.latestState === "unknown" &&
+    context.recentErrors.length === 0 &&
+    context.maintenance.length === 0
+  );
+}
+
 function round(n: number): number {
   return Math.round(n * 100) / 100;
 }

@@ -7,7 +7,7 @@ import {
   useMonitoringStore,
   type ConnectionStatus,
 } from "../../domains/monitoring/stores/monitoring.store.js";
-import { useDiagnoseTrigger } from "../composables/useDiagnoseTrigger.js";
+import { useDiagnoseTrigger } from "../../domains/ai-copilot/composables/useDiagnoseTrigger.js";
 
 /**
  * TopBar（design-spec §7.2）：search（外觀）、connection chip、BackpressureBadge、
@@ -17,7 +17,7 @@ import { useDiagnoseTrigger } from "../composables/useDiagnoseTrigger.js";
 const store = useMonitoringStore();
 
 /** diagnose 可用性：有選台、有連線、該台非進行中（去重）——判斷集中在共用入口。 */
-const { hasClient, canDiagnoseSelected: canDiagnose, diagnose } = useDiagnoseTrigger();
+const { connectionBlockedReason, canDiagnoseSelected: canDiagnose, diagnose } = useDiagnoseTrigger();
 
 function onDiagnose(): void {
   if (store.selectedMachineId === null) return;
@@ -73,7 +73,7 @@ function onSearchInput(event: Event): void {
         placeholder="Search machines"
         aria-label="Search machines"
         :value="store.searchQuery"
-        class="h-9 w-full rounded-control border border-subtle bg-inset pl-8 pr-3 text-sm text-fg placeholder:text-fg-subtle focus:border-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        class="h-9 w-full rounded-control border border-subtle bg-surface-inset pl-8 pr-3 text-sm text-fg placeholder:text-fg-subtle focus:border-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         @input="onSearchInput"
       />
     </div>
@@ -137,6 +137,17 @@ function onSearchInput(event: Event): void {
         <span v-if="latencyText" class="font-mono text-fg-muted">· {{ latencyText }}</span>
       </span>
 
+      <!-- 訂閱授權失敗（system/unauthorized）：沿用 crit token 的小 chip，完整說明放 title -->
+      <span
+        v-if="store.authError"
+        class="inline-flex items-center rounded-pill bg-crit-bg px-2.5 py-1 text-xs text-crit-fg"
+        role="alert"
+        :title="store.authError"
+        :aria-label="store.authError"
+      >
+        未授權
+      </span>
+
       <!-- Diagnose：作用於 selectedMachineId；無選取／無連線／該台 active 時 disabled -->
       <button
         type="button"
@@ -144,9 +155,7 @@ function onSearchInput(event: Event): void {
         :title="
           store.selectedMachineId === null
             ? '先選取機台'
-            : !hasClient
-              ? '尚未連線，請待連線後再診斷'
-              : 'Run AI diagnosis'
+            : (connectionBlockedReason ?? 'Run AI diagnosis')
         "
         aria-label="Run AI diagnosis"
         class="flex h-9 shrink-0 items-center gap-1.5 rounded-control bg-accent px-3 text-sm font-medium text-canvas hover:bg-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"

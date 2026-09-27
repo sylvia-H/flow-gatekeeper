@@ -1,3 +1,5 @@
+import { isProductionEnv } from "../env.js";
+
 /** pino 標準等級（不含自訂等級）。 */
 export type PinoLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace" | "silent";
 
@@ -41,7 +43,7 @@ export function resolveLogLevel(env: Record<string, string | undefined>): Resolv
 export function resolvePretty(env: Record<string, string | undefined>): boolean {
   if (env.LOG_PRETTY === "true") return true;
   if (env.LOG_PRETTY === "false") return false;
-  return env.NODE_ENV !== "production";
+  return !isProductionEnv(env.NODE_ENV);
 }
 
 /**

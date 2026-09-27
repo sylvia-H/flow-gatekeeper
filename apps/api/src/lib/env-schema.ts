@@ -23,6 +23,55 @@ function positiveInt(defaultValue: number) {
   return z.preprocess(emptyToUndefined, z.coerce.number().int().positive().default(defaultValue));
 }
 
+/** Node `setTimeout`／`setInterval` 可接受的最大延遲；超過會退化成 1 ms。 */
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/**
+ * 心跳 sweep 間隔下限。sweep 會 terminate 上一輪沒回 pong 的連線，間隔過短時正常但稍慢的
+ * client（行動網路、背景分頁）會被誤殺；1 秒已遠低於預設 15 秒，仍留得下一次 RTT。
+ */
+export const MIN_WS_HEARTBEAT_MS = 1_000;
+
+/**
+ * 遙測 tick 下限。README 明列「拉到 5ms 放大吞吐」為支援的 demo 設定，故下限取 5 而非更保守的值；
+ * 低於 5ms（每秒 200 批以上）時 Gateway 廣播與 History buffer 的壓力已脫離設計量級。
+ */
+export const MIN_MOCK_TELEMETRY_INTERVAL_MS = 5;
+
+/**
+ * 單一連線送出緩衝（`ws.bufferedAmount`）的高水位預設值與範圍。超過即略過該筆、連續數個心跳
+ * tick 仍超標則 terminate（見 MonitoringGateway）。下限 64 KiB：一批遙測或一則 `ai/done` 就可能
+ * 數 KB，再低會把正常但稍慢的連線誤判為慢讀者；上限 256 MiB：再高等於沒有背壓。
+ */
+export const DEFAULT_WS_SEND_HIGH_WATER_BYTES = 1024 * 1024;
+export const MIN_WS_SEND_HIGH_WATER_BYTES = 64 * 1024;
+export const MAX_WS_SEND_HIGH_WATER_BYTES = 256 * 1024 * 1024;
+
+/** WS 同時連線數上限（全域）：預設 500，上限 100000（再高已超出單實例 Gateway 的設計量級）。 */
+export const DEFAULT_MAX_WS_CONNECTIONS = 500;
+export const MAX_MAX_WS_CONNECTIONS = 100_000;
+
+/**
+ * 有設 `WS_AUTH_SECRET` 時，連線必須在此期限內通過 `machine/subscribe` token 檢查，否則以 1008
+ * 關閉。沒有期限的話，連上但永不訂閱、只會自動回 pong 的 client 可無限期佔住 `MAX_WS_CONNECTIONS`
+ * 的名額。下限 1 秒（留得下慢網路的握手＋首則訊息），上限 60 秒（再長就擋不住佔位）。
+ */
+export const DEFAULT_WS_AUTH_GRACE_MS = 10_000;
+export const MIN_WS_AUTH_GRACE_MS = 1_000;
+export const MAX_WS_AUTH_GRACE_MS = 60_000;
+
+function intInRange(defaultValue: number, min: number, max: number) {
+  return z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().min(min).max(max).default(defaultValue),
+  );
+}
+
+/** 計時器間隔：整數、介於下限與 Node 計時器上限之間。 */
+function timerInterval(defaultValue: number, min: number) {
+  return intInRange(defaultValue, min, MAX_TIMER_DELAY_MS);
+}
+
 function port(defaultValue: number) {
   return z.preprocess(
     emptyToUndefined,
@@ -40,12 +89,22 @@ function optionalString() {
 
 export const ApiEnvSchema = z.object({
   API_PORT: port(3000),
-  MOCK_TELEMETRY_INTERVAL_MS: positiveInt(50),
-  WS_HEARTBEAT_MS: positiveInt(15_000),
+  MOCK_TELEMETRY_INTERVAL_MS: timerInterval(50, MIN_MOCK_TELEMETRY_INTERVAL_MS),
+  WS_HEARTBEAT_MS: timerInterval(15_000, MIN_WS_HEARTBEAT_MS),
   /** 留空＝dev 開放訂閱（Gateway 僅在有設密鑰時才驗證 token）。 */
   WS_AUTH_SECRET: optionalString(),
   /** WS upgrade 的 Origin 白名單（逗號分隔）；留空＝不檢查。解析見 lib/ws-origin.ts。 */
   WS_ALLOWED_ORIGINS: optionalString(),
+  /** 單一連線送出緩衝高水位（bytes）；超過即略過該筆（背壓），見 MonitoringGateway。 */
+  WS_SEND_HIGH_WATER_BYTES: intInRange(
+    DEFAULT_WS_SEND_HIGH_WATER_BYTES,
+    MIN_WS_SEND_HIGH_WATER_BYTES,
+    MAX_WS_SEND_HIGH_WATER_BYTES,
+  ),
+  /** 有設密鑰時，連線須在此期限（ms）內通過 token 檢查，否則以 1008 關閉。 */
+  WS_AUTH_GRACE_MS: intInRange(DEFAULT_WS_AUTH_GRACE_MS, MIN_WS_AUTH_GRACE_MS, MAX_WS_AUTH_GRACE_MS),
+  /** WS 同時連線數上限；超過的 upgrade 以 503 拒絕。 */
+  MAX_WS_CONNECTIONS: intInRange(DEFAULT_MAX_WS_CONNECTIONS, 1, MAX_MAX_WS_CONNECTIONS),
   MONGO_URL: stringWithDefault("mongodb://127.0.0.1:27017/flow-gatekeeper"),
   MONGO_DB: stringWithDefault("flow-gatekeeper"),
   TELEMETRY_TTL_SECONDS: positiveInt(604_800),

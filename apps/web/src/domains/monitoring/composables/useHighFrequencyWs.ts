@@ -4,7 +4,7 @@ import type {
   SystemMetrics,
   TelemetryPoint,
 } from "@flow-gatekeeper/contracts";
-import type { ConnectionStatus } from "../stores/monitoring.store.js";
+import type { ConnectionStatus, DropCounts } from "../stores/monitoring.store.js";
 import { nextBackoffDelay } from "../lib/backoff.js";
 import { classifyWsMessage, type DiagnosisEvent } from "../lib/ws-message.js";
 import { coalesceTelemetry } from "../lib/telemetry-coalesce.js";
@@ -23,7 +23,8 @@ const BATCH_ERROR_LOG_INTERVAL_MS = 10_000;
  * `buffer.splice(0)` 後透過 `onBatch` 一次交給 store，使 reactive 提交次數遠少於訊息數。
  * 控制訊息 MUST NOT 混入 telemetry buffer（分流處理）。
  *
- * 韌性：ping/pong 心跳（pong 逾時→close），onclose 非手動關閉→指數退避重連，onerror→close；
+ * 韌性：ping/pong 心跳（pong 逾時→直接視為斷線、立即退避重連，不等瀏覽器 close 事件），
+ * onclose 非手動關閉→指數退避重連，onerror→close；
  * 每次（重）連線的 `system/connected` 皆觸發 `onConnected`，使 App 重訂閱。
  */
 export interface UseHighFrequencyWsOptions {
@@ -45,13 +46,20 @@ export interface UseHighFrequencyWsOptions {
    * MUST NOT 進遙測 buffer——否則會延遲顯示並污染背壓比值量測（見 ws-message.ts 分派註解）。
    */
   onMetrics?: (metrics: SystemMetrics) => void;
+  /**
+   * 選用：訂閱授權結果——`machine/subscribed` 回 true、`system/unauthorized` 回 false。
+   * 交 store.setAuthorized，讓「連得上但沒有資料」的授權失敗在畫面上看得見。
+   */
+  onAuthResult?: (authorized: boolean) => void;
   /** 選用：pong 到達時回報 ping→pong RTT（ms）→ store.setLatency。 */
   onLatency?: (ms: number) => void;
   /**
    * 選用：遙測在進 store 前被捨棄時回報筆數——`overflow` 為 buffer 溢位合併、`invalid` 為
    * 入口型別守衛剔除。交 store.recordDropped，讓背壓計量看得出資料曾被丟棄。
+   * 與遙測同樣先累計於非 reactive 計數器，**每幀至多呼叫一次**（硬規則 1）；Pause 期間照常
+   * 每幀提交（計數不是畫面內容，凍結它只會讓背壓 badge 在 resume 時一次跳動）。
    */
-  onDrop?: (count: number, reason: "overflow" | "invalid") => void;
+  onDrop?: (counts: DropCounts) => void;
   /**
    * 選用：pump 每幀讀它——回 true 時**跳過 flush、續存 buffer**（畫面凍結），
    * resume（回 false）後下一幀 flush 整個 buffer＝直接跳到最新。
@@ -61,7 +69,7 @@ export interface UseHighFrequencyWsOptions {
   maxBufferSize?: number;
   /** 心跳週期（ms），預設 15000。 */
   heartbeatMs?: number;
-  /** pong 逾時（ms），逾時未回即 close 觸發重連，預設 5000。 */
+  /** pong 逾時（ms），逾時未回即視為斷線並進入退避重連，預設 5000。 */
   pongTimeoutMs?: number;
 }
 
@@ -77,7 +85,7 @@ export interface HighFrequencyWsHandle {
 export function useHighFrequencyWs(
   options: UseHighFrequencyWsOptions,
 ): HighFrequencyWsHandle {
-  const { url, onBatch, onStatus, onConnected, onDiagnosisEvent } = options;
+  const { url, onBatch, onConnected, onDiagnosisEvent } = options;
   const maxBufferSize = options.maxBufferSize ?? 2000;
   const heartbeatMs = options.heartbeatMs ?? 15_000;
   const pongTimeoutMs = options.pongTimeoutMs ?? 5_000;
@@ -86,14 +94,27 @@ export function useHighFrequencyWs(
   let buffer: TelemetryPoint[] = [];
   let rafId: number | null = null;
   let ws: WebSocket | null = null;
+  /** 現役 socket 的 listener 一次解除用；retireSocket 時 abort。 */
+  let socketListeners: AbortController | null = null;
 
   let manualClose = false;
   let attempt = 0;
+  /** 最近一次回報的連線狀態；`connect()` 據此判斷是否要先補報 reconnecting。 */
+  let lastStatus: ConnectionStatus | null = null;
   let lastPingAt = 0; // 最近一次送 ping 的時刻，供 pong 計 RTT。
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   let pongTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let hiddenFlushTimer: ReturnType<typeof setInterval> | null = null;
+
+  // 丟棄筆數的非 reactive 累計；每幀 commitDrops 一次交出（硬規則 1）。
+  let pendingOverflow = 0;
+  let pendingInvalid = 0;
+
+  function onStatus(status: ConnectionStatus): void {
+    lastStatus = status;
+    options.onStatus(status);
+  }
 
   let batchErrorCount = 0;
   let lastBatchErrorLogAt = Number.NEGATIVE_INFINITY;
@@ -125,13 +146,31 @@ export function useHighFrequencyWs(
     }
   }
 
+  /** 把本幀累計的丟棄筆數一次交給 onDrop；先歸零再呼叫，回呼丟例外也不會重複計數。 */
+  function commitDrops(): void {
+    if (pendingOverflow === 0 && pendingInvalid === 0) return;
+    const counts: DropCounts = { overflow: pendingOverflow, invalid: pendingInvalid };
+    pendingOverflow = 0;
+    pendingInvalid = 0;
+    options.onDrop?.(counts);
+  }
+
+  /** 一幀的工作：遙測批次＋丟棄計數，各至多一次提交。 */
+  function frame(): void {
+    try {
+      flush();
+    } finally {
+      commitDrops();
+    }
+  }
+
   /**
    * rAF pump：每幀 flush 一次，跨重連持續運作。排程放在 finally：任何例外都不能讓下一幀
    * 停排——否則 buffer 卡在上限、畫面凍結，連線 chip 卻仍顯示 Connected，是無聲故障。
    */
   function pump(): void {
     try {
-      flush();
+      frame();
     } finally {
       if (!manualClose) rafId = requestAnimationFrame(pump);
     }
@@ -166,7 +205,22 @@ export function useHighFrequencyWs(
     }
   }
 
-  /** 週期送 ping；每次 ping 起 pongTimer，逾時未收 pong 即 close 觸發重連。 */
+  /**
+   * 解除現役 socket：先清引用並 abort 其 listener，再 close。舊 socket 之後遲來的
+   * close／message 事件因此不會再被處理，不會排出第二次重連或把舊資料灌進 buffer。
+   */
+  function retireSocket(): void {
+    const socket = ws;
+    ws = null;
+    socketListeners?.abort();
+    socketListeners = null;
+    socket?.close();
+  }
+
+  /**
+   * 週期送 ping；每次 ping 起 pongTimer。逾時未收 pong 直接視為斷線：網路靜默中斷時
+   * 瀏覽器的 close 事件可能數十秒後才到，期間不能讓狀態停在 connected（WEB-2）。
+   */
   function startHeartbeat(): void {
     clearHeartbeat();
     heartbeatTimer = setInterval(() => {
@@ -174,7 +228,10 @@ export function useHighFrequencyWs(
       send({ type: "ping" });
       clearPongTimer();
       pongTimer = setTimeout(() => {
-        ws?.close(); // 逾時未回 pong → close → onclose → 重連
+        pongTimer = null;
+        clearHeartbeat();
+        retireSocket();
+        scheduleReconnect();
       }, pongTimeoutMs);
     }, heartbeatMs);
   }
@@ -192,10 +249,11 @@ export function useHighFrequencyWs(
     // 遙測批次：逐筆進**非 reactive** buffer（不逐筆寫 reactive state）。
     for (const point of points) buffer.push(point);
     if (buffer.length > maxBufferSize) {
-      // 溢位不截斷最舊：改合併，保住每台最新值與期間的狀態轉換（Event Stream 不斷片）。
+      // 溢位不截斷最舊：改合併，保住每台最新值；轉換點盡量保留，但降到水位時較舊的轉換點
+      // 可能被取樣掉（見 `coalesceTelemetry`），Event Stream 只保證不漏最新狀態。
       const { kept, dropped } = coalesceTelemetry(buffer, maxBufferSize);
       buffer = kept;
-      if (dropped > 0) options.onDrop?.(dropped, "overflow");
+      pendingOverflow += dropped;
     }
   }
 
@@ -211,7 +269,7 @@ export function useHighFrequencyWs(
     const routed = classifyWsMessage(parsed);
     switch (routed.kind) {
       case "telemetry":
-        if (routed.rejected > 0) options.onDrop?.(routed.rejected, "invalid");
+        pendingInvalid += routed.rejected;
         pushTelemetry(routed.points);
         return;
       case "diagnosis":
@@ -230,20 +288,27 @@ export function useHighFrequencyWs(
     }
   }
 
-  /** 控制訊息副作用（system/connected 重訂閱並歸零退避；pong 確認心跳）。 */
+  /** 控制訊息副作用（system/connected 重訂閱；machine/subscribed 歸零退避；pong 確認心跳）。 */
   function handleControlMessage(message: Record<string, unknown>): void {
     switch (message.type) {
       case "system/connected":
-        // 退避在這裡才歸零、而非 `open`：「連上又立刻被伺服器關掉」時 open 仍會觸發，
-        // 若在 open 歸零就會以約 1 秒週期無限重連；收到 system/connected 才算真的連上。
-        attempt = 0;
         if (typeof message.clientId === "string") onConnected(message.clientId);
         break;
       case "pong":
         if (lastPingAt > 0) options.onLatency?.(Date.now() - lastPingAt);
         clearPongTimer(); // 心跳確認
         break;
-      // machine/subscribed／system/unauthorized：忽略。
+      case "machine/subscribed":
+        // 退避在這裡才歸零，而非 `open` 或 `system/connected`：伺服器接受連線後仍可能因 token
+        // 錯誤、違規而以 1008 關閉——這類連線 open 與 system/connected 都會到，若在那時歸零，
+        // 會以約 1 秒週期無限重連。訂閱成功才算「真的連上且可用」。
+        attempt = 0;
+        options.onAuthResult?.(true);
+        break;
+      case "system/unauthorized":
+        // 不再靜默忽略：否則使用者只看到「連上了卻沒有資料」，不知道是授權失敗（AR-S7）。
+        options.onAuthResult?.(false);
+        break;
       default:
         break;
     }
@@ -251,31 +316,56 @@ export function useHighFrequencyWs(
 
   function connect(): void {
     clearReconnect();
+    // 舊連線狀態仍停在 connected（例如 `online` 在舊 socket 的 close 事件到達前觸發、
+    // 其 listener 隨即被 abort，close 事件不會再處理）時先補報 reconnecting，讓 store 清掉
+    // 舊連線的 clientId／訂閱狀態，不讓診斷在新連線 open 前拿舊 socketId 送出。
+    if (lastStatus === "connected") onStatus("reconnecting");
     // 舊連線的心跳一併清掉：`online` 快速重連可能發生在舊 socket 的 close 事件到達之前，
     // 舊的 heartbeat／pongTimer 若續跑，會以 `ws?.close()` 把剛建立的新 socket 關掉。
     clearHeartbeat();
+    socketListeners?.abort();
+    const listeners = new AbortController();
+    socketListeners = listeners;
+    const { signal } = listeners;
     const socket = new WebSocket(url);
     ws = socket;
-    // 每個 listener 先確認自己仍是現役 socket：`online` 快速重連可能在舊 socket 尚在 CLOSING
-    // 時就建立新連線，舊 socket 遲來的 close 若照常處理，會再排一次重連、疊出第二條連線。
-    socket.addEventListener("open", () => {
-      if (socket !== ws) return;
-      onStatus("connected");
-      startHeartbeat();
-    });
-    socket.addEventListener("message", (event: MessageEvent) => {
-      if (socket !== ws) return;
-      handleMessage(event);
-    });
-    socket.addEventListener("close", () => {
-      if (socket !== ws) return;
-      clearHeartbeat();
-      scheduleReconnect(); // 手動關閉時 ws 已先被清成 null，走不到這裡
-    });
-    socket.addEventListener("error", () => {
-      if (socket !== ws) return;
-      socket.close(); // 交給 onclose 統一處理
-    });
+    // listener 綁在 signal 上，retireSocket 時一次解除；另外每個 listener 仍先確認自己是現役
+    // socket：`online` 快速重連可能在舊 socket 尚在 CLOSING 時就建立新連線，舊 socket 遲來的
+    // close 若照常處理，會再排一次重連、疊出第二條連線。
+    socket.addEventListener(
+      "open",
+      () => {
+        if (socket !== ws) return;
+        onStatus("connected");
+        startHeartbeat();
+      },
+      { signal },
+    );
+    socket.addEventListener(
+      "message",
+      (event: MessageEvent) => {
+        if (socket !== ws) return;
+        handleMessage(event);
+      },
+      { signal },
+    );
+    socket.addEventListener(
+      "close",
+      () => {
+        if (socket !== ws) return;
+        clearHeartbeat();
+        scheduleReconnect(); // 手動關閉或 pong 逾時已先 retireSocket，走不到這裡
+      },
+      { signal },
+    );
+    socket.addEventListener(
+      "error",
+      () => {
+        if (socket !== ws) return;
+        socket.close(); // 交給 onclose 統一處理
+      },
+      { signal },
+    );
   }
 
   /**
@@ -294,7 +384,7 @@ export function useHighFrequencyWs(
    */
   function onVisibilityChange(): void {
     if (document.visibilityState === "hidden") {
-      if (hiddenFlushTimer === null) hiddenFlushTimer = setInterval(flush, HIDDEN_FLUSH_MS);
+      if (hiddenFlushTimer === null) hiddenFlushTimer = setInterval(frame, HIDDEN_FLUSH_MS);
     } else {
       clearHiddenFlush();
     }
@@ -320,10 +410,10 @@ export function useHighFrequencyWs(
     if (typeof document !== "undefined") {
       document.removeEventListener("visibilitychange", onVisibilityChange);
     }
-    const socket = ws;
-    ws = null; // 先解除現役身分，socket 的 close 事件就不會再排重連
-    socket?.close();
+    retireSocket(); // 先解除現役身分與 listener，socket 的 close 事件就不會再排重連
     buffer = [];
+    pendingOverflow = 0;
+    pendingInvalid = 0;
     onStatus("disconnected");
   }
 

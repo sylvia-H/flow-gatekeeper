@@ -44,7 +44,7 @@ channels:
     subscribe:
       operationId: jobStatus
       summary: Server pushes diagnosis job status.
-      description: Server emits lifecycle status updates for a diagnosis job, optionally carrying the final result.
+      description: Server emits lifecycle status updates for a diagnosis job, optionally carrying the final result. When WS_AUTH_SECRET is set, it is sent only to authorized connections (those that passed the machine/subscribe token check).
       message:
         $ref: "#/components/messages/JobStatus"
 
@@ -52,7 +52,7 @@ channels:
     subscribe:
       operationId: aiToken
       summary: Server pushes streamed AI token chunks.
-      description: Server forwards streamed AI token chunks for an in-progress diagnosis job.
+      description: Server forwards streamed AI token chunks for an in-progress diagnosis job. When WS_AUTH_SECRET is set, it is sent only to authorized connections (those that passed the machine/subscribe token check).
       message:
         $ref: "#/components/messages/AiToken"
 
@@ -60,7 +60,7 @@ channels:
     subscribe:
       operationId: aiDone
       summary: Server pushes final AI diagnosis.
-      description: Server emits the validated final diagnosis result for a job, flagging whether it was served from cache.
+      description: Server emits the validated final diagnosis result for a job, flagging whether it was served from cache. When WS_AUTH_SECRET is set, it is sent only to authorized connections (those that passed the machine/subscribe token check).
       message:
         $ref: "#/components/messages/AiDone"
 
@@ -68,7 +68,7 @@ channels:
     subscribe:
       operationId: aiError
       summary: Server pushes AI provider or worker errors.
-      description: Server emits an error event when the AI provider or worker fails for a job.
+      description: Server emits an error event when the AI provider or worker fails for a job. When WS_AUTH_SECRET is set, it is sent only to authorized connections (those that passed the machine/subscribe token check).
       message:
         $ref: "#/components/messages/AiError"
 
@@ -117,8 +117,9 @@ channels:
       operationId: systemMetrics
       summary: Server broadcasts a periodic operational metrics summary.
       description: >-
-        Emitted every METRICS_INTERVAL_MS (default 60000, floor 5000) to every connected client,
-        independent of machine subscriptions. Delivery is at-most-once; a missed summary is never
+        Emitted every METRICS_INTERVAL_MS (default 60000, floor 5000) to every authorized client
+        (every connected client when WS_AUTH_SECRET is unset; otherwise only clients that passed the
+        machine/subscribe token check), independent of which machines are subscribed. Delivery is at-most-once; a missed summary is never
         resent. The worker half is null when the worker snapshot is absent, expired, or malformed.
       message:
         $ref: "#/components/messages/SystemMetrics"
@@ -310,6 +311,19 @@ components:
               - $ref: "#/components/schemas/WorkerMetrics"
               - type: "null"
             description: Null when the worker snapshot is absent, expired, or malformed (degraded output).
+          persist:
+            type: object
+            required: [dropped, failed]
+            properties:
+              dropped:
+                type: integer
+                minimum: 0
+                description: Records lost on the API history write path (telemetry points dropped on buffer overflow or failed writes, plus discarded errorlogs).
+              failed:
+                type: integer
+                minimum: 0
+                description: Failed insertMany batches (telemetry and errorlogs combined).
+            description: Optional. Cumulative counters since API process start (not reset per window). Older API versions omit this field; clients MUST tolerate its absence.
 
   schemas:
     WorkerMetrics:

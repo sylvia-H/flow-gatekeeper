@@ -20,7 +20,7 @@ apps/web/design/
 
 | 項目 | 內容 |
 | --- | --- |
-| Spec 版本 | `v0.5` |
+| Spec 版本 | `v0.6` |
 | 最後更新 | `2026-09-27` |
 | 產品 | flow-gatekeeper |
 | 風格 | 致敬 Argo CD 的暗色 operational dashboard |
@@ -155,7 +155,7 @@ flow-gatekeeper 應該像一個可長時間盯著看的維運工具，而不是�
 | `bg-surface` | panel、主內容背景 | `#111820` | `#111820` |
 | `bg-surface-hover` | card hover 抬起背景（§7.3 hover） | — | `#141D27` |
 | `bg-elevated` | drawer、popover、浮層 | `#17212B` | `#17212B` |
-| `bg-inset` | topology grid、log 區內凹背景 | `#0E151B` | `#0E151B` |
+| `bg-surface-inset` | topology grid、log 區內凹背景 | `#0E151B` | `#0E151B` |
 | `border-subtle` | 分隔線、卡片邊框 | `#26323D` | `#26323D` |
 | `border-strong` | selected、active、hover 邊框 | `#3E5266` | `#3E5266` |
 | `text-primary` | 主要文字 | `#E7EDF2` | `#E7EDF2` |
@@ -181,7 +181,7 @@ flow-gatekeeper 應該像一個可長時間盯著看的維運工具，而不是�
 
 對比規則（WCAG AA，一般文字 ≥ 4.5:1）：
 
-- `text-muted`（Tailwind `fg-subtle`）大量用於 10–12px 的 metadata，原值 `#687684` 對 `bg-surface` 僅約 3.8:1、對 `bg-elevated` 約 3.5:1，未達 AA。v0.5 提亮為 `#7C8A98`：對 `bg-canvas` 5.41:1、`bg-surface` 5.06:1、`bg-surface-hover` 4.82:1、`bg-elevated` 4.61:1、`bg-inset` 5.21:1，仍明顯低於 `text-secondary`（對 surface 7.35:1），層級不變。
+- `text-muted`（Tailwind `fg-subtle`）大量用於 10–12px 的 metadata，原值 `#687684` 對 `bg-surface` 僅約 3.8:1、對 `bg-elevated` 約 3.5:1，未達 AA。v0.5 提亮為 `#7C8A98`：對 `bg-canvas` 5.41:1、`bg-surface` 5.06:1、`bg-surface-hover` 4.82:1、`bg-elevated` 4.61:1、`bg-surface-inset` 5.21:1，仍明顯低於 `text-secondary`（對 surface 7.35:1），層級不變。
 - `text-muted` 不得放在 `accent-bg` 等彩色底上當正文（對 `accent-bg` 僅 4.15:1）；彩色底上的文字用對應的 `*-fg` 或 `accent`。
 
 ### 4.2 Typography
@@ -241,9 +241,11 @@ export default {
         surface: {
           DEFAULT: '#111820',
           hover: '#141D27',
+          // 內嵌面放在 surface 之下（bg-surface-inset）：頂層 `inset` 會與內建 `ring-inset` 撞名，
+          // 讓 ring-inset 輸出成「環顏色」而非 `--tw-ring-inset: inset`。
+          inset: '#0E151B',
         },
         elevated: '#17212B',
-        inset: '#0E151B',
         subtle: '#26323D',
         strong: '#3E5266',
         fg: '#E7EDF2',
@@ -332,7 +334,7 @@ export default {
 | App shell | `100vw x 100vh` | 整體背景 `bg-canvas` | 不讓 body scroll；內部區域各自 scroll。 |
 | Left sidebar | 預設 `240px` wide，可拖曳調整 `200-420px`（偏好存 localStorage） | product name、environment、machine groups、nav icons | 可縮到 72px collapsed。 |
 | Top bar | `56px` high | search、connection status、mock frequency、backpressure meter、diagnose action | control 高度固定 32-36px。 |
-| Main topology | fill remaining | node grid / topology canvas | 背景 `bg-inset`，可用細 grid。 |
+| Main topology | fill remaining | node grid / topology canvas | 背景 `bg-surface-inset`，可用細 grid。 |
 | Right drawer | `380-440px` wide | Copilot | 開啟時 main area 重新排版，不遮住主要狀態。 |
 | Bottom event strip | 預設 `150px` high，可拖曳調整 `100-360px`（偏好存 localStorage），可選 | recent error logs | 若資訊太擠，可改為 drawer 內 tab。 |
 
@@ -396,6 +398,7 @@ type AppLayoutProps = {
 
 - search input
 - connection status chip
+- 未授權 chip（條件顯示，見 7.2.2）
 - mock frequency segmented control 或 slider
 - backpressure meter（`BackpressureBadge`）
 - pause/resume stream icon button
@@ -409,7 +412,21 @@ type AppLayoutProps = {
 | mock frequency | slider 或 segmented control |
 | backpressure meter | `BackpressureBadge`（見 7.2.1） |
 | pause/resume | icon button |
-| diagnose | icon + text button，disabled when no selected machine |
+| diagnose | icon + text button，disabled when no selected machine，或連線未就緒（未收到本次連線 `system/connected`、未完成 `machine/subscribed`、已斷線或收到 `system/unauthorized`）；停用原因以 tooltip 說明 |
+
+#### 7.2.2 未授權 chip
+
+訂閱授權失敗時的持續提示，讓「遙測停了」不被誤判為網路問題。
+
+| 屬性 | 規格 |
+| --- | --- |
+| 位置 | 緊接在 connection status chip 右側 |
+| 樣式 | `rounded-pill` + `bg-crit-bg` + `text-crit-fg`，`text-xs`、padding `px-2.5 py-1`（與 connection chip 同高） |
+| 文字 | 「未授權」（不放完整說明，避免擠壓 TopBar） |
+| 完整說明 | 放 `title` 與 `aria-label` |
+| 無障礙 | `role="alert"`，出現時由螢幕閱讀器播報 |
+| 出現 | 收到 `system/unauthorized` |
+| 消失 | 下次收到 `machine/subscribed`（訂閱成功）時自動消失 |
 
 #### 7.2.1 `BackpressureBadge`
 
@@ -490,7 +507,7 @@ type BackpressureBadgeProps = {
 | healthy | `bg-surface`、`border-subtle`、status light `ok` |
 | warning | `bg-surface` + `warn-bg` subtle inset、status light `warn` |
 | critical | `crit-bg` tint、status light `crit`、`animate-critical-pulse` |
-| selected | border `accent` 2px，背景可用 `accent-bg` 低透明 |
+| selected | border `accent` 2px，背景 `accent-wash`。實作：`.machine-card[data-selected='true']` 以 1px `accent` 邊框 + 內縮 1px 的 `outline`（`outline-offset: -2px`）組成 2px——不改 border-width（不動盒模型）、**不用 ring／box-shadow**（critical 的 `animate-critical-pulse` 動的是 box-shadow，會把 ring 蓋掉）；規則置於 `apps/web/src/styles/tailwind.css` 的 `@tailwind variants` 之後、不進任何 layer，hover 時選取框不消失。選取時 critical 靠徽章、狀態燈、pulse 表達，底色以 selected（`accent-wash`）優先 |
 | stale | opacity 0.55、顯示 `Stale` badge |
 | hover | border `border-strong`，輕微上移 `translateY(-1px)` |
 
@@ -583,7 +600,7 @@ type ProgressBarProps = {
 
 Streaming panel 規格：
 
-- 背景 `bg-inset`。
+- 背景 `bg-surface-inset`。
 - max height `220-320px`。
 - overflow auto。
 - token append 時保持可讀，不強制每次跳到底，除非使用者沒有手動 scroll。
@@ -745,5 +762,6 @@ apps/web/src/domains/ai-copilot/stores/copilot.store.ts
 - `v0.3`：整合為 Spec Kit 可用交接規格，補齊 file mapping、interaction states、accessibility、screenshot 驗收。
 - `v0.4`：Claude Design 交接落地（refs 三張定稿 + `_sources/` 匯出）。依實際產出回寫衍生 token：`bg-surface-hover`、`accent-bg-strong`、`accent-wash` 與各狀態 `*-fg`/`*-border`（ok/warn/crit），並同步 §5 Tailwind `theme.extend`。此版起 `apps/web/design/design-spec.md` 為 canonical（`docs/design-spec.md` 為歷史起點）。
 - `v0.5`（2026-09-27 審查修正）：`text-muted`／`fg-subtle` 提亮 `#687684` → `#7C8A98`（AA）並加 §4.1 對比規則；§5 補 `fontSize`（`2xs`、`pill`、`md`、`lg`、`number`——`text-number` 先前未定義、從未產生 CSS）；`colors.base` 改名 `canvas`（與 `fontSize.base` 撞名）；§4.2 禁任意值字級、數值／單位分開；§7.2.1 背壓計量含丟棄筆數；§7.3 觸控裝置 diagnose icon 常駐；§8.3 Pause 凍結 stale 時鐘；§10 reduced-motion。
+- `v0.6`（2026-09-27）：內嵌面 token `bg-inset` 改名 `bg-surface-inset`，§5 config 由頂層 `inset` 移到 `surface.inset`（頂層 `inset` 與內建 `ring-inset` 撞名）；§7.3 selected 補實作方式（1px accent 邊框 + 內縮 outline、不用 ring，規則置於 `@tailwind variants` 之後）；§7.2.2 新增 TopBar「未授權」chip（`bg-crit-bg`／`text-crit-fg`／`rounded-pill`、`role="alert"`，`system/unauthorized` 出現、`machine/subscribed` 消失），§7.2 diagnose 停用條件補連線未就緒。
 
 

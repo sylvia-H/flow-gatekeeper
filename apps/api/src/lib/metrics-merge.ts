@@ -146,5 +146,7 @@ export function mergeMetrics(apiPart: ApiMetricsPart, workerRaws: readonly (stri
     queue: apiPart.queue,
     wsConnections: apiPart.wsConnections,
     worker: mergeWorkerSnapshots(fresh),
+    // persist 為 optional：來源讀取失敗時呼叫端不帶，輸出也不帶（不以 0 冒充「沒有遺失」）。
+    ...(apiPart.persist !== undefined ? { persist: apiPart.persist } : {}),
   };
 }

@@ -11,6 +11,10 @@ services:
   # 升版時兩者一起改（digest 取法：docker buildx imagetools inspect <image>:<tag>）。
   redis:
     image: redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    # infra 被 OOM kill（例如 AOF rewrite 超出記憶體上限）或意外退出後自動回來；api／worker 的無限重連
+    # 只能撐著、救不回 redis 本身。unless-stopped：手動 docker compose stop 後不會被拉起（ADR-002 §7
+    # 「拒絕 HA ≠ 不設防」：單實例，但不放任其死亡）。
+    restart: unless-stopped
     ports:
       - "127.0.0.1:6379:6379"
     # --maxmemory-policy MUST 為 noeviction：BullMQ 的 job／lock／stalled key 若被 LRU 淘汰，
@@ -60,6 +64,8 @@ services:
 
   mongo:
     image: mongo:7.0.43@sha256:9854f7139445d766a9523571d6f047530c45547460ffcf8259eb2bf4264632ca
+    # 同 redis：意外退出後自動回來，手動 stop 則尊重（ADR-002 §7）。
+    restart: unless-stopped
     ports:
       - "127.0.0.1:27017:27017"
     volumes:
@@ -180,12 +186,15 @@ services:
     # 依賴任一 down 即回 503 → exit 1 → unhealthy。008 原以 /ws 握手收到 system/connected 為準
     # （證明 Gateway 已 attach），該做法只驗行程與通道、驗不到依賴，008 clarify 已把此端點劃歸 009。
     # test 指令不變（映像的第二進入點 dist/healthcheck.js），只有該檔內容改走 HTTP。
+    # start_interval：start_period 內改每 2 秒探一次（需 Docker Engine 25+；更舊的 Engine 不認得此鍵），
+    # api 一就緒即轉 healthy，web（depends_on service_healthy）不必等滿第一個 30s interval 才啟動。
     healthcheck:
       test: ["CMD", "node", "dist/healthcheck.js"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 30s
+      start_interval: 2s
     # 單一 Node 行程；telemetry 批次 buffer 有上限，512m 有餘裕。
     deploy:
       resources:
@@ -234,11 +243,17 @@ services:
     # 唯一對外入口——避開 dev 的 5173／3000（research D2）。改對外埠只改左側（同源相對路徑使前端自然可攜）。
     # 容器內埠為 8080：runtime 改用 nginxinc/nginx-unprivileged（非 root，無法 bind <1024 的埠），
     # 見 apps/web/Dockerfile 與 nginx.conf 的 listen。
+    # 綁定位址預設 127.0.0.1（與 redis／mongo 一致）：demo 無認證（WS_AUTH_SECRET／WS_ALLOWED_ORIGINS
+    # 於 .env.demo 刻意留空），綁所有介面等於把監控台與 POST /diagnoses（會打 LLM、耗配額）交給同網段任何人。
+    # 要對外示範時才在 host shell 或 repo 根 .env 設 WEB_BIND=0.0.0.0（compose 插值）。
     ports:
-      - "8080:8080"
+      - "${WEB_BIND:-127.0.0.1}:8080:8080"
     restart: on-failure:5
+    # 長式 depends_on：等 api 的 healthcheck（/healthz）轉 healthy 才起 nginx，
+    # 避免入口先開、通道與 /diagnoses 在 api 就緒前回 502。
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     # 入口位址有回應即 healthy（FR-011）。用 `-O /dev/null` 而非 `--spider`——後者的支援隨
     # busybox 版本浮動，`-O /dev/null` 在 busybox wget 一律可用、意義等同。埠跟著容器內 listen 為 8080。
     healthcheck:

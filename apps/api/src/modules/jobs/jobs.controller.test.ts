@@ -1,10 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   BadRequestException,
+  ConflictException,
+  NotFoundException,
   ServiceUnavailableException,
   UnsupportedMediaTypeException,
 } from "@nestjs/common";
-import type { CreateDiagnosisBody, CreateDiagnosisResponse } from "@flow-gatekeeper/contracts";
+import type {
+  CreateDiagnosisBody,
+  CreateDiagnosisResponse,
+  DiagnosisJobPayload,
+} from "@flow-gatekeeper/contracts";
+import type { Queue } from "bullmq";
+import { JobsService } from "./jobs.service.js";
 import { JobsController } from "./jobs.controller.js";
 import type { DiagnosisCreator } from "./jobs.controller.js";
 
@@ -90,5 +98,60 @@ describe("JobsController.create", () => {
     await expect(
       controller.create(JSON_TYPE, { machineId: "cnc-01", socketId: SOCKET_ID }),
     ).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it("service 回 404（machineId 不在名冊）時原樣上拋", async () => {
+    const { controller } = makeController(async () => {
+      throw new NotFoundException();
+    });
+    await expect(
+      controller.create(JSON_TYPE, { machineId: "cnc-01", socketId: SOCKET_ID }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it("接真實 JobsService：格式合法但不在名冊的 machineId → 404，不入列", async () => {
+    const add = vi.fn(async () => ({}));
+    const queue = { getJob: vi.fn(async () => undefined), add } as unknown as Queue<DiagnosisJobPayload>;
+    const bindings = {
+      bindJobToClient: vi.fn(),
+      getBinding: () => undefined,
+      deleteBinding: vi.fn(),
+    };
+    const presence = { isAuthorized: () => true };
+    const controller = new JobsController(new JobsService(queue, bindings, presence));
+    const err = await captureError(controller.create(JSON_TYPE, { machineId: "ghost-01", socketId: SOCKET_ID }));
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect((err as NotFoundException).getStatus()).toBe(404);
+    expect(add).not.toHaveBeenCalled();
+    expect(bindings.bindJobToClient).not.toHaveBeenCalled();
+
+    await expect(
+      controller.create(JSON_TYPE, { machineId: "mixer-01", socketId: SOCKET_ID }),
+    ).resolves.toMatchObject({ machineId: "mixer-01", status: "waiting" });
+    expect(add).toHaveBeenCalledTimes(1);
+  });
+
+  it("接真實 JobsService：socketId 未在線或未授權 → 409，不綁定、不入列", async () => {
+    const add = vi.fn(async () => ({}));
+    const queue = { getJob: vi.fn(async () => undefined), add } as unknown as Queue<DiagnosisJobPayload>;
+    const bindings = {
+      bindJobToClient: vi.fn(),
+      getBinding: () => undefined,
+      deleteBinding: vi.fn(),
+    };
+    const authorized = new Set<string>();
+    const presence = { isAuthorized: (clientId: string) => authorized.has(clientId) };
+    const controller = new JobsController(new JobsService(queue, bindings, presence));
+    const err = await captureError(controller.create(JSON_TYPE, { machineId: "mixer-01", socketId: SOCKET_ID }));
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).getStatus()).toBe(409);
+    expect(add).not.toHaveBeenCalled();
+    expect(bindings.bindJobToClient).not.toHaveBeenCalled();
+
+    authorized.add(SOCKET_ID);
+    await expect(
+      controller.create(JSON_TYPE, { machineId: "mixer-01", socketId: SOCKET_ID }),
+    ).resolves.toMatchObject({ machineId: "mixer-01", status: "waiting" });
+    expect(bindings.bindJobToClient).toHaveBeenCalledTimes(1);
   });
 });

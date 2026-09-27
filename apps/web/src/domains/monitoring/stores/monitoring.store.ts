@@ -2,7 +2,7 @@ import { defineStore } from "pinia";
 import { computed, markRaw, ref, shallowRef, triggerRef } from "vue";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { fleetHealthOf, type FleetHealthSummary } from "../lib/fleet-health.js";
-import { KNOWN_MACHINE_IDS } from "../lib/machine-labels.js";
+import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
 import { deriveTransitionEvent, pushCapped, type DerivedEvent } from "../lib/events.js";
 import { filterMachineIds } from "../lib/machine-search.js";
 import { staleClock } from "../lib/stale.js";
@@ -15,6 +15,15 @@ const EVENT_CAP = 50;
  * 元件（AppLayout / TopBar chip）一律讀它，不另立平行狀態。
  */
 export type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
+
+/** 收到 `system/unauthorized` 時顯示的簡短提示（TopBar 授權 chip 的 title／aria）。 */
+export const AUTH_ERROR_MESSAGE = "即時通道訂閱未授權（WS token 無效），收不到機台資料";
+
+/** 一幀內在進 store 前被捨棄的遙測筆數：`overflow`＝buffer 溢位合併、`invalid`＝入口型別守衛剔除。 */
+export interface DropCounts {
+  overflow: number;
+  invalid: number;
+}
 
 /**
  * `MachineLive` —— 前端投影，衍生自契約 `TelemetryPoint`（非契約新增）。
@@ -49,8 +58,23 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   const selectedMachineId = ref<string | null>(null);
   /** 即時通道三態，初始 disconnected。 */
   const connectionStatus = ref<ConnectionStatus>("disconnected");
-  /** `system/connected` 派發的連線識別；保存供 005（POST /diagnoses 的 socketId）。 */
+  /**
+   * **現役**連線的識別（`system/connected` 派發），供 005 當 POST /diagnoses 的 socketId。
+   * 一離開 connected（斷線／重連中／pong 逾時／手動關閉）即清空：舊 clientId 綁的 socket
+   * 已不存在，拿它送診斷只會讓結果送往舊連線（WEB-3）。重連偵測另看 copilot.store 的
+   * `lastClientId`，兩者語意不同。
+   */
   const clientId = ref<string | null>(null);
+  /** 本頁是否曾收到過 `system/connected`；只供橫幅區分「首次連線中」與「已斷線」。 */
+  const everConnected = ref(false);
+  /**
+   * 本次連線是否已收到 `machine/subscribed`（＝Gateway 已把這條連線列為授權）。
+   * 在 `system/connected` 與 `machine/subscribed` 之間約 1 RTT 的空窗送診斷必得 409，
+   * 所以 `isLive` 也要求它；離開 connected 即清空。
+   */
+  const subscribed = ref(false);
+  /** 訂閱授權錯誤（收到 `system/unauthorized`）；`machine/subscribed` 成功後清除。 */
+  const authError = ref<string | null>(null);
   /**
    * 累積抵達前端的 telemetry 筆數（背壓分子）。**含**溢位合併丟棄與格式不符剔除的筆數——
    * 它回答的是「網路上收到多少」，若只算套用成功的筆數，背景分頁或 Pause 後比值會偏低且看不出原因。
@@ -81,6 +105,16 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   const searchQuery = ref("");
 
   // ── Getters ────────────────────────────────────────────────────────
+  /**
+   * 「連線真的活著」：狀態為 connected、已收到本次連線的 `system/connected`（clientId）且
+   * 已完成訂閱（`machine/subscribed`）。pong 逾時由 composable 直接轉為 reconnecting，
+   * socket 關閉亦同，兩者都會清空 clientId／subscribed，因此同時涵蓋心跳逾時與 socket 關閉。
+   * Diagnose 是否可用以它為準，不看「曾拿到過 clientId」。
+   */
+  const isLive = computed(
+    () => connectionStatus.value === "connected" && clientId.value !== null && subscribed.value,
+  );
+
   /** selectedMachineId 對應的快照，供 TopBar／005 使用。 */
   const selectedMachine = computed<MachineLive | null>(() =>
     selectedMachineId.value !== null
@@ -97,12 +131,12 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   );
 
   /**
-   * US2 Fleet Health 四類聚合。委派純函式 `fleetHealthOf`，走固定名冊 KNOWN_MACHINE_IDS
+   * US2 Fleet Health 四類聚合。委派純函式 `fleetHealthOf`，走固定名冊 MACHINE_IDS
    * （total 穩定＝5）。依賴 `machines` 與 `staleNow`（每秒 tick 重算 stale），屬低頻 reactive，
    * 不逐筆 telemetry 觸發（憲章 IV）。
    */
   const fleetHealth = computed<FleetHealthSummary>(() =>
-    fleetHealthOf(machines.value, staleNow.value, KNOWN_MACHINE_IDS),
+    fleetHealthOf(machines.value, staleNow.value, MACHINE_IDS),
   );
 
   /**
@@ -110,7 +144,7 @@ export const useMonitoringStore = defineStore("monitoring", () => {
    * 確保兩處過濾一致。空查詢回全部名冊。
    */
   const visibleMachineIds = computed<string[]>(() =>
-    filterMachineIds(KNOWN_MACHINE_IDS, searchQuery.value),
+    filterMachineIds(MACHINE_IDS, searchQuery.value),
   );
 
   // ── Actions ────────────────────────────────────────────────────────
@@ -144,12 +178,17 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   /**
    * composable 回報在進 store 前就被捨棄的筆數。兩者都計入 `receivedMessages`（它們確實抵達了），
    * 但不計入 `renderedBatches`（沒有觸發任何提交）。
+   *
+   * 呼叫端（`useHighFrequencyWs`）先把丟棄筆數累計在非 reactive 計數器，每幀 flush 時才
+   * 一次交進來（硬規則 1）：本 action 每幀至多一次，不隨訊息數成長。
    */
-  function recordDropped(count: number, reason: "overflow" | "invalid"): void {
-    if (count <= 0) return;
-    if (reason === "overflow") droppedMessages.value += count;
-    else invalidMessages.value += count;
-    receivedMessages.value += count;
+  function recordDropped(counts: DropCounts): void {
+    const overflow = Math.max(0, counts.overflow);
+    const invalid = Math.max(0, counts.invalid);
+    if (overflow === 0 && invalid === 0) return;
+    if (overflow > 0) droppedMessages.value += overflow;
+    if (invalid > 0) invalidMessages.value += invalid;
+    receivedMessages.value += overflow + invalid;
   }
 
   function selectMachine(machineId: string): void {
@@ -159,12 +198,33 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   function setConnectionStatus(status: ConnectionStatus): void {
     // 離開 connected（斷線/重連）即清除延遲量測，避免重連後 chip 沿用上一段連線的過期 RTT；
     // 重連後需等下一個 pong 才重新有值（首個 pong 前顯示 —）。
-    if (status !== "connected") latencyMs.value = null;
+    if (status !== "connected") {
+      latencyMs.value = null;
+      clientId.value = null; // 舊連線識別隨連線失效（WEB-3）
+      subscribed.value = false; // 新連線要重新訂閱才算授權
+    }
     connectionStatus.value = status;
   }
 
+  /**
+   * 識別換了＝換了一條連線：舊連線的訂閱授權不延續，須等新連線的 `machine/subscribed`。
+   * 平常離開 connected 時 `setConnectionStatus` 已清掉 subscribed；這裡補上「狀態未經過
+   * reconnecting 就換到新 clientId」的路徑，不讓 isLive 以新 id 搭配舊連線的授權。
+   */
   function setClientId(id: string): void {
+    if (clientId.value !== id) subscribed.value = false;
     clientId.value = id;
+    everConnected.value = true;
+  }
+
+  /**
+   * composable `onAuthResult`：`machine/subscribed`→true（標記已訂閱、清除錯誤）、
+   * `system/unauthorized`→false（未訂閱、記錄錯誤）。未授權時 api 會在逾時後 close(1008)，
+   * 前端走一般退避重連；authError 保留到下一次訂閱成功。
+   */
+  function setAuthorized(authorized: boolean): void {
+    subscribed.value = authorized;
+    authError.value = authorized ? null : AUTH_ERROR_MESSAGE;
   }
 
   function tickNow(): void {
@@ -192,6 +252,10 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     selectedMachineId,
     connectionStatus,
     clientId,
+    everConnected,
+    subscribed,
+    authError,
+    isLive,
     receivedMessages,
     droppedMessages,
     invalidMessages,
@@ -211,6 +275,7 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     selectMachine,
     setConnectionStatus,
     setClientId,
+    setAuthorized,
     tickNow,
     togglePause,
     setLatency,

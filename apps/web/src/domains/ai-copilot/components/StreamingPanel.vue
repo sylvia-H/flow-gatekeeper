@@ -4,7 +4,7 @@ import { nextTick, ref, watch } from "vue";
 /**
  * 串流面板（design-spec §7.7、FR-005/FR-013）：逐段 append 的 AI 推理文字 + caret。
  * 自動貼底跟隨——**僅在使用者未手動上捲時**跟隨到底；手動上捲則不強拉（FR-013）。
- * 背景 `bg-inset`、max-height 220–320px、overflow auto。
+ * 背景 `bg-surface-inset`、max-height 220–320px、overflow auto。
  *
  * 無障礙：刻意**不是** live region（`role="log"` 隱含 `aria-live`，會讓螢幕閱讀器逐 token 念）；
  * 串流中以 `aria-busy` 標示內容仍在變動，完成／失敗的摘要改由 CopilotDrawer 的 live region 公告。
@@ -42,7 +42,7 @@ watch(
 <template>
   <div
     ref="scroller"
-    class="max-h-[320px] min-h-[64px] overflow-auto rounded-control bg-inset p-3 font-mono text-xs leading-relaxed text-fg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+    class="max-h-[320px] min-h-[64px] overflow-auto rounded-control bg-surface-inset p-3 font-mono text-xs leading-relaxed text-fg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
     role="region"
     tabindex="0"
     aria-label="AI 推理串流"

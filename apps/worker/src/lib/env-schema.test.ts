@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseRedisEnv, parseWorkerEnv } from "./env-schema.js";
+import { LOCK_TTL_MARGIN_MS, parseRedisEnv, parseWorkerEnv } from "./env-schema.js";
 
 describe("parseWorkerEnv", () => {
   it("全部未設定 → 預設值，並對缺金鑰 warn", () => {
@@ -11,6 +11,8 @@ describe("parseWorkerEnv", () => {
     expect(r.env.REDIS_PORT).toBe(6379);
     expect(r.env.WORKER_CONCURRENCY).toBe(2);
     expect(r.env.GEMINI_MODEL).toBe("gemini-2.5-flash");
+    expect(r.env.AI_MAX_OUTPUT_TOKENS).toBe(2048);
+    expect(r.env.AI_TEMPERATURE).toBe(0.2);
     expect(r.warnings.some((w) => w.includes("GEMINI_API_KEY"))).toBe(true);
   });
 
@@ -49,8 +51,40 @@ describe("parseWorkerEnv", () => {
     expect(r.error).toContain("AI_DEDUPE_LOCK_SECONDS");
   });
 
-  it("鎖 TTL 恰等於 AI 逾時 → 通過", () => {
-    expect(parseWorkerEnv({ AI_DEDUPE_LOCK_SECONDS: "30", AI_TIMEOUT_MS: "30000" }).ok).toBe(true);
+  it("鎖 TTL 恰等於 AI 逾時（無收尾餘裕）→ 失敗，訊息寫明餘裕", () => {
+    const r = parseWorkerEnv({ AI_DEDUPE_LOCK_SECONDS: "30", AI_TIMEOUT_MS: "30000" });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toContain("AI_DEDUPE_LOCK_SECONDS");
+    expect(r.error).toContain(`${LOCK_TTL_MARGIN_MS}ms`);
+  });
+
+  it("鎖 TTL 恰等於 AI 逾時 + 餘裕 → 通過；少 1 秒 → 失敗", () => {
+    expect(LOCK_TTL_MARGIN_MS).toBe(5000);
+    expect(parseWorkerEnv({ AI_DEDUPE_LOCK_SECONDS: "35", AI_TIMEOUT_MS: "30000" }).ok).toBe(true);
+    expect(parseWorkerEnv({ AI_DEDUPE_LOCK_SECONDS: "34", AI_TIMEOUT_MS: "30000" }).ok).toBe(false);
+  });
+
+  it("AI_MAX_OUTPUT_TOKENS：正整數、上限 65536", () => {
+    const ok = parseWorkerEnv({ AI_MAX_OUTPUT_TOKENS: "1024" });
+    expect(ok.ok && ok.env.AI_MAX_OUTPUT_TOKENS).toBe(1024);
+    for (const v of ["0", "-1", "1.5", "65537", "abc"]) {
+      const r = parseWorkerEnv({ AI_MAX_OUTPUT_TOKENS: v });
+      expect(r.ok, v).toBe(false);
+      if (!r.ok) expect(r.error).toContain("AI_MAX_OUTPUT_TOKENS");
+    }
+  });
+
+  it("AI_TEMPERATURE：0–2（含端點、可為小數），留空走預設", () => {
+    for (const [v, want] of [["0", 0], ["2", 2], ["0.7", 0.7], ["", 0.2]] as const) {
+      const r = parseWorkerEnv({ AI_TEMPERATURE: v });
+      expect(r.ok && r.env.AI_TEMPERATURE, v).toBe(want);
+    }
+    for (const v of ["-0.1", "2.1", "hot"]) {
+      const r = parseWorkerEnv({ AI_TEMPERATURE: v });
+      expect(r.ok, v).toBe(false);
+      if (!r.ok) expect(r.error).toContain("AI_TEMPERATURE");
+    }
   });
 
   it("production 缺金鑰也可啟動（金鑰永遠可選），但有 warning；有金鑰則不 warn", () => {
@@ -60,6 +94,19 @@ describe("parseWorkerEnv", () => {
     const good = parseWorkerEnv({ NODE_ENV: "production", GEMINI_API_KEY: "k" });
     expect(good.ok).toBe(true);
     if (good.ok) expect(good.warnings).toEqual([]);
+  });
+
+  it("不能關 thinking 的模型配過低的 AI_MAX_OUTPUT_TOKENS → warning；調高或可關 thinking 的模型則不 warn", () => {
+    const hasThinkingWarning = (raw: Record<string, string>): boolean => {
+      const r = parseWorkerEnv({ GEMINI_API_KEY: "k", ...raw });
+      if (!r.ok) throw new Error(r.error);
+      return r.warnings.some((w) => w.includes("thinking") && w.includes("AI_MAX_OUTPUT_TOKENS"));
+    };
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.5-pro" })).toBe(true);
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-3-pro-preview", AI_MAX_OUTPUT_TOKENS: "4096" })).toBe(true);
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.5-pro", AI_MAX_OUTPUT_TOKENS: "8192" })).toBe(false);
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.5-flash" })).toBe(false);
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.0-flash" })).toBe(false);
   });
 });
 

@@ -190,7 +190,7 @@ describe("copilot store（contracts/copilot-store）", () => {
 
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 409 })));
     await store.diagnose("mixer-01", SOCKET);
-    expect(store.stateFor("mixer-01")).toMatchObject({ status: "failed", error: "此診斷請求已失效，請重新發起" });
+    expect(store.stateFor("mixer-01")).toMatchObject({ status: "failed", error: "連線已中斷或未授權，請等待重連後再試" });
   });
 
   it("diagnose 503（英文 body）→ 狀態碼對映的中文句，不露出 HTTP 字樣", async () => {

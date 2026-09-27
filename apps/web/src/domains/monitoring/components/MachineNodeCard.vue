@@ -11,6 +11,7 @@ import {
 } from "../lib/telemetry-format.js";
 import { STATE_STYLE } from "../../../shared/lib/state-style.js";
 import StatusLight from "../../../shared/components/StatusLight.vue";
+import { CARD_ROOT_CLASS, CARD_STALE_CLASS, cardStateClass } from "../lib/card-style.js";
 
 const props = defineProps<{
   machine: MachineLive | null; // null = placeholder（冷啟動／首批未到）
@@ -32,23 +33,8 @@ const label = computed(() => machineLabel(props.machineId));
  * `StatusLight` 同源）。徽章 label 在模板以 `uppercase` 呈現，固定字級/內距避免盒模型變化（FR-005）。
  */
 
-/**
- * 狀態 → 卡片外觀 token（design-spec §7.3）。
- * warning：`bg-surface` + `warn-bg` subtle inset（`ring-warn-bg` 內嵌環，忠實對映 §7.3；
- * 非盒模型、不位移，FR-002/005）；critical：crit-bg tint + pulse。placeholder 用中性面。
- */
-const stateClass = computed(() => {
-  if (!props.machine) return "border-subtle bg-surface";
-  switch (props.machine.state) {
-    case "healthy":
-      return "border-subtle bg-surface";
-    case "warning":
-      return "border-subtle bg-surface ring-1 ring-inset ring-warn-bg";
-    case "critical":
-      return "border-crit-border bg-crit-bg animate-critical-pulse";
-  }
-  return "border-subtle bg-surface";
-});
+/** 狀態 → 卡片外觀 token（design-spec §7.3）；對照與選取態的做法見 `card-style.ts`。 */
+const stateClass = computed(() => cardStateClass(props.machine ? props.machine.state : null));
 
 const PLACEHOLDER = "—";
 
@@ -107,11 +93,8 @@ const absoluteTime = computed(() =>
     <button
       type="button"
       class="flex min-h-[148px] w-full min-w-0 flex-col gap-3 rounded-card border p-3 text-left shadow-card transition duration-150 hover:-translate-y-px hover:border-strong hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-      :class="[
-        stateClass,
-        selected ? 'border-accent bg-accent-wash ring-1 ring-inset ring-accent' : '',
-        stale ? 'opacity-[0.55]' : '',
-      ]"
+      :class="[CARD_ROOT_CLASS, stateClass, stale ? CARD_STALE_CLASS : '']"
+      :data-selected="selected ? 'true' : 'false'"
       :aria-pressed="selected"
       @click="emit('select', machineId)"
     >

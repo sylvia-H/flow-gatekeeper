@@ -20,6 +20,9 @@ export const DIAGNOSE_REQUEST_TIMEOUT_MS = 15_000;
 /** 網路層失敗（fetch reject：離線、DNS、連線被拒）時給使用者的固定句。 */
 export const NETWORK_ERROR_MESSAGE = "無法連線診斷服務，請檢查網路後重試";
 
+/** 409 且即時通道已知未授權（收到 `system/unauthorized`）時改用的句子：重連也無濟於事，要換 token。 */
+export const UNAUTHORIZED_DIAGNOSE_MESSAGE = "即時通道未授權（WS token 無效），無法發起診斷";
+
 /** 已轉成可讀中文訊息的請求失敗；store 可直接把 `message` 呈現給使用者。 */
 export class DiagnoseRequestError extends Error {
   constructor(
@@ -32,8 +35,14 @@ export class DiagnoseRequestError extends Error {
 }
 
 /** 狀態碼 → 使用者看得懂的句子（不把「HTTP 503」這種字樣丟給使用者）。 */
-function messageForStatus(status: number): string {
-  if (status === 409) return "此診斷請求已失效，請重新發起";
+export function messageForStatus(status: number): string {
+  // 404：api 對名冊外的 machineId 回 404。
+  if (status === 404) return "此機台不在名冊中";
+  // 429：nginx 對 `/diagnoses` 限流（limit_req）；回應是 nginx 錯誤頁，不會有中文 message。
+  if (status === 429) return "診斷請求過於頻繁，請稍後再試";
+  // 409：jobId 綁定已結束／曾用於別台，或 socketId 對應的 WebSocket 已不存在／未授權。
+  // 兩者的處置相同（等連線恢復後以新 jobId 重發）；後端有中文 message 時優先顯示後端原句。
+  if (status === 409) return "連線已中斷或未授權，請等待重連後再試";
   if (status === 503) return "診斷佇列暫時無法使用，請稍後再試";
   if (status === 400 || status === 415) return "請求格式不被接受（前端版本可能過舊）";
   if (status >= 500) return "診斷服務暫時發生錯誤，請稍後再試";

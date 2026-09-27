@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MIN_OUTPUT_TOKENS_WITH_THINKING, thinkingCapability } from "./model-capabilities.js";
 
 /**
  * worker 環境變數的單一來源（Zod，bootstrap 最前面 parse，失敗 fail-fast）。
@@ -15,6 +16,17 @@ import { z } from "zod";
  * 這兩類刻意不升級為啟動失敗，以免 worker 與 api 對同一個變數有兩種語意。
  */
 
+/**
+ * 鎖 TTL 相對 AI 逾時的最低餘裕（毫秒）。持鎖期間除了 LLM 串流（≤ AI_TIMEOUT_MS），還有
+ * parseResult、Mongo insert（socketTimeoutMS 20s 內的一次寫入）與寫 cache；TTL 恰等於逾時時，
+ * 鎖可能在寫 cache 前過期，等待者搶到鎖再打一次 LLM。5s 足以涵蓋正常情況下的收尾步驟。
+ */
+export const LOCK_TTL_MARGIN_MS = 5000;
+
+/** 生成參數預設值（單一來源：env 留空時的預設，也是 `GeminiProvider` 未帶選項時的預設）。 */
+export const DEFAULT_AI_MAX_OUTPUT_TOKENS = 2048;
+export const DEFAULT_AI_TEMPERATURE = 0.2;
+
 const emptyToUndefined = (v: unknown): unknown =>
   typeof v === "string" && v.trim() === "" ? undefined : v;
 
@@ -22,6 +34,9 @@ const optionalString = z.preprocess(emptyToUndefined, z.string().optional());
 const stringWithDefault = (d: string) => z.preprocess(emptyToUndefined, z.string().default(d));
 const positiveInt = (d: number) =>
   z.preprocess(emptyToUndefined, z.coerce.number().int().positive().default(d));
+/** 有上下限的數值（可為小數）。 */
+const boundedNumber = (d: number, min: number, max: number) =>
+  z.preprocess(emptyToUndefined, z.coerce.number().min(min).max(max).default(d));
 /** 與 api 的 `port()` 同一規則：同一個 REDIS_PORT 不該 api 拒絕啟動、worker 卻照跑到連線才失敗。 */
 const port = (d: number) =>
   z.preprocess(emptyToUndefined, z.coerce.number().int().positive().max(65_535).default(d));
@@ -57,19 +72,32 @@ export const WorkerEnvSchema = RedisEnvSchema.extend({
   GEMINI_API_KEY: optionalString,
   GEMINI_MODEL: stringWithDefault("gemini-2.5-flash"),
   AI_TIMEOUT_MS: positiveInt(30_000),
+  /**
+   * 單次輸出 token 上限（Gemini `maxOutputTokens`）。診斷 JSON 約數百 token，2048 足夠；設上限是為了
+   * JSON mode 偶發的重複迴圈能由供應商以 `max_tokens` 截斷收尾，而不是拖到 AI_TIMEOUT_MS 才被中止。
+   * 上限 65536 與 Gemini 2.5 系列的最大輸出一致。
+   */
+  AI_MAX_OUTPUT_TOKENS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().positive().max(65_536).default(DEFAULT_AI_MAX_OUTPUT_TOKENS),
+  ),
+  /** 取樣溫度（0–2，Gemini 接受的範圍）。結構化診斷要穩定可重現，預設偏低。 */
+  AI_TEMPERATURE: boundedNumber(DEFAULT_AI_TEMPERATURE, 0, 2),
   AI_DEDUPE_LOCK_SECONDS: positiveInt(45),
   AI_CACHE_TTL_SECONDS: positiveInt(600),
   /** 每分鐘「實際 LLM 呼叫」上限（取鎖且 cache 仍未命中後才計數，見 processor）。 */
   AI_RPM: positiveInt(8),
   WORKER_CONCURRENCY: positiveInt(2),
 }).superRefine((env, ctx) => {
-  // 鎖必須活得比一次 LLM 呼叫久：否則持鎖者還在串流時鎖已過期，等待者搶到鎖再打一次 LLM，
-  // 去重直接失效。compare-and-del 只能保證「不刪別人的鎖」，擋不住這種重複呼叫。
-  if (env.AI_DEDUPE_LOCK_SECONDS * 1000 < env.AI_TIMEOUT_MS) {
+  // 鎖必須活得比一次 LLM 呼叫**加上收尾**久：否則持鎖者還在串流或寫庫時鎖已過期，等待者搶到鎖
+  // 再打一次 LLM，去重直接失效。compare-and-del 只能保證「不刪別人的鎖」，擋不住這種重複呼叫。
+  if (env.AI_DEDUPE_LOCK_SECONDS * 1000 < env.AI_TIMEOUT_MS + LOCK_TTL_MARGIN_MS) {
     ctx.addIssue({
       code: "custom",
       path: ["AI_DEDUPE_LOCK_SECONDS"],
-      message: `AI_DEDUPE_LOCK_SECONDS（${env.AI_DEDUPE_LOCK_SECONDS}s）× 1000 必須 ≥ AI_TIMEOUT_MS（${env.AI_TIMEOUT_MS}ms）`,
+      message:
+        `AI_DEDUPE_LOCK_SECONDS（${env.AI_DEDUPE_LOCK_SECONDS}s）× 1000 必須 ≥ AI_TIMEOUT_MS（${env.AI_TIMEOUT_MS}ms）` +
+        ` + 收尾餘裕 ${LOCK_TTL_MARGIN_MS}ms（parse、寫 Mongo、寫 cache）`,
     });
   }
 });
@@ -90,6 +118,18 @@ export function parseWorkerEnv(raw: Record<string, string | undefined>): WorkerE
     // 任何環境都允許留空：沒有 Gemini 帳號的評估者仍能看到遙測與背壓兩個賣點。缺金鑰不會
     // 拖到重試用盡——provider 會丟不可重試錯誤，每筆診斷立即以友善的金鑰訊息失敗。
     warnings.push("GEMINI_API_KEY 未設定：每筆 AI 診斷將立即以 provider_error 失敗（不重試）");
+  }
+  const { GEMINI_MODEL, AI_MAX_OUTPUT_TOKENS } = parsed.data;
+  if (
+    thinkingCapability(GEMINI_MODEL) === "always-on" &&
+    AI_MAX_OUTPUT_TOKENS < MIN_OUTPUT_TOKENS_WITH_THINKING
+  ) {
+    // thinking token 計入 maxOutputTokens：不能關 thinking 的模型配 2048 這類上限，常在 JSON 還沒
+    // 寫完就被 max_tokens 截斷，而 max_tokens 是不可重試的失敗——每筆診斷都失敗且不會自行恢復。
+    warnings.push(
+      `GEMINI_MODEL=${GEMINI_MODEL} 無法關閉 thinking，且 thinking token 計入 AI_MAX_OUTPUT_TOKENS（目前 ${AI_MAX_OUTPUT_TOKENS}）：` +
+        `建議調高至 ≥ ${MIN_OUTPUT_TOKENS_WITH_THINKING}，否則診斷容易因 max_tokens 截斷而失敗（不重試）`,
+    );
   }
   return { ok: true, env: parsed.data, warnings };
 }

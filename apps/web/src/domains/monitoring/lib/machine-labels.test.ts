@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { KNOWN_MACHINE_IDS, machineLabel } from "./machine-labels.js";
+import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
+import { machineLabel } from "./machine-labels.js";
 
 describe("machine-labels（FR-006a）", () => {
-  it("KNOWN_MACHINE_IDS 為 5 台固定名冊", () => {
-    expect(KNOWN_MACHINE_IDS).toEqual([
+  it("MACHINE_IDS 為 5 台固定名冊", () => {
+    expect(MACHINE_IDS).toEqual([
       "mixer-01",
       "press-02",
       "pack-03",

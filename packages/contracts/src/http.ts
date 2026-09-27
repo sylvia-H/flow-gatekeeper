@@ -18,7 +18,11 @@ export const CreateDiagnosisBodySchema = z.object({
   jobId: z.uuid().optional(),
   /** 機台識別；格式受限是為了不讓任意長字串進 prompt（prompt injection 與 token 成本）。 */
   machineId: z.string().regex(/^[a-z0-9-]{1,32}$/),
-  /** 發起連線的 WS clientId（Gateway 以 `randomUUID()` 派發，見 `system/connected`）。 */
+  /**
+   * 發起連線的 WS clientId（Gateway 以 `randomUUID()` 派發，見 `system/connected`）。
+   * 該連線必須**仍在線且已授權**（未設 `WS_AUTH_SECRET` 時連上即授權；有設時須已通過
+   * `machine/subscribe` 的 token 檢查），否則 api 回 409——AI 串流與 `job/status` 只送已授權連線。
+   */
   socketId: z.uuid(),
   /** 發起者；會寫進日誌與 `diagnosisTriggers`，故限制長度。缺省時 api 以 'demo-user' 代入。 */
   requestedBy: z.string().min(1).max(64).optional(),

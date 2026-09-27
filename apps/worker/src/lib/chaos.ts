@@ -5,10 +5,13 @@
  * - `WORKER_CHAOS`：`uncaught`｜`rejection`；未設定＝關閉。**預設 MUST 關閉、僅供演練**。
  * - `WORKER_CHAOS_AT`：`startup`（bootstrap 後約 2s 拋，供崩潰迴圈演練）｜
  *   `job`（下一筆 job 進入 active 時拋，供進行中工作重派演練）；預設 `startup`。
+ * - `WORKER_CHAOS_ALLOW_IN_PRODUCTION`：`true` 才允許在 `NODE_ENV=production`（容器 image）武裝；
+ *   預設 `false`（見 `parseChaosAllowInProduction`）。
  *
  * 非法值一律 warn 後**視為關閉**——零影響原則優先於 fail-fast：演練工具壞了，
  * 不該把正常啟動變成致命（含 `WORKER_CHAOS_AT` 非法：時點意圖不明時寧可不注入）。
  */
+import { isProductionEnv } from "@flow-gatekeeper/shared";
 
 export type ChaosKind = "uncaught" | "rejection";
 export type ChaosAt = "startup" | "job";
@@ -49,6 +52,36 @@ export function parseChaosConfig(env: Record<string, string | undefined>): Chaos
   }
 
   return { config: { kind: rawKind as ChaosKind, at: (rawAt as ChaosAt) || "startup" }, warnings: [] };
+}
+
+/**
+ * production 守衛的獨立開關 `WORKER_CHAOS_ALLOW_IN_PRODUCTION`（純函式）。
+ *
+ * 為什麼需要：worker image 內 `NODE_ENV=production`，守衛若只看 NODE_ENV，一鍵 demo 容器內的
+ * 崩潰演練一律不生效。開關必須**明確**設成 `true` 才放行（大小寫不拘）——「遺留在 production
+ * .env 的 WORKER_CHAOS 靜默造成崩潰迴圈」的防護仍是預設。非法值與 chaos 其他旗標同一原則：
+ * warn 後視為 `false`（不放行），不升級為啟動失敗。
+ */
+export function parseChaosAllowInProduction(env: Record<string, string | undefined>): {
+  allow: boolean;
+  warnings: string[];
+} {
+  const raw = env.WORKER_CHAOS_ALLOW_IN_PRODUCTION?.trim().toLowerCase();
+  if (!raw || raw === "false") return { allow: false, warnings: [] };
+  if (raw === "true") return { allow: true, warnings: [] };
+  return {
+    allow: false,
+    warnings: [
+      `WORKER_CHAOS_ALLOW_IN_PRODUCTION 非法值 "${env.WORKER_CHAOS_ALLOW_IN_PRODUCTION}"（合法：true|false），視為 false`,
+    ],
+  };
+}
+
+/** 是否武裝 chaos：非 production 一律可；production 僅在明確開關放行時可。 */
+export function shouldArmChaos(nodeEnv: string | undefined, allowInProduction: boolean): boolean {
+  // 判準與 api（`AppConfigService.isProduction`）、shared logging 共用：正規化後比較，避免
+  // `NODE_ENV=Production` 或帶空白時各端解讀不一致。
+  return !isProductionEnv(nodeEnv) || allowInProduction;
 }
 
 /** startup 時點的延遲：讓 bootstrap 完整走完（連線、ready log）再注入。 */

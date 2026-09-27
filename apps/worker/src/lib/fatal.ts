@@ -25,8 +25,12 @@ import { writeSync } from "node:fs";
 /**
  * `invalidConfig`：bootstrap 最前面的 env 驗證失敗。此時 logger 尚未建立（LOG_* 也可能正是
  * 出錯的變數），沿用同一條同步 stderr 路徑最可靠；exit 1 讓監督者語意與其他致命事件一致。
+ *
+ * `bootstrap`：env 通過後的啟動流程失敗（Mongo 連不上、Redis 未於時限內就緒…），由 entry 的
+ * `bootstrap().catch` 送進來。與 api 的 `fatalExit("bootstrap", err)` 同名，跨 process 查日誌時可
+ * 一併檢索；同樣走 `writeSync`——非同步 pino 寫完前就 `process.exit(1)` 會丟失這唯一一行。
  */
-export type FatalKind = "uncaughtException" | "unhandledRejection" | "invalidConfig";
+export type FatalKind = "uncaughtException" | "unhandledRejection" | "invalidConfig" | "bootstrap";
 
 /** 純函式：組致命訊息（不含 `[worker] ` 前綴，前綴由 log 層統一）。 */
 export function formatFatal(kind: FatalKind, value: unknown): string {
@@ -37,6 +41,12 @@ export function formatFatal(kind: FatalKind, value: unknown): string {
 /** 記錄致命訊息後立即以非零碼結束行程，交由監督者重啟。 */
 export function fatal(kind: FatalKind, value: unknown): never {
   // 同步寫 stderr（fd 2）：保證致命日誌在 process.exit 前落地，不被非同步 pipe 緩衝丟失。
-  writeSync(2, `[worker] ${formatFatal(kind, value)}\n`);
+  // 寫入本身也可能失敗（stderr 已關閉、EPIPE、EAGAIN）：日誌丟了也必須 exit(1)——否則錯誤會從
+  // 致命處理器內再拋出，行程停在未定義狀態，監督者也拿不到非零退出碼。
+  try {
+    writeSync(2, `[worker] ${formatFatal(kind, value)}\n`);
+  } catch {
+    // 無處可記；照常以非零碼結束。
+  }
   process.exit(1);
 }

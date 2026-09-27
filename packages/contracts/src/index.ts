@@ -6,3 +6,4 @@ export * from "./ai-stream.js";
 export * from "./job-status.js";
 export * from "./metrics.js";
 export * from "./http.js";
+export * from "./machines.js";

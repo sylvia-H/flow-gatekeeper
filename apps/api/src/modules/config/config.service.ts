@@ -1,11 +1,14 @@
 import { Injectable } from "@nestjs/common";
 import type { RedisOptions } from "ioredis";
 import {
+  MAX_METRICS_INTERVAL_MS,
+  MIN_METRICS_INTERVAL_MS,
   resolveLogLevel,
   resolveMetricsInterval,
   resolveMetricsLogLevel,
   resolvePretty,
 } from "@flow-gatekeeper/shared/logging";
+import { isProductionEnv } from "@flow-gatekeeper/shared";
 import { resolveHealthProbeTimeout } from "../../lib/health-probe-timeout.js";
 import { parseApiEnv } from "../../lib/env-schema.js";
 import { parseAllowedOrigins } from "../../lib/ws-origin.js";
@@ -39,11 +42,20 @@ export class AppConfigService {
   private readonly env: ApiEnv = parseApiEnv(process.env);
 
   readonly apiPort = this.env.API_PORT;
+  // 執行環境是否為 production：與 shared logging 的 `resolvePretty`、worker 的 chaos 守衛共用同一判準
+  // （`isProductionEnv`：trim + 小寫後比較，`NODE_ENV=Production ` 也算 production）。
+  // 集中在此讀，service 不直接碰 process.env.NODE_ENV。
+  readonly isProduction = isProductionEnv(process.env.NODE_ENV);
   readonly mockTelemetryIntervalMs = this.env.MOCK_TELEMETRY_INTERVAL_MS;
   readonly wsHeartbeatMs = this.env.WS_HEARTBEAT_MS;
   readonly wsAuthSecret = this.env.WS_AUTH_SECRET ?? "";
   // WS upgrade 的 Origin 白名單；空陣列＝不檢查（解析規則與 Gateway 共用 lib/ws-origin.ts）。
   readonly wsAllowedOrigins = parseAllowedOrigins(this.env.WS_ALLOWED_ORIGINS);
+  // WS 出口背壓高水位（bytes）與同時連線數上限（範圍驗證見 lib/env-schema.ts）。
+  readonly wsSendHighWaterBytes = this.env.WS_SEND_HIGH_WATER_BYTES;
+  readonly maxWsConnections = this.env.MAX_WS_CONNECTIONS;
+  // 有設 WS_AUTH_SECRET 時，連線通過 token 檢查的期限（逾時以 1008 關閉，防止佔住連線名額）。
+  readonly wsAuthGraceMs = this.env.WS_AUTH_GRACE_MS;
   readonly mongoUrl = this.env.MONGO_URL;
   readonly mongoDb = this.env.MONGO_DB;
   readonly telemetryTtlSeconds = this.env.TELEMETRY_TTL_SECONDS;
@@ -61,7 +73,7 @@ export class AppConfigService {
   // ——裸 `Number()` 會把 `HEALTH_PROBE_TIMEOUT_MS=`（空字串，`??` 不生效）解成 0、非數值解成
   // NaN，兩者都讓逾時 promise 立刻 reject → 依賴恆判 down → /healthz 恆 503（見 lib 的說明）。
   readonly healthProbeTimeoutMs = resolveHealthProbeTimeout(process.env).timeoutMs;
-  // 009 US3：指標結算間隔（預設 60000ms、下限 5000ms，低於下限一律回退預設而非 clamp）。
+  // 009 US3：指標結算間隔（預設 60000ms、須為 5000–2^31-1 的整數，不合法一律回退預設而非 clamp）。
   readonly metricsIntervalMs = resolveMetricsInterval(process.env).intervalMs;
   // 指標摘要 child logger 的等級——**獨立於 LOG_LEVEL**，使 LOG_LEVEL=warn 時摘要仍輸出（SC-005）。
   readonly metricsLogLevel = resolveMetricsLogLevel(process.env);
@@ -76,7 +88,7 @@ export class AppConfigService {
         .child({ context: AppConfigService.name })
         .warn(
           { invalidMetricsInterval: interval.rawValue, fallbackIntervalMs: interval.intervalMs },
-          `METRICS_INTERVAL_MS="${interval.rawValue ?? ""}" 不合法或低於下限，已回退至 ${interval.intervalMs}ms`,
+          `METRICS_INTERVAL_MS="${interval.rawValue ?? ""}" 不合法（須為 ${MIN_METRICS_INTERVAL_MS}–${MAX_METRICS_INTERVAL_MS} 的整數），已回退至 ${interval.intervalMs}ms`,
         );
     }
 

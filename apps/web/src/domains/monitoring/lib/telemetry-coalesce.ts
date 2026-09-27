@@ -15,11 +15,14 @@ export interface CoalesceResult {
  * 轉換點衍生，所以同一台連續同態的中間點對畫面沒有貢獻，是最便宜的犧牲品。
  *
  * 每台保留：第一筆（它相對 store 現有快照可能就是一次轉換，composable 無從得知）、每個
- * state 改變的點、最後一筆。合併後每台的「state 序列去除連續重複」與原序列完全相同，
- * 因此 store 衍生的事件不受影響（只是遙測數值被取樣）。
+ * state 改變的點、最後一筆。**未觸發下方降水位時**，合併後每台的「state 序列去除連續重複」
+ * 與原序列完全相同，因此 store 衍生的事件不受影響（只是遙測數值被取樣）。
  *
- * 若合併後仍超過上限（多台長時間高頻抖動，屬病態情況），從最舊的非「最新一筆」開始丟，
- * 並一次降到 `lowWater`：留出空間，避免之後每收一則訊息都要重跑一次 O(n) 合併。
+ * 合併後**一律**降到 `lowWater`（超出部分從最舊的非「最新一筆」開始丟）：呼叫端只在 buffer
+ * 超過 `maxSize` 時才合併，若合併結果只是略小於 `maxSize`（轉換點多的情境），下一則訊息就會
+ * 再次超標、每則都重跑一次 O(n) 合併；降到 `lowWater` 保證兩次合併之間至少隔
+ * `maxSize − lowWater` 筆。代價是溢位期間較舊的轉換點可能被取樣掉——溢位本身已是降級狀態，
+ * 丟棄筆數會計入 droppedMessages。每台最新一筆永遠保留。
  */
 export function coalesceTelemetry(
   points: readonly TelemetryPoint[],
@@ -41,8 +44,8 @@ export function coalesceTelemetry(
   });
 
   let finalIdx = keptIdx;
-  if (keptIdx.length > maxSize) {
-    const target = Math.max(lowWater, lastIndex.size);
+  const target = Math.max(lowWater, lastIndex.size);
+  if (keptIdx.length > target) {
     let excess = keptIdx.length - target;
     finalIdx = keptIdx.filter((i) => {
       if (excess > 0 && lastIndex.get(points[i]!.machineId) !== i) {

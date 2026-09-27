@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveMetricsInterval } from "./interval.js";
+import { MAX_METRICS_INTERVAL_MS, resolveMetricsInterval } from "./interval.js";
 
 describe("resolveMetricsInterval", () => {
   it("未設定回預設 60000", () => {
@@ -47,6 +47,25 @@ describe("resolveMetricsInterval", () => {
       intervalMs: 120_000,
       fellBackToDefault: false,
       rawValue: "120000",
+    });
+  });
+
+  it.each(["5000.5", "60000.1", "1e20", String(2 ** 31), "Infinity", "abc", "-5000", " "])(
+    "%s（非整數／超過 2^31-1／非數值／負數）回退預設",
+    (raw) => {
+      expect(resolveMetricsInterval({ METRICS_INTERVAL_MS: raw })).toEqual({
+        intervalMs: 60_000,
+        fellBackToDefault: true,
+        rawValue: raw,
+      });
+    },
+  );
+
+  it("上限邊界 2^31-1 原樣通過", () => {
+    expect(resolveMetricsInterval({ METRICS_INTERVAL_MS: String(MAX_METRICS_INTERVAL_MS) })).toEqual({
+      intervalMs: MAX_METRICS_INTERVAL_MS,
+      fellBackToDefault: false,
+      rawValue: String(MAX_METRICS_INTERVAL_MS),
     });
   });
 });

@@ -1030,6 +1030,8 @@ jobs:
 > - `DiagnosisResultSchema` 對壞 JSON 會丟錯。
 >
 > 用 Vitest 即可；package 若暫無測試，`test` script 先設成 `vitest run --passWithNoTests`，避免 CI 因空測試失敗。
+>
+> **已變更**：五個套件都已有測試，現況 `test` script 一律為 `vitest run`（已移除 `--passWithNoTests`，空測試會讓 CI 失敗），見 §15.6。
 
 ### 6.11 Feature 001 驗收
 
@@ -1351,6 +1353,14 @@ app.get(MonitoringGateway).attach(app.getHttpServer());
 ```
 
 > **已變更**：現為有上限 buffer＋每秒批次＋單一 in-flight，`persistBatch` 已不存在；errorlogs TTL 30 天。見 §15.6、ADR-002 §6.4。
+>
+> **現況註記（Gateway 韌性，上方 `MonitoringGateway` 為起草時的 reference）**：
+> - **授權**：有設 `WS_AUTH_SECRET` 時，`ai/*`、`job/status`、`system/metrics` 只送通過 `machine/subscribe` token 的連線；未設時連上即授權。錯誤 token 仍回 `system/unauthorized`。
+> - **違規關閉**：同一連線畸形訊息（無法解析、schema 不符）或錯誤 token 累計 10 次，以 close code `1008` 關閉；有設 `WS_AUTH_SECRET` 時，連線在 `WS_AUTH_GRACE_MS`（預設 10000）內未通過 token 也以 `1008` 關閉（由獨立的授權 sweep 檢查，間隔 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，實際關閉時間 ≤ grace + 該間隔）。
+> - **心跳**：伺服器端探活改為帶 nonce 的協定層 ping，pong 必須原樣帶回才算存活；未經請求或 nonce 不符的 pong 不算（瀏覽器與 `ws` 自動回應）。應用層 `ping`→`pong` 訊息仍保留供前端量 RTT。
+> - **慢 client 與連線上限**：`bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES`（預設 1 MiB）即略過該筆遙測推送（控制／診斷訊息照送），連續 3 個心跳 tick 超標則 terminate；連線數達 `MAX_WS_CONNECTIONS`（預設 500）時 upgrade 回 HTTP 503；有設 `WS_AUTH_SECRET` 時，未授權連線另有子上限 `max(10, floor(20% × MAX_WS_CONNECTIONS))`，達到亦回 503（限制未授權者可佔的總名額，持 token 的新連線池滿時同樣 503）。背壓略過的高頻流除遙測批次外也含 `ai/token`（終態由 `ai/done` 補齊）。
+> - **relay 日誌**：Redis／QueueEvents 錯誤日誌改為轉態節流——轉態（正常↔故障）時各記一則，故障期間每 30 秒至多一則，斷線期間不刷屏。
+> - 見 §15.6「第二輪審查修復」。
 
 ### 7.5 Seed maintenance records
 
@@ -1591,7 +1601,9 @@ export class JobsController {
 
 > 前端按下 Diagnose 時，POST body 要帶上目前的 `socketId`（即連線時收到的 `clientId`）。沒有 `socketId` 就無法把 streaming 推回正確的 client。
 
-> **已變更，現況：Zod 驗證＋冪等**（上面 service／controller 為起草時的形狀，保留作 reference）。controller 先要求 `Content-Type: application/json`（否則 `415`），再以 contracts 的 `CreateDiagnosisBodySchema` `safeParse`（`machineId` `^[a-z0-9-]{1,32}$`、`socketId` 必須是 uuid、`requestedBy` ≤ 64、可選 `jobId` uuid；不符回 `400`，只回 issue 路徑與代碼）。service 以前端產生的 `jobId` 作 idempotency key：綁定在任何 await 之前建立；同 jobId 重送回同一結果但**不改綁**；同 jobId 不同機台、或 job 已入列而綁定已失效回 `409`；入列設 5 秒逾時，逾時或 Redis 不可用回 `503`。成功為 Nest `@Post()` 預設的 `201`。見 `apps/api/src/modules/jobs/jobs.controller.ts`、`jobs.service.ts` 與 §15.6。
+> **已變更，現況：Zod 驗證＋冪等**（上面 service／controller 為起草時的形狀，保留作 reference）。controller 先要求 `Content-Type: application/json`（否則 `415`），再以 contracts 的 `CreateDiagnosisBodySchema` `safeParse`（`machineId` `^[a-z0-9-]{1,32}$`、`socketId` 必須是 uuid、`requestedBy` ≤ 64、可選 `jobId` uuid；不符回 `400`，只回 issue 路徑與代碼）。service 先比對機台名冊（`@flow-gatekeeper/contracts` 的 `MACHINE_IDS`，`packages/contracts/src/machines.ts`，api Gateway／mock telemetry 與 web 共用單一來源），格式合法但不在名冊的 `machineId` 在綁定與入列之前即回 `404`（名冊檢查先於冪等檢查），避免亂數 id 每次 cache miss 都真的打 LLM。service 以前端產生的 `jobId` 作 idempotency key：綁定在任何 await 之前建立；同 jobId 重送回同一結果但**不改綁**；同 jobId 不同機台、或 job 已入列而綁定已失效回 `409`；入列設 5 秒逾時，逾時或 Redis 不可用回 `503`。成功為 Nest `@Post()` 預設的 `201`。見 `apps/api/src/modules/jobs/jobs.controller.ts`、`jobs.service.ts` 與 §15.6。
+>
+> **現況（第二輪審查修復）**：驗證通過後依序檢查——`machineId` 不在名冊（`mixer-01`、`press-02`、`pack-03`、`oven-04`、`sorter-05`）回 `404`；`socketId` 對應的 WS 連線不在線或未授權回 `409`（`{statusCode:409,error:"Conflict",message:"WebSocket 連線不存在或未授權，請重新連線後再發起診斷"}`）；最後才走 `jobId` 冪等（既有 `409` 條件不變）。一鍵 demo 經 nginx 另有 `429` 限流。見 §15.6。
 
 ### 8.5 BullMQ limiter
 
@@ -1832,7 +1844,7 @@ export class GeminiProvider implements AiProvider {
 
 > **已變更，現況**（下面整段 `main.ts` 為起草時的 reference，保留不改）：processor 已抽成 `apps/worker/src/processor.ts`（依賴注入、可單測），`main.ts` 只負責組裝。與下方草稿的差異：
 >
-> - **去重真正生效**：鎖值用 `randomUUID()`、釋放用 Lua compare-and-del（只刪自己的鎖）；等待者搶到鎖後**再查一次 cache**；啟動時驗證 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS`，鎖不會比 LLM 呼叫先過期。
+> - **去重真正生效**：鎖值用 `randomUUID()`、釋放用 Lua compare-and-del（只刪自己的鎖）；等待者搶到鎖後**再查一次 cache**；啟動時驗證 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`（5 秒餘裕），鎖不會比 LLM 呼叫先過期。
 > - **LLM 限流**移到取鎖後的 Redis 固定窗（見 §8.5 現況）。
 > - **逾時**：`AbortSignal.timeout(AI_TIMEOUT_MS)` 交給 provider，真正中止底層串流；逾時後的殭屍串流不再送 token。
 > - **重試語意**：非最終嘗試的失敗只記 log 後 throw（交 BullMQ 退避），**不** publish `ai/error`；最終嘗試或不可重試錯誤才送。所有 `ai/*` 事件帶 `attempt`，前端換輪清空串流文字；stalled 重派時 `attempt` 不變、`seq` 從 0 重播，前端以同輪 `seq` 0 判定重播並清空。
@@ -2510,8 +2522,11 @@ export function useHighFrequencyWs<T>(opts: Options<T>) {
 > - **溢位不再「丟最舊、保最新」**：buffer 超過上限時改為**合併**——每台保留「第一筆＋每個 state 轉換點＋最新一筆」，丟掉中間同態的重複值（`lib/telemetry-coalesce.ts`），合併後仍超限才從最舊的非最新點丟到低水位；丟棄筆數計入 `droppedMessages` 並納入背壓比值。理由：單純截斷會把背景分頁或 Pause 期間的 warning／critical 轉換整段丟掉，Event Stream 永遠看不到。
 > - **入口守衛**：`machine/data` 裸陣列逐點以 `isTelemetryPoint` 驗證，不合格者剔除並計數；`ai/*` 事件以 `AiStreamEventSchema` 驗證後才交給 copilot。
 > - **pump 以 try/finally 包住**：`onBatch` 丟例外也不會中斷 rAF 迴圈。
-> - **重連**：退避次數在收到 `system/connected` 才歸零（不是 `onopen`），瀏覽器 `online` 事件立即重連；Pause 且連線中時凍結 stale 時鐘。
+> - **重連**：退避次數在收到 `machine/subscribed` 才歸零（不是 `onopen`；原先在 `system/connected` 歸零，已變更——token 錯誤被 `1008` 關閉的連線也會收到 `system/connected`），瀏覽器 `online` 事件立即重連（舊連線仍回報 connected 時先補報 reconnecting）；Pause 且連線中時凍結 stale 時鐘。
 > - 以上行為由 `useHighFrequencyWs.test.ts`（14 支）覆蓋。
+> - **pong 逾時**（現況）：上方 `pongTimer` 逾時後 `ws.close()` 的寫法已改為「視為斷線、立即重連」——逾時（預設 5 秒）當下即顯示 Reconnecting 並排入退避重連，不等瀏覽器的 close 事件（半死連線上 close 可能很久才觸發）。
+> - **`system/unauthorized`**（現況）：上方 `case 'system/unauthorized': return;` 的「忽略」已變更——前端記錄授權結果，TopBar 顯示「未授權」chip，下次 `machine/subscribed` 自動消失。
+> - **Diagnose 可用性**（現況）：只在連線就緒時可按（已收到本次連線的 `system/connected` 且已完成 `machine/subscribed`、未斷線、未收到 `system/unauthorized`），重連期間停用並以 tooltip 說明；`POST /diagnoses` 回 `409` 時顯示後端 message 原句，無則顯示「連線已中斷或未授權，請等待重連後再試」。
 
 ### 10.4 Feature 004 驗收
 
@@ -3007,7 +3022,7 @@ process.on("uncaughtException", (err) => fatal("uncaughtException", err));
 - **web 容器化**：多階段建置（`pnpm --filter web build`）→ runtime 用 **`nginx:alpine`**（起草時列為 14.3
   clarify，已定案）同時提供靜態產物與 `/ws`、`/diagnoses` 的同源反向代理。
   （**已變更，2026-09**：runtime 改為非 root 的 `nginxinc/nginx-unprivileged:1.31.6-alpine`（uid 101），
-  容器內 `listen 8080`、compose `8080:8080`，對外入口不變；另加 `server_tokens off`、安全 header、gzip 與快取策略，見 §15.6。）
+  容器內 `listen 8080`、compose `8080:8080`，對外入口不變（現況：綁定位址改由 `WEB_BIND` 決定、預設只綁本機，即 `${WEB_BIND:-127.0.0.1}:8080:8080`，見 README「注意事項」）；另加 `server_tokens off`、安全 header、gzip 與快取策略，見 §15.6。）
 - **compose profiles 切分執行模式**：`docker compose up -d` 維持只起 infra（dev 迴圈不變，app 仍用
   `tsx watch`）；**`docker compose --profile demo up -d --build`**（起草暫名 `full`，定案為 `demo`）起全棧
   demo，單一入口 `http://localhost:8080`。`demo` 分組涵蓋 web／api／worker／seed。
@@ -3171,12 +3186,14 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   既存 telemetry collection 的 TTL 以 `collMod` 更新（`TELEMETRY_TTL_SECONDS` 改值真的生效）；errorlogs
   補 TTL index（30 天）。compose 的 Redis／Mongo 只綁 127.0.0.1。
 - **worker（AI 管線）**：
-  - 去重：取鎖後 double-check cache、`randomUUID` 鎖值＋Lua compare-and-del；`AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS` 啟動驗證。
+  - 去重：取鎖後 double-check cache、`randomUUID` 鎖值＋Lua compare-and-del；`AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`（5 秒餘裕） 啟動驗證。
   - 逾時：`AbortSignal.timeout(AI_TIMEOUT_MS)` 統一逾時並交給 SDK，殭屍串流不再送 token。
   - SDK：遷移至 **`@google/genai`**；`responseJsonSchema` 由 `DiagnosisResultSchema` 產生走原生 structured output；
     僅 `gemini-2.5-flash` 系列送 `thinkingBudget: 0`。
   - `AiProvider` 新形狀：`id`／`model`／`signal`／`finishReason`／`usage`，錯誤為 `AiProviderError{retryable}`。
   - 重試：非最終嘗試不送 `ai/error`，所有事件帶 `attempt`，不可重試錯誤轉 `UnrecoverableError`。
+  - 空脈絡短路：窗口內無 telemetry、`latestState` 為 `unknown`、無 errorlog、無維修紀錄時，送不可重試的
+    `ai/error(no_context)`，不查快取、不取鎖、不吃 `AI_RPM`、不打 LLM（`isEmptyContext`，`context-builder.ts`）；名冊內有資料的機台不會觸發。
   - 金鑰：`GEMINI_API_KEY` **任何環境皆可留空**，缺席時每筆診斷立即以 `provider_error` 失敗、不重試。
   - 限流：**取鎖後 Redis 固定窗 `ai-rpm:<分鐘>`＋`moveToDelayed`**，取代 BullMQ limiter；cache 命中與等待者不吃額度。
   - 寫入：先 insert `diagnoses`（`jobId` unique，衝突退回非 unique）再 set cache；cache 讀回 `safeParse`；
@@ -3185,7 +3202,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
     （`stop_grace_period` 45s 維持）；heartbeat 依處理槽進度判斷卡死。
 - **web**：jobId 前端產生、送出前先建 pending；in-flight 去重；fetch 15s 逾時；`attempt` 換輪清空串流文字；
   `ai/done` 二次 schema 防線；StreamingPanel 不再逐 token 朗讀；行動版 dialog／focus trap；溢位合併與
-  `droppedMessages` 計入背壓比值；Pause 且連線中凍結 stale；退避在 `system/connected` 才歸零、`online` 事件重連；
+  `droppedMessages` 計入背壓比值；Pause 且連線中凍結 stale；退避在 `system/connected` 才歸零（已變更為 `machine/subscribed`，見下方 web 條）、`online` 事件重連；
   `machines` 改 `shallowRef`；Tailwind token 依 design-spec v0.5（`canvas`、`fg-subtle` #7C8A98、`2xs`／`pill`／`md`／`lg`／`number`）。
 - **worker 多實例 key**：`worker:heartbeat:<instanceId>`（TTL 30s）、`metrics:worker:<instanceId>`（TTL 3 × 間隔）；
   `instanceId = WORKER_INSTANCE_ID ?? os.hostname()`（容器內即 container id；限 `^[A-Za-z0-9._-]+$`、≤128，不合法拒絕啟動）。
@@ -3208,12 +3225,33 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
     `mongo:7.0.43`）；升版流程：`docker buildx imagetools inspect <image>:<tag>` 取新 digest，tag 與 digest 一起改。
   - 建置：BuildKit `RUN --mount=type=cache`＋`pnpm fetch`＋`pnpm install --offline --filter <app>...`；`pnpm deploy --legacy --prefer-offline`
     （legacy deploy 不讀 lockfile、需要 registry metadata；pnpm 10 起非 injected workspace 須加 `--legacy`，否則 `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`）。全棧 demo 需 BuildKit（Docker 23+ 預設）。
-  - web runtime 改 `nginx-unprivileged`（uid 101），容器內 `listen 8080`、compose `8080:8080`（對外入口不變）；`server_tokens off`、
+  - web runtime 改 `nginx-unprivileged`（uid 101），容器內 `listen 8080`、compose `8080:8080`（對外入口不變；現況為 `${WEB_BIND:-127.0.0.1}:8080:8080`，預設只綁本機）；`server_tokens off`、
     `X-Content-Type-Options`、`X-Frame-Options DENY`、`Referrer-Policy`、CSP（`default-src 'self'`、`connect-src 'self'`——CSP3 的 `'self'` 已涵蓋同源 ws/wss；要相容舊 Safari 再加回 `ws: wss:`、
     `frame-ancestors 'none'` 等）、gzip、`/assets/` `immutable` 一年、`index.html` `no-cache`。
   - packages 加 `files: ["dist"]`、`sideEffects: false`（runtime image 不再帶 src／測試）；root `pnpm.overrides`（multer ≥2.3.0、
     qs ≥6.16.0、body-parser ≥1.20.6、postcss ≥8.5.23、nanoid ≥3.3.18）使 `pnpm audit --prod` 由 19 項（9 high）降至 3 項（0 high，
     餘 file-type 與 `@nestjs/core` 需升主版本；**已變更**：2026-09 技術棧升級改用 NestJS 11（Express 5）＋`@nestjs/bullmq` 12 後 `pnpm audit --prod` 歸零，multer／qs／body-parser 三項 override 因 Express 5 相依鏈已自帶修補版而移除，現況見 root `package.json` 的 `pnpm.overrides`）；`.gitignore` 補 `*.tsbuildinfo`、`.vite/`。
+
+**第二輪審查修復**（`fix/20260927-research-review02`，報告 `docs/20260927-research-review02.md`）：
+
+- **api Gateway**：
+  - 授權：有設 `WS_AUTH_SECRET` 時 `ai/*`、`job/status`、`system/metrics` 只送已授權連線；未設時連上即授權。
+  - 違規（畸形訊息、錯誤 token）累計 10 次以 `1008` 關閉；有 `WS_AUTH_SECRET` 時 `WS_AUTH_GRACE_MS`（預設 10000，1000–60000）內未授權亦 `1008`；心跳改為帶 nonce 的協定層 ping，pong 須原樣帶回。
+  - 慢 client：`WS_SEND_HIGH_WATER_BYTES`（預設 1048576，65536–268435456）超標略過遙測推送（控制／診斷訊息照送）、連續 3 tick 超標 terminate；
+    `MAX_WS_CONNECTIONS`（預設 500，1–100000）達上限 upgrade 回 503；有 `WS_AUTH_SECRET` 時未授權連線子上限 `max(10, floor(20% × MAX_WS_CONNECTIONS))`。
+  - 授權期限改由獨立 sweep 檢查（間隔 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`），不再受心跳間隔拖長。
+  - `POST /diagnoses`：檢查順序為名冊 `404` → `socketId` 在線／已授權（否則 `409`，中文 message）→ `jobId` 冪等；既有 `409` 條件不變。
+  - relay 的 Redis／QueueEvents 錯誤日誌改為轉態節流（轉態時記、故障期間每 30 秒至多一則）；`system/metrics` 新增 optional `persist: { dropped, failed }`。
+- **web**：ping 後 5 秒未回 pong 即視為斷線、立即重連；Diagnose 只在連線就緒時可按（`system/connected` 且已 `machine/subscribed`、未斷線、未收到 `system/unauthorized`），卡片 icon 等所有入口共用同一閘門（未就緒時不送 POST）；退避改在 `machine/subscribed` 才歸零；`409` 顯示可讀訊息；
+  `system/unauthorized` 以 TopBar「未授權」chip 呈現；內嵌面 token 改名 `bg-surface-inset`（design-spec v0.6）。
+- **worker**：chaos 在 production 預設拒絕武裝，容器內演練需另設 `WORKER_CHAOS_ALLOW_IN_PRODUCTION=true`（§16.3 第 5 列）；
+  新增 `AI_MAX_OUTPUT_TOKENS`（2048，截斷視為不可重試的 `schema_invalid`）、`AI_TEMPERATURE`（0.2）；
+  鎖 TTL 條件改為 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`；致命 kind 補 `invalidConfig`／`bootstrap`。
+- **運維**：web 入口改 `${WEB_BIND:-127.0.0.1}:8080:8080`（對外示範設 `WEB_BIND=0.0.0.0`）；nginx 對 `/diagnoses`
+  `limit_req` 10 r/m、burst 5、超限 `429`，`/ws` `limit_conn` 每來源 20 條（Docker Desktop 下來源皆為 gateway，兩者皆實為全體共用一桶）；redis／mongo
+  `restart: unless-stopped`；web `depends_on: api: service_healthy`；api／worker 加 `files: ["dist"]`、worker build 排除
+  `smoke-gemini.ts`、`.dockerignore` 補 `**/` 前綴；demo `TELEMETRY_TTL_SECONDS` 改 86400；五套件 test 移除 `--passWithNoTests`。
+  root 聚合 script 內的裸 `pnpm` 需先 `corepack enable`（README 已註明）。
 
 ---
 
@@ -3298,10 +3336,10 @@ docker compose ps -a                          # 判讀就緒：seed Exited(0) + 
 | # | 注入 | 預期觀察 | 判讀方式 |
 | --- | --- | --- | --- |
 | 1 | **Redis 停掉**：`docker compose stop redis` | api **不崩潰**：`GET /healthz` 轉 `503 unhealthy` 且 body 指名 `redis` `down`；此時按 Diagnose，`POST /diagnoses` 於 5 秒內回 **`503`**（不會永久掛住），前端顯示可讀錯誤；worker 的 command 連線在 `REDIS_COMMAND_TIMEOUT_MS` 內 reject、BullMQ 連線自動重連；heartbeat 寫不進去，worker healthcheck 轉 unhealthy（僅示警）。`docker compose start redis` 後 `/healthz` 回 200、worker 恢復消化、再按 Diagnose 正常。註：`depends_on: condition: service_healthy` 只在**啟動編排**時求值——執行中停掉 redis 不會連帶停掉或重啟 api／worker（它們靠自身重連撐過去）；但若此時對 api／worker 執行 `up -d`，它們會等 redis healthcheck 轉 healthy 才啟動。redis 停止期間 heartbeat 寫不進去，worker 自身的 `worker:heartbeat:<instanceId>` 過期 → worker 轉 unhealthy（僅示警） | 開發模式：`curl -i http://localhost:3000/healthz`；一鍵 demo（api 不對外開埠、nginx 也未反代 `/healthz`）：`docker compose ps` 看 api 轉 `unhealthy`，或 `docker inspect --format "{{json .State.Health}}" <api 容器名>` 看探針輸出；`docker compose logs --timestamps api worker` |
-| 2 | **Mongo 停掉**：`docker compose stop mongo` | 遙測推送與背壓比值**照常**（寫入不在推送路徑上）；`/healthz` 轉 `503`（`mongo` `down`）；api 每秒一批的 telemetry 寫入失敗即整批丟棄並計入 `failedPoints`（有損語意、不重試，buffer 只吸收單批卡住期間的累積，不會因故障而累積到滿），error log **每 30 秒至多一則**並附 `droppedPoints`／`failedPoints`／`droppedErrorLogs` 累計數；期間的 errorlog 轉換進獨立佇列，網路類失敗放回重試。`start mongo` 後恢復寫入，佇列中的 errorlog 補寫進去（重複鍵視為成功） | `docker compose logs api` 找 `persist telemetry failed` 與 `totals ...` 行（這些計數目前只出現在 error log，未進 `system/metrics`）；`/healthz` 判讀同場景 1 |
+| 2 | **Mongo 停掉**：`docker compose stop mongo` | 遙測推送與背壓比值**照常**（寫入不在推送路徑上）；`/healthz` 轉 `503`（`mongo` `down`）；api 每秒一批的 telemetry 寫入失敗即整批丟棄並計入 `failedPoints`（有損語意、不重試，buffer 只吸收單批卡住期間的累積，不會因故障而累積到滿），error log **每 30 秒至多一則**並附 `droppedPoints`／`failedPoints`／`droppedErrorLogs` 累計數；期間的 errorlog 轉換進獨立佇列，網路類失敗放回重試。`start mongo` 後恢復寫入，佇列中的 errorlog 補寫進去（重複鍵視為成功） | `docker compose logs api` 找 `persist telemetry failed` 與 `totals ...` 行（逐類明細仍只在 api error log；總數可看 Metrics Panel 的 Persist（dropped/failed）或 `system/metrics.persist`，為 api 啟動以來累計）；`/healthz` 判讀同場景 1 |
 | 3 | **金鑰缺席**：`apps/worker/.env` 的 `GEMINI_API_KEY` 留空後 `docker compose --profile demo up -d worker` | worker 正常啟動、只記一則 warn；遙測、背壓、`/healthz` 全部正常；按 Diagnose 後**第一次嘗試就**失敗（不重試、不等退避），drawer 顯示指名 `GEMINI_API_KEY` 的可讀訊息 | drawer 訊息、`docker compose logs worker`（`provider_error`、無 attempt 2／3） |
 | 4 | **畸形 WS 輸入**：在監控台頁面的 DevTools console 執行 `const s = new WebSocket(location.origin.replace('http','ws') + '/ws'); s.onopen = () => { s.send('{not json'); s.send(JSON.stringify({ type: 'machine/subscribe', token: 1, machineIds: 'x' })); s.send('x'.repeat(20000)); }` | api **不崩潰**、容器 `RestartCount` 不變：前兩則被記一則 `ignored client message`（`invalid-json`／`schema`）後忽略，超過 `maxPayload` 16 KiB 的那則使該連線被關閉；原本的監控台連線與遙測不受影響 | `docker inspect --format "{{.RestartCount}}" <api 容器名>`、`docker compose logs api` |
-| 5 | **worker 致命注入**（007）：`apps/worker/.env` 設 `WORKER_CHAOS=uncaught`（或 `rejection`）、`WORKER_CHAOS_AT=job` 後重建 worker，再按 Diagnose | worker 同步寫出致命訊息後 `exit(1)`，Docker 依退避重啟；in-flight job 由 BullMQ stalled 機制重派，最終完成或以 `ai/error` 收尾；`WORKER_CHAOS_AT=startup` 則可演練連續 5 次失敗後停止重啟。**演練後務必清空兩個變數再重建** | `docker inspect --format "{{.RestartCount}} {{.State.Status}}" <worker 容器名>`、`docker compose logs worker`；細節見 `specs/007-worker-process-supervision/quickstart.md` 場景 3／4 |
+| 5 | **worker 致命注入**（007）：`apps/worker/.env` 設 `WORKER_CHAOS=uncaught`（或 `rejection`）、`WORKER_CHAOS_AT=job`，**並同時設 `WORKER_CHAOS_ALLOW_IN_PRODUCTION=true`**，後重建 worker（`docker compose --profile demo up -d worker`），再按 Diagnose。worker 映像內建 `ENV NODE_ENV=production`，而 chaos 守衛在 production 預設拒絕武裝（只記一則 error）——不加這個開關，容器內演練**不會生效** | worker 同步寫出致命訊息後 `exit(1)`，Docker 依退避重啟；in-flight job 由 BullMQ stalled 機制重派，最終完成或以 `ai/error` 收尾；`WORKER_CHAOS_AT=startup` 則可演練連續 5 次失敗後停止重啟。若 log 只出現「WORKER_CHAOS 於 production 預設忽略」而沒有致命訊息，即漏設開關。**演練後務必清空三個變數（`WORKER_CHAOS`、`WORKER_CHAOS_AT`、`WORKER_CHAOS_ALLOW_IN_PRODUCTION`）再重建** | `docker inspect --format "{{.RestartCount}} {{.State.Status}}" <worker 容器名>`、`docker compose logs worker`；細節見 `specs/007-worker-process-supervision/quickstart.md` 場景 3／4 |
 | 6 | **Gateway 崩潰**（008）：見 §16.2 第 12 步（`docker exec <api 容器名> pkill -KILL -f "dist/main.js"`） | 監督者重啟 api，前端經 nginx 自行重連；重連前的進行中診斷顯示「中斷 + Retry」（目前無結果讀取端點，Retry 若簽章相同會命中快取） | 同上 |
 
 ---
@@ -3325,7 +3363,7 @@ docker compose ps -a                          # 判讀就緒：seed Exited(0) + 
 | `docker compose --profile demo up --build` 報 `--mount` 不支援 | Dockerfile 用 `RUN --mount=type=cache`，需 BuildKit（Docker 23+ 預設）；舊版先設 `DOCKER_BUILDKIT=1`（PowerShell：`$env:DOCKER_BUILDKIT=1`）。 |
 | 想升級 base image | tag 與 digest 一起改：`docker buildx imagetools inspect <image>:<tag>` 取新 digest，更新 Dockerfile／compose 的 `image:@sha256:…`；只改 tag 不改 digest 等於沒升。 |
 | 啟用 Redis 密碼後 api／worker NOAUTH 或 AUTH 被拒 | `REDIS_PASSWORD` 三處 MUST 一致：host shell 或 repo 根 `.env`（compose 據此決定是否 `--requirepass`）、`apps/api/.env`（demo 為 `.env.demo`）、`apps/worker/.env`。只設 app 端 → 對無密碼 Redis 送 AUTH 被拒；shell 殘留同名變數而 app 端留空 → NOAUTH。 |
-| 啟動即退出並列出環境變數錯誤 | api／worker 的 env fail-fast：數值留空＝預設，非法值（0、負數、非數字、鎖 TTL 短於 AI 逾時）拒絕啟動，照錯誤訊息修正對應 `.env`。 |
+| 啟動即退出並列出環境變數錯誤 | api／worker 的 env fail-fast：數值留空＝預設，非法值（0、負數、非數字、鎖 TTL × 1000 短於 AI 逾時＋5 秒餘裕）拒絕啟動，照錯誤訊息修正對應 `.env`。 |
 
 ---
 

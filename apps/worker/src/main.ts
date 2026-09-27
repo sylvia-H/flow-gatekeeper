@@ -12,11 +12,13 @@ import { GeminiProvider } from "./ai/gemini-provider.js";
 import { createRedisStore } from "./cache/redis-store.js";
 import { buildDiagnosisContext } from "./context/context-builder.js";
 import { createMongoDiagnosisRepository, ensureDiagnosisIndexes } from "./diagnosis-repository.js";
-import { armChaos, parseChaosConfig } from "./lib/chaos.js";
+import { armChaos, parseChaosAllowInProduction, parseChaosConfig, shouldArmChaos } from "./lib/chaos.js";
 import { parseWorkerEnv } from "./lib/env-schema.js";
+import type { WorkerEnv } from "./lib/env-schema.js";
 import { fatal } from "./lib/fatal.js";
 import { startHeartbeat, stopHeartbeat } from "./lib/heartbeat.js";
 import { createLivenessTracker } from "./lib/liveness.js";
+import { createThrottledErrorReporter } from "./lib/log-throttle.js";
 import { createMetricsCollector } from "./lib/metrics-collector.js";
 import { heartbeatKey, resolveInstanceId, workerMetricsKey } from "./lib/redis-keys.js";
 import { createProcessor, isTerminalFailure } from "./processor.js";
@@ -31,6 +33,12 @@ import { createProcessor, isTerminalFailure } from "./processor.js";
 
 /** 啟動期等待 Redis 就緒的上限；超過即 fail-fast，交由監督者重啟。 */
 const REDIS_READY_TIMEOUT_MS = 10_000;
+
+/**
+ * 連線錯誤 log 的節流窗（與 api 的 `ERROR_LOG_THROTTLE_MS` 同值）：Redis 不可達或認證失敗時
+ * ioredis 每 100–270 ms 重連一次，同一錯誤在窗內只記一則，下一則附上被壓掉的次數。
+ */
+const CONNECTION_ERROR_LOG_THROTTLE_MS = 30_000;
 
 export async function bootstrap(): Promise<void> {
   // 致命錯誤語意（007 let it crash）：未捕捉例外／未處理拒絕代表行程狀態未定義，
@@ -78,15 +86,24 @@ export async function bootstrap(): Promise<void> {
   const pub = createCommandConnection(env);
   const cache = createCommandConnection(env);
   // 沒掛 error 監聽時 ioredis 會把每次重連失敗印成未處理的 error 事件；這裡改走結構化日誌。
-  pub.on("error", (err: Error) => redisLogger.warn({ err, conn: "pub" }, "Redis 連線錯誤"));
-  cache.on("error", (err: Error) => redisLogger.warn({ err, conn: "cache" }, "Redis 連線錯誤"));
+  // 轉態節流：同一連線的同一錯誤在窗內只記一則（重連洗版會淹沒其他日誌）；連線回到 ready 時
+  // 記一則「已恢復」並重置，之後再故障第一則立即可見。
+  const connErrors = createThrottledErrorReporter(CONNECTION_ERROR_LOG_THROTTLE_MS);
+  for (const [conn, redis] of [["pub", pub], ["cache", cache]] as const) {
+    redis.on("error", (err: Error) =>
+      connErrors.error(conn, err, (suppressed) => redisLogger.warn({ err, conn, suppressed }, "Redis 連線錯誤")),
+    );
+    redis.on("ready", () =>
+      connErrors.recovered(conn, (suppressed) => redisLogger.info({ conn, suppressed }, "Redis 連線已恢復")),
+    );
+  }
   await Promise.all([waitForReady(pub, REDIS_READY_TIMEOUT_MS), waitForReady(cache, REDIS_READY_TIMEOUT_MS)]);
 
   // 實例識別：heartbeat／metrics 快照都寫帶此後綴的 key，水平擴展時各副本互不掩蓋、互不覆寫。
   // healthcheck 以同一套 resolveInstanceId 推導，兩者必須一致。
   const instanceId = resolveInstanceId(env.WORKER_INSTANCE_ID);
 
-  const ai: AiProvider = new GeminiProvider(env.GEMINI_API_KEY ?? "", env.GEMINI_MODEL);
+  const ai: AiProvider = createAiProvider(env);
 
   // 指標收集器：累加於記憶體，每 METRICS_INTERVAL_MS 結算一次——寫 Redis 快照
   // `metrics:worker:<instanceId>`（供 api 掃描合併廣播）並記一則 worker 自身的 metrics 摘要。摘要走
@@ -135,10 +152,15 @@ export async function bootstrap(): Promise<void> {
   );
 
   // BullMQ 內部錯誤（連線中斷、腳本失敗）預設完全靜默；記下來才查得到「佇列為何不動」。
-  worker.on("error", (err) => bootLogger.error({ err }, "BullMQ worker error"));
+  // 與 pub／cache 共用轉態節流：Redis 斷線時 BullMQ 的重連錯誤同樣會洗版。
+  // 錯誤與恢復走同一個 redisLogger（conn: "bullmq"），故障→恢復在同一 context 下可成對查到。
+  worker.on("error", (err) =>
+    connErrors.error("bullmq", err, (suppressed) => redisLogger.error({ err, conn: "bullmq", suppressed }, "BullMQ worker error")),
+  );
 
   worker.on("ready", () => {
     bootLogger.info({ queue: DIAGNOSIS_QUEUE }, "worker ready");
+    connErrors.recovered("bullmq", (suppressed) => redisLogger.info({ conn: "bullmq", suppressed }, "BullMQ 連線已恢復"));
     // 存活訊號（供 compose healthcheck）：ready 後每 10s 寫 worker:heartbeat:<instanceId>（TTL 30s，掛既有 cache 連線）。
     // 事件迴圈被卡死時 timer 停擺、key 過期；所有處理槽都長時間無進度時也停止刷新
     // （liveness）→ compose healthcheck 轉 unhealthy（僅示警）。
@@ -148,15 +170,17 @@ export async function bootstrap(): Promise<void> {
 
   // 故障注入旗標：未設定＝關閉、零程式路徑差異；非法值 warn 後視為關閉。
   // 供 quickstart 場景 3/4 可重現演練「致命 → 重啟 → 恢復」，不改 code、不重建。
-  // 硬防護：production 一律拒絕武裝——chaos 是測試專用機制，遺留在 production .env 會靜默
-  // 造成崩潰迴圈（restart:on-failure:5 用盡後 worker 停擺）。演練請在非 production 環境進行。
+  // 硬防護：production 預設拒絕武裝——chaos 是測試專用機制，遺留在 production .env 會靜默
+  // 造成崩潰迴圈（restart:on-failure:5 用盡後 worker 停擺）。容器 image 固定 NODE_ENV=production，
+  // 要在容器內演練須另設 WORKER_CHAOS_ALLOW_IN_PRODUCTION=true 明確放行（演練後一併移除）。
   const chaos = parseChaosConfig(process.env);
-  for (const w of chaos.warnings) chaosLogger.warn(w);
+  const chaosAllow = parseChaosAllowInProduction(process.env);
+  for (const w of [...chaos.warnings, ...chaosAllow.warnings]) chaosLogger.warn(w);
   if (chaos.config) {
-    if (env.NODE_ENV === "production") {
+    if (!shouldArmChaos(env.NODE_ENV, chaosAllow.allow)) {
       chaosLogger.error(
         { kind: chaos.config.kind, at: chaos.config.at },
-        "WORKER_CHAOS 於 production 一律忽略（測試專用機制，勿留在 production .env）",
+        "WORKER_CHAOS 於 production 預設忽略（測試專用機制，勿留在 production .env；容器內演練需另設 WORKER_CHAOS_ALLOW_IN_PRODUCTION=true）",
       );
     } else {
       armChaos(chaos.config, worker, (msg) => chaosLogger.warn(msg));
@@ -218,15 +242,27 @@ export async function bootstrap(): Promise<void> {
   );
 }
 
+/** 依 env 建立 LLM provider（抽出供接線測試：生成參數必須來自 env，而非 adapter 預設）。 */
+export function createAiProvider(env: WorkerEnv): GeminiProvider {
+  return new GeminiProvider(env.GEMINI_API_KEY ?? "", env.GEMINI_MODEL, {
+    maxOutputTokens: env.AI_MAX_OUTPUT_TOKENS,
+    temperature: env.AI_TEMPERATURE,
+  });
+}
+
+/**
+ * entry 的 bootstrap 失敗收尾：走 `fatal()` 的同步 `writeSync` 再 exit(1)（與 api 的
+ * `fatalExit("bootstrap", err)` 對齊）。不可改用 pino——非同步寫入在 exit 前來不及落地，
+ * 監督者重啟迴圈裡唯一能說明原因的那一行會消失（見 lib/fatal.ts）。
+ */
+export function handleBootstrapFailure(err: unknown): never {
+  return fatal("bootstrap", err);
+}
+
 // 僅在被直接執行時才啟動；被 import（含 001 entry smoke）時不產生副作用。
 // 去 .js/.mjs/.cjs 副檔名再比對，兼容以無副檔名路徑啟動的執行器（與 api 對齊）。
 const stripJs = (p: string): string => p.replace(/\.[cm]?js$/, "");
 const invokedPath = process.argv[1] ? stripJs(resolve(process.argv[1])) : "";
 if (invokedPath && stripJs(resolve(fileURLToPath(import.meta.url))) === invokedPath) {
-  void bootstrap().catch((err: unknown) => {
-    // 僅在真正以 entry 執行且 bootstrap() 失敗時才建立 logger——維持模組 import 期
-    // side-effect-free（不因單純 import 而建立 pino 實例／pretty transport worker thread）。
-    createLogger("worker").child({ context: "bootstrap" }).error({ err }, "bootstrap failed");
-    process.exit(1);
-  });
+  void bootstrap().catch(handleBootstrapFailure);
 }

@@ -8,7 +8,8 @@ import type { AiProvider, AiStreamRequest, AiStreamResult } from "./ai/provider.
 import type { ProcessorStore } from "./cache/redis-store.js";
 import type { DiagnosisContext } from "./context/context-builder.js";
 import type { DiagnosisRepository } from "./diagnosis-repository.js";
-import { createProcessor, isTerminalFailure } from "./processor.js";
+import type { LivenessTracker } from "./lib/liveness.js";
+import { createProcessor, isTerminalFailure, NO_CONTEXT_CODE, NO_CONTEXT_MESSAGE } from "./processor.js";
 import type { ProcessorConfig, ProcessorJob, ProcessorLogger } from "./processor.js";
 
 // ---------------------------------------------------------------------------
@@ -153,19 +154,37 @@ function makeJob(jobId: string, opts: { attemptsMade?: number; attempts?: number
   return job;
 }
 
-function setup(scripts: Script[], overrides: Partial<ProcessorConfig> & { isClosing?: () => boolean } = {}) {
+/** 完全沒有資料的脈絡（不存在的 machineId 的典型樣貌）。 */
+const EMPTY_CONTEXT: DiagnosisContext = {
+  machineId: "ghost-99",
+  windowMinutes: 5,
+  latestState: "unknown",
+  telemetry: null,
+  recentErrors: [],
+  topErrorCodes: [],
+  maintenance: [],
+};
+
+function setup(
+  scripts: Script[],
+  overrides: Partial<ProcessorConfig> & {
+    isClosing?: () => boolean;
+    context?: DiagnosisContext;
+    liveness?: LivenessTracker;
+  } = {},
+) {
   const store = new FakeStore();
   const publisher = new FakePublisher();
   const repo = new FakeRepo();
   const ai = new FakeAiProvider(scripts);
   const metrics = { recordCacheHit: vi.fn(), recordCacheMiss: vi.fn(), recordLatency: vi.fn() };
-  const { isClosing, ...config } = overrides;
+  const { isClosing, context = CONTEXT, liveness, ...config } = overrides;
   const processor = createProcessor({
     store,
     publisher,
     repo,
     ai,
-    buildContext: async () => CONTEXT,
+    buildContext: async () => context,
     logger: silentLogger,
     metrics,
     config: {
@@ -177,6 +196,7 @@ function setup(scripts: Script[], overrides: Partial<ProcessorConfig> & { isClos
       ...config,
     },
     isClosing,
+    liveness,
   });
   return { store, publisher, repo, ai, metrics, processor };
 }
@@ -289,18 +309,101 @@ describe("createProcessor：重試語意", () => {
     expect(publisher.ofType("ai/token")).toEqual([]);
   });
 
-  it("finishReason=safety：視為格式失敗且不可重試", async () => {
-    const { publisher, processor } = setup([async () => ({ text: "", finishReason: "safety" })]);
-    await expect(processor(makeJob("a"))).rejects.toBeInstanceOf(UnrecoverableError);
-    expect(publisher.ofType("ai/error")[0]?.code).toBe("schema_invalid");
+  it("finishReason=stop 的完整回應：記一筆延遲樣本", async () => {
+    const { processor, metrics } = setup([okScript()]);
+    await processor(makeJob("ok"));
+    expect(metrics.recordLatency).toHaveBeenCalledTimes(1);
   });
 
-  it("finishReason=max_tokens：視為格式失敗、可重試（非最終不送 ai/error）", async () => {
+  it("finishReason=safety：視為格式失敗且不可重試，不記延遲樣本", async () => {
+    const { publisher, processor, metrics } = setup([async () => ({ text: "", finishReason: "safety" })]);
+    await expect(processor(makeJob("a"))).rejects.toBeInstanceOf(UnrecoverableError);
+    expect(publisher.ofType("ai/error")[0]?.code).toBe("schema_invalid");
+    expect(metrics.recordLatency).not.toHaveBeenCalled();
+  });
+
+  it("finishReason=max_tokens：視為格式失敗且不可重試（第一次嘗試就送 ai/error，不再燒 token 重試）", async () => {
     const text = JSON.stringify(VALID_RESULT);
-    const { publisher, processor } = setup([async () => ({ text, finishReason: "max_tokens" })]);
-    const err = await processor(makeJob("a")).catch((e: unknown) => e);
-    expect(err).not.toBeInstanceOf(UnrecoverableError);
-    expect(publisher.ofType("ai/error")).toEqual([]);
+    const { publisher, processor, repo, store, metrics } = setup([async () => ({ text, finishReason: "max_tokens" })]);
+    await expect(processor(makeJob("a", { attemptsMade: 0, attempts: 3 }))).rejects.toBeInstanceOf(UnrecoverableError);
+    expect(publisher.ofType("ai/error")).toEqual([
+      expect.objectContaining({ code: "schema_invalid", attempt: 1, message: expect.stringContaining("max_tokens") }),
+    ]);
+    // 截斷的輸出即使剛好是合法 JSON 也不落地、不進 cache、不寫 trigger（終態 trigger 由 failed handler 補寫）
+    expect(repo.diagnoses).toEqual([]);
+    expect(store.cacheKeys()).toEqual([]);
+    expect(repo.triggers).toEqual([]);
+    // 截斷樣本不進延遲統計（avg／p95 只反映完整回應）
+    expect(metrics.recordLatency).not.toHaveBeenCalled();
+  });
+});
+
+describe("createProcessor：ai/token 序號", () => {
+  it("同一次嘗試內 seq 由 0 起逐一遞增（前端以 seq 0 重設串流文字）", async () => {
+    const { publisher, processor } = setup([
+      async ({ onToken }) => {
+        const text = JSON.stringify(VALID_RESULT);
+        onToken(text.slice(0, 5));
+        onToken(text.slice(5, 20));
+        onToken(text.slice(20));
+        return { text, finishReason: "stop" };
+      },
+    ]);
+    await processor(makeJob("a"));
+    expect(publisher.ofType("ai/token").map((e) => e.seq)).toEqual([0, 1, 2]);
+    expect(publisher.ofType("ai/token").map((e) => e.text).join("")).toBe(JSON.stringify(VALID_RESULT));
+  });
+
+  it("每次嘗試的 seq 各自從 0 開始（重試換輪）", async () => {
+    const { publisher, processor } = setup([okScript(1)]);
+    await processor(makeJob("r", { attemptsMade: 1, attempts: 3 }));
+    expect(publisher.ofType("ai/token").map((e) => [e.attempt, e.seq])).toEqual([
+      [2, 0],
+      [2, 1],
+    ]);
+  });
+});
+
+describe("createProcessor：空脈絡短路", () => {
+  it("無遙測／異常事件／維修紀錄：不查 cache、不取鎖、不打 LLM，第一次嘗試就送不可重試的 ai/error(no_context)", async () => {
+    const liveness = { begin: vi.fn(), touch: vi.fn(), end: vi.fn(), isAlive: () => true };
+    const { ai, publisher, repo, store, metrics, processor } = setup([okScript()], {
+      context: EMPTY_CONTEXT,
+      liveness,
+    });
+    const job = makeJob("ghost", { attemptsMade: 0, attempts: 3 });
+    const err = await processor(job).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(UnrecoverableError);
+    // main.ts 的 failed handler 據此判終態並補寫 trigger(cached:false)
+    expect(isTerminalFailure(job, err as Error)).toBe(true);
+    expect(ai.calls).toHaveLength(0);
+    expect(publisher.events).toEqual([
+      { type: "ai/error", jobId: "ghost", attempt: 1, code: NO_CONTEXT_CODE, message: NO_CONTEXT_MESSAGE },
+    ]);
+    expect(store.counters.size).toBe(0); // 不吃 AI_RPM 額度
+    expect(store.lockKeys()).toEqual([]);
+    expect(store.cacheKeys()).toEqual([]);
+    expect(repo.diagnoses).toEqual([]);
+    expect(repo.triggers).toEqual([]); // trigger 由 failed handler 補寫，processor 不重複寫
+    expect(metrics.recordCacheHit).not.toHaveBeenCalled();
+    expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
+    expect(job.progress).toEqual([0, 20]);
+    // 短路路徑同樣成對釋放活性槽：漏 end 會讓槽永遠被佔，最終被判定為卡死
+    expect(liveness.begin).toHaveBeenCalledTimes(1);
+    expect(liveness.end).toHaveBeenCalledTimes(1);
+    expect(liveness.end).toHaveBeenCalledWith(liveness.begin.mock.calls[0]?.[0]);
+  });
+
+  it.each<[string, Partial<DiagnosisContext>]>([
+    ["有窗口內遙測", { telemetry: { count: 1, avgTemperature: 1, maxTemperature: 1, avgVibration: 1, maxVibration: 1, avgErrorRate: 0, maxErrorRate: 0 } }],
+    ["只有最近 state", { latestState: "healthy" }],
+    ["只有異常事件", { recentErrors: [{ state: "critical", message: "x", timestamp: "" }], topErrorCodes: ["critical"] }],
+    ["只有維修紀錄", { maintenance: [{ summary: "換軸承" }] }],
+  ])("%s → 照常呼叫 LLM", async (_label, patch) => {
+    const { ai, processor } = setup([okScript(1)], { context: { ...EMPTY_CONTEXT, ...patch } });
+    await processor(makeJob("x"));
+    expect(ai.calls).toHaveLength(1);
   });
 });
 
@@ -417,6 +520,10 @@ describe("createProcessor：LLM 限流與關閉", () => {
 describe("isTerminalFailure", () => {
   it("UnrecoverableError 即使 attempts 未用盡也是終態", () => {
     expect(isTerminalFailure({ attemptsMade: 1, opts: { attempts: 3 } }, new UnrecoverableError("x"))).toBe(true);
+  });
+  it("stalled 用盡（BullMQ 以 UnrecoverableError 走 handleFailed）也是終態", () => {
+    const err = new UnrecoverableError("job stalled more than allowable limit");
+    expect(isTerminalFailure({ attemptsMade: 0, opts: { attempts: 3 } }, err)).toBe(true);
   });
   it("attempts 用盡是終態；尚可重試則否", () => {
     expect(isTerminalFailure({ attemptsMade: 3, opts: { attempts: 3 } }, new Error("x"))).toBe(true);

@@ -26,6 +26,12 @@ function expectApiPartIntact(result: ReturnType<typeof mergeMetrics>): void {
 }
 
 describe("mergeMetrics", () => {
+  it("persist 有給就原樣帶出；沒給就不帶（不以 0 冒充）", () => {
+    const withPersist = mergeMetrics({ ...apiPart, persist: { dropped: 7, failed: 2 } }, []);
+    expect(withPersist.persist).toEqual({ dropped: 7, failed: 2 });
+    expect(mergeMetrics(apiPart, [])).not.toHaveProperty("persist");
+  });
+
   it("worker 快照合法時原樣併入", () => {
     const result = mergeMetrics(apiPart, [JSON.stringify(workerSnapshot)]);
     expectApiPartIntact(result);
