@@ -19,6 +19,11 @@ export type CopilotJobState =
       status: "active";
       machineId: string;
       jobId: string;
+      /**
+       * 目前呈現的是第幾次嘗試（BullMQ 重試時 jobId 不變、seq 又從 0 起）。
+       * 用來在換輪時清空 streamText，並丟棄舊輪遲到的 token。
+       */
+      attempt: number;
       progress: number | null;
       streamText: string;
     }
@@ -91,10 +96,19 @@ export function humanizeError(raw: string | undefined, code?: string): string {
 
 /**
  * 起始 active 狀態（`diagnose`/`retry` 共用）：新 jobId、progress 未定（indeterminate）、
- * streamText 清空（FR-004/FR-007）。純函式，便於單元測試與 store 重用。
+ * streamText 清空（FR-004/FR-007）。store 在 POST 送出**之前**就建立它（pending），
+ * 讓早於 HTTP 回應抵達的事件也能被消費。純函式，便於單元測試與 store 重用。
  */
 export function startActiveState(machineId: string, jobId: string): CopilotJobState {
-  return { status: "active", machineId, jobId, progress: null, streamText: "" };
+  return { status: "active", machineId, jobId, attempt: 1, progress: null, streamText: "" };
+}
+
+/**
+ * 終態事件（ai/done／ai/error）要保留的串流文字：來自更新一輪時，手上的文字屬於已放棄的舊輪
+ * （新一輪可能沒吐 token 就直接結束，例如 cache 命中），留著會讓「推理過程」和結果對不上。
+ */
+function streamTextFor(state: Extract<CopilotJobState, { status: "active" }>, attempt: number): string {
+  return attempt > state.attempt ? "" : state.streamText;
 }
 
 /**
@@ -123,7 +137,13 @@ export function copilotReducer(
       return { ...state, progress: event.progress ?? state.progress };
 
     case "ai/token":
-      // 單一有序 WebSocket 依 seq 遞送，直接 append 即保序（research R6）。
+      // 舊輪遲到的 token：新一輪已開始重播，接上去只會把兩輪文字混在一起。
+      if (event.attempt < state.attempt) return state;
+      // 換輪（重試）：後端從頭重播，先清掉上一輪的半截文字再接，否則會變成「半截 + 完整」。
+      if (event.attempt > state.attempt) {
+        return { ...state, attempt: event.attempt, streamText: event.text };
+      }
+      // 同一輪：單一有序 WebSocket 依 seq 遞送，直接 append 即保序（research R6）。
       return { ...state, streamText: state.streamText + event.text };
 
     case "ai/done":
@@ -132,16 +152,17 @@ export function copilotReducer(
         machineId: state.machineId,
         jobId: state.jobId,
         cached: event.cached,
-        streamText: state.streamText,
+        streamText: streamTextFor(state, event.attempt),
         result: event.result,
       };
 
     case "ai/error":
+      // 後端只在最終嘗試失敗時才送 ai/error，收到即為終態。
       return {
         status: "failed",
         machineId: state.machineId,
         jobId: state.jobId,
-        streamText: state.streamText,
+        streamText: streamTextFor(state, event.attempt),
         error: humanizeError(event.message, event.code),
       };
   }

@@ -8,6 +8,9 @@ import SuggestedActionList from "./SuggestedActionList.vue";
  * 後端已 `DiagnosisResultSchema.parse()`；前端不放寬）。五區塊：
  * summary／severity／likelyCauses／evidence／suggestedActions。
  *
+ * 這裡直接信任契約型別、不逐欄位防禦：畸形 `ai/done.result` 在 WS 入口（safeParse）與
+ * copilot store 入口（`AiDoneSchema.safeParse`，失敗轉 failed）兩道防線就被擋下，進不到這裡。
+ *
  * ⚠️ 空陣列（無 evidence／suggestedActions／likelyCauses）以空狀態文字呈現，
  * 不崩潰、不殘留佔位（spec Edge Cases、CHK022、T014）。
  */
@@ -58,7 +61,7 @@ const SOURCE_LABEL: Record<DiagnosisResult["evidence"][number]["source"], string
           class="rounded-control border border-subtle bg-surface px-2.5 py-2"
         >
           <div class="mb-0.5 flex items-center gap-2">
-            <span class="rounded-pill bg-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase leading-none text-fg-subtle">
+            <span class="rounded-pill bg-elevated px-1.5 py-0.5 text-2xs font-medium uppercase leading-none text-fg-subtle">
               {{ SOURCE_LABEL[ev.source] }}
             </span>
             <span v-if="ev.id" class="font-mono text-xs text-fg-subtle">{{ ev.id }}</span>
