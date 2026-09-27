@@ -77,6 +77,19 @@ describe("mergeMetrics", () => {
     expect(mergeMetrics(apiPart, JSON.stringify(badHitRate)).worker).toBeNull();
   });
 
+  it("計數違反契約（負數、非整數）降級為 null", () => {
+    const negativeHits = { ...workerSnapshot, cache: { ...workerSnapshot.cache, hits: -1 } };
+    expect(mergeMetrics(apiPart, JSON.stringify(negativeHits)).worker).toBeNull();
+
+    const fractionalCount = { ...workerSnapshot, llmLatency: { ...workerSnapshot.llmLatency, count: 1.5 } };
+    expect(mergeMetrics(apiPart, JSON.stringify(fractionalCount)).worker).toBeNull();
+  });
+
+  it("契約以外的多餘欄位不外洩到廣播 payload", () => {
+    const extra = { ...workerSnapshot, injected: "<script>" };
+    expect(mergeMetrics(apiPart, JSON.stringify(extra)).worker).toEqual(workerSnapshot);
+  });
+
   it("空樣本的合法快照（統計值為 null）不被誤判為畸形", () => {
     const idle: WorkerMetrics = {
       snapshotAt: "2026-07-20T09:15:20.004Z",

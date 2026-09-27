@@ -38,10 +38,12 @@ export async function bootstrap(): Promise<void> {
     abortOnError: false,
   });
   // 經 AppConfigService 取 port：直接讀 process.env 會繞過其啟動時的設定驗證。
-  const port = app.get(AppConfigService).apiPort;
+  const config = app.get(AppConfigService);
+  const port = config.apiPort;
   await app.listen(port);
   const gateway = app.get(MonitoringGateway);
-  gateway.attach(app.getHttpServer());
+  // Origin 白名單一樣走 AppConfigService（單一設定來源），Gateway 內不再各自讀 process.env。
+  gateway.attach(app.getHttpServer(), { allowedOrigins: config.wsAllowedOrigins });
 
   // 009 US3：於組合根把指標來源與出口接給 MetricsService 並啟動週期結算——`JobsService`
   // 與 `MonitoringGateway` 是 AppModule 層的 provider，對 MetricsModule 不可見，故沿用本檔
