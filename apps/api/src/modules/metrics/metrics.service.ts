@@ -29,8 +29,8 @@ export type MetricsSources = {
  * 讀回各 worker 實例快照（非破壞性，不 `DEL`）→ `mergeMetrics` 合併 → 以**專屬 metrics child logger** 輸出一則摘要 → 廣播
  * `system/metrics` 給所有連線。
  *
- * **FR-009**：本服務不在任何高頻路徑（`publishTelemetry`／`persistBatch`）記錄任何東西，
- * 只在週期結算時輸出一則。
+ * 本服務刻意不在任何高頻路徑（每 tick 的 telemetry 廣播與 History `enqueue`）記錄任何東西，
+ * 只在週期結算時輸出一則——否則指標本身就會成為每秒 20 次的 log 噪音源。
  */
 @Injectable()
 export class MetricsService implements OnModuleInit, OnModuleDestroy {

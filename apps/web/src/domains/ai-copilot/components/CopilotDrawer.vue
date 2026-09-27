@@ -57,12 +57,12 @@ const steps = computed(() =>
 const MAX_ATTEMPTS = 3;
 
 /**
- * US7 job meta——queue／concurrency 靜態對映 003 設定（queue 自契約 import 常數值）；
- * attempt 取自串流事件，讓重試換輪時使用者看得出串流文字為何從頭開始。
+ * job meta——queue 自契約 import 常數值；attempt 取自串流事件，讓重試換輪時使用者看得出串流
+ * 文字為何從頭開始。不顯示 concurrency：它現在是 worker 端可設定的 `WORKER_CONCURRENCY`，前端拿不到
+ * 真實值，寫死數字只會與實際不符。
  */
 const jobMeta = computed<readonly { label: string; value: string }[]>(() => [
   { label: "Queue", value: DIAGNOSIS_QUEUE },
-  { label: "Concurrency", value: "2" },
   {
     label: "Attempt",
     value: props.state.status === "active" ? `${props.state.attempt} / ${MAX_ATTEMPTS}` : `${MAX_ATTEMPTS}`,
@@ -207,8 +207,8 @@ watch(
           <ProgressBar status="active" :value="state.progress" />
         </div>
 
-        <!-- US7 job meta（queue／concurrency 靜態對映 003；attempt 取自串流事件） -->
-        <dl class="grid grid-cols-3 gap-2">
+        <!-- job meta（queue 自契約常數；attempt 取自串流事件） -->
+        <dl class="grid grid-cols-2 gap-2">
           <div
             v-for="meta in jobMeta"
             :key="meta.label"
