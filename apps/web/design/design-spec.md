@@ -398,6 +398,7 @@ type AppLayoutProps = {
 
 - search input
 - connection status chip
+- 未授權 chip（條件顯示，見 7.2.2）
 - mock frequency segmented control 或 slider
 - backpressure meter（`BackpressureBadge`）
 - pause/resume stream icon button
@@ -411,7 +412,21 @@ type AppLayoutProps = {
 | mock frequency | slider 或 segmented control |
 | backpressure meter | `BackpressureBadge`（見 7.2.1） |
 | pause/resume | icon button |
-| diagnose | icon + text button，disabled when no selected machine |
+| diagnose | icon + text button，disabled when no selected machine，或連線未就緒（未收到本次連線 `system/connected`、未完成 `machine/subscribed`、已斷線或收到 `system/unauthorized`）；停用原因以 tooltip 說明 |
+
+#### 7.2.2 未授權 chip
+
+訂閱授權失敗時的持續提示，讓「遙測停了」不被誤判為網路問題。
+
+| 屬性 | 規格 |
+| --- | --- |
+| 位置 | 緊接在 connection status chip 右側 |
+| 樣式 | `rounded-pill` + `bg-crit-bg` + `text-crit-fg`，`text-xs`、padding `px-2.5 py-1`（與 connection chip 同高） |
+| 文字 | 「未授權」（不放完整說明，避免擠壓 TopBar） |
+| 完整說明 | 放 `title` 與 `aria-label` |
+| 無障礙 | `role="alert"`，出現時由螢幕閱讀器播報 |
+| 出現 | 收到 `system/unauthorized` |
+| 消失 | 下次收到 `machine/subscribed`（訂閱成功）時自動消失 |
 
 #### 7.2.1 `BackpressureBadge`
 
@@ -747,6 +762,6 @@ apps/web/src/domains/ai-copilot/stores/copilot.store.ts
 - `v0.3`：整合為 Spec Kit 可用交接規格，補齊 file mapping、interaction states、accessibility、screenshot 驗收。
 - `v0.4`：Claude Design 交接落地（refs 三張定稿 + `_sources/` 匯出）。依實際產出回寫衍生 token：`bg-surface-hover`、`accent-bg-strong`、`accent-wash` 與各狀態 `*-fg`/`*-border`（ok/warn/crit），並同步 §5 Tailwind `theme.extend`。此版起 `apps/web/design/design-spec.md` 為 canonical（`docs/design-spec.md` 為歷史起點）。
 - `v0.5`（2026-09-27 審查修正）：`text-muted`／`fg-subtle` 提亮 `#687684` → `#7C8A98`（AA）並加 §4.1 對比規則；§5 補 `fontSize`（`2xs`、`pill`、`md`、`lg`、`number`——`text-number` 先前未定義、從未產生 CSS）；`colors.base` 改名 `canvas`（與 `fontSize.base` 撞名）；§4.2 禁任意值字級、數值／單位分開；§7.2.1 背壓計量含丟棄筆數；§7.3 觸控裝置 diagnose icon 常駐；§8.3 Pause 凍結 stale 時鐘；§10 reduced-motion。
-- `v0.6`（2026-09-27）：內嵌面 token `bg-inset` 改名 `bg-surface-inset`，§5 config 由頂層 `inset` 移到 `surface.inset`（頂層 `inset` 與內建 `ring-inset` 撞名）；§7.3 selected 補實作方式（1px accent 邊框 + 內縮 outline、不用 ring，規則置於 `@tailwind variants` 之後）。
+- `v0.6`（2026-09-27）：內嵌面 token `bg-inset` 改名 `bg-surface-inset`，§5 config 由頂層 `inset` 移到 `surface.inset`（頂層 `inset` 與內建 `ring-inset` 撞名）；§7.3 selected 補實作方式（1px accent 邊框 + 內縮 outline、不用 ring，規則置於 `@tailwind variants` 之後）；§7.2.2 新增 TopBar「未授權」chip（`bg-crit-bg`／`text-crit-fg`／`rounded-pill`、`role="alert"`，`system/unauthorized` 出現、`machine/subscribed` 消失），§7.2 diagnose 停用條件補連線未就緒。
 
 

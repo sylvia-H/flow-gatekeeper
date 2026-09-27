@@ -1351,6 +1351,14 @@ app.get(MonitoringGateway).attach(app.getHttpServer());
 ```
 
 > **已變更**：現為有上限 buffer＋每秒批次＋單一 in-flight，`persistBatch` 已不存在；errorlogs TTL 30 天。見 §15.6、ADR-002 §6.4。
+>
+> **現況註記（Gateway 韌性，上方 `MonitoringGateway` 為起草時的 reference）**：
+> - **授權**：有設 `WS_AUTH_SECRET` 時，`ai/*`、`job/status`、`system/metrics` 只送通過 `machine/subscribe` token 的連線；未設時連上即授權。錯誤 token 仍回 `system/unauthorized`。
+> - **違規關閉**：同一連線畸形訊息（無法解析、schema 不符）或錯誤 token 累計 10 次，以 close code `1008` 關閉；有設 `WS_AUTH_SECRET` 時，連線在 `WS_AUTH_GRACE_MS`（預設 10000）內未通過 token 也以 `1008` 關閉。
+> - **心跳**：伺服器端探活改為帶 nonce 的協定層 ping，pong 必須原樣帶回才算存活；未經請求或 nonce 不符的 pong 不算（瀏覽器與 `ws` 自動回應）。應用層 `ping`→`pong` 訊息仍保留供前端量 RTT。
+> - **慢 client 與連線上限**：`bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES`（預設 1 MiB）即略過該筆推送，連續 3 個心跳 tick 超標則 terminate；連線數達 `MAX_WS_CONNECTIONS`（預設 500）時 upgrade 回 HTTP 503。
+> - **relay 日誌**：Redis／QueueEvents 錯誤日誌改為轉態節流——轉態（正常↔故障）時各記一則，故障期間每 30 秒至多一則，斷線期間不刷屏。
+> - 見 §15.6「第二輪審查修復」。
 
 ### 7.5 Seed maintenance records
 
@@ -1592,6 +1600,8 @@ export class JobsController {
 > 前端按下 Diagnose 時，POST body 要帶上目前的 `socketId`（即連線時收到的 `clientId`）。沒有 `socketId` 就無法把 streaming 推回正確的 client。
 
 > **已變更，現況：Zod 驗證＋冪等**（上面 service／controller 為起草時的形狀，保留作 reference）。controller 先要求 `Content-Type: application/json`（否則 `415`），再以 contracts 的 `CreateDiagnosisBodySchema` `safeParse`（`machineId` `^[a-z0-9-]{1,32}$`、`socketId` 必須是 uuid、`requestedBy` ≤ 64、可選 `jobId` uuid；不符回 `400`，只回 issue 路徑與代碼）。service 先比對 api 的機台名冊（`MACHINE_IDS`，與 Gateway 過濾訂閱共用單一來源；見 `apps/api/src/modules/telemetry/mock-telemetry.service.ts`），格式合法但不在名冊的 `machineId` 在綁定與入列之前即回 `404`（名冊檢查先於冪等檢查），避免亂數 id 每次 cache miss 都真的打 LLM。service 以前端產生的 `jobId` 作 idempotency key：綁定在任何 await 之前建立；同 jobId 重送回同一結果但**不改綁**；同 jobId 不同機台、或 job 已入列而綁定已失效回 `409`；入列設 5 秒逾時，逾時或 Redis 不可用回 `503`。成功為 Nest `@Post()` 預設的 `201`。見 `apps/api/src/modules/jobs/jobs.controller.ts`、`jobs.service.ts` 與 §15.6。
+>
+> **現況（第二輪審查修復）**：驗證通過後依序檢查——`machineId` 不在名冊（`mixer-01`、`press-02`、`pack-03`、`oven-04`、`sorter-05`）回 `404`；`socketId` 對應的 WS 連線不在線或未授權回 `409`（`{statusCode:409,error:"Conflict",message:"WebSocket 連線不存在或未授權，請重新連線後再發起診斷"}`）；最後才走 `jobId` 冪等（既有 `409` 條件不變）。一鍵 demo 經 nginx 另有 `429` 限流。見 §15.6。
 
 ### 8.5 BullMQ limiter
 
@@ -2512,6 +2522,9 @@ export function useHighFrequencyWs<T>(opts: Options<T>) {
 > - **pump 以 try/finally 包住**：`onBatch` 丟例外也不會中斷 rAF 迴圈。
 > - **重連**：退避次數在收到 `system/connected` 才歸零（不是 `onopen`），瀏覽器 `online` 事件立即重連；Pause 且連線中時凍結 stale 時鐘。
 > - 以上行為由 `useHighFrequencyWs.test.ts`（14 支）覆蓋。
+> - **pong 逾時**（現況）：上方 `pongTimer` 逾時後 `ws.close()` 的寫法已改為「視為斷線、立即重連」——逾時（預設 5 秒）當下即顯示 Reconnecting 並排入退避重連，不等瀏覽器的 close 事件（半死連線上 close 可能很久才觸發）。
+> - **`system/unauthorized`**（現況）：上方 `case 'system/unauthorized': return;` 的「忽略」已變更——前端記錄授權結果，TopBar 顯示「未授權」chip，下次 `machine/subscribed` 自動消失。
+> - **Diagnose 可用性**（現況）：只在連線就緒時可按（已收到本次連線的 `system/connected` 且已完成 `machine/subscribed`、未斷線、未收到 `system/unauthorized`），重連期間停用並以 tooltip 說明；`POST /diagnoses` 回 `409` 時顯示後端 message 原句，無則顯示「連線已中斷或未授權，請等待重連後再試」。
 
 ### 10.4 Feature 004 驗收
 
@@ -3216,6 +3229,26 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - packages 加 `files: ["dist"]`、`sideEffects: false`（runtime image 不再帶 src／測試）；root `pnpm.overrides`（multer ≥2.3.0、
     qs ≥6.16.0、body-parser ≥1.20.6、postcss ≥8.5.23、nanoid ≥3.3.18）使 `pnpm audit --prod` 由 19 項（9 high）降至 3 項（0 high，
     餘 file-type 與 `@nestjs/core` 需升主版本；**已變更**：2026-09 技術棧升級改用 NestJS 11（Express 5）＋`@nestjs/bullmq` 12 後 `pnpm audit --prod` 歸零，multer／qs／body-parser 三項 override 因 Express 5 相依鏈已自帶修補版而移除，現況見 root `package.json` 的 `pnpm.overrides`）；`.gitignore` 補 `*.tsbuildinfo`、`.vite/`。
+
+**第二輪審查修復**（`fix/20260927-research-review02`，報告 `docs/20260927-research-review02.md`）：
+
+- **api Gateway**：
+  - 授權：有設 `WS_AUTH_SECRET` 時 `ai/*`、`job/status`、`system/metrics` 只送已授權連線；未設時連上即授權。
+  - 違規（畸形訊息、錯誤 token）累計 10 次以 `1008` 關閉；有 `WS_AUTH_SECRET` 時 `WS_AUTH_GRACE_MS`（預設 10000，1000–60000）內未授權亦 `1008`；心跳改為帶 nonce 的協定層 ping，pong 須原樣帶回。
+  - 慢 client：`WS_SEND_HIGH_WATER_BYTES`（預設 1048576，65536–268435456）超標略過推送、連續 3 tick 超標 terminate；
+    `MAX_WS_CONNECTIONS`（預設 500，1–100000）達上限 upgrade 回 503。
+  - `POST /diagnoses`：檢查順序為名冊 `404` → `socketId` 在線／已授權（否則 `409`，中文 message）→ `jobId` 冪等；既有 `409` 條件不變。
+  - relay 的 Redis／QueueEvents 錯誤日誌改為轉態節流（轉態時記、故障期間每 30 秒至多一則）；`system/metrics` 新增 optional `persist: { dropped, failed }`。
+- **web**：pong 逾時 5 秒即視為斷線、立即重連；Diagnose 只在連線就緒時可按（`system/connected` 且已 `machine/subscribed`、未斷線、未收到 `system/unauthorized`）；`409` 顯示可讀訊息；
+  `system/unauthorized` 以 TopBar「未授權」chip 呈現；內嵌面 token 改名 `bg-surface-inset`（design-spec v0.6）。
+- **worker**：chaos 在 production 預設拒絕武裝，容器內演練需另設 `WORKER_CHAOS_ALLOW_IN_PRODUCTION=true`（§16.3 第 5 列）；
+  新增 `AI_MAX_OUTPUT_TOKENS`（2048，截斷視為不可重試的 `schema_invalid`）、`AI_TEMPERATURE`（0.2）；
+  鎖 TTL 條件改為 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`；致命 kind 補 `invalidConfig`／`bootstrap`。
+- **運維**：web 入口改 `${WEB_BIND:-127.0.0.1}:8080:8080`（對外示範設 `WEB_BIND=0.0.0.0`）；nginx 對 `/diagnoses`
+  `limit_req` 10 r/m、burst 5、超限 `429`，`/ws` `limit_conn` 每來源 20 條（Docker Desktop 下來源皆為 gateway，兩者皆實為全體共用一桶）；redis／mongo
+  `restart: unless-stopped`；web `depends_on: api: service_healthy`；api／worker 加 `files: ["dist"]`、worker build 排除
+  `smoke-gemini.ts`、`.dockerignore` 補 `**/` 前綴；demo `TELEMETRY_TTL_SECONDS` 改 86400；五套件 test 移除 `--passWithNoTests`。
+  root 聚合 script 內的裸 `pnpm` 需先 `corepack enable`（README 已註明）。
 
 ---
 
