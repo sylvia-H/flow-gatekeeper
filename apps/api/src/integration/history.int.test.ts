@@ -39,6 +39,7 @@ function point(machineId: string, state: MachineState, secondsAgo: number): Tele
 
 describe.runIf(process.env.FG_INTEGRATION === "1")("HistoryService 寫入路徑 × 真 Mongo（整合）", () => {
   let client: MongoClient;
+  let originalLogger: unknown;
   const dbNames: string[] = [];
   const services: HistoryService[] = [];
 
@@ -56,6 +57,8 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("HistoryService 寫入路徑 
   }
 
   beforeAll(async () => {
+    // overrideLogger(false) 會把 staticInstanceRef 設為 undefined；afterAll 以原值還原（只設 logLevels 還原不了）。
+    originalLogger = Reflect.get(Logger, "staticInstanceRef");
     Logger.overrideLogger(false);
     client = new MongoClient(MONGO_URL, { serverSelectionTimeoutMS: 3000 });
     try {
@@ -78,7 +81,7 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("HistoryService 寫入路徑 
       for (const name of dbNames) await client.db(name).dropDatabase();
     } finally {
       await client?.close();
-      Logger.overrideLogger(["log", "error", "warn", "debug", "verbose", "fatal"]);
+      Reflect.set(Logger, "staticInstanceRef", originalLogger);
     }
   });
 

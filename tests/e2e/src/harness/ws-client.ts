@@ -69,6 +69,9 @@ export class E2eClient {
 
   /** open 之後才掛：連線中途被關（api 重啟、nginx 斷線）時讓所有 pending waiter 立即失敗並帶上 code／reason。 */
   private watchClose(): void {
+    // 常駐 error listener：沒有 listener 時 EventEmitter 會直接 throw（未捕捉例外讓 vitest worker 崩潰）。
+    // ws 在 error 之後必定接著 emit close，waiter 的失敗由下方 close handler 統一處理。
+    this.ws.on("error", () => undefined);
     this.ws.on("close", (code: number, reason: Buffer) => {
       this.closedReason = `WebSocket 已關閉（code ${code}${reason.length > 0 ? `，reason: ${reason.toString("utf8")}` : ""}）`;
       const pending = this.waiters;
@@ -82,11 +85,24 @@ export class E2eClient {
     const ws = new WebSocket(WS_URL);
     const client = new E2eClient(ws);
     await new Promise<void>((resolve, reject) => {
-      ws.once("open", () => resolve());
-      ws.once("error", reject);
+      const onOpen = () => {
+        ws.off("error", onError);
+        resolve();
+      };
+      const onError = (err: Error) => {
+        ws.off("open", onOpen);
+        reject(err);
+      };
+      ws.once("open", onOpen);
+      ws.once("error", onError);
     });
     client.watchClose();
-    await client.waitFor(() => client.clientId !== "", timeoutMs, "system/connected");
+    try {
+      await client.waitFor(() => client.clientId !== "", timeoutMs, "system/connected");
+    } catch (err) {
+      ws.terminate(); // 未關的 socket 會讓 vitest 掛著不結束
+      throw err;
+    }
     return client;
   }
 

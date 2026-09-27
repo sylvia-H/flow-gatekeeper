@@ -32,6 +32,7 @@ type IndexInfo = { name?: string; key: Record<string, unknown>; expireAfterSecon
 
 describe.runIf(process.env.FG_INTEGRATION === "1")("HistoryService TTL 維護 × 真 Mongo（整合）", () => {
   let client: MongoClient;
+  let originalLogger: unknown;
   const dbNames: string[] = [];
 
   function freshDbName(): string {
@@ -65,6 +66,8 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("HistoryService TTL 維護 ×
 
   beforeAll(async () => {
     // Nest Logger 的 log／warn 在此只是雜訊；斷言一律讀回 Mongo 實際狀態。
+    // overrideLogger(false) 會把 staticInstanceRef 設為 undefined；afterAll 以原值還原（只設 logLevels 還原不了）。
+    originalLogger = Reflect.get(Logger, "staticInstanceRef");
     Logger.overrideLogger(false);
     client = new MongoClient(MONGO_URL, { serverSelectionTimeoutMS: 3000 });
     try {
@@ -85,7 +88,7 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("HistoryService TTL 維護 ×
       for (const name of dbNames) await client.db(name).dropDatabase();
     } finally {
       await client?.close();
-      Logger.overrideLogger(["log", "error", "warn", "debug", "verbose", "fatal"]);
+      Reflect.set(Logger, "staticInstanceRef", originalLogger);
     }
   });
 
