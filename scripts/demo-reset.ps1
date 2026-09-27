@@ -38,7 +38,14 @@ Write-Host "清除 AI 快取（ai-cache:*）與去重鎖（ai-lock:*）..." -For
 # --scan 非阻塞逐鍵刪；-T 關 TTY 確保非互動、不卡；> /dev/null 吞掉 DEL 回覆。
 # set -e + pipefail：任一 scan/del（含管線左側）失敗即讓 sh 以非零退出、"cleared"
 # 不會印出——否則尾端無條件 echo 會讓「清快取失敗」被誤判為成功（見下方守衛）。
-$flush = "set -e; set -o pipefail; " +
+# REDIS_PASSWORD 有值時（compose 以 --requirepass 啟用認證）改走 REDISCLI_AUTH——redis-cli 原生讀取、
+# 不像 -a 會出現在行程列表與 stderr 警告；未設時不匯出，避免對無密碼的 redis 送 AUTH "" 而失敗。
+# 送進容器 sh 的字串 MUST 不含雙引號：PowerShell 5.1 把參數交給外部程式（docker）時不跳脫內嵌
+# 雙引號，sh 會收到 [ -n $REDIS_PASSWORD ]——空值時退化成 [ -n ] 恆為真 → 匯出空 REDISCLI_AUTH →
+# 預設（未設密碼）的 demo 每次重置都失敗。故用 ${#VAR} 長度判斷（無引號也安全），賦值右側不做
+# word splitting，含空白的密碼亦不需引號。外層用單引號字串，避免 PowerShell 先展開 $REDIS_PASSWORD。
+$auth  = 'if [ ${#REDIS_PASSWORD} -gt 0 ]; then REDISCLI_AUTH=$REDIS_PASSWORD; export REDISCLI_AUTH; fi; '
+$flush = $auth + "set -e; set -o pipefail; " +
          "redis-cli --scan --pattern 'ai-cache:*' | xargs -r redis-cli del > /dev/null; " +
          "redis-cli --scan --pattern 'ai-lock:*' | xargs -r redis-cli del > /dev/null; echo cleared"
 
