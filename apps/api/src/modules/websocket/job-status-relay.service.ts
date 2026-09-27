@@ -17,7 +17,11 @@ const ORPHAN_TTL_MS = 10 * 60_000;
  * 不補送的話前端會把仍在排隊的 job 判成逾時失敗。
  */
 export const DELAYED_KEEPALIVE_MS = 15_000;
-/** 到期後仍未收到 waiting/active 的寬限：promote 由 worker 的延遲計時觸發，略晚於到期時間屬正常。 */
+/**
+ * 到期後仍未收到 waiting/active 的寬限：promote 由 worker 的延遲計時觸發，略晚於到期時間屬正常。
+ * 刻意只補到這裡：promote 需要 worker 有空 slot，slot 全忙或 worker 已死時到期後仍無事件——
+ * 這種情況交回前端 watchdog 判定，而不是無限補送把死掉的 worker 掩蓋成「排隊中」。
+ */
 const DELAYED_GRACE_MS = 5_000;
 
 /**

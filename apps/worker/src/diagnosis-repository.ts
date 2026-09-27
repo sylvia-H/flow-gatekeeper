@@ -19,6 +19,9 @@ const DUPLICATE_KEY = 11000;
 /** 索引衝突類錯誤：E11000（既有資料重複）、85 IndexOptionsConflict、86 IndexKeySpecsConflict。 */
 const INDEX_CONFLICT_CODES = new Set([DUPLICATE_KEY, 85, 86]);
 
+/** IndexNotFound：要移除的索引已不存在（多副本同時啟動時，另一個副本先移除了）。 */
+const INDEX_NOT_FOUND = 27;
+
 /** diagnosisTriggers 保留天數：只是輕量稽核，不需永久保存，無限增長反而拖慢查詢。 */
 export const TRIGGER_TTL_SECONDS = 30 * 24 * 60 * 60;
 
@@ -26,8 +29,13 @@ export interface IndexLogger {
   error(obj: unknown, msg?: string): void;
 }
 
+function mongoCode(err: unknown): number | undefined {
+  return err instanceof MongoServerError && typeof err.code === "number" ? err.code : undefined;
+}
+
 function isIndexConflict(err: unknown): boolean {
-  return err instanceof MongoServerError && typeof err.code === "number" && INDEX_CONFLICT_CODES.has(err.code);
+  const code = mongoCode(err);
+  return code !== undefined && INDEX_CONFLICT_CODES.has(code);
 }
 
 /**
@@ -44,6 +52,12 @@ function isIndexConflict(err: unknown): boolean {
  * 恢復路徑：退回時建立的非 unique `{ jobId: 1 }` 索引會以同鍵擋住下次的 unique 建立（85/86），
  * 若不處理，清完重複資料重啟也永遠回不到 unique。所以遇到衝突且存在這種同鍵非 unique 索引時，
  * 先移除它再建一次 unique；仍失敗（重複資料還在）才再退回。
+ *
+ * 移除前先探測是否仍有重複 jobId：重複資料未清就 drop → 重建 unique（全表掃描後撞 11000）→
+ * 再建非 unique（又一次掃描），每次重啟都白做兩次索引重建，還讓 `{ jobId: 1 }` 有一段沒有索引。
+ * 探測到重複就保留既有索引、只記 error。「列索引 → drop → 重建」不是原子操作，多副本同時啟動
+ * 會互相踩到：drop 撞 IndexNotFound（27）代表別的副本已先移除；重建撞 85/86 但此時已存在 unique
+ * 的 jobId 索引，代表別的副本已先建好——兩者都是目的已達成，不該退回非 unique 或記 error。
  */
 export async function ensureDiagnosisIndexes(db: Db, log: IndexLogger): Promise<void> {
   const diagnoses = db.collection("diagnoses");
@@ -53,32 +67,72 @@ export async function ensureDiagnosisIndexes(db: Db, log: IndexLogger): Promise<
 }
 
 async function ensureUniqueJobIdIndex(diagnoses: Collection, log: IndexLogger): Promise<void> {
-  const createUnique = () => diagnoses.createIndex({ jobId: 1 }, { unique: true });
-  let lastErr: unknown;
+  const createUnique = () => tryCreateIndex(diagnoses, { jobId: 1 }, { unique: true });
+  let lastErr = await createUnique();
+  if (lastErr === undefined) return;
+
+  // 11000 是資料重複、沒有索引擋路，直接退回；85/86 才需要看是哪個同鍵索引擋住。
+  if (mongoCode(lastErr) !== DUPLICATE_KEY) {
+    const existing = await findJobIdIndex(diagnoses);
+    if (existing?.unique === true) return; // 已有 unique（不同名、或另一副本剛建好）
+    if (existing) {
+      if (await hasDuplicateJobIds(diagnoses)) {
+        log.error(
+          { err: lastErr },
+          "diagnoses.jobId 仍有重複資料，保留既有的非 unique 索引；重試冪等不再有保證，清理後重啟即恢復 unique",
+        );
+        return;
+      }
+      await dropIndexIfExists(diagnoses, existing.name);
+    }
+    // 擋路的索引已移除（由本副本或併發副本），再建一次。
+    lastErr = await createUnique();
+    if (lastErr === undefined) return;
+    if (mongoCode(lastErr) !== DUPLICATE_KEY && (await findJobIdIndex(diagnoses))?.unique === true) return;
+  }
+
+  log.error({ err: lastErr }, "diagnoses.jobId unique 索引建立失敗（既有重複資料或索引衝突），退回非 unique 索引；重試冪等不再有保證");
+  await tryCreateIndex(diagnoses, { jobId: 1 });
+}
+
+/** 建索引；索引衝突類錯誤以回傳值交還呼叫端判斷，其餘（連線失敗等）照拋。 */
+async function tryCreateIndex(
+  coll: Collection,
+  key: Record<string, 1 | -1>,
+  opts?: { unique: true },
+): Promise<unknown> {
   try {
-    await createUnique();
-    return;
+    await (opts ? coll.createIndex(key, opts) : coll.createIndex(key));
+    return undefined;
   } catch (err) {
     if (!isIndexConflict(err)) throw err;
-    lastErr = err;
+    return err;
   }
-  const blocking = (await diagnoses.indexes()).find(
-    (ix) => isJobIdOnlyKey(ix.key) && ix.unique !== true,
-  );
-  if (blocking?.name) {
-    await diagnoses.dropIndex(blocking.name);
-    try {
-      await createUnique();
-      return;
-    } catch (err) {
-      if (!isIndexConflict(err)) throw err;
-      lastErr = err;
-    }
+}
+
+/** 找出鍵恰為 `{ jobId: 1 }` 的索引（Mongo 不允許同鍵兩個索引，最多一個）。 */
+async function findJobIdIndex(coll: Collection): Promise<{ name: string; unique: boolean } | undefined> {
+  const ix = (await coll.indexes()).find((i) => isJobIdOnlyKey(i.key) && typeof i.name === "string");
+  return ix?.name ? { name: ix.name, unique: ix.unique === true } : undefined;
+}
+
+async function hasDuplicateJobIds(coll: Collection): Promise<boolean> {
+  const dup = await coll
+    .aggregate([
+      { $group: { _id: "$jobId", n: { $sum: 1 } } },
+      { $match: { n: { $gt: 1 } } },
+      { $limit: 1 },
+    ])
+    .toArray();
+  return dup.length > 0;
+}
+
+async function dropIndexIfExists(coll: Collection, name: string): Promise<void> {
+  try {
+    await coll.dropIndex(name);
+  } catch (err) {
+    if (mongoCode(err) !== INDEX_NOT_FOUND) throw err;
   }
-  log.error({ err: lastErr }, "diagnoses.jobId unique 索引建立失敗（既有重複資料或索引衝突），退回非 unique 索引；重試冪等不再有保證");
-  await diagnoses.createIndex({ jobId: 1 }).catch((e: unknown) => {
-    if (!isIndexConflict(e)) throw e;
-  });
 }
 
 /** 索引鍵是否恰為 `{ jobId: 1 }`（排除以 jobId 開頭的複合索引）。 */

@@ -175,13 +175,15 @@ beforeEach(() => {
 
 afterEach(async () => {
   // 先收尾再斷言：斷言失敗會中止 afterEach，若排在前面，mock 與 ws server／timer 會洩漏到後續測試。
-  process.off("uncaughtException", onUncaught);
-  const exitCalls = exitSpy.mock.calls.length;
-  exitSpy.mockRestore();
+  // 監聽與 exit 計數要等收尾做完才拆：關閉 ws server 期間若拋出或觸發致命守門 exit(1)，
+  // 正是「優雅關閉被誤報成崩潰」，必須仍被下面兩個斷言抓到。
   for (const h of running.splice(0)) {
     h.gateway.onModuleDestroy();
     await new Promise<void>((resolve) => h.server.close(() => resolve()));
   }
+  process.off("uncaughtException", onUncaught);
+  const exitCalls = exitSpy.mock.calls.length;
+  exitSpy.mockRestore();
   expect(exitCalls).toBe(0);
   expect(uncaught).toEqual([]);
 });

@@ -1832,7 +1832,7 @@ export class GeminiProvider implements AiProvider {
 > - **LLM 限流**移到取鎖後的 Redis 固定窗（見 §8.5 現況）。
 > - **逾時**：`AbortSignal.timeout(AI_TIMEOUT_MS)` 交給 provider，真正中止底層串流；逾時後的殭屍串流不再送 token。
 > - **重試語意**：非最終嘗試的失敗只記 log 後 throw（交 BullMQ 退避），**不** publish `ai/error`；最終嘗試或不可重試錯誤才送。所有 `ai/*` 事件帶 `attempt`，前端換輪清空串流文字；stalled 重派時 `attempt` 不變、`seq` 從 0 重播，前端以同輪 `seq` 0 判定重播並清空。
-> - **寫入順序**：先 insert `diagnoses`（`jobId` unique index，建立衝突時退回非 unique 並記 error；重啟時若只剩退回留下的同鍵非 unique 索引擋路，會先移除再重建 unique，清完重複資料即自動恢復）再寫 cache，最後寫 `diagnosisTriggers`（TTL 30 天）；cache 讀回一律 `safeParse`，不合 schema 即刪除並視為 miss。
+> - **寫入順序**：先 insert `diagnoses`（`jobId` unique index，建立衝突時退回非 unique 並記 error；重啟時若只剩退回留下的同鍵非 unique 索引擋路，會先探測重複資料是否已清——已清才移除並重建 unique，未清則保留既有索引只記 error；多副本同時啟動互相踩到 drop／重建時視為目的已達成，不會退回）再寫 cache，最後寫 `diagnosisTriggers`（TTL 30 天）；cache 讀回一律 `safeParse`，不合 schema 即刪除並視為 miss。
 > - **關閉**：收到 SIGTERM 先立旗標，dedupe 等待中的 job 立即交回佇列，`worker.close()` 只需等真正在打 LLM 的 job（`stop_grace_period` 45s 維持）。heartbeat 依處理槽進度判斷卡死。
 > - **env fail-fast**：以 Zod 驗證（`apps/worker/src/lib/env-schema.ts`），留空套預設、非法即 exit 1；`GEMINI_API_KEY` 任何環境皆可留空。
 

@@ -111,4 +111,26 @@ describe("classifyInsertFailure", () => {
     const wrapped = new MongoBulkWriteError(inner, {} as never);
     expect(classifyInsertFailure(wrapped, 4)).toEqual({ kind: "terminal", rejected: 4 });
   });
+
+  // write concern 失敗：文件已在 primary 套用，只是複製確認未達標——不算遺失、不重試。
+  // driver 的 WriteConcernError／BulkWriteResult 沒有 runtime 匯出，依 bulk/common.js 的形狀模擬兩條路徑。
+  it("write concern 失敗（writeErrors 為空、err 帶 WriteConcernError）→ terminal 但 rejected 0", () => {
+    const wce = { code: 64, errmsg: "waiting for replication timed out" };
+    const viaErr = Object.assign(new MongoBulkWriteError({ message: wce.errmsg, code: wce.code }, {} as never), {
+      err: wce,
+    });
+    expect(viaErr.writeErrors).toEqual([]);
+    expect(classifyInsertFailure(viaErr, 5)).toEqual({ kind: "terminal", rejected: 0 });
+
+    const result = { getWriteConcernError: () => wce };
+    const viaResult = new MongoBulkWriteError({ message: wce.errmsg, code: wce.code }, result as never);
+    expect(classifyInsertFailure(viaResult, 5)).toEqual({ kind: "terminal", rejected: 0 });
+
+    // 沒有 write concern 錯誤的 result：不受影響，仍依原始錯誤分類。
+    const plain = new MongoBulkWriteError(
+      new MongoServerError({ message: "document too large", code: 10334 }),
+      { getWriteConcernError: () => undefined } as never,
+    );
+    expect(classifyInsertFailure(plain, 5)).toEqual({ kind: "terminal", rejected: 5 });
+  });
 });

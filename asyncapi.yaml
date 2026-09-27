@@ -183,7 +183,7 @@ components:
           attempt:
             type: integer
             minimum: 1
-            description: BullMQ attempt number (attemptsMade + 1). The job id is reused across retries and seq restarts at 0, so clients reset accumulated stream text when this changes.
+            description: BullMQ attempt number (attemptsMade + 1). The job id is reused across retries and seq restarts at 0, so clients reset accumulated stream text when this changes. A stalled re-dispatch (worker crash) does not increment attemptsMade, so seq also restarts at 0 within the same attempt; clients treat seq 0 as a new execution and reset as well.
           seq:
             type: integer
           text:
@@ -201,7 +201,7 @@ components:
           attempt:
             type: integer
             minimum: 1
-            description: BullMQ attempt number (attemptsMade + 1). The job id is reused across retries and seq restarts at 0, so clients reset accumulated stream text when this changes.
+            description: BullMQ attempt number (attemptsMade + 1). The job id is reused across retries and seq restarts at 0, so clients reset accumulated stream text when this changes. A stalled re-dispatch (worker crash) does not increment attemptsMade, so seq also restarts at 0 within the same attempt; clients treat seq 0 as a new execution and reset as well.
           cached:
             type: boolean
           result:
@@ -219,7 +219,7 @@ components:
           attempt:
             type: integer
             minimum: 1
-            description: BullMQ attempt number (attemptsMade + 1). The job id is reused across retries and seq restarts at 0, so clients reset accumulated stream text when this changes.
+            description: BullMQ attempt number (attemptsMade + 1). The job id is reused across retries and seq restarts at 0, so clients reset accumulated stream text when this changes. A stalled re-dispatch (worker crash) does not increment attemptsMade, so seq also restarts at 0 within the same attempt; clients treat seq 0 as a new execution and reset as well.
           code:
             type: string
           message:

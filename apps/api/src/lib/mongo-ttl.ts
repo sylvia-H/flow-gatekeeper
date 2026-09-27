@@ -99,6 +99,18 @@ function writeErrorList(err: unknown): unknown[] | undefined {
 }
 
 /**
+ * bulk 錯誤是否為 write concern 失敗（duck typing，不依賴 driver 的 class 實體）：
+ * driver 把 `WriteConcernError` 放在 `err`（server 回應層），或只留在 `result.getWriteConcernError()`
+ * （複製確認逾時被當成 `MongoWriteConcernError` 拋出、再包成 bulk 錯誤的那條路徑）。
+ */
+function hasWriteConcernError(err: unknown): boolean {
+  const e = err as { err?: unknown; result?: { getWriteConcernError?: unknown } } | null;
+  if (e?.err && typeof e.err === "object") return true;
+  const getter = e?.result?.getWriteConcernError;
+  return typeof getter === "function" && getter.call(e?.result) != null;
+}
+
+/**
  * 分類 `insertMany({ ordered: false })` 的失敗，區分「可重試」與「毒批次」。
  *
  * 只有網路／選址類錯誤（沒有 writeErrors，且是上列錯誤類別或帶 RetryableWriteError 標籤）才重試；
@@ -109,6 +121,10 @@ function writeErrorList(err: unknown): unknown[] | undefined {
  * driver 6.x 的 `insertMany` 內部走 `bulkWrite`：連網路／選址失敗也會被包成
  * `MongoBulkWriteError`，帶**空的** `writeErrors: []`，原始錯誤放在 `errorResponse`。
  * 空陣列代表 server 根本沒有逐筆判定，不能當成毒批次——要拆開看原始錯誤才分得出能否重試。
+ *
+ * write concern 失敗（replica set 下 `w: majority` 逾時等）也是 `writeErrors: []`，但語意相反：
+ * 文件已套用在 primary、只是複製確認未達標。不該計成遺失（會高估 droppedErrorLogs），也不必重試
+ * （driver 已補 `_id`，重送只會整批撞 11000）——視為已寫入、終局。
  */
 export function classifyInsertFailure(err: unknown, batchSize: number): InsertFailure {
   const writeErrors = writeErrorList(err);
@@ -117,6 +133,9 @@ export function classifyInsertFailure(err: unknown, batchSize: number): InsertFa
       (w) => (w as { code?: unknown } | null)?.code !== 11000,
     ).length;
     return { kind: "terminal", rejected };
+  }
+  if (writeErrors && hasWriteConcernError(err)) {
+    return { kind: "terminal", rejected: 0 };
   }
   const inner = (err as { errorResponse?: unknown } | null)?.errorResponse;
   if (
