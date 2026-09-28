@@ -1,8 +1,8 @@
 <!-- SPECKIT START -->
 <!-- 提醒：下次執行 speckit-agent-context-update 會覆寫本區塊，屆時再把 current plan 指向新 feature 的 plan.md。 -->
 目前**無進行中的 SDD feature**；最近一次完成的是 009（`specs/009-observability-baseline/plan.md`）。
-009 之後的修復與升級見兩輪審查報告 `docs/20260927-research-review.md`、`docs/20260927-research-review02.md`（數字與結論以第二輪為準；`fix/20260927-research-review`、`upgrade/20260927-tech-stack`、`fix/20260927-research-review02` 皆已併入 `develop`），
-現況摘要見 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15.6「v1.0.0 之後的現況摘要」。技術棧、結構與指令以 README 與指南為準。
+009 之後的修復與升級見兩輪審查報告 `docs/20260927-research-review.md`、`docs/20260927-research-review02.md`（數字與結論以第二輪為準；`fix/20260927-research-review`、`upgrade/20260927-tech-stack`、`fix/20260927-research-review02`、`fix/20260927-review02-batch-cd` 皆已併入 `develop`，並於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第三輪審查報告 `docs/20260927-research-review03.md` 在 `docs/20260927-research-review03` 分支、尚未併入），
+現況摘要見 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15.6「1.0.0 之後的現況摘要」。技術棧、結構與指令以 README 與指南為準。
 <!-- SPECKIT END -->
 
 # flow-gatekeeper — Agent 操作指引
@@ -128,7 +128,7 @@ commit**，不需逐次徵詢；流程為：
   實例：`merge(fix-review02): 併入 fix/20260927-research-review02`、`merge(upgrade): 併入 upgrade/20260927-tech-stack`、
   `merge(docs): 併入 docs/20260927-research-review02`。
 - **收尾前 MUST 回補真實來源**：「跨 Feature 決策 MUST 回補真實來源」同樣適用於維護分支——merge 回 `develop` 前 MUST 把影響範圍外的決策
-  寫進 `README.md`、指南 §15.6「v1.0.0 之後的現況摘要」（及相關章節）、`docs/adr-*.md`、`CHANGELOG.md`；只寫在審查報告或 Agent memory 不算落地。
+  寫進 `README.md`、指南 §15.6「1.0.0 之後的現況摘要」（及相關章節）、`docs/adr-*.md`、`CHANGELOG.md`；只寫在審查報告或 Agent memory 不算落地。
 - **契約變更 MUST 升版**：動到 `packages/contracts` 的 message／payload（WS 或 HTTP）時，MUST 升 `asyncapi.yaml` 的 `info.version`
   並在 `CHANGELOG.md` 的契約小節記一筆（SDD feature 分支同樣適用）。版本策略：**release 時** git tag、六份 `package.json` 的 `version`
   與 `CHANGELOG.md` 頂端條目三者 MUST 一致；開發期 `package.json` 可先升到預定版本，`CHANGELOG.md` 頂端維持 `[Unreleased]`，
@@ -169,10 +169,10 @@ commit**，不需逐次徵詢；流程為：
    `apps/{api,worker,web}`、`packages/{contracts,shared}`）的 `version` 已升到目標版本，並與 `CHANGELOG.md` 頂端條目一致
    （把 `[Unreleased]` 改為該版本與發布日期）。
 2. `git checkout main` → `git merge --no-ff develop`，merge commit 訊息格式為
-   `merge(release): 併入 develop 準備 <版本> 發布`（前例：`merge(release): 併入 develop 準備第一版發布（v1.0.0）`）。
-3. 在該 merge commit 上打 annotated tag：`git tag -a vX.Y.Z -m "flow-gatekeeper vX.Y.Z：<中文摘要>"`（前例：`flow-gatekeeper v1.0.0：第一版正式發布`）。
+   `merge(release): 併入 develop 準備 <版本> 發布`（前例：`merge(release): 併入 develop 準備第一版發布（v1.0.0）`、`merge(release): 併入 develop 準備 1.1.0 發布`）。
+3. 在該 merge commit 上打 annotated tag：`git tag -a X.Y.Z -m "flow-gatekeeper X.Y.Z：<中文摘要>"`——tag **不帶 `v` 前綴**（第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`；前例：`flow-gatekeeper 1.1.0：三輪審查加固版`）。
 4. 建立 GitHub Release（對應 tag），上傳 demo 影片等二進位資產；README「端到端操作 Demo」的連結指向
-   `releases/download/vX.Y.Z/flow-gatekeeper-demo.mp4`、海報圖指向 `raw/main/docs/demo/...`——重錄 demo 或換版時
-   MUST 同步更新這兩個連結，避免 README 指到舊版或不存在的資產。
+   `releases/download/<影片所屬版本>/flow-gatekeeper-demo.mp4`（指向影片**實際所屬**的 release，不必每版重錄——1.1.0 未重錄，連結維持指向 `1.0.0`）、海報圖指向 `raw/main/docs/demo/...`——重錄 demo、tag 更名或搬移資產時
+   MUST 同步更新這兩個連結，避免 README 指到不存在的資產。
 5. push `main` 與 tag（`git push origin main --follow-tags`）屬影響共享狀態的操作，SHOULD 先與使用者確認。
    發布後若 `main` 上有直接修正（例如 README 連結），MUST 回併 `develop`，不讓兩支分岔。

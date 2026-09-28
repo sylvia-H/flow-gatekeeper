@@ -2,35 +2,43 @@
 
 本檔記錄 flow-gatekeeper 對使用者／部署者可見的變更，格式參考 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)，
 產品版本遵循 [Semantic Versioning](https://semver.org/lang/zh-TW/)。開發過程的逐 commit 細節見 `git log`；
-v1.0.0 之後各維護分支的現況摘要見 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15.6。
+1.0.0 之後各維護分支的現況摘要見 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15.6。
 
 ## 版本策略
 
 本專案有**兩條彼此獨立**的版本號：
 
-1. **產品版本**（`vX.Y.Z`）：**release 時**三者 MUST 一致——git tag ＝ 六份 `package.json` 的 `version`（root、`apps/api`、`apps/worker`、
+1. **產品版本**（`X.Y.Z`；git tag **不帶 `v` 前綴**，例 `1.1.0`）：**release 時**三者 MUST 一致——git tag ＝ 六份 `package.json` 的 `version`（root、`apps/api`、`apps/worker`、
    `apps/web`、`packages/contracts`、`packages/shared`）＝ 本檔頂端的版本條目；release 流程（`CLAUDE.md`「`main` 的 release 流程」）第 1 步核對。
-   開發期 `package.json` 可先升到預定版本（本次已先升 `1.1.0`），`## [Unreleased]` 於 release 時改為 `## [X.Y.Z] - YYYY-MM-DD`。
+   開發期 `package.json` 可先升到預定版本，`## [Unreleased]` 於 release 時改為 `## [X.Y.Z] - YYYY-MM-DD`。
 2. **契約版本**：`asyncapi.yaml` 的 `info.version`，描述即時通道與 `POST /diagnoses` 的 wire 契約，**不跟產品版本走**。
    契約的任何加嚴（runtime 接受範圍變窄）、新增欄位、新增或改變消費端義務，都 MUST 升版——向後相容者升 minor，不相容者升 major；
    純措辭修正可升 patch。各版內容見下方「asyncapi 契約版本」小節，README 與指南中的 `info.version` 字串由
    `packages/contracts/src/docs-contract-version.test.ts` 自動比對。
 
-**歷史說明**（不改寫既有 tag，只在此釐清）：
+**歷史說明**（不改寫既有 commit 歷史，只在此釐清）：
 
-- v1.0.0（2026-08-05）發布時，`asyncapi.yaml` 的 `info.version` 仍是起草時的 `0.1.0`；之後的第一輪審查修復（`cffb306`）一次把它
-  改成 `1.1.0`，中間**沒有** 1.0.0，當時是把契約版本對齊「產品 v1.0.0 之後的第一個變更」，語意不清。自本次起兩條版本各自獨立演進。
-- v1.0.0 時五份套件 `package.json`（apps ×3、packages ×2）的 `version` 一直停在 `0.1.0`，root `package.json` 則沒有 `version` 欄位，
-  與 tag 沒有單一來源（第二輪審查 DOC-D14）；自 v1.1.0 起五份套件由 `0.1.0` 對齊為 `1.1.0`、root 新增 `version`，六份與 tag 對齊。
+- 第一版的 tag 原名 `v1.0.0`，於 2026-09-28（1.1.0 發布時）**更名為 `1.0.0`**（指向同一 commit `3e94ac2`），GitHub Release 與 demo 影片下載連結一併改指 `1.0.0`；自此產品 tag 一律不帶 `v` 前綴。
+
+- 1.0.0（2026-08-05）發布時，`asyncapi.yaml` 的 `info.version` 仍是起草時的 `0.1.0`；之後的第一輪審查修復（`cffb306`）一次把它
+  改成 `1.1.0`，中間**沒有** 1.0.0，當時是把契約版本對齊「產品 1.0.0 之後的第一個變更」，語意不清。自 1.1.0 起兩條版本各自獨立演進。
+- 1.0.0 時五份套件 `package.json`（apps ×3、packages ×2）的 `version` 一直停在 `0.1.0`，root `package.json` 則沒有 `version` 欄位，
+  與 tag 沒有單一來源（第二輪審查 DOC-D14）；自 1.1.0 起五份套件由 `0.1.0` 對齊為 `1.1.0`、root 新增 `version`，六份與 tag 對齊。
 
 ## [Unreleased]
 
-預定版本：**v1.1.0**。彙整 v1.0.0 之後的維護分支（前三條已於 2026-09-27 併入 `develop`）：
+（無）
+
+## [1.1.0] - 2026-09-28
+
+2026-09 三輪全面審查後的加固版：修復兩輪審查報告的 P0～P2、升級技術棧、補齊測試基礎建設。tag `1.1.0`，對應 `develop` 併入 `main` 的 merge commit。彙整 1.0.0 之後的四條維護分支（皆已於 2026-09-27～28 併入 `develop`）：
 
 - `fix/20260927-research-review`（merge `a8ef62a`）：第一輪全面審查（`docs/20260927-research-review.md`）的修復。
 - `upgrade/20260927-tech-stack`（merge `6be71c6`）：技術棧升級。
 - `fix/20260927-research-review02`（merge `898ccfc`）：第二輪審查（`docs/20260927-research-review02.md`）Batch A／B 修復。
-- `fix/20260927-review02-batch-cd`（merge hash 待併回 `develop` 時填）：第二輪審查 Batch C（文件與 release 準備）與 Batch D（測試基礎建設）。
+- `fix/20260927-review02-batch-cd`（merge `4c43d18`）：第二輪審查 Batch C（文件與 release 準備）與 Batch D（測試基礎建設），含最終兩段式 code-review 的 9 個修正 commit。
+
+第三輪審查報告（`docs/20260927-research-review03.md`，審 `4c43d18`）在 1.1.0 之後另以 `docs/` 分支併入；其發現的缺陷（含一項 P1：api 端 BullMQ producer `Queue` 未掛 `error` listener，Redis 認證失敗時密碼經 `console.error` 明文進 stderr）**未在本版修復**，升級者若啟用 `REDIS_PASSWORD` 請確認密碼正確、並留意容器 stderr 日誌。
 
 ### 相容性注意（升級前必讀）
 
@@ -44,8 +52,13 @@ v1.0.0 之後各維護分支的現況摘要見 `docs/Flow-Gatekeeper-SDD-完整�
 - **demo 入口預設只綁本機**：web 容器改為 `${WEB_BIND:-127.0.0.1}:8080:8080`；要讓同網段其他機器連進來示範，需在 host shell 或 repo 根 `.env` 設 `WEB_BIND=0.0.0.0`。
 - **HTTP 400 的錯誤碼**：`POST /diagnoses` 驗證失敗時 `issues[].code` 由 `invalid_string` 變為 **`invalid_format`**（Zod 4）。
 - **`POST /diagnoses` 新增回應**：`machineId` 不在機台名冊 → **404**；`socketId` 不在線或未授權 → **409**（新增觸發條件，1.1.0 起 409 已用於 `jobId` 衝突；中文 message）；demo 經 nginx 時超過限流 → **429**。
-- **Node 最低版本**：root `package.json` 新增 **`engines.node >=22.12`**（Vite 7／plugin-vue 6 需求；v1.0.0 沒有 `engines`，中間的 `>=22` 只存在於未發布的修復分支）；pnpm 升 **10.34.5**（`packageManager` 釘版，經 corepack 取得）。
+- **Node 最低版本**：root `package.json` 新增 **`engines.node >=22.12`**（Vite 7／plugin-vue 6 需求；1.0.0 沒有 `engines`，中間的 `>=22` 只存在於未發布的修復分支）；pnpm 升 **10.34.5**（`packageManager` 釘版，經 corepack 取得）。
 - **既有 demo volume**：`TELEMETRY_TTL_SECONDS` 會以 `collMod` 套到既存 collection，demo 範本預設改為 86400（1 天）。
+- **數值 env 改為 fail-fast**：api 與 worker 的數值變數（`API_PORT`／`REDIS_PORT`／`WS_*`／`MOCK_TELEMETRY_INTERVAL_MS`／`TELEMETRY_TTL_SECONDS`／`AI_*`／`FAKE_AI_*`／`WORKER_CONCURRENCY`／`REDIS_COMMAND_TIMEOUT_MS`）留空＝預設，但設成 0、負數、小數或非數字即**拒絕啟動**（1.0.0 多為靜默回退）；另新增下限 `WS_HEARTBEAT_MS ≥ 1000`、`MOCK_TELEMETRY_INTERVAL_MS ≥ 5`，`WORKER_INSTANCE_ID` 只接受 `[A-Za-z0-9._-]`。demo 容器設錯會進 `restart: on-failure:5` 並在 5 次後停止，以 `docker compose logs <服務>` 查是哪個變數。009 的 `LOG_LEVEL`／`METRICS_INTERVAL_MS`／`HEALTH_PROBE_TIMEOUT_MS` 維持回退＋warn。
+- **Redis／Mongo 只綁 `127.0.0.1`**：compose 的 `6379`／`27017` 改發佈在 `127.0.0.1`，同網段其他主機連不到；需要對外時自行改 `ports`。
+- **Redis `maxmemory 256mb` ＋ `noeviction`**：滿載時寫入報錯而非淘汰 key；長跑 demo 若見 `OOM command not allowed` 請 `down -v` 重設或調高上限。
+- **worker 的 Redis key 改名**：`worker:heartbeat` → `worker:heartbeat:<instanceId>`、`metrics:worker` → `metrics:worker:<instanceId>`；讀這些 key 的外部腳本需改為 pattern 掃描。
+- **自寫 WS client 需更新**：`machine/data` 自契約 1.1.0 起為裸 `TelemetryPoint[]` 陣列（無 envelope）、`ai/token`／`ai/done`／`ai/error` 必帶 `attempt`，且同一 `attempt` 內再次收到 `seq` 0 須視為重播並清空累積文字（見下方「asyncapi 契約版本」）。
 
 ### Added
 
@@ -114,7 +127,7 @@ v1.0.0 之後各維護分支的現況摘要見 `docs/Flow-Gatekeeper-SDD-完整�
 
 ## [1.0.0] - 2026-08-05
 
-第一版正式發布（Feature 001–009）。tag `v1.0.0`（`3e94ac2`）；當時 `asyncapi.yaml` 的 `info.version` 為 0.1.0，五份套件 `package.json` 為 `0.1.0`，root `package.json` 無 `version` 與 `engines`。
+第一版正式發布（Feature 001–009）。tag `1.0.0`（`3e94ac2`；原名 `v1.0.0`，2026-09-28 更名）；當時 `asyncapi.yaml` 的 `info.version` 為 0.1.0，五份套件 `package.json` 為 `0.1.0`，root `package.json` 無 `version` 與 `engines`。
 
 ---
 
@@ -123,7 +136,7 @@ v1.0.0 之後各維護分支的現況摘要見 `docs/Flow-Gatekeeper-SDD-完整�
 `asyncapi.yaml` 的 `info.version` 獨立於產品版本（見「版本策略」）。本節同時記錄 HTTP（`POST /diagnoses`）的契約變化，
 核對來源為 `git log -p -- asyncapi.yaml` 與 `packages/contracts/src/`。
 
-### 1.2.0（產品 v1.1.0 起）
+### 1.2.0（產品 1.1.0 起）
 
 asyncapi `info.version` 1.2.0，向後相容的 minor：
 
@@ -151,6 +164,6 @@ asyncapi `info.version` 由 0.1.0 直接改為 1.1.0（`cffb306`；沒有 1.0.0�
 - HTTP：`POST /diagnoses` 以 `CreateDiagnosisBodySchema` 驗證並具冪等性（201／400／415／409／503）。
 - 契約層全面 Zod 化，並以漂移測試比對 asyncapi 與 Zod。
 
-### 0.1.0（產品 v1.0.0）
+### 0.1.0（產品 1.0.0）
 
-asyncapi `info.version` 0.1.0：Feature 001 起草、002 擴充 WS 控制訊息、009 新增 `system/metrics` 的初版契約，隨 v1.0.0 發布。
+asyncapi `info.version` 0.1.0：Feature 001 起草、002 擴充 WS 控制訊息、009 新增 `system/metrics` 的初版契約，隨 1.0.0 發布。
