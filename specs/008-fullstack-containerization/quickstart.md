@@ -176,6 +176,8 @@ docker compose ps -a
 > **首次啟動請等映像建置完成**（數分鐘）；`api` 的 `start_period` 為 30s，故 `up` 回傳後約半分鐘內顯示 `starting` 是預期行為，不是失敗。
 >
 > **已知限制（spec 明文接受）**：本判定**不涵蓋** Mongo／Redis 連通性——api 可能握手成功但資料層斷線而仍顯示 `healthy`。該深度屬 Feature 009 的觀測基線。
+>
+> **現況（已變更）**：009 起 api healthcheck 改打 `GET /healthz`，已涵蓋 Redis／Mongo 連通性（任一 down 即 unhealthy）；另加 `start_interval: 2s`（Docker Engine 25+），`start_period` 內每 2 秒探一次，api 一就緒即轉 healthy，不必等滿 30s。api 未 healthy 時 `web` 不會啟動，`up` 會報 dependency failed。現況以 README「判讀全部就緒」為準。
 
 ### 2b. 四個賣點全在單一入口下重現（SC-002）
 

@@ -1,4 +1,11 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["src/**/*.test.ts", "src/**/*.check.ts"]
+  "compilerOptions": {
+    // production 編譯必須與 runtime（node 原生載入 packages 的 dist）對照同一份 dist 型別：
+    // 否則 src 已改、dist 未重建時型別檢查會過、執行期卻炸。開發期的 src 對照由 tsconfig.json（typecheck）負責。
+    "customConditions": []
+  },
+  // smoke-gemini 是手動煙霧測試（`pnpm --filter @flow-gatekeeper/worker smoke:gemini` 以 tsx 直跑 src），
+  // 不是 runtime 入口；排除以免 dist/ai/smoke-gemini.js 隨 pnpm deploy 進 production image。
+  "exclude": ["src/**/*.test.ts", "src/**/*.check.ts", "src/ai/smoke-gemini.ts"]
 }

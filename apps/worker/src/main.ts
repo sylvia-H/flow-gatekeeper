@@ -2,200 +2,59 @@ import "dotenv/config";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "bullmq";
-import type { Job } from "bullmq";
 import { MongoClient } from "mongodb";
-import type { Db } from "mongodb";
 import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
-import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisResult } from "@flow-gatekeeper/contracts";
-import { createLogger } from "@flow-gatekeeper/shared/logging";
-import type { ChildLogger } from "@flow-gatekeeper/shared/logging";
-import { createRedisConnection, redisConnectionOptions } from "./redis.js";
-import type { Redis } from "ioredis";
+import type { DiagnosisJobPayload } from "@flow-gatekeeper/contracts";
+import { createLogger, ERROR_LOG_THROTTLE_MS } from "@flow-gatekeeper/shared/logging";
+import { bullmqConnectionOptions, createCommandConnection, waitForReady } from "./redis.js";
 import type { AiProvider } from "./ai/provider.js";
 import { GeminiProvider } from "./ai/gemini-provider.js";
-import { buildPrompt } from "./ai/prompt.js";
+import { FakeAiProvider } from "./ai/fake-provider.js";
+import { createRedisStore } from "./cache/redis-store.js";
 import { buildDiagnosisContext } from "./context/context-builder.js";
-import { buildDiagnosisSignature } from "./cache/signature.js";
-import { armChaos, parseChaosConfig } from "./lib/chaos.js";
+import { createMongoDiagnosisRepository, ensureDiagnosisIndexes } from "./diagnosis-repository.js";
+import { armChaos, parseChaosAllowInProduction, parseChaosConfig, shouldArmChaos } from "./lib/chaos.js";
+import { parseWorkerEnv } from "./lib/env-schema.js";
+import type { WorkerEnv } from "./lib/env-schema.js";
 import { fatal } from "./lib/fatal.js";
 import { startHeartbeat, stopHeartbeat } from "./lib/heartbeat.js";
+import { createLivenessTracker } from "./lib/liveness.js";
+import { createThrottledErrorReporter } from "./lib/log-throttle.js";
 import { createMetricsCollector } from "./lib/metrics-collector.js";
-import type { MetricsCollector } from "./lib/metrics-collector.js";
-import { parseResult } from "./lib/parse-result.js";
+import { heartbeatKey, resolveInstanceId, workerMetricsKey } from "./lib/redis-keys.js";
+import { createProcessor, isTerminalFailure } from "./processor.js";
 
 /**
  * apps/worker entry（003）——BullMQ Worker 消化診斷 job（憲章 IV worker isolation）。
  *
- * 連線分離（憲章 IV／research D3）：`pub`（發布 token）／`cache`（cache/lock 一般 command）；
- * BullMQ queue 連線由 BullMQ 自管。流程（US1 compute + US2 cache/lock/limiter）：
- *   context → signature → cache 命中直接 ai/done(cached:true)；未命中取 `ai-lock` 去重
- *   → prompt → AiProvider 串流（token → Pub/Sub `ai-stream:<jobId>`）→ parseResult（失敗
- *   ai/error 並 throw）→ 寫 cache + diagnoses + diagnosisTriggers → ai/done(cached:false)。
+ * 本檔只負責組裝：env 驗證 → 連線（Mongo、`pub`／`cache` 一般指令連線、BullMQ 自管連線）
+ * → 依賴注入建立 processor（流程與重試語意見 `processor.ts`）→ 事件監聽與優雅關閉。
  * import 保持 side-effect-free：僅在被直接執行時才 bootstrap（保 001 entry smoke）。
  */
 
-const POLL_INTERVAL_MS = 300;
-
-/**
- * 發布 AI 串流事件到 Redis Pub/Sub（worker MUST NOT 直接 emit ws，憲章 IV）。
- * `jl` MUST 已綁定 `context: "processor"` 與 `jobId`（contracts/log-fields.md §2 規則 3）。
- */
-function publish(pub: Redis, jobId: string, event: AiStreamEvent, jl: ChildLogger): void {
-  // fire-and-forget，但在源頭接住 publish 失敗並記 log：單筆 token 發布失敗不該拖垮整個 worker
-  // ——若放任成浮空 rejection，會觸發全域致命守門（let it crash → exit(1) 重啟），把 job 級
-  // 小故障放大成行程級重啟。真正的 Redis 中斷會由後續被 await 的 cache 指令（get/set/del）
-  // 拋出，走 processor 的 ai/error 與重試路徑收尾。
-  void pub.publish(`ai-stream:${jobId}`, JSON.stringify(event)).catch((err: unknown) => {
-    jl.warn({ eventType: event.type, err }, "publish 失敗");
-  });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function writeTrigger(
-  db: Db,
-  machineId: string,
-  jobId: string,
-  requestedBy: string,
-  cached: boolean,
-): Promise<void> {
-  await db
-    .collection("diagnosisTriggers")
-    .insertOne({ machineId, jobId, requestedBy, cached, createdAt: new Date() });
-}
-
-/** 建立 job processor（閉包持有 db／pub／cache／ai／logger／metrics 與可調參數）。 */
-function createProcessor(
-  db: Db,
-  pub: Redis,
-  cache: Redis,
-  ai: AiProvider,
-  processorLogger: ChildLogger,
-  metrics: MetricsCollector,
-) {
-  const model = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
-  const cacheTtl = Number(process.env.AI_CACHE_TTL_SECONDS ?? 600);
-  const lockTtl = Number(process.env.AI_DEDUPE_LOCK_SECONDS ?? 45);
-  const aiTimeoutMs = Number(process.env.AI_TIMEOUT_MS ?? 30000);
-
-  return async (job: Job<DiagnosisJobPayload>): Promise<void> => {
-    const { jobId, machineId, requestedBy, windowMinutes, promptVersion } = job.data;
-    // 長流程以 child logger 綁定一次（contracts/log-fields.md §2 規則 3）：本次 job 生命週期
-    // 內所有事件皆帶 jobId／machineId 結構化欄位，SC-002 的跨行程串接不需訊息字串子字串比對。
-    const jl = processorLogger.child({ jobId, machineId });
-    jl.info("job active");
-    // 009 US3 指標：快取命中／未命中**只在第一次嘗試計**。BullMQ 的 attempts（jobs.service.ts
-    // 設為 3）會讓同一個 job 重跑整段 processor——不設此閘門，一次 LLM 逾時的診斷會記 3 筆
-    // 未命中，在 LLM 不穩期間系統性壓低回報的 hitRate，也破壞「每個 job 恰好一筆」的不變量。
-    // `attemptsMade` 於 job 結束（完成／失敗）時才遞增，故處理第 N 次嘗試時其值為 N-1。
-    const isFirstAttempt = job.attemptsMade === 0;
-    // FR-018 進度里程碑綁真實階段：0=job active、20=context 返回、40=取鎖將呼叫 LLM、
-    // 60=首個 token、80=parseResult 成功、100=寫庫/快取（cached 直接 100）。
-    await job.updateProgress(0);
-
-    const context = await buildDiagnosisContext({ mongo: db, machineId, windowMinutes });
-    await job.updateProgress(20);
-    const sig = buildDiagnosisSignature({
-      machineId,
-      state: context.latestState,
-      topErrorCodes: context.topErrorCodes,
-      promptVersion,
-      model,
-    });
-    const cacheKey = `ai-cache:${sig}`;
-    const lockKey = `ai-lock:${sig}`;
-
-    /** cache 命中：回 ai/done(cached:true)、記 trigger、**不**寫 diagnoses（FR-013/FR-013a）。 */
-    const replyCached = async (): Promise<boolean> => {
-      const raw = await cache.get(cacheKey);
-      if (!raw) return false;
-      // 009 US3 指標（純觀測，不改控制流）：命中在此計、**未命中改在取鎖後的計算路徑計**
-      // ——`replyCached()` 在 dedupe 等待迴圈中每 300ms 就被呼叫一次，於此處計未命中會讓
-      // 一次等待灌入數十筆 miss、hitRate 失真。以「每個 job 恰好一筆」為準：被快取服務者
-      // （含等待後才命中）算命中，真正走到 LLM 者算未命中；重試不重複計（見 isFirstAttempt）。
-      if (isFirstAttempt) metrics.recordCacheHit();
-      const result = JSON.parse(raw) as DiagnosisResult;
-      publish(pub, jobId, { type: "ai/done", jobId, cached: true, result }, jl);
-      await writeTrigger(db, machineId, jobId, requestedBy, true);
-      await job.updateProgress(100);
-      jl.info({ sig }, "cache hit");
-      return true;
-    };
-
-    if (await replyCached()) return;
-
-    // 「取鎖或等待」迴圈（SC-004 去重；F1：持鎖者逾時/崩潰後放行重算）。
-    // lock TTL 保證進度：最遲於 lockTtl 後鎖過期，某 waiter 會搶到鎖改走計算路徑。
-    const deadline = Date.now() + aiTimeoutMs + lockTtl * 1000 + 5000;
-    for (;;) {
-      const gotLock = await cache.set(lockKey, "1", "EX", lockTtl, "NX");
-      if (gotLock) {
-        try {
-          await job.updateProgress(40);
-          let seq = 0;
-          // 首個 token 的 60 里程碑非致命：以 .catch 吞掉更新失敗、並保留 promise 供後續 await，
-          // 確保 60 先於 80 落定（避免 fire-and-forget 與 await 80 交錯導致進度倒退）。
-          let firstTokenProgress: Promise<void> = Promise.resolve();
-          jl.info({ sig }, "LLM call");
-          // 009 US3 指標：走到這裡代表本次診斷未由快取服務（每個 job 至多一筆，見 replyCached
-          // 與 isFirstAttempt——重試會重跑整段 processor，僅第一次嘗試計入）。
-          if (isFirstAttempt) metrics.recordCacheMiss();
-          // LLM 延遲以 streamDiagnosis 的**呼叫外圍**計時：涵蓋首 token 前的等待與整段串流，
-          // 即使用者實際感受到的等待。純觀測——失敗路徑不記樣本（拋錯直接離開這段）。
-          // 與 cache 計數不同，延遲**不設 isFirstAttempt 閘門**：樣本的單位是「一次成功的 LLM
-          // 呼叫」而非「一個 job」，重試後成功的那次呼叫本來就該進樣本。
-          const llmStartedAt = Date.now();
-          const fullText = await ai.streamDiagnosis(
-            buildPrompt({ machineId, context }),
-            (text) => {
-              const s = seq++;
-              publish(pub, jobId, { type: "ai/token", jobId, seq: s, text }, jl);
-              if (s === 0) firstTokenProgress = job.updateProgress(60).catch(() => {}); // 首個 token：真實進入串流
-            },
-          );
-          metrics.recordLatency(Date.now() - llmStartedAt);
-
-          let result: DiagnosisResult;
-          try {
-            result = parseResult(fullText);
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err);
-            jl.error({ err }, "schema invalid");
-            publish(pub, jobId, { type: "ai/error", jobId, code: "schema_invalid", message }, jl);
-            throw err; // 用盡 attempts 後由 failed handler（T026）通知
-          }
-          await firstTokenProgress; // 確保 60 里程碑先於 80 落定
-          await job.updateProgress(80); // schema 解析成功
-
-          await cache.set(cacheKey, JSON.stringify(result), "EX", cacheTtl);
-          await db
-            .collection("diagnoses")
-            .insertOne({ machineId, jobId, cached: false, result, createdAt: new Date() });
-          await writeTrigger(db, machineId, jobId, requestedBy, false);
-          await job.updateProgress(100);
-          publish(pub, jobId, { type: "ai/done", jobId, cached: false, result }, jl);
-          jl.info("job completed");
-        } finally {
-          await cache.del(lockKey);
-        }
-        return;
-      }
-
-      // 取不到鎖：他人正在算 → 輪詢共用其結果。
-      if (await replyCached()) return;
-      if (Date.now() > deadline) {
-        throw new Error(`dedupe wait exceeded for ${jobId}`); // 最終保護：交還 attempts 重試
-      }
-      await sleep(POLL_INTERVAL_MS);
-      // 迴圈頂端重試 SET NX：若鎖已過期但 cache 仍空（持鎖者逾時/崩潰），本 waiter 搶到鎖改走
-      // 計算路徑重算，未搶到者續輪詢——確保「放行重算」、不永久卡死（F1）。
-    }
-  };
-}
+/** 啟動期等待 Redis 就緒的上限；超過即 fail-fast，交由監督者重啟。 */
+const REDIS_READY_TIMEOUT_MS = 10_000;
 
 export async function bootstrap(): Promise<void> {
+  // 致命錯誤語意（007 let it crash）：未捕捉例外／未處理拒絕代表行程狀態未定義，
+  // 記錄明確標示「致命」的訊息後**立即 exit(1)**、不嘗試收尾——重建交由監督者
+  // （compose `restart: on-failure`）重啟後的乾淨行程；優雅關閉走 exit(0)、不觸發重啟。
+  // 進行中與佇列中的 job 由 BullMQ 既有 stalled/attempts 機制重派，不需自行收尾。
+  // 運維層契約（exit code／log 格式／演練旗標）見
+  // specs/007-worker-process-supervision/contracts/supervision-runtime.md；
+  // 雙模式差異（dev 直跑無監督者、致命後停在等待檔案變更）見 README「執行模式」章節。
+  process.on("unhandledRejection", (reason) => fatal("unhandledRejection", reason));
+  process.on("uncaughtException", (err) => fatal("uncaughtException", err));
+
+  // env 必須最先驗：設定錯誤（空字串變 0、鎖 TTL 短於 AI 逾時）若放行，worker 會照樣啟動、
+  // 照樣 healthy，直到 job 一筆筆失敗才被發現。啟動當下 exit 1 最容易查。
+  // GEMINI_API_KEY 例外地永遠可選：缺席只記 warn，每筆診斷由 provider 立即以不可重試錯誤結束。
+  const parsedEnv = parseWorkerEnv(process.env);
+  if (!parsedEnv.ok) {
+    fatal("invalidConfig", new Error(`環境變數不合法：${parsedEnv.error}`));
+  }
+  const env = parsedEnv.env;
+
   // logger 於 bootstrap() 內建立（而非模組頂層）：確保被單純 import（含 001 entry smoke）
   // 時不產生任何副作用（不建立 pino 實例、不觸發 pretty transport 的 worker thread）。
   const logger = createLogger("worker");
@@ -204,97 +63,148 @@ export async function bootstrap(): Promise<void> {
   const chaosLogger = logger.child({ context: "chaos" });
   const shutdownLogger = logger.child({ context: "shutdown" });
   const processorLogger = logger.child({ context: "processor" });
+  const redisLogger = logger.child({ context: "redis" });
+  for (const w of parsedEnv.warnings) bootLogger.warn(w);
 
-  // 致命錯誤語意（007 let it crash）：未捕捉例外／未處理拒絕代表行程狀態未定義，
-  // 記錄明確標示「致命」的訊息後**立即 exit(1)**、不嘗試收尾——重建交由監督者
-  // （compose `restart: on-failure`）重啟後的乾淨行程；優雅關閉走 exit(0)、不觸發重啟。
-  // 進行中與佇列中的 job 由 BullMQ 既有 stalled/attempts 機制重派（FR-005）。
-  // 運維層契約（exit code／log 格式／演練旗標）見
-  // specs/007-worker-process-supervision/contracts/supervision-runtime.md；
-  // 雙模式差異（dev 直跑無監督者、致命後停在等待檔案變更）見 README「執行模式」章節。
-  process.on("unhandledRejection", (reason) => fatal("unhandledRejection", reason));
-  process.on("uncaughtException", (err) => fatal("uncaughtException", err));
-
-  const mongoClient = new MongoClient(process.env.MONGO_URL ?? "mongodb://127.0.0.1:27017/flow-gatekeeper");
+  // 逾時全數設上限：驅動預設 socketTimeoutMS 0（永不逾時），Mongo 掛住時 processor 會無限期
+  // 佔住 concurrency 槽。socketTimeoutMS 需長於單一查詢的 maxTimeMS（context-builder 5s）。
+  const mongoClient = new MongoClient(env.MONGO_URL, {
+    serverSelectionTimeoutMS: 3000,
+    socketTimeoutMS: 20_000,
+  });
   await mongoClient.connect();
-  const db = mongoClient.db(process.env.MONGO_DB ?? "flow-gatekeeper");
-  await db.collection("diagnoses").createIndex({ machineId: 1, createdAt: -1 });
-  await db.collection("diagnosisTriggers").createIndex({ machineId: 1, createdAt: -1 });
+  const db = mongoClient.db(env.MONGO_DB);
+  await ensureDiagnosisIndexes(db, bootLogger);
 
-  // 連線分離（憲章 IV）：pub 發布、cache 一般 command；BullMQ queue 連線由 BullMQ 以 options 自管。
-  const pub = createRedisConnection();
-  const cache = createRedisConnection();
+  // 連線分離（憲章 IV）：pub 發布、cache 一般 command；BullMQ 連線由 BullMQ 以 options 自管。
+  // 這兩條是「斷線即 reject」的一般指令連線（見 redis.ts），必須等 ready 後才開始使用。
+  const pub = createCommandConnection(env);
+  const cache = createCommandConnection(env);
+  // 沒掛 error 監聽時 ioredis 會把每次重連失敗印成未處理的 error 事件；這裡改走結構化日誌。
+  // 轉態節流：同一連線的同一錯誤在窗內只記一則（重連洗版會淹沒其他日誌）；連線回到 ready 時
+  // 記一則「已恢復」並重置，之後再故障第一則立即可見。
+  const connErrors = createThrottledErrorReporter(ERROR_LOG_THROTTLE_MS);
+  for (const [conn, redis] of [["pub", pub], ["cache", cache]] as const) {
+    redis.on("error", (err: Error) =>
+      connErrors.error(conn, (suppressed) => redisLogger.warn({ err, conn, suppressed }, "Redis 連線錯誤")),
+    );
+    redis.on("ready", () =>
+      connErrors.recovered(conn, (suppressed) => redisLogger.info({ conn, suppressed }, "Redis 連線已恢復")),
+    );
+  }
+  await Promise.all([waitForReady(pub, REDIS_READY_TIMEOUT_MS), waitForReady(cache, REDIS_READY_TIMEOUT_MS)]);
 
-  const ai: AiProvider = new GeminiProvider(
-    process.env.GEMINI_API_KEY ?? "",
-    process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
-    Number(process.env.AI_TIMEOUT_MS ?? 30000),
-  );
+  // 實例識別：heartbeat／metrics 快照都寫帶此後綴的 key，水平擴展時各副本互不掩蓋、互不覆寫。
+  // healthcheck 以同一套 resolveInstanceId 推導，兩者必須一致。
+  const instanceId = resolveInstanceId(env.WORKER_INSTANCE_ID);
 
-  // 009 US3 指標收集器：累加於記憶體，每 METRICS_INTERVAL_MS 結算一次——寫 Redis 快照
-  // `metrics:worker`（供 api 合併廣播）並記一則 worker 自身的 metrics 摘要。摘要走
+  const ai: AiProvider = selectAiProvider(env);
+
+  // 指標收集器：累加於記憶體，每 METRICS_INTERVAL_MS 結算一次——寫 Redis 快照
+  // `metrics:worker:<instanceId>`（供 api 掃描合併廣播）並記一則 worker 自身的 metrics 摘要。摘要走
   // `logger.metrics`（level 由 METRICS_LOG_LEVEL 獨立釘定），LOG_LEVEL=warn 時不會被濾掉
-  // （SC-005）。掛既有 cache 連線；與 007 的 worker:heartbeat 各自獨立、互不干涉（FR-010）。
-  const metrics = createMetricsCollector({ redis: cache, logger: logger.metrics });
+  // （運維調低日誌等級時仍看得到指標）。掛既有 cache 連線；與 worker:heartbeat:<instanceId> 各自獨立、互不干涉。
+  const metrics = createMetricsCollector({
+    redis: cache,
+    key: workerMetricsKey(instanceId),
+    logger: logger.metrics,
+  });
   metrics.start();
 
+  // 處理槽活性：一次正常 job 的最長無進度區間約為「首 token 前的 LLM 等待（≤ AI_TIMEOUT_MS）」
+  // 或單一 Mongo 查詢（≤ 5s），再加 30s 緩衝；超過代表槽真的卡住了。
+  const liveness = createLivenessTracker({
+    slots: env.WORKER_CONCURRENCY,
+    stallMs: env.AI_TIMEOUT_MS + 30_000,
+  });
+
+  let closing = false;
   const worker = new Worker<DiagnosisJobPayload>(
     DIAGNOSIS_QUEUE,
-    createProcessor(db, pub, cache, ai, processorLogger, metrics),
+    createProcessor({
+      store: createRedisStore(cache),
+      publisher: pub,
+      repo: createMongoDiagnosisRepository(db),
+      ai,
+      buildContext: ({ machineId, windowMinutes }) => buildDiagnosisContext({ mongo: db, machineId, windowMinutes }),
+      logger: processorLogger,
+      metrics,
+      config: {
+        aiTimeoutMs: env.AI_TIMEOUT_MS,
+        lockTtlSeconds: env.AI_DEDUPE_LOCK_SECONDS,
+        cacheTtlSeconds: env.AI_CACHE_TTL_SECONDS,
+        aiRpm: env.AI_RPM,
+      },
+      isClosing: () => closing,
+      liveness,
+    }),
     {
-      connection: redisConnectionOptions(),
-      concurrency: 2,
-      limiter: { max: Number(process.env.AI_RPM ?? 8), duration: 60_000 },
+      connection: bullmqConnectionOptions(env),
+      concurrency: env.WORKER_CONCURRENCY,
+      // 刻意不設 BullMQ `limiter`：它計的是 job 啟動數（cache 命中、等待者、重試都吃額度），
+      // 不是 LLM 呼叫數。LLM 限流改在 processor 取鎖後以 Redis 固定窗計數（AI_RPM）。
     },
+  );
+
+  // BullMQ 內部錯誤（連線中斷、腳本失敗）預設完全靜默；記下來才查得到「佇列為何不動」。
+  // 與 pub／cache 共用轉態節流：Redis 斷線時 BullMQ 的重連錯誤同樣會洗版。
+  // 錯誤與恢復走同一個 redisLogger（conn: "bullmq"），故障→恢復在同一 context 下可成對查到。
+  worker.on("error", (err) =>
+    connErrors.error("bullmq", (suppressed) => redisLogger.error({ err, conn: "bullmq", suppressed }, "BullMQ worker error")),
   );
 
   worker.on("ready", () => {
     bootLogger.info({ queue: DIAGNOSIS_QUEUE }, "worker ready");
-    // 存活訊號（FR-007）：ready 後每 10s 寫 worker:heartbeat（TTL 30s，掛既有 cache 連線）。
-    // 事件迴圈被卡死時 timer 停擺、key 過期 → compose healthcheck 轉 unhealthy（僅示警）。
+    connErrors.recovered("bullmq", (suppressed) => redisLogger.info({ conn: "bullmq", suppressed }, "BullMQ 連線已恢復"));
+    // 存活訊號（供 compose healthcheck）：ready 後每 10s 寫 worker:heartbeat:<instanceId>（TTL 30s，掛既有 cache 連線）。
+    // 事件迴圈被卡死時 timer 停擺、key 過期；所有處理槽都長時間無進度時也停止刷新
+    // （liveness）→ compose healthcheck 轉 unhealthy（僅示警）。
     // ready 於連線重建時會重複觸發——startHeartbeat 冪等，重入只重設 timer。
-    startHeartbeat(cache, (msg) => heartbeatLogger.warn(msg));
+    startHeartbeat(cache, heartbeatKey(instanceId), (msg) => heartbeatLogger.warn(msg), () => liveness.isAlive());
   });
 
-  // 故障注入旗標（FR-008）：未設定＝關閉、零程式路徑差異；非法值 warn 後視為關閉。
+  // 故障注入旗標：未設定＝關閉、零程式路徑差異；非法值 warn 後視為關閉。
   // 供 quickstart 場景 3/4 可重現演練「致命 → 重啟 → 恢復」，不改 code、不重建。
-  // 硬防護：production 一律拒絕武裝——chaos 是測試專用機制，遺留在 production .env 會靜默
-  // 造成崩潰迴圈（restart:on-failure:5 用盡後 worker 停擺）。演練請在非 production 環境進行。
+  // 硬防護：production 預設拒絕武裝——chaos 是測試專用機制，遺留在 production .env 會靜默
+  // 造成崩潰迴圈（restart:on-failure:5 用盡後 worker 停擺）。容器 image 固定 NODE_ENV=production，
+  // 要在容器內演練須另設 WORKER_CHAOS_ALLOW_IN_PRODUCTION=true 明確放行（演練後一併移除）。
   const chaos = parseChaosConfig(process.env);
-  for (const w of chaos.warnings) chaosLogger.warn(w);
+  const chaosAllow = parseChaosAllowInProduction(process.env);
+  for (const w of [...chaos.warnings, ...chaosAllow.warnings]) chaosLogger.warn(w);
   if (chaos.config) {
-    if (process.env.NODE_ENV === "production") {
+    if (!shouldArmChaos(env.NODE_ENV, chaosAllow.allow)) {
       chaosLogger.error(
         { kind: chaos.config.kind, at: chaos.config.at },
-        "WORKER_CHAOS 於 production 一律忽略（測試專用機制，勿留在 production .env）",
+        "WORKER_CHAOS 於 production 預設忽略（測試專用機制，勿留在 production .env；容器內演練需另設 WORKER_CHAOS_ALLOW_IN_PRODUCTION=true）",
       );
     } else {
       armChaos(chaos.config, worker, (msg) => chaosLogger.warn(msg));
     }
   }
 
-  // 失敗處理（US3）：僅在 attempts **用盡**（最終終態）後通知 ai/error（FR-020／US3 案例3）；
-  // 尚有重試時只記 warn，交由 BullMQ 指數退避重試。
+  // 失敗處理：對前端的最終通知由 api 經 QueueEvents `failed` 送 `ai/error(worker_failed)`——
+  // worker 在這裡 publish 已到不了前端（api 收到 failed 即解除 jobId 綁定，此時才 PUBLISH 會被丟棄）。
+  // AI 管線自身的終態錯誤已由 processor 在 throw 前送出。這裡只負責補寫最終失敗的 trigger。
   worker.on("failed", (job, err) => {
     if (!job) return;
     const { jobId, machineId, requestedBy } = job.data;
-    const jl = processorLogger.child({ jobId, machineId });
-    const attempts = job.opts.attempts ?? 1;
-    if (job.attemptsMade >= attempts) {
+    const jl = processorLogger.child({ jobId, machineId, attempt: job.attemptsMade });
+    if (isTerminalFailure(job, err)) {
       jl.error({ err }, "job failed (final)");
-      publish(pub, jobId, { type: "ai/error", jobId, code: "worker_failed", message: err.message }, jl);
-      // FR-013a：失敗（含重試用盡）也是一次觸發，補寫輕量稽核（cached:false），使每次觸發皆可追溯。
-      void writeTrigger(db, machineId, jobId, requestedBy, false).catch((e: unknown) =>
-        jl.error({ err: e }, "failure trigger write failed"),
-      );
+      // 失敗（含重試用盡、不可重試）也是一次觸發，補寫輕量稽核（cached:false），使每次觸發皆可追溯。
+      void createMongoDiagnosisRepository(db)
+        .insertTrigger({ machineId, jobId, requestedBy, cached: false })
+        .catch((e: unknown) => jl.error({ err: e }, "failure trigger write failed"));
     } else {
       jl.warn({ err }, "job attempt failed (will retry)");
     }
   });
 
-  // 優雅關閉（US3）：worker.close → mongo.close → redis quit，確保崩潰/關閉不殘留、可被 BullMQ 重派。
+  // 優雅關閉：worker.close → mongo.close → redis quit，確保崩潰/關閉不殘留、可被 BullMQ 重派。
   const shutdown = async (signal: string): Promise<void> => {
     shutdownLogger.info({ signal }, "received signal, shutting down worker");
+    // 先立旗標：dedupe 等待中的 job 看到後立刻交回佇列，worker.close() 只需等真正在打 LLM 的 job。
+    closing = true;
     try {
       // 先 drain 在途 job 再停心跳：worker.close() 會等在途 job（含長串流）收尾，期間仍需
       // 持續寫 heartbeat，否則 key 於 TTL 過期、healthcheck 在正常優雅關閉途中誤翻 unhealthy。
@@ -304,6 +214,12 @@ export async function bootstrap(): Promise<void> {
       // 指標 timer 與心跳同時停：關閉時**不輸出未滿一窗的殘窗摘要**——優雅關閉的日誌尾端
       // 出現一則低值摘要會被誤讀為系統異常（data-model E3）。
       metrics.stop();
+      // 主動刪掉本實例的 key：優雅縮減副本時，healthcheck／api 不必再等 TTL 才發現這個實例已離開，
+      // 殘留快照也不會被 api 加總。失敗只記 warn、不中斷後續收尾；崩潰路徑刪不到，由 TTL 與
+      // api 端的過期快照過濾兜底。
+      await cache
+        .del(heartbeatKey(instanceId), workerMetricsKey(instanceId))
+        .catch((err: unknown) => shutdownLogger.warn({ err }, "刪除本實例 heartbeat／metrics key 失敗"));
       await mongoClient.close();
       await pub.quit();
       await cache.quit();
@@ -315,7 +231,40 @@ export async function bootstrap(): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
 
-  bootLogger.info("flow-gatekeeper worker (003) bootstrapped");
+  bootLogger.info(
+    { provider: ai.id, model: ai.model, concurrency: env.WORKER_CONCURRENCY, aiRpm: env.AI_RPM },
+    "flow-gatekeeper worker (003) bootstrapped",
+  );
+}
+
+/**
+ * 依 `AI_PROVIDER` 選 provider：預設 gemini；`fake` 為 e2e／演練用的測試替身（固定假診斷、
+ * 以可設定延遲逐段串流，見 ai/fake-provider.ts）。兩者都經 `AiProvider` interface 注入 processor
+ * （硬規則 4），fake 的輸出同樣經 parseResult／DiagnosisResultSchema 驗證（硬規則 6）。
+ * production 下選 fake 的 warn 由 parseWorkerEnv 產生、於 bootstrap 輸出。
+ */
+export function selectAiProvider(env: WorkerEnv): AiProvider {
+  if (env.AI_PROVIDER === "fake") {
+    return new FakeAiProvider({ tokenDelayMs: env.FAKE_AI_TOKEN_DELAY_MS, tokenCount: env.FAKE_AI_TOKENS });
+  }
+  return createAiProvider(env);
+}
+
+/** 依 env 建立 Gemini provider（抽出供接線測試：生成參數必須來自 env，而非 adapter 預設）。 */
+export function createAiProvider(env: WorkerEnv): GeminiProvider {
+  return new GeminiProvider(env.GEMINI_API_KEY ?? "", env.GEMINI_MODEL, {
+    maxOutputTokens: env.AI_MAX_OUTPUT_TOKENS,
+    temperature: env.AI_TEMPERATURE,
+  });
+}
+
+/**
+ * entry 的 bootstrap 失敗收尾：走 `fatal()` 的同步 `writeSync` 再 exit(1)（與 api 的
+ * `fatalExit("bootstrap", err)` 對齊）。不可改用 pino——非同步寫入在 exit 前來不及落地，
+ * 監督者重啟迴圈裡唯一能說明原因的那一行會消失（見 lib/fatal.ts）。
+ */
+export function handleBootstrapFailure(err: unknown): never {
+  return fatal("bootstrap", err);
 }
 
 // 僅在被直接執行時才啟動；被 import（含 001 entry smoke）時不產生副作用。
@@ -323,10 +272,5 @@ export async function bootstrap(): Promise<void> {
 const stripJs = (p: string): string => p.replace(/\.[cm]?js$/, "");
 const invokedPath = process.argv[1] ? stripJs(resolve(process.argv[1])) : "";
 if (invokedPath && stripJs(resolve(fileURLToPath(import.meta.url))) === invokedPath) {
-  void bootstrap().catch((err: unknown) => {
-    // 僅在真正以 entry 執行且 bootstrap() 失敗時才建立 logger——維持模組 import 期
-    // side-effect-free（不因單純 import 而建立 pino 實例／pretty transport worker thread）。
-    createLogger("worker").child({ context: "bootstrap" }).error({ err }, "bootstrap failed");
-    process.exit(1);
-  });
+  void bootstrap().catch(handleBootstrapFailure);
 }

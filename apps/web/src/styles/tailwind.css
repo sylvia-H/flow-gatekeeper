@@ -1,6 +1,11 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+/*
+ * 明寫 variants 的位置：未寫時 Tailwind 3 會把 hover:／focus:／md: 等變體規則附加到整份檔案最尾端，
+ * 排在下方的選取態與 reduced-motion 規則之後、反過來蓋掉它們。
+ */
+@tailwind variants;
 
 @layer base {
   /*
@@ -32,5 +37,46 @@
   }
   ::-webkit-scrollbar-corner {
     background: transparent;
+  }
+}
+
+/*
+ * MachineNodeCard 選取態（design-spec §7.3：border accent 2px、背景 accent wash）。
+ * 刻意放在 `@tailwind utilities` 之後、不進任何 layer，並以 `.machine-card[data-selected]`
+ * 取得 (0,2,0) 特異性：
+ * - 勝過狀態 class（`border-subtle`／`bg-surface`／`border-crit-border`／`bg-crit-bg`，皆 (0,1,0)）；
+ * - 與 `hover:*`／`focus:outline-none`（(0,2,0)）同特異性但輸出在後（variants 已在上方明寫位置），
+ *   hover 時選取框不消失。
+ * 2px 由 1px accent 邊框 + 內縮 1px 的 outline 組成：不改 border-width（不動盒模型、不位移），
+ * 也不用 ring／box-shadow——critical 的 `animate-critical-pulse` 動的是 box-shadow，會把 ring 蓋掉。
+ * 回歸測試：`domains/monitoring/components/MachineNodeCard.css.test.ts`。
+ */
+.machine-card[data-selected='true'] {
+  border-color: theme('colors.accent.DEFAULT');
+  background-color: theme('colors.accent.wash');
+  outline: 1px solid theme('colors.accent.DEFAULT');
+  outline-offset: -2px;
+}
+
+/*
+ * prefers-reduced-motion：放在所有 layer 之後，確保蓋過 animate-* utilities。
+ * 狀態本身不靠動畫傳達（critical 有 crit-bg tint 與文字徽章、串流有逐字出現的文字、
+ * progress 有 aria 描述），所以這裡直接停掉循環動畫：
+ * - critical pulse、串流游標：停在靜止樣式。
+ * - indeterminate progress：停成一段靜止的 1/3 條，仍看得出「進行中」而非空條。
+ * - transition（hover 上移、面板展開）縮到近乎瞬間，保留狀態變化本身。
+ */
+@media (prefers-reduced-motion: reduce) {
+  .animate-critical-pulse,
+  .animate-stream-caret,
+  .animate-indeterminate {
+    animation: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

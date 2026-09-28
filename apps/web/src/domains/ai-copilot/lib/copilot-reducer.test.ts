@@ -18,7 +18,7 @@ const RESULT: DiagnosisResult = {
 };
 
 function active(jobId = "job-1", over: Partial<Extract<CopilotJobState, { status: "active" }>> = {}) {
-  return { status: "active", machineId: "mixer-01", jobId, progress: null, streamText: "", ...over } as CopilotJobState;
+  return { status: "active", machineId: "mixer-01", jobId, attempt: 1, progress: null, streamText: "", ...over } as CopilotJobState;
 }
 
 describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
@@ -27,6 +27,7 @@ describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
       status: "active",
       machineId: "mixer-01",
       jobId: "job-1",
+      attempt: 1,
       progress: null,
       streamText: "",
     });
@@ -55,16 +56,67 @@ describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
 
   it("ai/token 依 seq 保序 append 至 streamText（FR-005）", () => {
     let s = active();
-    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", seq: 0, text: "診斷" });
-    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", seq: 1, text: "推理" });
-    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", seq: 2, text: "中" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "診斷" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 1, text: "推理" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 2, text: "中" });
     expect(s).toMatchObject({ status: "active", streamText: "診斷推理中" });
+  });
+
+  it("attempt 換輪：先清空上一輪 streamText 再接新 token（重試不再疊加）", () => {
+    let s = active();
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "第一輪" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 1, text: "半截" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 2, seq: 0, text: "第二輪" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 2, seq: 1, text: "完整" });
+    expect(s).toMatchObject({ status: "active", attempt: 2, streamText: "第二輪完整" });
+  });
+
+  it("stalled 重派（attempt 不變、seq 從 0 重播）：丟掉前一次的半截文字，不拼接", () => {
+    let s = active("job-1");
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "崩潰前" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 1, text: "半截" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "重跑" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 1, text: "完整" });
+    expect(s).toMatchObject({ status: "active", attempt: 1, streamText: "重跑完整" });
+  });
+
+  it("第 1 輪 token → 第 2 輪直接 done：completed 不保留舊輪文字", () => {
+    let s = active();
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "舊輪半截" });
+    s = copilotReducer(s, { type: "ai/done", jobId: "job-1", attempt: 2, cached: true, result: RESULT });
+    expect(s).toMatchObject({ status: "completed", streamText: "" });
+  });
+
+  it("第 1 輪 token → 第 2 輪直接 error：failed 不保留舊輪文字；同輪則保留", () => {
+    const s1 = copilotReducer(active("job-1", { streamText: "舊輪" }), {
+      type: "ai/error", jobId: "job-1", attempt: 2, code: "worker_failed", message: "x",
+    });
+    expect(s1).toMatchObject({ status: "failed", streamText: "" });
+    const s2 = copilotReducer(active("job-1", { streamText: "同輪" }), {
+      type: "ai/error", jobId: "job-1", attempt: 1, code: "worker_failed", message: "x",
+    });
+    expect(s2).toMatchObject({ status: "failed", streamText: "同輪" });
+  });
+
+  it("舊輪遲到的 token 被丟棄，不混進新一輪", () => {
+    const s0 = active("job-1", { attempt: 2, streamText: "第二輪" });
+    const s1 = copilotReducer(s0, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 5, text: "舊" });
+    expect(s1).toBe(s0);
+  });
+
+  it("早到事件：pending（剛建立、尚無進度）狀態即可消費 job/status 與 ai/done", () => {
+    let s = startActiveState("mixer-01", "job-1");
+    s = copilotReducer(s, { type: "job/status", jobId: "job-1", machineId: "mixer-01", status: "waiting" });
+    expect(s).toMatchObject({ status: "active", progress: null });
+    s = copilotReducer(s, { type: "ai/done", jobId: "job-1", attempt: 1, cached: true, result: RESULT });
+    expect(s).toMatchObject({ status: "completed", cached: true });
   });
 
   it("ai/done → completed（含 cached:true、保留 streamText）（FR-006/FR-009）", () => {
     const s = copilotReducer(active("job-1", { streamText: "分析…" }), {
       type: "ai/done",
       jobId: "job-1",
+      attempt: 1,
       cached: true,
       result: RESULT,
     });
@@ -82,6 +134,7 @@ describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
     const s = copilotReducer(active("job-1", { streamText: "分析…" }), {
       type: "ai/error",
       jobId: "job-1",
+      attempt: 1,
       code: "schema_invalid",
       message: "ZodError: invalid_type ...很長的原始堆疊",
     });
@@ -106,15 +159,15 @@ describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
 
   it("過期 jobId 片段被忽略、不覆蓋當前呈現（FR-011）", () => {
     const s0 = active("job-2", { streamText: "新任務" });
-    const stale = copilotReducer(s0, { type: "ai/token", jobId: "job-1", seq: 9, text: "舊殘留" });
+    const stale = copilotReducer(s0, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 9, text: "舊殘留" });
     expect(stale).toBe(s0); // 原狀態不變
-    const staleDone = copilotReducer(s0, { type: "ai/done", jobId: "job-1", cached: false, result: RESULT });
+    const staleDone = copilotReducer(s0, { type: "ai/done", jobId: "job-1", attempt: 1, cached: false, result: RESULT });
     expect(staleDone).toBe(s0);
   });
 
   it("非 active 狀態（idle/completed）不消費事件", () => {
     const idle: CopilotJobState = { status: "idle", machineId: "mixer-01" };
-    expect(copilotReducer(idle, { type: "ai/token", jobId: "job-1", seq: 0, text: "x" })).toBe(idle);
+    expect(copilotReducer(idle, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "x" })).toBe(idle);
     const done: CopilotJobState = {
       status: "completed",
       machineId: "mixer-01",
@@ -123,20 +176,20 @@ describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
       streamText: "",
       result: RESULT,
     };
-    expect(copilotReducer(done, { type: "ai/token", jobId: "job-1", seq: 1, text: "y" })).toBe(done);
+    expect(copilotReducer(done, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 1, text: "y" })).toBe(done);
   });
 });
 
 describe("isStaleJobEvent（FR-011）", () => {
   it("jobId 相符 → 非過期", () => {
-    expect(isStaleJobEvent(active("job-1"), { type: "ai/token", jobId: "job-1", seq: 0, text: "x" })).toBe(false);
+    expect(isStaleJobEvent(active("job-1"), { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "x" })).toBe(false);
   });
   it("jobId 不符 → 過期", () => {
-    expect(isStaleJobEvent(active("job-1"), { type: "ai/token", jobId: "job-2", seq: 0, text: "x" })).toBe(true);
+    expect(isStaleJobEvent(active("job-1"), { type: "ai/token", jobId: "job-2", attempt: 1, seq: 0, text: "x" })).toBe(true);
   });
   it("idle（無 jobId）→ 任何事件皆過期", () => {
     const idle: CopilotJobState = { status: "idle", machineId: "mixer-01" };
-    expect(isStaleJobEvent(idle, { type: "ai/token", jobId: "job-1", seq: 0, text: "x" })).toBe(true);
+    expect(isStaleJobEvent(idle, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "x" })).toBe(true);
   });
 });
 

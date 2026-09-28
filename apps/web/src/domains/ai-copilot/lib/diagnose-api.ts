@@ -1,40 +1,117 @@
+import {
+  CreateDiagnosisResponseSchema,
+  type CreateDiagnosisBody,
+  type CreateDiagnosisResponse,
+} from "@flow-gatekeeper/contracts";
+
 /**
  * 診斷觸發 REST helper（contracts/diagnose-rest、research R2）。
  *
- * 以瀏覽器原生 `fetch` 打**同源** `POST /diagnoses`（dev 由 vite proxy 轉 :3000），
- * body `{ machineId, socketId, requestedBy? }`（`socketId` = 004 對外最新 `clientId`）。
- * 回傳後端指派的 `jobId`；後續 `job/status`／`ai/*`（帶同一 jobId）經 004 WebSocket 回送。
+ * 以瀏覽器原生 `fetch` 打**同源** `POST /diagnoses`（dev 由 vite proxy 轉 :3000）。
+ * `jobId` 由呼叫端先產生並放進 body 當 idempotency key：store 在送出前就以它建立 pending
+ * 狀態，後續 `job/status`／`ai/*` 即使早於 HTTP 回應抵達也對得上。同一 jobId 重送，只有在
+ * 後端綁定仍在時才回同一個 job；綁定已結束（或 jobId 曾用於別台）則回 409，需以新 jobId 重發。
+ * body／回應型別都取自契約，避免前後端各自維護一份而漂移。
  */
 
-/** `POST /diagnoses` 回應（200，初始狀態）。 */
-export interface CreateDiagnosisResponse {
-  jobId: string;
-  machineId: string;
-  status: "waiting";
+/** POST 往返上限：沒有上限時請求可能永遠懸著，store 的 in-flight 旗標也跟著卡住、Retry 按不下去。 */
+export const DIAGNOSE_REQUEST_TIMEOUT_MS = 15_000;
+
+/** 網路層失敗（fetch reject：離線、DNS、連線被拒）時給使用者的固定句。 */
+export const NETWORK_ERROR_MESSAGE = "無法連線診斷服務，請檢查網路後重試";
+
+/** 409 且即時通道已知未授權（收到 `system/unauthorized`）時改用的句子：重連也無濟於事，要換 token。 */
+export const UNAUTHORIZED_DIAGNOSE_MESSAGE = "即時通道未授權（WS token 無效），無法發起診斷";
+
+/** 已轉成可讀中文訊息的請求失敗；store 可直接把 `message` 呈現給使用者。 */
+export class DiagnoseRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = "DiagnoseRequestError";
+  }
+}
+
+/** 狀態碼 → 使用者看得懂的句子（不把「HTTP 503」這種字樣丟給使用者）。 */
+export function messageForStatus(status: number): string {
+  // 404：api 對名冊外的 machineId 回 404。
+  if (status === 404) return "此機台不在名冊中";
+  // 429：nginx 對 `/diagnoses` 限流（limit_req）；回應是 nginx 錯誤頁，不會有中文 message。
+  if (status === 429) return "診斷請求過於頻繁，請稍後再試";
+  // 409：jobId 綁定已結束／曾用於別台，或 socketId 對應的 WebSocket 已不存在／未授權。
+  // 兩者的處置相同（等連線恢復後以新 jobId 重發）；後端有中文 message 時優先顯示後端原句。
+  if (status === 409) return "連線已中斷或未授權，請等待重連後再試";
+  if (status === 503) return "診斷佇列暫時無法使用，請稍後再試";
+  if (status === 400 || status === 415) return "請求格式不被接受（前端版本可能過舊）";
+  if (status >= 500) return "診斷服務暫時發生錯誤，請稍後再試";
+  return "診斷請求失敗，請重試";
 }
 
 /**
- * 觸發診斷。前置條件（有 `socketId`＝已連線）由呼叫端把關；此處僅負責送出與解析回應。
- * 非 2xx 或缺 `jobId` → throw，交由 store 轉該台 failed（附可讀訊息）。
+ * 取後端 JSON body 的 `message`（api 以中文撰寫）。只接受含中文的短字串：Nest 預設的英文
+ * reason phrase（如 "Unsupported Media Type"）或驗證錯誤陣列不適合直接給使用者看，交給狀態碼對映。
  */
+async function readServerMessage(res: Response): Promise<string | null> {
+  try {
+    const body: unknown = await res.json();
+    const msg = typeof body === "object" && body !== null ? (body as { message?: unknown }).message : undefined;
+    if (typeof msg === "string" && msg.length > 0 && msg.length < 120 && /[一-鿿]/.test(msg)) return msg;
+  } catch {
+    // body 不是 JSON（例如 proxy 錯誤頁）→ 退回狀態碼對映
+  }
+  return null;
+}
+
+function timeoutSignal(): AbortSignal | undefined {
+  return typeof AbortSignal.timeout === "function"
+    ? AbortSignal.timeout(DIAGNOSE_REQUEST_TIMEOUT_MS)
+    : undefined;
+}
+
 export async function postDiagnose(
+  jobId: string,
   machineId: string,
   socketId: string,
   requestedBy?: string,
 ): Promise<CreateDiagnosisResponse> {
-  const res = await fetch("/diagnoses", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ machineId, socketId, ...(requestedBy ? { requestedBy } : {}) }),
-  });
+  const body = {
+    jobId,
+    machineId,
+    socketId,
+    ...(requestedBy ? { requestedBy } : {}),
+  } satisfies CreateDiagnosisBody;
+
+  let res: Response;
+  try {
+    res = await fetch("/diagnoses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: timeoutSignal(),
+    });
+  } catch (err) {
+    const name = err instanceof Error ? err.name : "";
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new DiagnoseRequestError("診斷請求逾時，請重試");
+    }
+    throw new DiagnoseRequestError(NETWORK_ERROR_MESSAGE);
+  }
 
   if (!res.ok) {
-    throw new Error(`診斷請求失敗（HTTP ${res.status}）`);
+    const serverMessage = await readServerMessage(res);
+    throw new DiagnoseRequestError(serverMessage ?? messageForStatus(res.status), res.status);
   }
 
-  const data = (await res.json()) as Partial<CreateDiagnosisResponse>;
-  if (typeof data.jobId !== "string" || data.jobId.length === 0) {
-    throw new Error("診斷請求回應缺少 jobId");
+  // 回應同樣是外部輸入：不合契約（例如 proxy 回了 HTML 錯誤頁）就當失敗處理，而不是帶著 undefined 繼續。
+  const parsed = CreateDiagnosisResponseSchema.safeParse(await res.json().catch(() => null));
+  if (!parsed.success) {
+    throw new DiagnoseRequestError("診斷請求回應格式不符");
   }
-  return { jobId: data.jobId, machineId, status: "waiting" };
+  if (parsed.data.jobId !== jobId) {
+    // 後端應回傳我們送出的同一個 jobId；不一致代表 idempotency 失效，後續事件會對不上。
+    throw new DiagnoseRequestError("診斷請求回應的 jobId 與送出不一致");
+  }
+  return parsed.data;
 }

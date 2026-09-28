@@ -4,6 +4,10 @@
  * `DiagnosisJobPayload` 屬 api↔worker 的 BullMQ job 內部傳輸型別（非 WS 訊息，不進
  * asyncapi）。依憲章 III「型別來源分層」，純傳輸型別 MAY 以 TS 定義，仍以本套件為單一
  * 來源，MUST NOT 在 api/worker 各寫平行定義。
+ *
+ * 刻意不含 prompt 版本：prompt 內容住在 worker，版本也由 worker 的 prompt 模組自行匯出
+ * 版本常數放進 cache signature——版本與內容放在同一處，改 prompt 才不會忘記升版、讓舊
+ * cache 繼續服務到 TTL。
  */
 
 /** BullMQ 佇列名稱——api（產 job）與 worker（消化）MUST 一致。 */
@@ -11,7 +15,7 @@ export const DIAGNOSIS_QUEUE = "diagnosis";
 
 /** 一次診斷請求的 job payload。 */
 export type DiagnosisJobPayload = {
-  /** randomUUID，同時作為 BullMQ jobId 與 ai-stream channel 尾綴。 */
+  /** UUID，同時作為 BullMQ jobId 與 ai-stream channel 尾綴（可由前端帶入作 idempotency key）。 */
   jobId: string;
   /** 目標機台（沿用 002 的 5 台示範機台識別）。 */
   machineId: string;
@@ -21,6 +25,4 @@ export type DiagnosisJobPayload = {
   requestedAt: string;
   /** context 讀取窗口（分鐘，預設 5）。 */
   windowMinutes: number;
-  /** 進 cache 簽章的 prompt 版本（預設 'diagnosis-v1'）。 */
-  promptVersion: string;
 };

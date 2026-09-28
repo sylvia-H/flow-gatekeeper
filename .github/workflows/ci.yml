@@ -7,18 +7,47 @@ on:
   # push:
   # pull_request:
 
+# 最小權限：本流程只需讀取原始碼（上傳 artifact 走 Actions 內建 token，不需 contents: write）。
+permissions:
+  contents: read
+
+# 同一分支重複觸發時取消舊 run，只保留最新一次。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# actions 維持以 tag 引用、不釘 commit SHA：目前沒有 dependabot／renovate 之類的自動更新機制，
+# 釘 SHA 只會讓版本默默過期；日後導入自動更新時再改釘 SHA。
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    # 目前全流程約數分鐘；設上限避免卡死的 run 空耗分鐘數。
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
-          node-version: 24
+          # 與 Dockerfile（node:22.23.3-alpine）、root engines 同一來源：.nvmrc
+          node-version-file: .nvmrc
           cache: pnpm
+      # 不需先 build packages/*：typecheck／test 透過 exports 的 "development" condition 直接吃 src。
       - run: pnpm install --frozen-lockfile
       - run: pnpm contract:lint
       - run: pnpm typecheck
       - run: pnpm lint
-      - run: pnpm test
+      # 以 test:coverage 取代 `pnpm test`：root vitest.config.ts 的 test.projects 跑的是同一批（五個套件）
+      # 測試，另外產出合併覆蓋率並檢查不退步門檻；兩者都跑只會把單元測試重跑一遍。
+      - run: pnpm test:coverage
+      - name: 上傳覆蓋率報告（lcov）
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 14
+      # 最後走一次 production 建置路徑（customConditions: [] → 解析 dist），
+      # 補上 typecheck 改吃 src 後不再覆蓋到的「packages build → apps 依 dist 編譯」這段。
+      - run: pnpm build

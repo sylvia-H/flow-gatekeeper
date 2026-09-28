@@ -24,7 +24,7 @@ function clockLabel(ts: number): string {
   <section class="flex flex-col bg-surface" :style="{ height: `${height}px` }" aria-label="Event stream">
     <div class="flex shrink-0 items-center justify-between border-b border-subtle px-4 py-1.5">
       <span class="text-xs font-medium uppercase tracking-wide text-fg-subtle">Event Stream</span>
-      <span class="font-mono text-[10px] text-fg-subtle">{{ events.length }}/50</span>
+      <span class="font-mono text-2xs text-fg-subtle">{{ events.length }}/50</span>
     </div>
 
     <!-- 空狀態 -->

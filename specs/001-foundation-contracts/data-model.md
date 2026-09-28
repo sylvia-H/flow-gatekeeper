@@ -1,5 +1,11 @@
 # Phase 1 Data Model: Foundation & Contracts
 
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - 實體一覽：`TelemetryPoint`／`MachineSubscribe`／`JobStatus`／`AiStreamEvent` 為「TS type」→ 已全面改為 Zod schema（Zod 4），型別由 `z.infer` 推導。
+> - 事件表：`machine/data` 為單筆 `TelemetryPoint` → 實際推送與契約皆為裸 `TelemetryPoint[]` 陣列，前端以 `isTelemetryPoint` 守衛。
+> - 事件表：`ai/token`／`ai/done`／`ai/error` 無 `attempt` → 三者皆帶 `attempt`（重試換輪辨識）。
+
 本 feature 的「資料模型」即共用通訊契約的型別結構。契約以 `packages/contracts` 的 Zod
 schema 為單一真實來源（憲章 III），AsyncAPI（`asyncapi.yaml`）為對應的通訊文件。型別精確
 定義見實作指南 §6.8/§6.9，本檔聚焦結構、欄位、驗證規則與範圍邊界，不重貼完整 code。

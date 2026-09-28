@@ -49,7 +49,7 @@ export function offendingMetrics(t: TelemetryPoint["telemetry"]): Record<MetricK
 }
 
 /**
- * 相對時間「Ns ago」（FR-004）。以 sec 級精度，讀既有 `store.now`（每秒 tick）即可更新，
+ * 相對時間「Ns ago」（FR-004）。以 sec 級精度，讀既有 `store.staleNow`（每秒 tick；Pause 且連線中時凍結）即可更新，
  * 不另開計時器。邊界：<5s→`just now`、<60s→`Ns ago`、<60m→`Nm ago`、<24h→`Nh ago`、否則 `Nd ago`。
  */
 export function relativeTimeLabel(lastUpdated: number, now: number): string {

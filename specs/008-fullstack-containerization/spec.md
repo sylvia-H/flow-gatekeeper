@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-15
 
-**Status**: Draft
+**Status**: 已完成（v1.0.0；2026-07-17 以 `fa61410` 併入 develop）；之後變更見指南 §15.6「v1.0.0 之後的現況摘要」
 
 **Input**: User description: "008-fullstack-containerization"（依 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §14 方向藍圖與 `docs/adr-002-productionization-scope.md` §5 既定決策起草）
 

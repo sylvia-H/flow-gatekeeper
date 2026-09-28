@@ -1,0 +1,48 @@
+name: nightly-mutation
+
+# 變異測試常態化（第二輪審查 docs/20260927-research-review02.md §6 Batch D）：
+# Stryker 只變異五個接線層核心檔（範圍見 stryker.config.mjs），守住測試「斷言面」，門檻 break 70%。
+# 注意：CI 主流程（ci.yml）目前停用 push／pull_request 觸發（私有 repo 期間節省 Actions 分鐘數）；
+# 本 workflow 獨立於 ci.yml，只由排程與手動觸發，不隨 push 執行。
+# 分支：GitHub 的 schedule 只從預設分支（main）的 workflow 檔觸發，但 main 只接 release；
+# 因此 schedule 由 main 觸發、實際 checkout develop 測日常開發線（本檔須已隨 release 進 main 才會開始排程）。
+on:
+  schedule:
+    - cron: "0 18 * * *" # 每日 UTC 18:00（台灣時間 02:00）
+  workflow_dispatch: # Actions 頁可手動 Run workflow
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-mutation
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    # 本機 8 核（7 個 test runner）完整跑約 25 分；私有 repo 的 ubuntu-latest 只有 2 vCPU（約 2 個 runner），
+    # 推估 90 分以上。60 分會被取消（cancelled 連報告都不上傳），先放寬到 180 分，實測後再收斂。
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # 測日常開發線而非 release 快照（見檔頭「分支」說明）。
+          ref: develop
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          # 與 ci.yml、Dockerfile、root engines 同一來源：.nvmrc
+          node-version-file: .nvmrc
+          cache: pnpm
+      # 不需先 build packages/*：vitest 透過 exports 的 "development" condition 直接吃 src。
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:mutation
+      # 分數低於 break 門檻時上一步會失敗；報告仍要上傳，方便看存活變異。
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: mutation-report
+          path: reports/mutation/
+          retention-days: 14
+          if-no-files-found: warn

@@ -16,7 +16,10 @@
 # ---- 依賴與建置產物（容器內以 frozen lockfile 重新安裝、重新建置）----
 **/node_modules
 **/dist
-coverage
+# 無 **/ 前綴時只比對 context 根目錄——各套件底下的 coverage 會漏進 context
+**/coverage
+# tsc 增量資訊若隨 context 進去、而 dist 被上面排除，tsc 可能誤判「已是最新」而不輸出 dist
+**/*.tsbuildinfo
 
 # ---- 版控與本機工具狀態 ----
 .git
@@ -34,8 +37,10 @@ coverage
 docs
 specs
 scripts
-*.log
-*.md
+# 無 **/ 前綴時只比對 context 根目錄（.dockerignore 的樣式以 context 根為錨點，不像 .gitignore 會遞迴），
+# 各 app／package 底下的 README、log 會漏進 context。
+**/*.log
+**/*.md
 asyncapi.yaml
 .spectral.yaml
 docker-compose.yml

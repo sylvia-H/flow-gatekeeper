@@ -1,5 +1,12 @@
 # Phase 1 Data Model — 前端高頻 WebSocket Gatekeeper 監控台
 
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - §3：控制訊息「忽略 subscribed·unauthorized」→ `machine/subscribed` 用於歸零退避與判定連線就緒；`system/unauthorized` 以 TopBar chip 呈現。
+> - §1：`batchRatio = receivedMessages / renderedBatches` → `droppedMessages` 一併計入比值；buffer 溢位改為合併。
+> - §1：`machines: Map` 為一般 reactive state → 改 `shallowRef`。
+> - §2：`nextBackoffDelay(attempt)` 的 attempt 歸零時機 → 在 `machine/subscribed` 才歸零。
+
 前端無持久化；此處描述 **Pinia store 的記憶體狀態模型** 與相關純函式。型別以 `@flow-gatekeeper/contracts` 為單一來源（`TelemetryPoint`、`MachineState`、控制訊息聯集），本 feature 不新增契約。
 
 ## 1. Monitoring Store（`domains/monitoring/stores/monitoring.store.ts`）

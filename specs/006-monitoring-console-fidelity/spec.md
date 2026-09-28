@@ -4,7 +4,13 @@
 
 **Created**: 2026-07-03
 
-**Status**: Draft
+**Status**: 已完成（v1.0.0；2026-07-04 以 `c0602d6` 併入 develop）；之後變更見指南 §15.6「v1.0.0 之後的現況摘要」
+
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - FR-018／Clarifications／Assumptions：任務 meta「一律靜態、MUST NOT 呈現動態 attempt」→ 契約 `ai/*` 已帶 `attempt`，drawer 現顯示 Attempt `N / 3`（取自串流事件）。
+> - FR-013 pause／resume → Pause 且連線中時凍結 stale 判定（避免暫停期間卡片全轉 stale）。
+> - FR-014 connection chip → TopBar 另有 `system/unauthorized` 的「未授權」chip。
 
 **Input**: User description: "在 apps/web 把 design-spec（layout.png / node-states.png / copilot-drawer.png）已定義、但 004/005 漏做或沒對齊的前端項目補齊。全部前端-only，只消費現有 telemetry 與診斷資料，不動 packages/contracts 與後端。範圍（依 User Story）：US1 卡片保真（狀態文字徽章、warning 數值染 amber 而邊框維持 subtle、遙測單位、相對時間戳）；US2 Fleet Health（機台 state 聚合計數＋比例條）；US3 Event Stream（最近門檻跨越／錯誤事件列，去重不灌爆）；US4 TopBar（pause/resume、connection chip 延遲 ms、search 實際過濾）；US5 主區標題列（Fleet monitor · N machines）；US6 機台分組（sidebar 依前端靜態對照分區）；US7 Drawer active 保真（BullMQ 任務 meta 與處理步驟清單）。不在範圍：Graph 拓樸圖視圖、Alerts/History 整頁、Copilot follow-up 對話、Recent jobs 清單、likely-cause 信心分數、mock frequency 真正作用（皆需後端／契約，另案）。共同成功條件：全部使用 design-spec 具名 token 不散落 hex；高頻 telemetry 下不逐筆重繪；四個 viewport 不溢出／重疊／layout shift；不新增 packages/contracts event/payload、不改後端。"
 

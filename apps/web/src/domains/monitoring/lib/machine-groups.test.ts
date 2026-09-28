@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { KNOWN_MACHINE_IDS } from "./machine-labels.js";
+import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
 import { MACHINE_GROUPS, machineGroup } from "./machine-groups.js";
 
 describe("machine-groups（FR-017）", () => {
@@ -14,7 +14,7 @@ describe("machine-groups（FR-017）", () => {
 
   it("每台 roster 機台恰屬一組（涵蓋全部 5 台、無重複）", () => {
     const assigned = MACHINE_GROUPS.flatMap((g) => g.machineIds);
-    expect([...assigned].sort()).toEqual([...KNOWN_MACHINE_IDS].sort());
+    expect([...assigned].sort()).toEqual([...MACHINE_IDS].sort());
     expect(new Set(assigned).size).toBe(assigned.length);
   });
 

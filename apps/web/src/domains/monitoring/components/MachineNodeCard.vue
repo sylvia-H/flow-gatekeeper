@@ -11,13 +11,14 @@ import {
 } from "../lib/telemetry-format.js";
 import { STATE_STYLE } from "../../../shared/lib/state-style.js";
 import StatusLight from "../../../shared/components/StatusLight.vue";
+import { CARD_ROOT_CLASS, CARD_STALE_CLASS, cardStateClass } from "../lib/card-style.js";
 
 const props = defineProps<{
   machine: MachineLive | null; // null = placeholder（冷啟動／首批未到）
   machineId: string;
   selected: boolean;
   stale: boolean; // >10s 未更新：降透明＋Stale badge，數值不清空（FR-017）
-  now: number; // 每秒 tick，驅動相對時間「Ns ago」更新（FR-004）
+  now: number; // store.staleNow：每秒 tick 驅動「Ns ago」；Pause 且連線中時凍結（見 staleClock）
 }>();
 
 const emit = defineEmits<{
@@ -32,23 +33,8 @@ const label = computed(() => machineLabel(props.machineId));
  * `StatusLight` 同源）。徽章 label 在模板以 `uppercase` 呈現，固定字級/內距避免盒模型變化（FR-005）。
  */
 
-/**
- * 狀態 → 卡片外觀 token（design-spec §7.3）。
- * warning：`bg-surface` + `warn-bg` subtle inset（`ring-warn-bg` 內嵌環，忠實對映 §7.3；
- * 非盒模型、不位移，FR-002/005）；critical：crit-bg tint + pulse。placeholder 用中性面。
- */
-const stateClass = computed(() => {
-  if (!props.machine) return "border-subtle bg-surface";
-  switch (props.machine.state) {
-    case "healthy":
-      return "border-subtle bg-surface";
-    case "warning":
-      return "border-subtle bg-surface ring-1 ring-inset ring-warn-bg";
-    case "critical":
-      return "border-crit-border bg-crit-bg animate-critical-pulse";
-  }
-  return "border-subtle bg-surface";
-});
+/** 狀態 → 卡片外觀 token（design-spec §7.3）；對照與選取態的做法見 `card-style.ts`。 */
+const stateClass = computed(() => cardStateClass(props.machine ? props.machine.state : null));
 
 const PLACEHOLDER = "—";
 
@@ -56,20 +42,25 @@ const PLACEHOLDER = "—";
 interface MetricView {
   key: MetricKey;
   label: string;
-  text: string;
+  value: string;
+  unit: string;
   cls: string;
 }
 
-/** 單一 metric 描述子（key/label/格式化）——placeholder 與實值分支共用同一份，避免兩處漂移。 */
+/**
+ * 單一 metric 描述子（key/label/格式化）——placeholder 與實值分支共用同一份，避免兩處漂移。
+ * 數值與單位分開渲染（refs/node-states.png）：數值用 22px `text-number`，單位用小字，
+ * 兩者擠在同一個 22px 字串裡會讓 220px 寬的卡片放不下「1,180 u/min」。
+ */
 const METRIC_DESCRIPTORS: readonly {
   key: MetricKey;
   label: string;
   format: (t: MachineLive["telemetry"]) => string;
 }[] = [
-  { key: "temperature", label: "Temp", format: (t) => `${t.temperature.toFixed(1)}${metricUnit("temperature")}` },
-  { key: "vibration", label: "Vibration", format: (t) => `${t.vibration.toFixed(2)} ${metricUnit("vibration")}` },
-  { key: "throughput", label: "Throughput", format: (t) => `${Math.round(t.throughput)} ${metricUnit("throughput")}` },
-  { key: "errorRate", label: "Errors", format: (t) => `${(t.errorRate * 100).toFixed(1)}${metricUnit("errorRate")}` },
+  { key: "temperature", label: "Temp", format: (t) => t.temperature.toFixed(1) },
+  { key: "vibration", label: "Vibration", format: (t) => t.vibration.toFixed(2) },
+  { key: "throughput", label: "Throughput", format: (t) => Math.round(t.throughput).toLocaleString("en-US") },
+  { key: "errorRate", label: "Errors", format: (t) => (t.errorRate * 100).toFixed(1) },
 ];
 
 const metrics = computed<MetricView[]>(() => {
@@ -78,7 +69,13 @@ const metrics = computed<MetricView[]>(() => {
   return METRIC_DESCRIPTORS.map((d) => {
     const offense = off ? off[d.key] : null;
     const cls = offense === "crit" ? "text-crit" : offense === "warn" ? "text-warn" : "text-fg";
-    return { key: d.key, label: d.label, text: m ? d.format(m.telemetry) : PLACEHOLDER, cls };
+    return {
+      key: d.key,
+      label: d.label,
+      value: m ? d.format(m.telemetry) : PLACEHOLDER,
+      unit: metricUnit(d.key),
+      cls,
+    };
   });
 });
 
@@ -96,11 +93,8 @@ const absoluteTime = computed(() =>
     <button
       type="button"
       class="flex min-h-[148px] w-full min-w-0 flex-col gap-3 rounded-card border p-3 text-left shadow-card transition duration-150 hover:-translate-y-px hover:border-strong hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-      :class="[
-        stateClass,
-        selected ? 'border-accent bg-accent-wash ring-1 ring-inset ring-accent' : '',
-        stale ? 'opacity-[0.55]' : '',
-      ]"
+      :class="[CARD_ROOT_CLASS, stateClass, stale ? CARD_STALE_CLASS : '']"
+      :data-selected="selected ? 'true' : 'false'"
       :aria-pressed="selected"
       @click="emit('select', machineId)"
     >
@@ -111,7 +105,7 @@ const absoluteTime = computed(() =>
             <span class="truncate text-sm font-medium text-fg">{{ label }}</span>
             <span
               v-if="stale"
-              class="shrink-0 rounded-pill border border-warn-border bg-warn-bg px-1.5 py-0.5 text-[10px] font-medium uppercase leading-none text-warn-fg"
+              class="shrink-0 rounded-pill border border-warn-border bg-warn-bg px-1.5 py-0.5 text-2xs font-medium uppercase leading-none text-warn-fg"
             >Stale</span>
           </div>
           <div class="truncate font-mono text-xs text-fg-muted">{{ machineId }}</div>
@@ -119,7 +113,7 @@ const absoluteTime = computed(() =>
         <div class="flex shrink-0 items-center gap-1.5">
           <span
             v-if="machine"
-            class="rounded-pill px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-none tracking-wide"
+            class="rounded-pill px-1.5 py-0.5 text-2xs font-semibold uppercase leading-none tracking-wide"
             :class="[STATE_STYLE[machine.state].badgeText, STATE_STYLE[machine.state].badgeSurface]"
           >{{ STATE_STYLE[machine.state].label }}</span>
           <StatusLight
@@ -137,7 +131,10 @@ const absoluteTime = computed(() =>
       <div class="grid grid-cols-2 gap-x-3 gap-y-2">
         <div v-for="metric in metrics" :key="metric.key">
           <div class="text-xs text-fg-subtle">{{ metric.label }}</div>
-          <div class="font-mono text-number leading-none" :class="metric.cls">{{ metric.text }}</div>
+          <div class="flex flex-wrap items-baseline gap-x-1 font-mono">
+            <span class="text-number leading-none" :class="metric.cls">{{ metric.value }}</span>
+            <span class="text-2xs text-fg-subtle">{{ metric.unit }}</span>
+          </div>
         </div>
       </div>
 
@@ -146,10 +143,11 @@ const absoluteTime = computed(() =>
       </div>
     </button>
 
-    <!-- Diagnose icon（作用於該台；hover/focus 顯示，鍵盤可達）。store 內部去重／連線把關。 -->
+    <!-- Diagnose icon（作用於該台；hover/focus 顯示，鍵盤可達）。store 內部去重／連線把關。
+         觸控裝置沒有 hover：`opacity-0` 的按鈕看不見卻點得到，所以 (hover: none) 時常駐顯示。 -->
     <button
       type="button"
-      class="absolute bottom-2 right-2 rounded-control border border-subtle bg-surface p-1.5 text-fg-subtle opacity-0 transition hover:bg-surface-hover hover:text-accent focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent group-hover:opacity-100"
+      class="absolute bottom-2 right-2 rounded-control border border-subtle bg-surface p-1.5 text-fg-subtle opacity-0 transition hover:bg-surface-hover hover:text-accent focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent group-hover:opacity-100 [@media(hover:none)]:opacity-100"
       :aria-label="`Diagnose ${label}`"
       @click="emit('diagnose', machineId)"
     >

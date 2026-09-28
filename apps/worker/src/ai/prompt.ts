@@ -1,8 +1,17 @@
 import type { DiagnosisContext } from "../context/context-builder.js";
+import { DIAGNOSIS_RESULT_JSON_SCHEMA } from "../lib/zod-json-schema.js";
+
+/**
+ * prompt 版本（進 cache signature）。**改動本檔 prompt 內容時 MUST 同時升版**——版本與內容放在
+ * 同一個檔案，就是為了讓改 prompt 的人不會忘記讓舊 cache 失效（否則舊 cache 會續服務到 TTL）。
+ */
+// v2：結構說明由手寫範例改為內嵌 DiagnosisResultSchema 推導的 JSON Schema。
+export const PROMPT_VERSION = "diagnosis-v2";
 
 /**
  * 由機台脈絡組出診斷 prompt（指南 §8.9）：彙總近期 telemetry／errorlogs／maintenance，
- * 並**要求模型只回傳指定 JSON 結構**（對齊 `DiagnosisResultSchema`；解析/驗證在 worker）。
+ * 並**要求模型只回傳指定 JSON 結構**。結構描述由 `DiagnosisResultSchema` 推導（與 provider 的
+ * structured output 同源），這裡只補欄位語意；解析／驗證仍在 worker（`parseResult`）。
  */
 export function buildPrompt(args: { machineId: string; context: DiagnosisContext }): string {
   const { machineId, context } = args;
@@ -36,17 +45,9 @@ export function buildPrompt(args: { machineId: string; context: DiagnosisContext
     "近期維修紀錄：",
     maintenanceBlock,
     "",
-    "請**只輸出一個 JSON 物件**（不要有其他文字、不要 markdown 圍欄），結構如下：",
-    "{",
-    '  "summary": string,                       // 一句話診斷摘要',
-    '  "severity": "ok" | "warning" | "critical",',
-    '  "likelyCauses": string[],                // 可能原因',
-    '  "suggestedActions": [                     // 建議動作',
-    '    { "label": string, "priority": "low" | "medium" | "high", "command"?: string }',
-    "  ],",
-    '  "evidence": [                             // 佐證（引用上述脈絡）',
-    '    { "source": "telemetry" | "errorlog" | "maintenance", "id"?: string, "excerpt": string }',
-    "  ]",
-    "}",
+    "請**只輸出一個 JSON 物件**（不要有其他文字、不要 markdown 圍欄），須符合以下 JSON Schema：",
+    JSON.stringify(DIAGNOSIS_RESULT_JSON_SCHEMA),
+    "欄位語意：summary 為一句話診斷摘要；likelyCauses 為可能原因；suggestedActions 為可執行的建議動作" +
+      "（command 選填）；evidence 必須引用上方脈絡作為佐證（source 標明出處）。",
   ].join("\n");
 }

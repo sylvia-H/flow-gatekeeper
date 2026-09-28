@@ -1,5 +1,12 @@
 # Data Model: Worker Process Supervision（Phase 1）
 
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - E1：`depends_on: redis、mongo` → `condition: service_healthy`。
+> - E2：`worker:heartbeat`（單實例假設）→ `worker:heartbeat:<instanceId>`（`instanceId = WORKER_INSTANCE_ID ?? os.hostname()`），判定只看自身 key；寫入改依處理槽進度，卡住的槽不再續命。
+> - E3 chaos 旗標 → 新增 `WORKER_CHAOS_ALLOW_IN_PRODUCTION`；production 下未設即只記 error、不武裝。
+> - E4：`kind` 僅 `uncaughtException`｜`unhandledRejection` → 另有 `invalidConfig`、`bootstrap`，皆以 `writeSync` 同步寫出後 `exit(1)`。
+
 本 feature 不新增任何 MongoDB collection 或 `packages/contracts` payload；實體皆為**運維層狀態**（容器、Redis 暫態 key、env 設定、log 記錄）。欄位契約細節見 [contracts/supervision-runtime.md](./contracts/supervision-runtime.md)。
 
 ## E1：受監督執行形態（compose worker service）

@@ -22,7 +22,7 @@ const ariaLabel = computed(() => view.value.ariaLabel);
 
 <template>
   <div
-    class="relative h-1.5 w-full overflow-hidden rounded-pill bg-inset"
+    class="relative h-1.5 w-full overflow-hidden rounded-pill bg-surface-inset"
     role="progressbar"
     :aria-valuemin="0"
     :aria-valuemax="100"

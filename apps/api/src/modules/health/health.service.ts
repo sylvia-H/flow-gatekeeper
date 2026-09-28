@@ -4,6 +4,7 @@ import IORedis from "ioredis";
 import type { Redis } from "ioredis";
 import { AppConfigService } from "../config/config.service.js";
 import { HistoryService } from "../history/history.service.js";
+import { attachThrottledErrorLog } from "../../lib/connection-error-throttle.js";
 import type { DependencyProbe } from "../../lib/health-aggregate.js";
 
 /**
@@ -23,14 +24,19 @@ export class HealthService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit(): void {
     // 專屬連線（憲章 IV）：與 BullMQ producer／job-status QueueEvents／ai-stream subscriber
-    // 皆分開，僅供本服務的 PING 探測使用。maxRetriesPerRequest: null 對齊全案既有連線慣例；
-    // 不因此無限期阻塞——真正的逾時保護由 probe() 的 Promise.race 提供（research R4）。
-    this.redis = new IORedis({
-      host: this.config.redisHost,
-      port: this.config.redisPort,
-      maxRetriesPerRequest: null,
+    // 皆分開，僅供本服務的 PING 探測使用。用 `command` 設定：斷線時 PING 立刻 reject、即時判
+    // down，不在離線佇列裡排隊；probe() 的 Promise.race 仍是最後一道逾時保護（research R4）。
+    this.redis = new IORedis(this.config.redisOptions("command"));
+    // 轉態節流：斷線時 ioredis 每 100–270 ms 重連一次，逐則記錄會洗版。
+    attachThrottledErrorLog(this.redis, {
+      error: (err, suppressed) =>
+        this.logger.warn(
+          `health redis connection error: ${err.message}` +
+            (suppressed > 0 ? `（期間另有 ${suppressed} 則同類錯誤未記）` : ""),
+        ),
+      recovered: (suppressed) =>
+        this.logger.log(`health redis connection recovered（故障期間共壓掉 ${suppressed} 則錯誤）`),
     });
-    this.redis.on("error", (err) => this.logger.warn(`health redis connection error: ${err.message}`));
   }
 
   async onModuleDestroy(): Promise<void> {

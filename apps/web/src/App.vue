@@ -12,7 +12,9 @@ import { useMetricsStore } from "./domains/monitoring/stores/metrics.store.js";
 import { useCopilotStore } from "./domains/ai-copilot/stores/copilot.store.js";
 import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFrequencyWs.js";
 import { useResizeDrag } from "./shared/composables/useResizeDrag.js";
-import { KNOWN_MACHINE_IDS, machineLabel } from "./domains/monitoring/lib/machine-labels.js";
+import { useDiagnoseTrigger } from "./domains/ai-copilot/composables/useDiagnoseTrigger.js";
+import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
+import { machineLabel } from "./domains/monitoring/lib/machine-labels.js";
 import { MACHINE_GROUPS, machineGroup } from "./domains/monitoring/lib/machine-groups.js";
 import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.js";
 
@@ -65,19 +67,15 @@ const selectedState = computed<CopilotJobState>(() =>
 const selectedLabel = computed(() =>
   store.selectedMachineId !== null ? machineLabel(store.selectedMachineId) : "",
 );
-const canDiagnose = computed(() =>
-  copilot.canDiagnose(store.selectedMachineId, store.clientId !== null),
-);
+// 診斷觸發走共用入口（TopBar／卡片 icon／drawer 同一份邏輯），clientId 只從 monitoring store 讀。
+const trigger = useDiagnoseTrigger();
+const { canDiagnoseSelected: canDiagnose, connectionBlockedReason } = trigger;
 
 function onDiagnose(): void {
-  if (store.selectedMachineId !== null) {
-    void copilot.diagnose(store.selectedMachineId, store.clientId);
-  }
+  if (store.selectedMachineId !== null) trigger.diagnose(store.selectedMachineId);
 }
 function onRetry(): void {
-  if (store.selectedMachineId !== null) {
-    void copilot.retry(store.selectedMachineId, store.clientId);
-  }
+  if (store.selectedMachineId !== null) trigger.retry(store.selectedMachineId);
 }
 /** 中止：放棄該台目前診斷（→ idle，可立即重新診斷）。 */
 function onCancel(): void {
@@ -87,7 +85,7 @@ function onCancel(): void {
 }
 
 // US5 主區標題列機台數（N＝固定名冊長度；不含 Graph/拓樸切換，僅標題）。
-const machineCount = computed(() => KNOWN_MACHINE_IDS.length);
+const machineCount = computed(() => MACHINE_IDS.length);
 
 // US6 sidebar 分組：直接依 MACHINE_GROUPS 順序分區，成員經 search 過濾；過濾後為空的群組略去
 // 標題（FR-017、Edge Cases）。roster 5 台皆已分組（machine-groups 測試保證），故無需 Ungrouped 桶。
@@ -109,7 +107,7 @@ const banner = computed(() => {
         cls: "border-warn-border bg-warn-bg text-warn-fg",
       };
     case "disconnected":
-      return store.clientId === null
+      return !store.everConnected
         ? { text: "Connecting…", cls: "border-subtle bg-elevated text-fg-muted" }
         : {
             text: "Disconnected — 顯示最後已知資料，資料可能過時",
@@ -119,7 +117,8 @@ const banner = computed(() => {
   return null;
 });
 
-// 每秒 tick 驅動 stale 重算（低頻，不需高頻；research R7）。
+// 每秒 tick 驅動 stale 重算（低頻，不需高頻；research R7）。`store.now` 恆照走——Pause 的
+// 凍結只作用在 `store.staleNow`（卡片／Fleet Health），watchdog 與 metrics 面板仍用真實時間。
 // 同一個 tick 順帶跑診斷逾時 watchdog：active 任務逾 STALL_TIMEOUT_MS 無進展即自動收尾為
 // failed（可 Retry），避免後端卡住時 drawer 永遠停在 active（門檻取 worker AI_TIMEOUT 30s + 餘裕）。
 const STALL_TIMEOUT_MS = 45_000;
@@ -145,11 +144,16 @@ const handle = useHighFrequencyWs({
   // US4：pause 時 pump 跳過 flush（續存 buffer）；pong RTT 回報 store.latencyMs。
   isPaused: () => store.paused,
   onLatency: store.setLatency,
+  // 訂閱授權結果（system/unauthorized 不再靜默忽略，TopBar 顯示授權 chip）。
+  onAuthResult: store.setAuthorized,
+  // 溢位合併與入口剔除的筆數計入背壓計量（BackpressureBadge 另列 dropped）。
+  onDrop: store.recordDropped,
   // 診斷事件分流交 copilot.store（憲章 IV／FR-017：不進遙測 buffer）。
   onDiagnosisEvent: copilot.applyEvent,
   // 009：指標摘要（低頻）直接交 metrics.store，同樣不進遙測 buffer。
   onMetrics: metrics.applyMetrics,
-  // 每次（重）連線都會觸發：保存 clientId（供 005）並用單一名冊訂閱 5 台（dev 送空 token）。
+  // 每次（重）連線都會觸發：保存 clientId（單一來源為 monitoring store）並用單一名冊訂閱 5 台
+  // （dev 送空 token）。
   onConnected: (clientId: string) => {
     store.setClientId(clientId);
     // 005：重連（新 clientId）使舊綁定失效——把仍 active 的台標中斷＋可 Retry（FR-012／R7）。
@@ -157,7 +161,7 @@ const handle = useHighFrequencyWs({
     handle.send({
       type: "machine/subscribe",
       token: "",
-      machineIds: [...KNOWN_MACHINE_IDS],
+      machineIds: [...MACHINE_IDS],
     });
   },
 });
@@ -252,7 +256,7 @@ const handle = useHighFrequencyWs({
         :machine-label="selectedLabel"
         :summary="store.selectedMachine"
         :can-diagnose="canDiagnose"
-        :has-client="store.clientId !== null"
+        :connection-blocked-reason="connectionBlockedReason"
         @diagnose="onDiagnose"
         @retry="onRetry"
         @cancel="onCancel"

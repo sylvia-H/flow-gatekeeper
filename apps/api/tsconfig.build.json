@@ -1,4 +1,11 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["src/**/*.test.ts", "src/**/*.check.ts"]
+  "compilerOptions": {
+    // production 編譯必須與 runtime（node 原生載入 packages 的 dist）對照同一份 dist 型別：
+    // 否則 src 已改、dist 未重建時型別檢查會過、執行期卻炸。開發期的 src 對照由 tsconfig.json（typecheck）負責。
+    // api 的 start:dev 也走本檔（nest start --watch），所以 package.json 的 start:dev 會先用 tsc 直接 build
+    // contracts 與 shared（兩者皆用各自的 tsconfig.build.json），不經巢狀 pnpm——PATH 只有 corepack 時也能跑。
+    "customConditions": []
+  },
+  "exclude": ["src/**/*.test.ts", "src/**/*.check.ts", "src/**/test-support/**"]
 }

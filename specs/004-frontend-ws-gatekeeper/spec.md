@@ -4,7 +4,14 @@
 
 **Created**: 2026-07-02
 
-**Status**: Draft
+**Status**: 已完成（v1.0.0；2026-07-02 以 `0773bac` 併入 develop）；之後變更見指南 §15.6「v1.0.0 之後的現況摘要」
+
+> ⚠️ **已變更（2026-09-27 盤點）**：下列原敘述已被 v1.0.0 之後的修復／升級改變；內文保留為歷史，現況以指南 §15.6「v1.0.0 之後的現況摘要」為準（`docs/Flow-Gatekeeper-SDD-完整實作指南.md`）。
+>
+> - FR-013／FR-025 指數退避與重連 → 退避在 `machine/subscribed` 才歸零（非 `system/connected`）；換 clientId 重置訂閱；`online` 事件立即重連。
+> - FR-012 ping／pong 容忍時間 → ping 後 5 秒未回 pong 即視為斷線、立即重連。
+> - FR-018／FR-010 buffer 溢位丟最舊、比值由累積數導出 → 溢位改為合併（coalesce），`droppedMessages` 計入背壓比值（比值以資料點計、含丟棄筆數）。
+> - （原 spec 未涵蓋）`system/unauthorized` 以 TopBar「未授權」chip 呈現，並關閉 Diagnose 入口的連線閘門（見 005 橫幅）。
 
 **Input**: User description: "在 apps/web 實作 monitoring domain 與高頻 WebSocket gatekeeper。範圍：Vue 3 + Pinia 建立 monitoring store；useHighFrequencyWs hook（onmessage 只 push buffer，不直接寫 reactive state）；requestAnimationFrame 每幀批次提交 telemetry；支援 ping/pong heartbeat、指數退避重連、manual close；AppLayout、MachineNodeCard、StatusLight 使用 design-spec token；UI 可訂閱 machineIds，顯示最新 telemetry、state、lastUpdated；TopBar 放 BackpressureBadge，顯示 receivedMessages、renderedBatches 與比值（store getter batchRatio）。成功條件：10-50ms telemetry 下 UI 不明顯卡頓；Performance recording 中 reactive update 次數小於 message 次數；斷線後自動重連；卡片文字不溢出、不互相遮擋；BackpressureBadge 在畫面上即時顯示比值（高頻時應遠大於 1:1）。"
 
