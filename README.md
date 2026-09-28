@@ -8,8 +8,13 @@
 並把「背壓比值」與「逐字串流的 AI 推理」直接畫在同一個畫面上——
 再把整套系統做進**受監督的容器**、補齊**崩潰自癒**與**可觀測性基線**，讓它不只是能跑，而是禁得起斷線、崩潰與被監控。
 
+**現況為 1.1.0**（2026-09-28）：在 1.0.0 之後經三輪全面審查修復、技術棧升級（NestJS 11／Express 5、Vite 7、Zod 4、Pinia 3、Vitest 4、pnpm 10）
+與測試基礎建設補齊（覆蓋率門檻、真 Redis／Mongo 整合測試、跨 process e2e、變異測試）；逐項變更與升級注意事項見 [`CHANGELOG.md`](CHANGELOG.md)。
+
 <br/>
 
+![Release 1.1.0](https://img.shields.io/badge/release-1.1.0-0f6cbd)
+![asyncapi 1.2.0](https://img.shields.io/badge/asyncapi-1.2.0-6b7280)
 ![Vue 3.5](https://img.shields.io/badge/Vue-3.5-42b883?logo=vuedotjs&logoColor=white)
 ![NestJS 11](https://img.shields.io/badge/NestJS-11-e0234e?logo=nestjs&logoColor=white)
 ![TypeScript strict](https://img.shields.io/badge/TypeScript-strict-3178c6?logo=typescript&logoColor=white)
@@ -33,7 +38,7 @@
 
 ![Demo 海報](https://github.com/sylvia-H/flow-gatekeeper/raw/main/docs/demo/flow-gatekeeper-demo-poster.jpg)
 
-## 🎬 [下載完整 Demo（22 秒）](https://github.com/sylvia-H/flow-gatekeeper/releases/download/v1.0.0/flow-gatekeeper-demo.mp4)
+## 🎬 [下載完整 Demo（22 秒）](https://github.com/sylvia-H/flow-gatekeeper/releases/download/1.0.0/flow-gatekeeper-demo.mp4)
 
 </div>
 
@@ -48,7 +53,7 @@
 
 > 錄製方式：本機清空 `ai-cache:*`／`ai-lock:*` 後，用 Playwright 對著跑在容器裡的真實全棧（api／worker／web／Redis／MongoDB，AI 由 Gemini 2.5 Flash 即時回覆）做一次腳本化操作並錄影，全程無手動剪輯或字卡。想自己重現，見下方「[快速開始](#快速開始)」。
 
-> **版本註記**：影片與海報為 **v1.0.0** 畫面（下方「功能逐項展示」的截圖同樣攝於 v1.0.0 發布前，2026-07-31）；之後的 UI 變更——機台卡片選取態、連線狀態 chip（含 pong 逾時的活性判定）、未授權 chip、Copilot 任務 meta 改標 Attempt `N / 3` 等——以 [`CHANGELOG.md`](CHANGELOG.md) 為準，未重錄。影片刻意**同時**放在 git（`docs/demo/`）與 GitHub Release：Release 供上方連結直接下載，git 內一份供 clone 後離線閱讀 README，兩者維持現狀。
+> **版本註記**：影片與海報為 **1.0.0**（tag 原名 `v1.0.0`，2026-09-28 更名）畫面（下方「功能逐項展示」的截圖同樣攝於 1.0.0 發布前，2026-07-31）；1.1.0 **未重錄**，下載連結維持指向 1.0.0 release 的資產。之後的 UI 變更——機台卡片選取態、連線狀態 chip（含 pong 逾時的活性判定）、未授權 chip、Copilot 任務 meta 改標 Attempt `N / 3` 等——以 [`CHANGELOG.md`](CHANGELOG.md) 為準，未重錄。影片刻意**同時**放在 git（`docs/demo/`）與 GitHub Release：Release 供上方連結直接下載，git 內一份供 clone 後離線閱讀 README，兩者維持現狀。
 
 ---
 
@@ -68,6 +73,7 @@
 - [執行模式：開發模式與一鍵 demo](#執行模式開發模式與一鍵-demo)
 - [環境變數](#環境變數)
 - [測試與品質門檻](#測試與品質門檻)
+- [版本與變更紀錄](#版本與變更紀錄)
 - [開發方法論：Spec-Driven Development](#開發方法論spec-driven-development)
 - [關鍵架構決策（ADR）](#關鍵架構決策adr)
 - [已宣告的取捨](#已宣告的取捨)
@@ -83,6 +89,7 @@
 
 - **資料面**：前端高頻背壓、跨進程串流 relay、佇列削峰、cache-aside 去重、契約優先的全棧型別安全（Feature 001–006）。
 - **運維面**：worker/api/web 的 process 監督與 let-it-crash 崩潰語意、整棧一鍵容器化、結構化日誌與健康探針／關鍵指標的可觀測性基線（Feature 007–009）。
+- **加固面（1.1.0，非 SDD 維護分支）**：三輪全面審查的 P0～P2 修復（去重鎖真正生效、LLM 限流改 worker 取鎖後固定窗、Gateway 出口閘門與輸入加固、日誌遮蔽祕密、env fail-fast）、技術棧升級、測試金字塔補齊（覆蓋率門檻、整合測試、e2e、變異測試）。
 
 前半段回答「這個系統怎麼把資料正確、即時地流過去」，後半段回答「這個系統怎麼在無人值守時活下來、又怎麼讓人看見它活得好不好」——兩段合起來才是完整的工程紀律展示，而不只是一個能連線的 demo。整個專案以 [GitHub Spec Kit](https://github.com/github/spec-kit)（Spec-Driven Development）逐 feature 開發，工程原則以 `.specify/memory/constitution.md`（專案憲章）為準；重大跨 feature 的技術取捨另記錄於 `docs/adr-*.md`（見下方「[關鍵架構決策（ADR）](#關鍵架構決策adr)」）。
 
@@ -107,6 +114,8 @@
 | 🩺 **let it crash + process 監督** | worker／api 崩潰語意從「log + 續跑」翻成 `exit(1)` 交監督者以乾淨行程重啟，不再帶著未定義狀態硬撐 | Redis heartbeat key 偵測「活著但卡住」；連續失敗 5 次即停止重啟，防崩潰迴圈打爆 LLM 額度——見 [ADR-002](docs/adr-002-productionization-scope.md) |
 | 📦 **整棧容器化 + 單一入口** | `docker compose --profile demo up -d --build` 起 api／worker／web 三端受監督容器，瀏覽器只面對單一入口 | nginx 同源反代 `/ws`、`/diagnoses`；`down -v` 可乾淨重設、劇本可重播 |
 | 🔭 **可觀測性基線** | 三端補齊結構化 JSON 日誌（pino）、`GET /healthz` 依賴探針、queue 深度／WS 連線數／LLM latency／cache 命中率週期入 log 並廣播 `system/metrics` | 「這個專案本身是監控台，但它自己也該可被監控」——dev-only Metrics Panel 即時顯示這些數字 |
+| 🛡️ **Gateway 出口／入口閘門（1.1.0）** | 慢讀者背壓（`bufferedAmount` 高水位＋連續 3 tick terminate）、帶 nonce 的心跳、連線數上限與未授權子上限（滿則 upgrade 回 503）、授權期限、違規累計 10 次即 `1008` 關閉；`POST /diagnoses` 的 `socketId` 必須是在線且已授權的連線 | 真實 Nest app＋ws client 實測：偽造 pong 者 1.65 s 回收、不回 close frame 者 2 s 內 terminate 並釋放名額（第三輪審查） |
+| 🧪 **測試金字塔補齊（1.1.0）** | 982 支單元測試＋覆蓋率不退步門檻、27 項真 Redis／Mongo 整合測試、5 場景跨 process e2e（含 worker `SIGKILL` 後 stalled 重派）、五個接線層核心檔的 Stryker 變異測試 | 第三輪審查 57 個手工變異殺死 54 個；e2e 斷言 `job/status` 進度序列與 `ai/token` `seq`／`attempt` |
 
 ---
 
@@ -162,7 +171,7 @@ sidebar 依前端**靜態對照**把機台分成 **Prep／Forming & Baking／Ful
 
 ![Copilot drawer 進入 active：任務 meta、處理步驟清單與逐字串流](docs/screenshots/copilot-streaming.png)
 
-> 截圖為 v1.0.0 發布前（2026-07-31 重拍，Feature 009 完成時）的畫面，早於 2026-09 審查修復：當時任務 meta 仍顯示 Concurrency，現為 Attempt `N / 3`。
+> 截圖為 1.0.0 發布前（2026-07-31 重拍，Feature 009 完成時）的畫面，早於 2026-09 審查修復：當時任務 meta 仍顯示 Concurrency，現為 Attempt `N / 3`。
 
 ### 9. 結構化診斷結果（五區塊）
 
@@ -421,7 +430,8 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | **資料庫** | MongoDB 7（telemetry time-series + TTL、errorlogs、maintenanceRecords、diagnoses） |
 | **契約** | `packages/contracts`（Zod 4 單一來源，`z.infer` 推導型別）+ `asyncapi.yaml` |
 | **可觀測性** | pino（結構化 JSON 日誌 + 專屬 metrics child logger）、`GET /healthz` 依賴探針、`system/metrics` 廣播 |
-| **部署 / 監督** | Docker 多階段建置（BuildKit cache mount、`pnpm fetch`＋`install --offline`、`pnpm deploy --legacy --prod` 裁剪 workspace 依賴——pnpm 10 起非 injected workspace 須加 `--legacy`，否則 `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`；**2026-09-27 乾淨 cache 實測**：legacy deploy 仍依共用 lockfile 取版本——全新 cache mount＋`--no-cache` 建置的 api image 內全部 production 套件與 `pnpm-lock.yaml` 逐一相同（139 個套件名；計數方法：image 內 `node_modules/.pnpm` 下 149 個套件目錄（即 deploy log 的 `+149`，不含 `lock.yaml`），扣除 2 個 workspace 套件、合併 peer 後綴變體後為 147 組 name@version、139 個套件名；lockfile 端以 apps/api、packages/contracts、packages/shared 三個 importer 的 production 依賴遞迴展開 `snapshots`，扣除 5 個非 linux-x64 平台的 optional `@msgpackr-extract/*` 後同為 139 個套件名。第二輪審查報告記的 151 恰等於本次 image `node_modules/.pnpm` 的原始項目數（149 個套件目錄＋`lock.yaml`＋內層 `node_modules`），推測報告以此計，差異在計數口徑、不在版本），範圍內較新的 `ws` 8.22.0／`bullmq` 5.81.5 未被選入；它仍需 registry metadata（`--offline` 會 `ERR_PNPM_NO_OFFLINE_META`，故用 `--prefer-offline`），且屬單次觀察、升 pnpm 時需重驗；base image tag＋digest 雙釘）、`restart: on-failure:5`、redis／mongo healthcheck＋`service_healthy`、資源上限與 log 輪替、Redis heartbeat 存活探針（每實例一把）、`nginx-unprivileged`（web 容器內同源反代 `/ws`、`/diagnoses`，安全 header＋gzip） |
+| **部署 / 監督** | Docker 多階段建置（BuildKit cache mount、`pnpm fetch`＋`install --offline`、`pnpm deploy --legacy --prod` 裁剪 workspace 依賴——pnpm 10 起非 injected workspace 須加 `--legacy`，否則 `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`；**2026-09-27 乾淨 cache 實測**：legacy deploy 仍依共用 lockfile 取版本，api image 內 139 個 production 套件名與 `pnpm-lock.yaml` 逐一相同、範圍內較新的 `ws`／`bullmq` 未被選入，第三輪審查另以模擬 builder 條件複驗 worker（91 個套件全在 lockfile、無 dev 依賴）；計數口徑與限制見指南 §15.6 運維段與 ADR-002 §6.5；它仍需 registry metadata（故用 `--prefer-offline`），升 pnpm 時需重驗；base image tag＋digest 雙釘）、`restart: on-failure:5`、redis／mongo healthcheck＋`service_healthy`、資源上限與 log 輪替、Redis heartbeat 存活探針（每實例一把）、`nginx-unprivileged`（web 容器內同源反代 `/ws`、`/diagnoses`，安全 header＋gzip） |
+| **測試** | Vitest 4＋`@vitest/coverage-v8`（root `vitest.config.ts` 聚合五套件、不退步門檻）、真 Redis／Mongo 整合測試（`test:integration`）、跨 process e2e（`tests/e2e`＋`docker-compose.e2e.yml`，worker 換 fake `AiProvider`）、Stryker 變異測試（`test:mutation`，nightly）、happy-dom＋`@vue/test-utils` 元件測試 |
 | **語言 / 工具鏈** | Node 22（`.nvmrc`，`engines >=22.12`，Vite 7 需求）、strict TypeScript 5.9、pnpm workspace、ESLint 9、Vitest 4、vue-tsc 3、Spectral（contract lint） |
 | **本機 infra** | Docker Compose：不帶分組起 Redis 7 + MongoDB 7（開發模式）；`demo` profile 起 api／worker／web／seed 全棧受監督容器 |
 
@@ -436,7 +446,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | `telemetry` | 每個 tick 的機台遙測資料點 | **time-series** collection + TTL（`TELEMETRY_TTL_SECONDS`，預設 7 天）自動過期；collection 已存在時以 `collMod` 更新，改值重啟即生效 |
 | `errorlogs` | 機台**狀態轉換**記錄（healthy↔warning↔critical） | 以「上一狀態」去重，只在轉換時寫一筆；TTL 30 天 |
 | `maintenanceRecords` | 維修紀錄（seed 產生） | 診斷 context 的佐證來源之一 |
-| `diagnoses` | 完成的結構化診斷結果 | 通過 `DiagnosisResultSchema` 才落地；快取命中不重複寫；`jobId` unique（重試冪等）。**目前只寫不讀**——沒有對外讀取端點（`GET /diagnoses/:jobId` 列為 roadmap 012） |
+| `diagnoses` | 完成的結構化診斷結果 | 通過 `DiagnosisResultSchema` 才落地；快取命中不重複寫；`jobId` unique（重試冪等）。**目前只寫不讀**——沒有對外讀取端點（`GET /diagnoses/:jobId` 列為 roadmap 012-lite） |
 | `diagnosisTriggers` | 每次診斷觸發的輕量稽核 | 即使命中快取也記一筆（誰、何時、對哪台）；TTL 30 天 |
 
 **Redis 7**（BullMQ／Pub/Sub／cache／lock／限流窗／heartbeat／指標；連線分兩類：BullMQ Worker／QueueEvents／subscriber 為 blocking 連線，其餘 command 連線斷線即失敗、不無限排隊）：
@@ -472,6 +482,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | **007** | [Worker 生產化與 process 監督](specs/007-worker-process-supervision/spec.md) | worker 容器化（多階段 Dockerfile）、崩潰語意由「log + 續跑」翻轉為 **let it crash**（`exit(1)`）交給 Docker `restart: on-failure` 監督重啟、Redis heartbeat key 偵測「活著但卡住」、可決定性重現的故障注入旗標、崩潰迴圈防護（連續 5 次失敗即停止重啟，避免熱迴圈打爆 LLM 額度） |
 | **008** | [整棧容器化與一鍵 Demo](specs/008-fullstack-containerization/spec.md) | api／web 比照 007 容器化並收進 `demo` compose profile，nginx 反向代理 `/ws`、`/diagnoses` 至 api，瀏覽器**單一入口** `http://localhost:8080`；`seed` 一次性服務備妥示範資料；開發模式（host 直跑）零影響；乾淨收場（`down -v` 可重播） |
 | **009** | [可觀測性基線](specs/009-observability-baseline/spec.md) | 三端補齊「監控台自己也該可被監控」的基線：pino 結構化 JSON 日誌（含關聯鍵）、`GET /healthz` 依賴狀態探針（Redis／Mongo 二態回應）、queue 深度／WS 連線數／LLM latency／cache 命中率等關鍵指標週期入 log、dev-only **Metrics Panel**（`VITE_METRICS_PANEL`，唯讀、預設收合，production build 預設關閉）、有損寫入語意明文化（見下方「[已宣告的取捨](#已宣告的取捨)」） |
+| **1.1.0 維護**（2026-09，非 SDD） | [`CHANGELOG.md`](CHANGELOG.md)、指南 §15.6 | 四條維護分支：兩輪審查修復（第一輪 P0～P2、第二輪 Batch A～D）、技術棧升級（NestJS 11／Express 5、Vite 7、Zod 4、Pinia 3、Vitest 4、pnpm 10、`@google/genai`）、測試基礎建設（覆蓋率門檻、整合測試、e2e、變異測試）、契約升 1.2.0 與新增 `CHANGELOG.md`；第三輪審查報告與其修復留待 1.1.0 之後 |
 
 ---
 
@@ -503,7 +514,8 @@ flow-gatekeeper/
 ├── specs/             # 001–009 每條 feature 的 spec / plan / tasks / checklist
 ├── docs/              # ADR、SDD 完整實作指南、design-spec、demo 影片與截圖
 ├── scripts/           # dev-up.ps1（一鍵起全棧）、demo-reset.ps1（清 AI 快取）
-├── asyncapi.yaml      # 即時通道契約（Spectral lint）
+├── asyncapi.yaml      # 即時通道契約（Spectral lint；info.version 1.2.0）
+├── CHANGELOG.md       # 產品版本（1.1.0）與 asyncapi 契約版本的變更紀錄與版本策略
 ├── docker-compose.yml # Redis 7 + MongoDB 7（不帶分組）＋ demo profile：api/worker/web/seed 全棧受監督容器
 ├── docker-compose.e2e.yml # 只給 tests/e2e 用的 override（獨立專案名、18080、AI_PROVIDER=fake）
 ├── vitest.config.ts   # 只給 test:coverage：test.projects 聚合五個套件、合併覆蓋率與門檻
@@ -555,6 +567,7 @@ docker compose up -d
 # 4) 一鍵起 host 端全棧：seed → api → worker → web（各開一個 PowerShell 視窗，方便分開看 log）
 ./scripts/dev-up.ps1
 #   已 seed 過可加 -SkipSeed
+#   新環境若被 PowerShell ExecutionPolicy（預設 Restricted）擋下：powershell -ExecutionPolicy Bypass -File .\scripts\dev-up.ps1
 
 # 5) 開瀏覽器
 #   web → http://localhost:5173   （api → http://localhost:3000，ws 在 /ws）
@@ -663,7 +676,7 @@ api 或 worker 連續快速失敗（如設定錯誤導致啟動即崩潰）時�
   docker inspect --format "{{.RestartCount}} {{.State.Status}}" <容器名>   # 預期 5 exited
   docker compose logs <服務名>       # 看崩潰原因
   ```
-- **復原手段**：先排除故障根因，再 `docker compose --profile demo up -d <服務名>` 重新拉起（重建容器並歸零重試計數；容器成功運行超過 10 秒後 Docker 也會自動重置失敗計數）。
+- **復原手段**：先排除故障根因，再 `docker compose --profile demo up -d <服務名>` 重新拉起（重建容器並歸零重試計數）。注意：Docker 的失敗計數只在重新 `up`／`start` 時歸零——容器穩定運行超過 10 秒只會把**重啟退避間隔**歸零，不會清掉累計次數，長跑 demo 累積 5 次崩潰仍會停下。另外 Docker 引擎或主機重開後只有 `unless-stopped` 的 redis／mongo 會自動回來，api／worker／web 是 `on-failure` 且優雅關閉為退出碼 0，**不會**自動回來，請重跑 `docker compose --profile demo up -d`。
 - **worker 致命注入演練（`WORKER_CHAOS`）在容器內需另設 `WORKER_CHAOS_ALLOW_IN_PRODUCTION=true`**：worker 映像內建 `NODE_ENV=production`，chaos 守衛在 production 預設拒絕武裝（只記一則 error）。演練時於 `apps/worker/.env` 同時設 `WORKER_CHAOS=uncaught`（或 `rejection`）、`WORKER_CHAOS_AT=job`（或 `startup`）與 `WORKER_CHAOS_ALLOW_IN_PRODUCTION=true`，`docker compose --profile demo up -d worker` 重建；**演練後三個變數都清空**再重建。劇本見指南 §16.3 第 5 列與 `specs/007-worker-process-supervision/quickstart.md` 場景 3／4；變數語意見下方「環境變數」表。
 - **要演練「崩潰自癒」給人看**：MUST 用 **in-process kill** 觸發真實崩潰——`docker exec <api 容器名> pkill -KILL -f "dist/main.js"`。**不要用 `docker kill <容器>`**：那是「經 daemon 對容器下的手動停止」，Docker 會抑制所有 restart policy，容器停在 `exited` 不會自動重啟（只有行程自身非零退出才算 failure）。
 
@@ -747,12 +760,23 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
   - _006 前端保真_：`fleet-health` 聚合不變量（四類之和＝total）、`events` 去重＋50 筆上限、`machine-groups` 分組與 fallback、`machine-search` 過濾比對、`telemetry-format` 單位、進度條純函式不變量。
   - _2026-09 審查修復補強_：asyncapi↔Zod 漂移測試、客戶端控制訊息／`POST /diagnoses` 契約、`useHighFrequencyWs`（14 支，含溢位合併、退避歸零、pump 例外不中斷）、worker `processor`（去重 double-check、限流延後、重試與 `attempt` 語意）、env fail-fast、telemetry 有上限 buffer／單一 in-flight。
   - _review02 Batch D 斷言面補齊_（第二輪審查 TQ-4～TQ-9）：`processor` 事件序列與重試分支、`job-status-relay`、`HistoryService` 計數協調、pino logger 包裝、web 元件測試（`CopilotDrawer`、`MachineNodeCard`、`MetricsPanel`、metrics store）、fake provider 與 `AI_PROVIDER` env 驗證。
-- **覆蓋率門檻**：`pnpm test:coverage`（= `vitest run --coverage`）以 root `vitest.config.ts` 的 `test.projects` 一次跑五個套件（shared、contracts、worker、api、web；`tests/e2e` 不納入），以 `@vitest/coverage-v8` 產出合併報告（`coverage/`，text-summary＋lcov）。門檻 **lines 60％／branches 50％**，定位是「不退步」而非追數字；Batch D 補測試後實測總計約 lines 81％、branches 76％（2026-09-28 本機實測 81.4％／76.4％，94 個測試檔 976 支；首次落地時約 67％／65％），數字隨測試增減浮動、以 CI 輸出為準。`main.ts` 入口刻意納入分母，bootstrap 本體由 e2e 覆蓋。
+- **覆蓋率門檻**：`pnpm test:coverage`（= `vitest run --coverage`）以 root `vitest.config.ts` 的 `test.projects` 一次跑五個套件（shared、contracts、worker、api、web；`tests/e2e` 不納入），以 `@vitest/coverage-v8` 產出合併報告（`coverage/`，text-summary＋lcov）。門檻 **lines 60％／branches 50％**，定位是「不退步」而非追數字；Batch D 補測試後實測總計約 lines 81％、branches 76％（2026-09-28 隔離重跑 81.52％／76.56％，94 個測試檔 982 支；首次落地時約 67％／65％），數字隨測試增減浮動、以 CI 輸出為準。**勿與其他 vitest／Stryker 行程並行跑**——`coverage/` 是共用輸出目錄，並行時 `.vue` 檔會被靜默排除、數字失真（第三輪審查 TQ-15）。`main.ts` 入口刻意納入分母，bootstrap 本體由 e2e 覆蓋。
 - **整合測試（真 Redis／Mongo）**：`pnpm --filter @flow-gatekeeper/worker test:integration`、`pnpm --filter @flow-gatekeeper/api test:integration`（各自的 `vitest.integration.config.ts`，只收 `src/integration/**/*.int.test.ts`，不進 `pnpm test`／覆蓋率）。**前置**：repo 根 `docker compose up -d`；連不上即明確失敗、不靜默 skip。隔離：Redis 用 db 15（`INTEGRATION_REDIS_DB` 可改）＋每輪隨機 key 前綴、Mongo 每輪隨機資料庫，測後清理，不碰 db 0 與正式資料庫。涵蓋：worker——Lua compare-and-del 鎖、兩副本並發去重（LLM 只呼叫一次）、鎖 TTL 到期換手、限流窗 `INCR`＋首次 `EXPIRE` 原子性、cache／lock TTL、畸形 cache 即 DEL、`diagnoses` 索引建立與 Mongo 錯誤碼 85／86／11000 的退回路徑；api——time-series TTL 以 `collMod` 更新、errorlogs TTL 漂移修正、`HistoryService` 的 `writeOnce`／flush 計數協調。
 - **跨 process e2e**：`pnpm test:e2e`（= `pnpm --filter @flow-gatekeeper/e2e test:e2e`，套件在 `tests/e2e`）。以獨立 compose 專案 `flow-gatekeeper-e2e`（`docker-compose.yml`＋`docker-compose.e2e.yml`）起全棧，只對外開 `127.0.0.1:18080`、worker 用 `AI_PROVIDER=fake`，以原生 `ws` client 走 nginx 入口驗四個場景：訂閱 → `POST /diagnoses` → `job/status`／`ai/token`／`ai/done` 事件序列、cache 命中、`409`（不在線 socketId）／`404`（名冊外機台）、worker `SIGKILL` 後 stalled 重派；跑完 `down -v`（映像保留）。不需 `GEMINI_API_KEY`、不讀開發者自己的 `.env`，可與 demo／dev infra 並存。**前置**：Docker Engine 25+、**Compose 2.24.4+**（override 用到 `!reset`／`!override`；一鍵 demo 本身仍只需 2.20.2+）。細節見 [`tests/e2e/README.md`](tests/e2e/README.md)。
-- **變異測試**：`pnpm test:mutation`（= `stryker run`，設定 `stryker.config.mjs`）只變異五個接線層核心檔（worker `processor.ts`、api `monitoring.gateway.ts`／`job-status-relay.service.ts`、web `useHighFrequencyWs.ts`／`copilot-reducer.ts`），`break` 門檻 70（看總分）；報告輸出 `reports/mutation/`。每日由 `.github/workflows/nightly-mutation.yml` 執行（GitHub 的 schedule 只從預設分支 `main` 觸發，故 workflow 在 `main` 排程、實際 checkout `develop`；本檔須隨 release 進 `main` 才會開始排程），亦可手動觸發。首跑總分約 72；`monitoring.gateway`（66.5）與 `processor`（62.7）單檔低於 70，列為追蹤項目。
+- **變異測試**：`pnpm test:mutation`（= `stryker run`，設定 `stryker.config.mjs`）只變異五個接線層核心檔（worker `processor.ts`、api `monitoring.gateway.ts`／`job-status-relay.service.ts`、web `useHighFrequencyWs.ts`／`copilot-reducer.ts`），`break` 門檻 70（看總分）；報告輸出 `reports/mutation/`。每日由 `.github/workflows/nightly-mutation.yml` 執行（GitHub 的 schedule 只從預設分支 `main` 觸發，故 workflow 在 `main` 排程、實際 checkout `develop`；本檔須隨 release 進 `main` 才會開始排程），亦可手動觸發。首跑總分約 72；2026-09-28 單檔重測 `processor` 73.86、`monitoring.gateway` 68.47（後者仍低於 70，主因為關閉路徑缺斷言，列為追蹤項目）。
 - **一鍵全檢**：`pnpm check` = 契約 lint → typecheck → lint → test（乾淨 clone 免先 build packages）；`pnpm check:coverage` 同序但以 `test:coverage` 取代 `test`。CI（`.github/workflows/ci.yml`，目前僅手動觸發）依序跑契約 lint → typecheck → lint → `test:coverage`（含覆蓋率門檻，並上傳 lcov artifact）→ `pnpm build`，Node 版本讀 `.nvmrc`；workflow 設最小權限 `permissions: contents: read`、同分支 `concurrency` 取消舊 run、`timeout-minutes: 20`。變異測試另走 nightly workflow，整合測試與 e2e 目前只在本機跑。
 - 每條 feature 的 spec 都帶**量化 Success Criteria（SC）**與**可重播 demo**，讓每個賣點都能被獨立驗收。
+
+---
+
+## 版本與變更紀錄
+
+| 項目 | 現況 |
+| --- | --- |
+| **產品版本** | **1.1.0**（2026-09-28；git tag `1.1.0`，指向 `develop` 併入 `main` 的 merge commit）。六份 `package.json` 的 `version` 與 tag 一致。產品 tag **不帶 `v` 前綴**——第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`（同一 commit `3e94ac2`），GitHub Release 與 demo 影片連結一併改指 `1.0.0` |
+| **契約版本** | `asyncapi.yaml` `info.version` **1.2.0**，獨立於產品版本演進；每版加嚴／新增欄位／新增消費端義務都記在 `CHANGELOG.md`「asyncapi 契約版本」小節 |
+| **變更紀錄** | [`CHANGELOG.md`](CHANGELOG.md)（Keep a Changelog 格式；升級前先讀「相容性注意」）；維護分支的現況摘要見指南 §15.6 |
+| **Release** | `main` 只接收發布：`develop` 以 `--no-ff` 併入 `main` → annotated tag → GitHub Release（流程見 `CLAUDE.md`「`main` 的 release 流程」）；日常開發與 feature merge 一律在 `develop` |
 
 ---
 
@@ -799,13 +823,14 @@ specify → clarify → plan → checklist → tasks → analyze → implement �
 ## 已知限制
 
 - **重連不 rebind**：Gateway 每次連線派新 `clientId`，「任務 → 連線」綁定以記憶體 Map 實作；重連會使進行中任務綁定失效——前端把它收尾為「中斷 + Retry」，不做跨重連續傳（正式做法可改存 Redis）。`POST /diagnoses` 以同一 `jobId` 重送也**不會改綁**到新連線（防止他人把診斷結果改送到自己的連線），需以新 `jobId` 重新發起。
-- **診斷結果目前沒有讀取端點**：`diagnoses` 確實落 MongoDB、結果也進 Redis 快取，但 HTTP 只有 `POST /diagnoses` 與 `GET /healthz`，前端**無法**在重連後取回某個 `jobId` 的完整結果；目前唯一的「取回」是按 Retry 重新發起，若簽章相同且快取未過期（`AI_CACHE_TTL_SECONDS`，預設 10 分鐘）會秒回並標 Cached。`GET /diagnoses/:jobId` 與重連 rebind 列為 roadmap 012（串流韌性）。
+- **診斷結果目前沒有讀取端點**：`diagnoses` 確實落 MongoDB、結果也進 Redis 快取，但 HTTP 只有 `POST /diagnoses` 與 `GET /healthz`，前端**無法**在重連後取回某個 `jobId` 的完整結果；目前唯一的「取回」是按 Retry 重新發起，若簽章相同且快取未過期（`AI_CACHE_TTL_SECONDS`，預設 10 分鐘）會秒回並標 Cached。`GET /diagnoses/:jobId` 與重連 rebind 列為 roadmap 012-lite（串流韌性）。
 - **Gateway 單實例**（worker 已可多實例：heartbeat／metrics key 帶實例識別、api 掃描合併）：Gateway 訂閱表與 `jobId` 路由都在行程內記憶體，目前不跨多 server 水平擴展；要擴展時訂閱表需外置 Redis、`psubscribe ai-stream:*` 需改精準 channel subscribe（見 [ADR-002 §6.1](docs/adr-002-productionization-scope.md)、ADR-001 §6）。
 - **worker 崩潰後的重派有長時間靜默**：e2e 實測 worker 被 `SIGKILL` 後，BullMQ 要等 job lock（30 秒）過期、再經 stalled 檢查（每 30 秒，先標記、下一輪才搬回 wait）才重派，約 **92 秒**內前端收不到任何事件，超過前端 45 秒的無進展 watchdog（任務先被收尾為 failed）；重派後 `ai/*` 的 `attempt` 仍為 1、`seq` 從 0 重播。relay 監聽 `stalled` 與等待者 keepalive 列為 roadmap 012-lite（見 [ADR-002 §6.5](docs/adr-002-productionization-scope.md)）。
-- **AI token 串流為 at-most-once**：Redis Pub/Sub 是 fire-and-forget，Gateway 重啟或前端斷線期間的 token 會永久丟失（最終診斷結果仍會落 MongoDB 與快取，但如上一條所述目前沒有讀取端點，斷線的那一方看不到它，只能 Retry）；升級路徑為 Redis Streams + consumer group 續傳，見 [ADR-002 §6.2](docs/adr-002-productionization-scope.md)。
+- **AI token 串流為 at-most-once**：Redis Pub/Sub 是 fire-and-forget，Gateway 重啟或前端斷線期間的 token 會永久丟失（最終診斷結果仍會落 MongoDB 與快取，但如上一條所述目前沒有讀取端點，斷線的那一方看不到它，只能 Retry）；升級路徑見 [ADR-002 §6.2／§6.5](docs/adr-002-productionization-scope.md)（012-lite 傾向以 BullMQ `returnvalue`＋`job/status.result`＋讀取端點取代 Redis Streams）。
 - **REST 診斷入口開發階段免授權**：`POST /diagnoses` 無身分驗證；rate limit 只在一鍵 demo 的 nginx 入口（每來源 IP 10 r/m、burst 5，超限回 `429`；Docker Desktop 下實為全體共用一桶，見「注意事項」），開發模式直連 api 時沒有（已有 Zod 輸入驗證、只收 `application/json` 以強制跨站請求先過 CORS preflight、jobId 冪等）；即時通道訂閱仍走 `WS_AUTH_SECRET`（本身也只是靜態共享字串，非正式 JWT/OIDC），另有可選的 Origin 白名單。正式環境的 REST 認證與握手階段驗證升級不在範圍，見 [ADR-002 §6.3](docs/adr-002-productionization-scope.md)。
 - **telemetry 丟棄計數**：已以 `system/metrics` 的 optional `persist: { dropped, failed }`（api 啟動以來累計）廣播；逐類明細（`droppedPoints`／`failedPoints`／`droppedErrorLogs`）仍只出現在（30 秒節流的）api error log。
 - **示範機台固定為 5 台**：`mixer-01`、`press-02`、`pack-03`、`oven-04`、`sorter-05`；遙測由 mock producer 以決定性規律產生（含週期性 warning/critical 尖峰），以滿足可重播驗收。
+- **第三輪審查（2026-09-28，審 `4c43d18`）已知未修**：api 端 BullMQ producer `Queue` 未掛 `error` listener——Redis 認證失敗時密碼會經 BullMQ 的 `console.error` 明文進 stderr（pino 路徑已遮蔽）；同簽章請求失敗時不去重（持鎖者失敗即放鎖，等待者接著各自打 LLM）；`ai/done` 為 fire-and-forget、與 `completed` 分走不同 Redis 連線而無順序保證，Pub/Sub 訂閱中斷時 api 無日誌、前端只能等 45 秒 watchdog；`pong` 不受背壓限制、入站無速率上限；Redis 不可達時 `app.close()` 會卡到被 SIGKILL。完整清單、實測證據與修法見第三輪審查報告 `docs/20260927-research-review03.md`（1.1.0 之後併入 `develop`）與 ADR-002 §6.5.1。
 - **可觀測性僅止於基線**：只有結構化日誌 + `/healthz` + 指標入 log／廣播，沒有 Prometheus/Grafana 儀表板、沒有 tracing、沒有告警規則——這些刻意不做，理由見 [ADR-002 §7](docs/adr-002-productionization-scope.md)。
 
 ---

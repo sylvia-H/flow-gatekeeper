@@ -3173,9 +3173,9 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 > **已變更（2026-09-27 第二輪審查）**：roadmap 修訂為 **010-lite → 012-lite → 011**（`docs/20260927-research-review02.md` §5.4）；
 > 012-lite 改為優先採 BullMQ `returnvalue`＋`GET /diagnoses/:jobId`＋`stalled` 監聽，Redis Streams 降為備選。延後項總表見 ADR-002 §6.5。
 
-### 15.6 v1.0.0 之後的現況摘要
+### 15.6 1.0.0 之後的現況摘要
 
-本節彙整 **v1.0.0（`3e94ac2`）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況。這些分支都不是 SDD feature，
+本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；這些分支於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布，變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
 但改動了多處跨 feature 的行為；各章 reference code 保留，另以「已變更」註記指回本節。依 `develop` 的 merge 順序
 （`git log --oneline --first-parent --merges 3e94ac2..HEAD` 核對）：
 
@@ -3186,7 +3186,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 2 | `upgrade/20260927-tech-stack` | `6be71c6` | 技術棧升級，17 個 commit | 技術棧升級 |
 | 3 | `docs/20260927-research-review02` | `63b6f66` | 新增第二輪審查報告 `docs/20260927-research-review02.md` | — |
 | 4 | `fix/20260927-research-review02` | `898ccfc` | 第二輪審查 Batch A／B 修復 | 第二輪審查修復 |
-| 5 | `fix/20260927-review02-batch-cd` | 待併回 | 第二輪報告 Batch C（文件與 release 準備）、Batch D（測試基礎建設），外加 6 項 code-review findings | Batch C／D |
+| 5 | `fix/20260927-review02-batch-cd` | `4c43d18` | 第二輪報告 Batch C（文件與 release 準備）、Batch D（測試基礎建設），外加 6 項 code-review findings | Batch C／D |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。
 
@@ -3306,13 +3306,13 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   `smoke-gemini.ts`、`.dockerignore` 補 `**/` 前綴；demo `TELEMETRY_TTL_SECONDS` 改 86400；五套件 test 移除 `--passWithNoTests`。
   root 聚合 script 內的裸 `pnpm` 需先 `corepack enable`（README 已註明）。
 
-**Batch C／D**（`fix/20260927-review02-batch-cd`，merge 待併回 `develop` 時填；報告 `docs/20260927-research-review02.md` §6）：
+**Batch C／D**（`fix/20260927-review02-batch-cd`，merge `4c43d18`；報告 `docs/20260927-research-review02.md` §6）：
 
 - **Batch C（文件與 release 準備）**：
   - 契約：`asyncapi.yaml` 的 `info.version` 已升 **1.2.0**（明細見上方第二輪修復段與 `CHANGELOG.md`「asyncapi 契約版本」）；新增 repo 根 `CHANGELOG.md`（版本策略：產品版本與契約版本兩條獨立演進）。
-  - 產品版本：六份 `package.json`（root 新增 `version`、五套件由 `0.1.0` 對齊）預定 **1.1.0**，release 時與 tag、CHANGELOG 條目一致。
+  - 產品版本：六份 `package.json`（root 新增 `version`、五套件由 `0.1.0` 對齊）為 **1.1.0**，已於 2026-09-28 與 tag `1.1.0`、CHANGELOG 條目一致發布（產品 tag 自此不帶 `v` 前綴）。
   - 憲章升 **1.5.0**：Principle III「型別來源分層」改為全部 WS message 與 `POST /diagnoses` 一律 Zod＋`z.infer`；Governance 新增「跨 feature／跨分支決策 MUST 回補真實來源（涵蓋維護分支）」與「契約變更 MUST 升 `info.version` 並記 CHANGELOG」。`CLAUDE.md` 補「維護分支」小節。
-  - 本節由「2026-09 修復摘要」改名為「v1.0.0 之後的現況摘要」並加上維護分支表；ADR-002 新增 §6.5「已知未做與延後項」表。
+  - 本節由「2026-09 修復摘要」改名為「1.0.0 之後的現況摘要」（原「v1.0.0 之後」，隨 tag 更名）並加上維護分支表；ADR-002 新增 §6.5「已知未做與延後項」表。
   - specs 001–008 補狀態與「已變更」橫幅；第一輪報告數字更正後凍結為歷史快照。
   - 文件一致性自動檢查：`packages/contracts/src/docs-contract-version.test.ts`（README／指南／CHANGELOG 的 `info.version` 現況宣稱＝`asyncapi.yaml`）、api／worker 各一支 `readme-env-table.test.ts`（README 環境變數表涵蓋 `env-schema.ts` 全部 key、反向不留幽靈變數）。
 - **Batch D（測試基礎建設）**——指令、前置與門檻以 README「測試與品質門檻」為準：
