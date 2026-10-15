@@ -1,7 +1,7 @@
 <!-- SPECKIT START -->
 <!-- 提醒：下次執行 speckit-agent-context-update 會覆寫本區塊，屆時再把 current plan 指向新 feature 的 plan.md。 -->
 目前**無進行中的 SDD feature**；最近一次完成的是 009（`specs/009-observability-baseline/plan.md`）。
-009 之後的修復與升級見兩輪審查報告 `docs/20260927-research-review.md`、`docs/20260927-research-review02.md`（數字與結論以第二輪為準；`fix/20260927-research-review`、`upgrade/20260927-tech-stack`、`fix/20260927-research-review02`、`fix/20260927-review02-batch-cd` 皆已併入 `develop`，並於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第三輪審查報告 `docs/20260927-research-review03.md` 在 `docs/20260927-research-review03` 分支、尚未併入），
+009 之後的修復與升級見兩輪審查報告 `docs/20260927-research-review.md`、`docs/20260927-research-review02.md`（數字與結論以第二輪為準；`fix/20260927-research-review`、`upgrade/20260927-tech-stack`、`fix/20260927-research-review02`、`fix/20260927-review02-batch-cd` 皆已併入 `develop`，並於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第三輪審查報告 `docs/20260927-research-review03.md` 已於 2026-10-15 併入 `develop`），
 現況摘要見 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15.6「1.0.0 之後的現況摘要」。技術棧、結構與指令以 README 與指南為準。
 <!-- SPECKIT END -->
 

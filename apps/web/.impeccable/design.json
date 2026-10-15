@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-15T06:10:00Z",
+  "title": "Design System: flow-gatekeeper",
+  "extensions": {
+    "colorMeta": {
+      "accent": { "role": "primary", "displayName": "Signal Blue", "canonical": "#4FA3FF", "tonalRamp": ["#0B1F38", "#102A42", "#143A5C", "#1E5A8F", "#2F7FC7", "#4FA3FF", "#76B8FF", "#B5DAFF"] },
+      "canvas": { "role": "neutral", "displayName": "Abyss Canvas", "canonical": "#0B1014", "tonalRamp": ["#0B1014", "#0E151B", "#111820", "#141D27", "#17212B", "#26323D", "#3E5266", "#9AA8B5"] },
+      "surface": { "role": "neutral", "displayName": "Panel", "canonical": "#111820", "tonalRamp": ["#0B1014", "#0E151B", "#111820", "#141D27", "#17212B", "#26323D", "#3E5266", "#9AA8B5"] },
+      "elevated": { "role": "neutral", "displayName": "Elevated", "canonical": "#17212B", "tonalRamp": ["#0B1014", "#0E151B", "#111820", "#141D27", "#17212B", "#26323D", "#3E5266", "#9AA8B5"] },
+      "text-primary": { "role": "neutral", "displayName": "Text Primary", "canonical": "#E7EDF2", "tonalRamp": ["#3E5266", "#55667A", "#7C8A98", "#9AA8B5", "#B8C3CD", "#D0D8E0", "#E7EDF2", "#F6F8FA"] },
+      "ok": { "role": "status", "displayName": "OK Green", "canonical": "#37C978", "tonalRamp": ["#0C2417", "#123522", "#1E5C38", "#27874F", "#2FA863", "#37C978", "#6FDCA0", "#9DF0BF"] },
+      "warn": { "role": "status", "displayName": "Warning Amber", "canonical": "#F2B84B", "tonalRamp": ["#2A1F0C", "#3A2B12", "#6B5220", "#9A7A2E", "#C6993B", "#F2B84B", "#F2CF85", "#F8E3B5"] },
+      "crit": { "role": "status", "displayName": "Critical Red", "canonical": "#FF5C66", "tonalRamp": ["#2A0F12", "#3B151A", "#7A2A30", "#B03C45", "#DA4C56", "#FF5C66", "#FF9AA0", "#FFC9CD"] }
+    },
+    "typographyMeta": {
+      "title": { "displayName": "Title", "purpose": "面板標題（AI Copilot、品牌名）；實務上多為 14px semibold，16px 定義了但幾乎未用。" },
+      "body": { "displayName": "Body", "purpose": "按鈕文字、side nav、卡片名稱、結果摘要。" },
+      "label": { "displayName": "Label", "purpose": "區段標頭與側欄分組名，uppercase + tracking-wide。" },
+      "micro": { "displayName": "Micro", "purpose": "10px 狀態徽章、單位、計數；另有 11px text-pill 給 drawer chip。" },
+      "mono": { "displayName": "Mono", "purpose": "machine id、job id、時間戳、延遲、串流文字——一切機器產生的值。" },
+      "number": { "displayName": "Telemetry Number", "purpose": "卡片上的四個遙測值，整個 app 唯一的大字。" }
+    },
+    "shadows": [
+      { "name": "card", "value": "0 1px 0 rgba(255,255,255,0.04), 0 12px 28px rgba(0,0,0,0.22)", "purpose": "機台卡片常駐；上緣 4% 白高光模擬受光邊。" },
+      { "name": "drawer", "value": "-18px 0 36px rgba(0,0,0,0.35)", "purpose": "右側 drawer 與手機 bottom-sheet。" },
+      { "name": "critical-pulse", "value": "0 0 0 0 rgba(255,92,102,0.35) → 0 0 0 6px rgba(255,92,102,0)", "purpose": "critical 卡片與狀態燈的擴散光暈，唯一會動的陰影。" }
+    ],
+    "motion": [
+      { "name": "critical-pulse", "value": "criticalPulse 1.2s ease-in-out infinite", "purpose": "critical 狀態的慢脈動；reduced-motion 時停止。" },
+      { "name": "stream-caret", "value": "streamCaret 0.8s steps(1) infinite", "purpose": "AI 串流文字尾端游標閃爍。" },
+      { "name": "indeterminate", "value": "indeterminate 1.2s ease-in-out infinite", "purpose": "進度未知時 1/3 寬色塊滑動；reduced-motion 時停成靜止 1/3 條。" },
+      { "name": "hover-lift", "value": "transition 150ms; transform translateY(-1px)", "purpose": "卡片 hover 微抬。" },
+      { "name": "progress-width", "value": "width 300ms ease-out", "purpose": "數值進度條寬度變化。" }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Diagnose／Run diagnosis：全站唯一的實心藍按鈕。",
+      "html": "<button class=\"ds-btn-primary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M11 2v2\"/><path d=\"M5 2v2\"/><path d=\"M5 3H4a2 2 0 0 0-2 2v4a6 6 0 0 0 12 0V5a2 2 0 0 0-2-2h-1\"/><path d=\"M8 15a6 6 0 0 0 12 0v-3\"/><circle cx=\"20\" cy=\"10\" r=\"2\"/></svg>Diagnose</button>",
+      "css": ".ds-btn-primary { display:inline-flex; align-items:center; gap:6px; height:36px; padding:0 12px; border:0; border-radius:6px; background:#4FA3FF; color:#0B1014; font:500 14px/20px Inter, ui-sans-serif, system-ui; cursor:pointer; } .ds-btn-primary:hover { background:#76B8FF; } .ds-btn-primary:focus-visible { outline:none; box-shadow:0 0 0 2px #4FA3FF; } .ds-btn-primary:disabled { opacity:.5; cursor:not-allowed; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Pause／Resume、中止診斷：面板色底 + hairline。",
+      "html": "<button class=\"ds-btn-secondary\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"14\" y=\"4\" width=\"4\" height=\"16\" rx=\"1\"/><rect x=\"6\" y=\"4\" width=\"4\" height=\"16\" rx=\"1\"/></svg>Pause</button>",
+      "css": ".ds-btn-secondary { display:inline-flex; align-items:center; gap:6px; height:36px; padding:0 10px; border:1px solid #26323D; border-radius:6px; background:#111820; color:#9AA8B5; font:400 12px/16px Inter, ui-sans-serif, system-ui; cursor:pointer; } .ds-btn-secondary:hover { background:#141D27; color:#E7EDF2; } .ds-btn-secondary:focus-visible { outline:none; box-shadow:0 0 0 2px #4FA3FF; }"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input-search",
+      "description": "TopBar 機台搜尋，全站唯一輸入欄。",
+      "html": "<div class=\"ds-search\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/></svg><input type=\"search\" placeholder=\"Search machines\" aria-label=\"Search machines\"></div>",
+      "css": ".ds-search { position:relative; width:320px; color:#7C8A98; } .ds-search svg { position:absolute; left:10px; top:50%; transform:translateY(-50%); pointer-events:none; } .ds-search input { width:100%; height:36px; padding:0 12px 0 32px; border:1px solid #26323D; border-radius:6px; background:#0E151B; color:#E7EDF2; font:400 14px/20px Inter, ui-sans-serif, system-ui; } .ds-search input::placeholder { color:#7C8A98; } .ds-search input:focus { outline:none; border-color:#3E5266; box-shadow:0 0 0 2px #4FA3FF; }"
+    },
+    {
+      "name": "Connection Chip",
+      "kind": "chip",
+      "refersTo": "chip-status",
+      "description": "TopBar 連線狀態：圓點依三態上色，後綴 mono 延遲。",
+      "html": "<span class=\"ds-chip\"><span class=\"ds-chip-dot\"></span>Connected <span class=\"ds-chip-meta\">· 12 ms</span></span>",
+      "css": ".ds-chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; background:#17212B; color:#9DF0BF; font:400 12px/16px Inter, ui-sans-serif, system-ui; } .ds-chip-dot { width:8px; height:8px; border-radius:999px; background:#37C978; } .ds-chip-meta { font-family: 'JetBrains Mono', ui-monospace, monospace; color:#9AA8B5; }"
+    },
+    {
+      "name": "State Badge (critical)",
+      "kind": "chip",
+      "refersTo": "badge-state-crit",
+      "description": "卡片右上角的狀態文字徽章，10px uppercase，bg-*-bg + text-*-fg。",
+      "html": "<span class=\"ds-badge ds-badge-crit\">Critical</span> <span class=\"ds-badge ds-badge-warn\">Warning</span> <span class=\"ds-badge ds-badge-ok\">Healthy</span>",
+      "css": ".ds-badge { display:inline-block; padding:2px 6px; border-radius:999px; font:600 10px/1 Inter, ui-sans-serif, system-ui; text-transform:uppercase; letter-spacing:.025em; } .ds-badge-crit { background:#3B151A; color:#FF9AA0; } .ds-badge-warn { background:#3A2B12; color:#F2CF85; } .ds-badge-ok { background:#123522; color:#9DF0BF; }"
+    },
+    {
+      "name": "Machine Node Card",
+      "kind": "card",
+      "refersTo": "card-machine",
+      "description": "中央網格的機台卡片（healthy 態）：名稱、mono id、狀態徽章與燈、2×2 等寬遙測、相對時間。",
+      "html": "<button class=\"ds-card\"><div class=\"ds-card-head\"><div><div class=\"ds-card-name\">Mixer 01</div><div class=\"ds-card-id\">mixer-01</div></div><div class=\"ds-card-state\"><span class=\"ds-card-badge\">Healthy</span><span class=\"ds-card-light\"></span></div></div><div class=\"ds-card-grid\"><div><div class=\"ds-card-label\">Temp</div><div class=\"ds-card-val\">62.4<small>°C</small></div></div><div><div class=\"ds-card-label\">Vibration</div><div class=\"ds-card-val\">1.82<small>mm/s</small></div></div><div><div class=\"ds-card-label\">Throughput</div><div class=\"ds-card-val\">118<small>u/min</small></div></div><div><div class=\"ds-card-label\">Error rate</div><div class=\"ds-card-val\">0.4<small>%</small></div></div></div><div class=\"ds-card-foot\">updated 1s ago</div></button>",
+      "css": ".ds-card { display:flex; flex-direction:column; gap:12px; width:240px; min-height:148px; padding:12px; text-align:left; border:1px solid #26323D; border-radius:8px; background:#111820; color:#E7EDF2; box-shadow:0 1px 0 rgba(255,255,255,.04), 0 12px 28px rgba(0,0,0,.22); font-family:Inter, ui-sans-serif, system-ui; cursor:pointer; transition:transform .15s, border-color .15s, background .15s; } .ds-card:hover { transform:translateY(-1px); border-color:#3E5266; background:#141D27; } .ds-card:focus-visible { outline:none; box-shadow:0 0 0 2px #4FA3FF; } .ds-card-head { display:flex; justify-content:space-between; gap:8px; } .ds-card-name { font:500 14px/20px Inter, ui-sans-serif, system-ui; } .ds-card-id { font:400 12px/16px 'JetBrains Mono', ui-monospace, monospace; color:#9AA8B5; } .ds-card-state { display:flex; align-items:center; gap:6px; } .ds-card-badge { padding:2px 6px; border-radius:999px; background:#123522; color:#9DF0BF; font:600 10px/1 Inter, ui-sans-serif, system-ui; text-transform:uppercase; letter-spacing:.025em; } .ds-card-light { width:9px; height:9px; border-radius:999px; background:#37C978; } .ds-card-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; } .ds-card-label { font:400 12px/16px Inter, ui-sans-serif, system-ui; color:#7C8A98; } .ds-card-val { font:400 22px/1 'JetBrains Mono', ui-monospace, monospace; } .ds-card-val small { margin-left:4px; font-size:10px; color:#7C8A98; } .ds-card-foot { margin-top:auto; font:400 12px/16px 'JetBrains Mono', ui-monospace, monospace; color:#7C8A98; }"
+    },
+    {
+      "name": "Sidebar Nav Item",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "側欄機台項目；active 用 accent-bg 底。",
+      "html": "<nav class=\"ds-nav\"><div class=\"ds-nav-group\">Production line</div><button class=\"ds-nav-item ds-nav-item-active\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3-4.03 2.42Z\"/><path d=\"m7 16.5-4.74-2.85\"/><path d=\"m7 16.5 5-3\"/><path d=\"M7 16.5v5.17\"/><path d=\"M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5l-5 3Z\"/><path d=\"m17 16.5-5-3\"/><path d=\"m17 16.5 4.74-2.85\"/><path d=\"M17 16.5v5.17\"/><path d=\"M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0l-3 1.8Z\"/><path d=\"M12 8 7.26 5.15\"/><path d=\"m12 8 4.74-2.85\"/><path d=\"M12 13.5V8\"/></svg>Mixer 01</button><button class=\"ds-nav-item\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\"/></svg>Press 02</button></nav>",
+      "css": ".ds-nav { width:216px; padding:8px 0; background:#111820; } .ds-nav-group { padding:0 4px 8px; font:500 12px/16px Inter, ui-sans-serif, system-ui; text-transform:uppercase; letter-spacing:.025em; color:#7C8A98; } .ds-nav-item { display:flex; align-items:center; gap:8px; width:100%; padding:6px 8px; border:0; border-radius:6px; background:transparent; color:#9AA8B5; font:400 14px/20px Inter, ui-sans-serif, system-ui; text-align:left; cursor:pointer; } .ds-nav-item svg { color:#7C8A98; flex:none; } .ds-nav-item:hover { background:#141D27; } .ds-nav-item-active { background:#102A42; color:#E7EDF2; } .ds-nav-item:focus-visible { outline:none; box-shadow:0 0 0 2px #4FA3FF; }"
+    },
+    {
+      "name": "Progress Bar",
+      "kind": "custom",
+      "refersTo": "card-machine",
+      "description": "6px pill 軌道；數值態填色，indeterminate 態 1/3 色塊滑動。",
+      "html": "<div class=\"ds-progress\" role=\"progressbar\" aria-valuemin=\"0\" aria-valuemax=\"100\" aria-valuenow=\"60\"><div class=\"ds-progress-fill\" style=\"width:60%\"></div></div>",
+      "css": ".ds-progress { position:relative; width:240px; height:6px; overflow:hidden; border-radius:999px; background:#0E151B; } .ds-progress-fill { height:100%; border-radius:999px; background:#4FA3FF; transition:width .3s ease-out; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Night-Shift Control Room",
+    "overview": "這是一間給值夜班操作員長時間盯著的控制室：整個畫面壓在近黑的藍灰底上，面板之間只用一階一階更亮的藍灰色和一條 1px 的細邊區隔，沒有陰影堆疊、沒有裝飾。唯一會「說話」的是狀態色——綠、琥珀、紅各自只佔卡片的一角徽章與一顆狀態燈，critical 時才讓整張卡片染上暗紅底並緩慢脈動。藍色 accent 保留給「可以按」與「被選中」兩件事。\n\n資訊密度中高：中央是自適應的機台卡片網格，每張卡片用 22px 的等寬數字承載四個遙測值，metadata 全部退到 10 到 12px 的灰階小字。等寬字體不只用在數字，也用在 machine id、job id、時間戳與 AI 串流文字，形成「凡是機器產生的東西都是 mono」的規律。動效只有三種循環動畫和 150ms 的 hover 上移，全部在 prefers-reduced-motion 下關閉。",
+    "keyCharacteristics": [
+      "深色藍灰五階面：canvas → surface-inset → surface → surface-hover → elevated，以明度而非陰影分層",
+      "狀態三色各自成一組四件套（實色／前景文字／邊框／暗底），所有面板共用同一張對照表",
+      "單一 accent 藍，只用於 primary action、選取態、串流游標與背壓比值",
+      "Inter 做 UI、JetBrains Mono 做一切機器產生的值",
+      "圓角三檔：6px 控制項、8px 卡片、全圓 pill；陰影只有兩種且極淡"
+    ],
+    "rules": [
+      { "name": "The One Blue Rule", "body": "accent 藍只出現在四個地方：primary action、選取態、串流游標、背壓比值。任何裝飾性的藍都是錯的。", "section": "colors" },
+      { "name": "The Four-Piece Rule", "body": "每個狀態色都是「實色／fg／border／bg」四件套，徽章永遠是 bg-*-bg + text-*-fg，實色只給圓點與比例條，絕不把實色當文字色用在暗底上。", "section": "colors" },
+      { "name": "The Tint-Not-Shout Rule", "body": "critical 用暗紅底加慢脈動表達緊急，不用亮紅大面積、不閃爍；warning 連邊框都不換。", "section": "colors" },
+      { "name": "The Machine-Speaks-Mono Rule", "body": "凡是 id、數值、時間、log、AI 原始輸出，一律等寬；凡是人寫的標籤與說明，一律 Inter。", "section": "typography" },
+      { "name": "The No-Hero Rule", "body": "沒有 display 字級；視覺重量來自 22px 等寬數字與狀態色，不來自標題。", "section": "typography" },
+      { "name": "The Tonal-Steps Rule", "body": "要讓東西「在上面」，換下一階底色加 hairline，而不是加陰影。", "section": "elevation" },
+      { "name": "The Outline-Not-Ring Rule", "body": "選取框用 outline 1px + offset -2px 疊在 1px accent 邊框上組成 2px，不用 ring／box-shadow——因為 critical 的脈動動的就是 box-shadow，ring 會被蓋掉。", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 用五階底色加 1px hairline 分層；要「浮起」就換下一階底色。",
+      "Do 讓每個狀態同時有顏色、文字徽章與 aria label；徽章一律 bg-*-bg + text-*-fg。",
+      "Do 把一切機器產生的值（id、數值、時間、串流）設成 JetBrains Mono。",
+      "Do 保持控制項高度 36px、圓角 6px；卡片圓角 8px、內距 12px。",
+      "Do 在 prefers-reduced-motion: reduce 下停掉三種循環動畫並把 transition 縮到 0.01ms。",
+      "Do 讓 10–12px 小字對其底色 ≥ 4.5:1（text-muted 已為此提亮到 #7C8A98）。"
+    ],
+    "donts": [
+      "Don't 在元件內寫 hex、style=\"color:#…\" 或自創 warning／critical 色（憲章硬規則）。",
+      "Don't 把 accent 藍用在 primary action、選取態、游標、背壓比值以外的地方。",
+      "Don't 用陰影表達層級，也不要在選取態用 ring／box-shadow（會被 critical 脈動蓋掉）。",
+      "Don't 用大面積紫色漸層、裝飾光球、bokeh，或超過 8px 的卡片圓角。",
+      "Don't 讓 warning 卡片換邊框、讓 critical 閃爍或用亮紅整面。",
+      "Don't 在 stale 時清空數值或改變卡片盒模型（避免 layout shift）。"
+    ]
+  }
+}
