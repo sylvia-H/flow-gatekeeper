@@ -38,16 +38,16 @@ const title = computed(() => {
 
 <template>
   <span
-    class="inline-flex items-center gap-1 rounded-pill bg-elevated px-2.5 py-1 font-mono text-xs text-fg-muted"
+    class="inline-flex items-center gap-1 rounded-pill bg-rim px-2.5 py-1 font-mono text-xs text-ink-2"
     :title="title"
   >
     <span class="hidden sm:inline">{{ receivedText }} msgs</span>
-    <span class="hidden sm:inline text-fg-subtle">·</span>
+    <span class="hidden sm:inline text-ink-3">·</span>
     <span class="hidden sm:inline">{{ framesText }} frames</span>
-    <span class="hidden sm:inline text-fg-subtle">·</span>
-    <span class="font-medium text-accent">{{ ratio }}:1</span>
+    <span class="hidden sm:inline text-ink-3">·</span>
+    <span class="font-medium text-accent-strong">{{ ratio }}:1</span>
     <template v-if="discarded > 0">
-      <span class="hidden sm:inline text-fg-subtle">·</span>
+      <span class="hidden sm:inline text-ink-3">·</span>
       <span class="hidden sm:inline">{{ discardedText }} dropped</span>
     </template>
   </span>

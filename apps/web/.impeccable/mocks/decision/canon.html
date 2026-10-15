@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><title>flow-gatekeeper · 品類標準</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap">
+<style>
+:root{--bg:#F8FAFC;--w:#fff;--tx:#111827;--t2:#6B7280;--bd:#E5E7EB;--ac:#2563EB;--ok:#16A34A;--wn:#D97706;--cr:#DC2626;--crbg:#FEF2F2}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.4 Inter,"Noto Sans TC",sans-serif;color:var(--tx)}
+.m{font-family:"JetBrains Mono",monospace;font-weight:600}
+#root{width:1440px;height:900px;overflow:hidden;margin:0;background:var(--bg);display:grid;grid-template-columns:240px 1fr;position:relative}
+.rail{background:var(--w);border-right:1px solid var(--bd);padding:16px;display:flex;flex-direction:column;gap:16px}
+.brand{display:flex;align-items:center;gap:8px;font-weight:600;font-size:16px}
+.logo{width:24px;height:24px;border-radius:6px;background:var(--ac)}
+.env{font-size:12px;border:1px solid var(--bd);border-radius:999px;padding:1px 8px;color:var(--t2);font-weight:500}
+.h{font-size:12px;color:var(--t2);font-weight:600;margin-bottom:8px}
+.bar{display:flex;height:8px;border-radius:4px;overflow:hidden;gap:2px;margin-bottom:12px}
+.bar i{display:block}
+.cnt{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.cnt div{border:1px solid var(--bd);border-radius:8px;padding:8px;font-size:12px;color:var(--t2)}
+.cnt b{display:block;font:600 24px "JetBrains Mono",monospace;color:var(--tx)}
+.ev{border:1px solid var(--bd);border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:8px;border-left:3px solid}
+.sw{margin-top:auto;display:flex;border:1px solid var(--bd);border-radius:8px;overflow:hidden;font-size:13px}
+.sw span{flex:1;text-align:center;padding:6px;color:var(--t2)}.sw .on{background:var(--ac);color:#fff}
+.main{display:grid;grid-template-columns:1fr 360px;grid-template-rows:56px 1fr;min-width:0}
+.tb{grid-column:1/3;background:var(--w);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:16px;padding:0 16px}
+.in{width:260px;border:1px solid var(--bd);border-radius:8px;padding:7px 12px;color:var(--t2);background:var(--bg)}
+.bt{border:1px solid var(--bd);border-radius:8px;padding:7px 14px;background:var(--w);font-weight:500}
+.bt.d{opacity:.45}.bt.p{background:var(--ac);color:#fff;border-color:var(--ac)}
+.chip{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;background:#EFF6FF;color:var(--ac)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:currentColor}
+.ctr{display:grid;grid-template-rows:96px 1fr 150px;min-width:0;border-right:1px solid var(--bd)}
+.bp{background:var(--w);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:16px;padding:0 16px}
+.bp .l{font-size:12px;color:var(--t2)}.bp .n{font:600 24px "JetBrains Mono",monospace}
+.bp .r{font:600 32px "JetBrains Mono",monospace;color:var(--ac)}
+.ar{color:var(--t2);font-size:24px}
+.stage{display:grid;grid-template-columns:1fr 36px 1fr 36px 1fr;padding:16px 16px 0}
+.col{display:flex;flex-direction:column;gap:16px}
+.col>.h{margin:0;font-size:13px;color:var(--tx)}
+.link{align-self:center;height:2px;background:var(--t2);position:relative;margin-top:-24px}
+.link:after{content:"";position:absolute;right:-1px;top:-5px;border:6px solid transparent;border-left:9px solid var(--t2);border-right:0}
+.link.k{height:4px}.link.k:after{top:-4px}
+.c{background:var(--w);border:1px solid var(--bd);border-radius:8px;padding:12px;box-shadow:0 1px 2px rgba(17,24,39,.05)}
+.c.cr{background:var(--crbg);border-color:#FECACA}.c.sel{outline:2px solid var(--ac);outline-offset:1px}
+.top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px}
+.top b{font-size:15px;display:block}.top small{font:500 12px "JetBrains Mono",monospace;color:var(--t2)}
+.pill{border-radius:999px;padding:2px 10px;font-size:12px;font-weight:600;display:inline-flex;gap:6px;align-items:center}
+.ok{color:#15803D;background:#F0FDF4}.wn{color:#B45309;background:#FFFBEB}.cr2{color:#B91C1C;background:#FEE2E2}
+.g{display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;margin:8px 0}
+.g span{font-size:12px;color:var(--t2)}.g b{display:block;font:600 24px "JetBrains Mono",monospace;line-height:1.2}
+.g b u{text-decoration:none;font-size:12px;color:var(--t2);font-weight:500}
+.ft{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--t2);gap:6px}
+.log{background:var(--w);border-top:1px solid var(--bd);padding:12px 16px;overflow:hidden}
+.row{display:flex;gap:16px;padding:4px 0;border-top:1px solid var(--bd);font-size:13px}
+.row .m{font-size:13px;color:var(--t2);font-weight:500}
+.cp{background:var(--w);padding:16px;display:flex;flex-direction:column;gap:12px}
+.cp h3{margin:0;font-size:16px}.pg{height:8px;background:var(--bd);border-radius:4px}.pg i{display:block;width:60%;height:100%;background:var(--ac);border-radius:4px}
+.sk{height:10px;background:var(--bd);border-radius:4px;margin-top:8px}
+.sec{border:1px solid var(--bd);border-radius:8px;padding:12px;font-size:13px}
+.sec p{margin:4px 0 0}
+</style></head><body>
+<div id="root">
+<aside class="rail">
+ <div class="brand"><span class="logo"></span>flow-gatekeeper <span class="env">開發</span></div>
+ <div><div class="h">機群健康</div>
+  <div class="bar"><i style="flex:3;background:var(--ok)"></i><i style="flex:1;background:var(--wn)"></i><i style="flex:1;background:var(--cr)"></i><i style="flex:.0001;background:var(--t2)"></i></div>
+  <div class="cnt"><div><b style="color:var(--ok)">3</b>正常</div><div><b style="color:var(--wn)">1</b>警告</div><div><b style="color:var(--cr)">1</b>嚴重</div><div><b>0</b>停滯</div></div></div>
+ <div><div class="h">最近異常</div>
+  <div class="ev" style="border-left-color:var(--cr)">壓製機 02 · 嚴重 · 剛剛</div>
+  <div class="ev" style="border-left-color:var(--wn)">烤爐 04 · 警告 · 12 秒前</div></div>
+ <div class="sw"><span class="on">主題：淺色</span><span>深色</span></div>
+</aside>
+<div class="main">
+ <div class="tb"><div class="in">搜尋機台</div><span class="bt">暫停</span><span class="bt d">Mock 頻率</span>
+  <span style="flex:1"></span><span class="chip ok"><i class="dot"></i>已連線 · 12 ms</span><span class="bt p">診斷</span></div>
+ <div class="ctr">
+  <div class="bp"><div><div class="l">背壓 · 每秒訊息</div><div class="n">1,240</div></div><span class="ar">→</span>
+   <div><div class="l">每秒批次</div><div class="n">60</div></div><span class="ar">→</span>
+   <div><div class="l">比值</div><div class="r">20.7 : 1</div></div>
+   <svg style="margin-left:auto" width="230" height="64" viewBox="0 0 230 64"><polyline fill="none" stroke="#2563EB" stroke-width="2" points="0,40 20,34 40,38 60,24 80,30 100,18 120,26 140,14 160,22 180,16 200,24 230,12"/><polyline fill="none" stroke="#9CA3AF" stroke-width="2" points="0,52 30,50 60,52 90,49 120,51 150,50 180,52 230,50"/></svg></div>
+  <div class="stage">
+   <div class="col"><div class="h">前處理 Prep</div>
+    <div class="c"><div class="top"><div><b>攪拌機 01</b><small>mixer-01</small></div><span class="pill ok"><i class="dot"></i>正常</span></div>
+     <div class="g"><div><span>溫度</span><b>55.4<u> °C</u></b></div><div><span>振動</span><b>0.61<u> mm/s</u></b></div><div><span>轉速</span><b>115<u> u/min</u></b></div><div><span>不良率</span><b>0.0<u> %</u></b></div></div>
+     <div class="ft">更新 1 秒前</div></div></div>
+   <div class="link"></div>
+   <div class="col"><div class="h">成型烘烤 Forming &amp; Baking</div>
+    <div class="c cr sel"><div class="top"><div><b>壓製機 02</b><small>press-02</small></div><span class="pill cr2"><i class="dot"></i>嚴重</span></div>
+     <div class="g"><div><span>溫度</span><b>97.0<u> °C</u></b></div><div><span>振動</span><b>2.19<u> mm/s</u></b></div><div><span>轉速</span><b>73<u> u/min</u></b></div><div><span>不良率</span><b>16.0<u> %</u></b></div></div>
+     <div class="ft"><span>更新 0 秒前</span><span class="chip">診斷中 60%</span></div></div>
+    <div class="c"><div class="top"><div><b>烤爐 04</b><small>oven-04</small></div><span class="pill wn"><i class="dot"></i>警告</span></div>
+     <div class="g"><div><span>溫度</span><b>81.3<u> °C</u></b></div><div><span>振動</span><b>1.10<u> mm/s</u></b></div><div><span>轉速</span><b>118<u> u/min</u></b></div><div><span>不良率</span><b>3.2<u> %</u></b></div></div>
+     <div class="ft"><span>更新 1 秒前</span><span class="pill wn">警告 · 12 秒前</span></div></div></div>
+   <div class="link k"></div>
+   <div class="col"><div class="h">包裝分揀 Fulfilment</div>
+    <div class="c"><div class="top"><div><b>包裝機 03</b><small>pack-03</small></div><span class="pill ok"><i class="dot"></i>正常</span></div>
+     <div class="g"><div><span>溫度</span><b>63.5<u> °C</u></b></div><div><span>振動</span><b>0.30<u> mm/s</u></b></div><div><span>轉速</span><b>121<u> u/min</u></b></div><div><span>不良率</span><b>0.2<u> %</u></b></div></div>
+     <div class="ft">更新 1 秒前</div></div>
+    <div class="c"><div class="top"><div><b>分揀機 05</b><small>sorter-05</small></div><span class="pill ok"><i class="dot"></i>正常</span></div>
+     <div class="g"><div><span>溫度</span><b>69.8<u> °C</u></b></div><div><span>振動</span><b>0.69<u> mm/s</u></b></div><div><span>轉速</span><b>126<u> u/min</u></b></div><div><span>不良率</span><b>1.0<u> %</u></b></div></div>
+     <div class="ft">更新 2 秒前</div></div></div>
+  </div>
+  <div class="log"><div class="h">事件流 · 10/50</div>
+   <div class="row"><span class="m">14:10:56</span><span class="pill cr2">嚴重</span>壓製機 02 進入嚴重</div>
+   <div class="row"><span class="m">14:10:55</span><span class="pill wn">警告</span>烤爐 04 進入警告 ×3</div>
+   <div class="row"><span class="m">14:10:40</span><span class="pill ok">正常</span>烤爐 04 回復正常</div>
+   <div class="row"><span class="m">14:10:12</span><span class="pill cr2">嚴重</span>壓製機 02 進入嚴重</div></div>
+ </div>
+ <aside class="cp">
+  <div style="display:flex;justify-content:space-between;align-items:center"><h3>AI 診斷 · press-02</h3><span class="chip">進行中</span></div>
+  <div><div class="pg"><i></i></div><div class="m" style="font-size:24px;margin-top:4px">60%</div></div>
+  <div class="sec"><b>摘要</b><p>壓製機 02 在維修後出現間歇性過熱…</p><div class="sk" style="width:70%"></div></div>
+  <div class="sec"><b>建議動作</b><p>1. 檢查冷卻迴路並確認流量</p><p>2. 降低壓製頻率後重新量測</p></div>
+  <div class="sec"><b>可能原因</b><div class="sk"></div><div class="sk" style="width:80%"></div></div>
+  <div class="sec" style="display:flex;justify-content:space-between"><b>證據</b><span style="color:var(--t2)">還有 6 筆 ▾</span></div>
+  <div class="sec" style="margin-top:auto;display:flex;justify-content:space-between"><b>原始串流</b><span style="color:var(--t2)">▾ 展開</span></div>
+  <span class="bt" style="text-align:center;color:var(--cr);border-color:#FECACA">中止診斷</span>
+ </aside>
+</div>
+</div>
+</body></html>

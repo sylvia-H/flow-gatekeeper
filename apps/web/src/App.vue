@@ -104,14 +104,14 @@ const banner = computed(() => {
     case "reconnecting":
       return {
         text: "Reconnecting… 顯示最後已知資料",
-        cls: "border-warn-border bg-warn-bg text-warn-fg",
+        cls: "border-warn bg-warn-bg text-warn-fg",
       };
     case "disconnected":
       return !store.everConnected
-        ? { text: "Connecting…", cls: "border-subtle bg-elevated text-fg-muted" }
+        ? { text: "Connecting…", cls: "border-edge bg-rim text-ink-2" }
         : {
             text: "Disconnected — 顯示最後已知資料，資料可能過時",
-            cls: "border-crit-border bg-crit-bg text-crit-fg",
+            cls: "border-crit bg-crit-bg text-crit-fg",
           };
   }
   return null;
@@ -176,27 +176,27 @@ const handle = useHighFrequencyWs({
     @open-panel="desktopPanelOpen = true"
   >
     <template #sidebar>
-      <div class="flex items-center gap-2 border-b border-subtle px-4 py-3">
+      <div class="flex items-center gap-2 border-b border-edge px-4 py-3">
         <Activity class="h-5 w-5 text-accent" aria-hidden="true" />
         <div class="min-w-0">
-          <div class="truncate text-sm font-semibold text-fg">flow-gatekeeper</div>
-          <div class="text-xs text-fg-subtle">development</div>
+          <div class="truncate text-sm font-semibold text-ink">flow-gatekeeper</div>
+          <div class="text-xs text-ink-3">development</div>
         </div>
       </div>
       <nav class="space-y-4 px-3 py-4">
         <div v-for="group in sidebarGroups" :key="group.name">
-          <div class="px-1 pb-2 text-xs font-medium uppercase tracking-wide text-fg-subtle">
+          <div class="px-1 pb-2 text-xs font-medium uppercase tracking-wide text-ink-3">
             {{ group.name }}
           </div>
           <ul class="space-y-0.5">
             <li v-for="id in group.ids" :key="id">
               <button
                 type="button"
-                class="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-sm text-fg-muted hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                :class="store.selectedMachineId === id ? 'bg-accent-bg text-fg' : ''"
+                class="flex w-full items-center gap-2 rounded-control px-2 py-1.5 text-left text-sm text-ink-2 hover:bg-rim/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                :class="store.selectedMachineId === id ? 'bg-accent-wash text-ink' : ''"
                 @click="store.selectMachine(id)"
               >
-                <Boxes class="h-4 w-4 shrink-0 text-fg-subtle" aria-hidden="true" />
+                <Boxes class="h-4 w-4 shrink-0 text-ink-3" aria-hidden="true" />
                 <span class="truncate">{{ machineLabel(id) }}</span>
               </button>
             </li>
@@ -205,7 +205,7 @@ const handle = useHighFrequencyWs({
       </nav>
 
       <!-- Fleet Health（design-spec §6 左欄下方）：四類聚合，隨遙測即時更新 -->
-      <div class="mt-auto border-t border-subtle px-3 py-4">
+      <div class="mt-auto border-t border-edge px-3 py-4">
         <FleetHealth :summary="store.fleetHealth" />
       </div>
     </template>
@@ -225,11 +225,11 @@ const handle = useHighFrequencyWs({
           {{ banner.text }}
         </div>
         <!-- US5 主區標題列：「Fleet monitor · N machines」（僅標題，不含 Graph 視圖） -->
-        <div class="flex shrink-0 items-center gap-2 border-b border-subtle px-4 py-2.5">
+        <div class="flex shrink-0 items-center gap-2 border-b border-edge px-4 py-2.5">
           <Boxes class="h-4 w-4 text-accent" aria-hidden="true" />
-          <h1 class="text-sm font-semibold text-fg">Fleet monitor</h1>
-          <span class="text-fg-subtle" aria-hidden="true">·</span>
-          <span class="text-sm text-fg-muted">{{ machineCount }} machines</span>
+          <h1 class="text-sm font-semibold text-ink">Fleet monitor</h1>
+          <span class="text-ink-3" aria-hidden="true">·</span>
+          <span class="text-sm text-ink-2">{{ machineCount }} machines</span>
         </div>
         <div class="min-h-0 flex-1">
           <TopologyCanvas />
@@ -243,7 +243,7 @@ const handle = useHighFrequencyWs({
           @pointerdown="onEventStripHandleDown"
         />
         <!-- Event Stream（design-spec §7.8，main 底部）：前端衍生最近事件 -->
-        <div class="shrink-0 border-t border-subtle">
+        <div class="shrink-0 border-t border-edge">
           <EventStrip :events="store.events" :height="eventStripHeight" />
         </div>
       </div>

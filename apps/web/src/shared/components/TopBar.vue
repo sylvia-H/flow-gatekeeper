@@ -65,7 +65,7 @@ function onSearchInput(event: Event): void {
     <!-- Search：可隨中間欄寬度收縮（min-w-0 flex-1），最寬到 xs；空間不足時先讓它讓位 -->
     <div class="relative min-w-0 flex-1 max-w-xs">
       <Search
-        class="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-subtle"
+        class="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-3"
         aria-hidden="true"
       />
       <input
@@ -73,7 +73,7 @@ function onSearchInput(event: Event): void {
         placeholder="Search machines"
         aria-label="Search machines"
         :value="store.searchQuery"
-        class="h-9 w-full rounded-control border border-subtle bg-surface-inset pl-8 pr-3 text-sm text-fg placeholder:text-fg-subtle focus:border-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        class="h-9 w-full rounded-control border border-edge bg-bench pl-8 pr-3 text-sm text-ink placeholder:text-ink-3 focus:border-etch focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         @input="onSearchInput"
       />
     </div>
@@ -84,7 +84,7 @@ function onSearchInput(event: Event): void {
       <!-- Pause/Resume：凍結/恢復畫面更新（US4）；暫停期間續收 buffer、resume 跳最新 -->
       <button
         type="button"
-        class="flex h-9 items-center gap-1.5 rounded-control border border-subtle bg-surface px-2.5 text-xs text-fg-muted hover:bg-surface-hover hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        class="flex h-9 items-center gap-1.5 rounded-control border border-edge bg-surface px-2.5 text-xs text-ink-2 hover:bg-rim/60 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         :aria-pressed="store.paused"
         :aria-label="store.paused ? 'Resume telemetry' : 'Pause telemetry'"
         :title="store.paused ? '恢復畫面更新' : '暫停畫面更新（續收 buffer）'"
@@ -101,7 +101,7 @@ function onSearchInput(event: Event): void {
         disabled
         title="Mock telemetry frequency（後續啟用）"
         aria-label="Mock telemetry frequency"
-        class="tb-optional flex h-9 cursor-not-allowed items-center gap-1.5 rounded-control border border-subtle bg-surface px-2.5 text-xs text-fg-subtle opacity-60"
+        class="tb-optional flex h-9 cursor-not-allowed items-center gap-1.5 rounded-control border border-edge bg-surface px-2.5 text-xs text-ink-3 opacity-60"
       >
         <Gauge class="h-4 w-4" aria-hidden="true" />
         <span class="hidden md:inline">Mock Hz</span>
@@ -124,7 +124,7 @@ function onSearchInput(event: Event): void {
 
       <!-- Connection status chip（讀 store.connectionStatus 單一來源，依三態上色） -->
       <span
-        class="inline-flex items-center gap-1.5 rounded-pill bg-elevated px-2.5 py-1 text-xs"
+        class="inline-flex items-center gap-1.5 rounded-pill bg-rim px-2.5 py-1 text-xs"
         :class="connectionChip.text"
         role="status"
         :aria-label="`Connection: ${connectionLabel}`"
@@ -134,7 +134,7 @@ function onSearchInput(event: Event): void {
           :class="[connectionChip.dot, chipPulse ? 'animate-critical-pulse' : '']"
         />
         {{ connectionLabel }}
-        <span v-if="latencyText" class="font-mono text-fg-muted">· {{ latencyText }}</span>
+        <span v-if="latencyText" class="font-mono text-ink-2">· {{ latencyText }}</span>
       </span>
 
       <!-- 訂閱授權失敗（system/unauthorized）：沿用 crit token 的小 chip，完整說明放 title -->
@@ -158,7 +158,7 @@ function onSearchInput(event: Event): void {
             : (connectionBlockedReason ?? 'Run AI diagnosis')
         "
         aria-label="Run AI diagnosis"
-        class="flex h-9 shrink-0 items-center gap-1.5 rounded-control bg-accent px-3 text-sm font-medium text-canvas hover:bg-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
+        class="flex h-9 shrink-0 items-center gap-1.5 rounded-control bg-accent px-3 text-sm font-medium text-surface-strong hover:bg-accent-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
         @click="onDiagnose"
       >
         <Stethoscope class="h-4 w-4" aria-hidden="true" />

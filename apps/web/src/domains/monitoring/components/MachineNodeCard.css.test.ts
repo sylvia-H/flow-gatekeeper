@@ -143,26 +143,25 @@ function resolveProp(el: ElementModel, prop: string): string | undefined {
 
 // ---------- 顏色比較 ----------
 
-function rgbOf(value: string | undefined): [number, number, number] | null {
+/**
+ * 013 起色票全部是 `rgb(var(--c-…) / <alpha-value>)`，實際色值在 theme.css、隨主題切換；
+ * 所以這裡比的是「指向哪個語意變數」，而不是 RGB 數值——兩個 class 指向同一個 `--c-*`
+ * 就是同一個顏色（兩套主題皆然）。
+ */
+function colorVar(value: string | undefined): string | null {
   if (!value) return null;
-  const hex = /#([0-9a-f]{6})\b/i.exec(value);
-  if (hex) {
-    const n = Number.parseInt(hex[1]!, 16);
-    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-  }
-  const rgb = /rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/.exec(value);
-  return rgb ? [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])] : null;
+  return /var\((--c-[\w-]+)\)/.exec(value)?.[1] ?? null;
 }
 
-function token(path: string): [number, number, number] {
+function token(path: string): string {
   let cur: unknown = config.theme?.extend?.colors;
   for (const key of path.split(".")) {
     cur = typeof cur === "object" && cur !== null ? (cur as Record<string, unknown>)[key] : undefined;
   }
   if (typeof cur === "object" && cur !== null) cur = (cur as Record<string, unknown>)["DEFAULT"];
-  const rgb = typeof cur === "string" ? rgbOf(cur) : null;
-  if (!rgb) throw new Error(`找不到色票 ${path}`);
-  return rgb;
+  const name = typeof cur === "string" ? colorVar(cur) : null;
+  if (!name) throw new Error(`找不到色票 ${path}`);
+  return name;
 }
 
 // ---------- 情境 ----------
@@ -170,12 +169,12 @@ function token(path: string): [number, number, number] {
 type CardState = MachineState | "placeholder";
 const STATES: readonly CardState[] = ["placeholder", ...(Object.keys(STATE_STYLE) as MachineState[])];
 
-/** 狀態 class 預期的未選取底色／邊框（design-spec §7.3）。 */
+/** 狀態 class 預期的未選取底色／邊框（`card-style.ts`；warning 為 1px `border-warn` 全邊框，FR-030）。 */
 const EXPECTED_IDLE: Record<CardState, { border: string; bg: string }> = {
-  placeholder: { border: "subtle", bg: "surface" },
-  healthy: { border: "subtle", bg: "surface" },
-  warning: { border: "subtle", bg: "surface" },
-  critical: { border: "crit.border", bg: "crit.bg" },
+  placeholder: { border: "edge", bg: "surface" },
+  healthy: { border: "edge", bg: "surface" },
+  warning: { border: "warn", bg: "surface" },
+  critical: { border: "crit", bg: "crit.bg" },
 };
 
 type Interaction = "none" | "hover" | "focus" | "hover+focus";
@@ -208,11 +207,11 @@ describe("WEB-1：色票不得與 Tailwind 修飾字撞名", () => {
     expect(decls).toEqual(["--tw-ring-inset: inset"]);
   });
 
-  it("頂層色票沒有 `inset`（改為 `surface.inset` → `bg-surface-inset`）", () => {
+  it("頂層色票沒有 `inset`；巢狀色票（`surface.strong` → `bg-surface-strong`）指向對應的主題變數", () => {
     const colors = config.theme?.extend?.colors ?? {};
     expect(Object.keys(colors)).not.toContain("inset");
-    expect(rgbOf(resolveProp({ classes: new Set(["bg-surface-inset"]), attrs: {}, active: new Set() }, "background-color"))).toEqual(
-      token("surface.inset"),
+    expect(colorVar(resolveProp({ classes: new Set(["bg-surface-strong"]), attrs: {}, active: new Set() }, "background-color"))).toBe(
+      "--c-surface-strong",
     );
   });
 });
@@ -245,29 +244,29 @@ describe("WEB-1：MachineNodeCard 選取態勝過狀態 class", () => {
 
       it(`${label}：選取 → accent 邊框、accent-wash 底、accent outline`, () => {
         const el = cardElement(state, { selected: true, stale, interaction });
-        expect(rgbOf(resolveProp(el, "border-color"))).toEqual(token("accent"));
-        expect(rgbOf(resolveProp(el, "background-color"))).toEqual(token("accent.wash"));
+        expect(colorVar(resolveProp(el, "border-color"))).toBe(token("accent"));
+        expect(colorVar(resolveProp(el, "background-color"))).toBe(token("accent.wash"));
         const outline = resolveProp(el, "outline") ?? "";
         expect(outline).toMatch(/\b1px solid\b/);
-        expect(rgbOf(outline)).toEqual(token("accent"));
+        expect(colorVar(outline)).toBe(token("accent"));
         expect(resolveProp(el, "outline-offset")).toBe("-2px");
       });
 
       it(`${label}：未選取 → 狀態自身外觀（與選取可區分）`, () => {
         const el = cardElement(state, { selected: false, stale, interaction });
-        const border = rgbOf(resolveProp(el, "border-color"));
-        const bg = rgbOf(resolveProp(el, "background-color"));
+        const border = colorVar(resolveProp(el, "border-color"));
+        const bg = colorVar(resolveProp(el, "background-color"));
         if (hover) {
-          expect(border).toEqual(token("strong"));
-          expect(bg).toEqual(token("surface.hover"));
+          expect(border).toBe(token("etch"));
+          expect(bg).toBe(token("rim"));
         } else {
-          expect(border).toEqual(token(EXPECTED_IDLE[state].border));
-          expect(bg).toEqual(token(EXPECTED_IDLE[state].bg));
+          expect(border).toBe(token(EXPECTED_IDLE[state].border));
+          expect(bg).toBe(token(EXPECTED_IDLE[state].bg));
         }
-        expect(border).not.toEqual(token("accent"));
-        expect(bg).not.toEqual(token("accent.wash"));
+        expect(border).not.toBe(token("accent"));
+        expect(bg).not.toBe(token("accent.wash"));
         // 未選取卡片不得帶 accent outline
-        expect(rgbOf(resolveProp(el, "outline"))).not.toEqual(token("accent"));
+        expect(colorVar(resolveProp(el, "outline"))).not.toBe(token("accent"));
         // focus 情境確實命中 `focus:outline-none`（證明上方選取案例的 focus 路徑有被模擬到）
         if (interaction.includes("focus")) expect(resolveProp(el, "outline")).toBe("2px solid transparent");
       });

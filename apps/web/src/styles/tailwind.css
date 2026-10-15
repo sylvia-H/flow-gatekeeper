@@ -1,3 +1,6 @@
+/* 主題變數（全站唯一的色值來源）MUST 在 @tailwind base 之前載入。 */
+@import "./theme.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -9,13 +12,12 @@
 
 @layer base {
   /*
-   * 細卷軸——取代突兀的 OS 預設卷軸，對齊 design-spec 深色 token。
-   * 顏色一律走具名 token（theme('colors.*')），不散落 hex（憲章 II）：
-   * thumb=subtle、hover=strong、track 透明。WebKit 與 Firefox 皆涵蓋。
+   * 細卷軸——取代突兀的 OS 預設卷軸。顏色一律走語意 token（theme('colors.*')），不散落色值：
+   * thumb=edge、hover=etch、track 透明；兩套主題由 CSS 變數自動切換。WebKit 與 Firefox 皆涵蓋。
    */
   * {
     scrollbar-width: thin;
-    scrollbar-color: theme('colors.subtle') transparent;
+    scrollbar-color: theme('colors.edge') transparent;
   }
 
   ::-webkit-scrollbar {
@@ -27,13 +29,13 @@
   }
   ::-webkit-scrollbar-thumb {
     /* 2px 透明邊 + padding-box 讓圓角 thumb 內縮，視覺上更細更克制 */
-    background-color: theme('colors.subtle');
+    background-color: theme('colors.edge');
     background-clip: padding-box;
     border: 2px solid transparent;
     border-radius: theme('borderRadius.pill');
   }
   ::-webkit-scrollbar-thumb:hover {
-    background-color: theme('colors.strong');
+    background-color: theme('colors.etch');
   }
   ::-webkit-scrollbar-corner {
     background: transparent;
@@ -41,10 +43,10 @@
 }
 
 /*
- * MachineNodeCard 選取態（design-spec §7.3：border accent 2px、背景 accent wash）。
+ * MachineNodeCard 選取態（深青 2px 框、accent-wash 底；direction contract FIRST VIEWPORT）。
  * 刻意放在 `@tailwind utilities` 之後、不進任何 layer，並以 `.machine-card[data-selected]`
  * 取得 (0,2,0) 特異性：
- * - 勝過狀態 class（`border-subtle`／`bg-surface`／`border-crit-border`／`bg-crit-bg`，皆 (0,1,0)）；
+ * - 勝過狀態 class（`border-edge`／`bg-surface`／`border-warn`／`border-crit`／`bg-crit-bg`，皆 (0,1,0)）；
  * - 與 `hover:*`／`focus:outline-none`（(0,2,0)）同特異性但輸出在後（variants 已在上方明寫位置），
  *   hover 時選取框不消失。
  * 2px 由 1px accent 邊框 + 內縮 1px 的 outline 組成：不改 border-width（不動盒模型、不位移），
@@ -61,15 +63,21 @@
 /*
  * prefers-reduced-motion：放在所有 layer 之後，確保蓋過 animate-* utilities。
  * 狀態本身不靠動畫傳達（critical 有 crit-bg tint 與文字徽章、串流有逐字出現的文字、
- * progress 有 aria 描述），所以這裡直接停掉循環動畫：
- * - critical pulse、串流游標：停在靜止樣式。
+ * progress 有 aria 描述、連線粗細仍表達 throughput），所以這裡直接停掉循環動畫：
+ * - critical pulse、串流游標、stage 連線流動（animate-flow）：停在靜止樣式。
  * - indeterminate progress：停成一段靜止的 1/3 條，仍看得出「進行中」而非空條。
- * - transition（hover 上移、面板展開）縮到近乎瞬間，保留狀態變化本身。
+ * - transition（hover 上移、面板展開、主題切換）縮到近乎瞬間，保留狀態變化本身；
+ *   `[data-theme-switching]` 期間的過渡由 theme.css 的 `transition: none !important` 停用
+ *   （不論是否 reduced-motion），下方 `*` 規則亦涵蓋，不另寫重複規則。
+ * - 預留：異常 latch 出現動畫與走勢線（Sparkline）的 transition 由後續 phase 的元件加上，
+ *   一律落在下方 `*` 規則的範圍內（transition 縮為 0.01ms）；若改用 animation，須把其
+ *   class 加進第一條規則（例：`.animate-latch-in`）。
  */
 @media (prefers-reduced-motion: reduce) {
   .animate-critical-pulse,
   .animate-stream-caret,
-  .animate-indeterminate {
+  .animate-indeterminate,
+  .animate-flow {
     animation: none;
   }
 

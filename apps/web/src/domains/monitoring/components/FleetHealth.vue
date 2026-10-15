@@ -34,12 +34,12 @@ function pct(count: number): number {
 
 <template>
   <section class="px-1" aria-label="Fleet Health">
-    <div class="px-1 pb-2 text-xs font-medium uppercase tracking-wide text-fg-subtle">
+    <div class="px-1 pb-2 text-xs font-medium uppercase tracking-wide text-ink-3">
       Fleet Health
     </div>
 
     <!-- 比例條：四段依佔比排列；0 佔比不顯示 -->
-    <div class="flex h-2 w-full overflow-hidden rounded-pill bg-surface-inset" role="presentation">
+    <div class="flex h-2 w-full overflow-hidden rounded-pill bg-bench" role="presentation">
       <div
         v-for="seg in segments"
         :key="seg.key"
@@ -53,12 +53,12 @@ function pct(count: number): number {
     <dl class="mt-3 grid grid-cols-2 gap-x-3 gap-y-1.5">
       <div v-for="seg in segments" :key="seg.key" class="flex items-center gap-1.5">
         <span class="h-2 w-2 shrink-0 rounded-pill" :class="seg.dot" aria-hidden="true" />
-        <dt class="text-xs text-fg-muted">{{ seg.label }}</dt>
-        <dd class="ml-auto font-mono text-xs text-fg">{{ seg.count }}</dd>
+        <dt class="text-xs text-ink-2">{{ seg.label }}</dt>
+        <dd class="ml-auto font-mono text-xs text-ink">{{ seg.count }}</dd>
       </div>
     </dl>
 
-    <div class="mt-2 px-1 text-right font-mono text-2xs text-fg-subtle">
+    <div class="mt-2 px-1 text-right font-mono text-xs text-ink-3">
       total {{ summary.total }}
     </div>
   </section>

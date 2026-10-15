@@ -22,15 +22,15 @@ function clockLabel(ts: number): string {
 
 <template>
   <section class="flex flex-col bg-surface" :style="{ height: `${height}px` }" aria-label="Event stream">
-    <div class="flex shrink-0 items-center justify-between border-b border-subtle px-4 py-1.5">
-      <span class="text-xs font-medium uppercase tracking-wide text-fg-subtle">Event Stream</span>
-      <span class="font-mono text-2xs text-fg-subtle">{{ events.length }}/50</span>
+    <div class="flex shrink-0 items-center justify-between border-b border-edge px-4 py-1.5">
+      <span class="text-xs font-medium uppercase tracking-wide text-ink-3">Event Stream</span>
+      <span class="font-mono text-xs text-ink-3">{{ events.length }}/50</span>
     </div>
 
     <!-- 空狀態 -->
     <div
       v-if="events.length === 0"
-      class="flex flex-1 items-center justify-center text-xs text-fg-subtle"
+      class="flex flex-1 items-center justify-center text-xs text-ink-3"
     >
       無事件——機台狀態轉入 warning/critical 時於此顯示。
     </div>
@@ -40,14 +40,14 @@ function clockLabel(ts: number): string {
       <li
         v-for="event in events"
         :key="event.id"
-        class="flex min-h-[34px] items-center gap-3 border-b border-subtle/60 px-4 py-1 text-xs"
+        class="flex min-h-[34px] items-center gap-3 border-b border-edge/60 px-4 py-1 text-xs"
       >
-        <span class="shrink-0 font-mono text-fg-subtle">{{ clockLabel(event.ts) }}</span>
+        <span class="shrink-0 font-mono text-ink-3">{{ clockLabel(event.ts) }}</span>
         <span class="flex shrink-0 items-center gap-1.5" :class="SEVERITY[event.severity].cls">
           <span class="h-1.5 w-1.5 rounded-pill" :class="SEVERITY[event.severity].dot" aria-hidden="true" />
           {{ SEVERITY[event.severity].label }}
         </span>
-        <span class="truncate text-fg-muted">{{ event.message }}</span>
+        <span class="truncate text-ink-2">{{ event.message }}</span>
       </li>
     </ul>
   </section>

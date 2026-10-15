@@ -29,54 +29,54 @@ const SOURCE_LABEL: Record<DiagnosisResult["evidence"][number]["source"], string
     <!-- 1. Summary + severity -->
     <section>
       <div class="mb-1.5 flex items-center justify-between gap-2">
-        <h3 class="text-xs font-medium uppercase tracking-wide text-fg-subtle">Summary</h3>
+        <h3 class="text-xs font-medium uppercase tracking-wide text-ink-3">Summary</h3>
         <SeverityBadge :severity="result.severity" />
       </div>
-      <p class="text-sm leading-relaxed text-fg">{{ result.summary }}</p>
+      <p class="text-sm leading-relaxed text-ink">{{ result.summary }}</p>
     </section>
 
     <!-- 2. Likely causes -->
     <section>
-      <h3 class="mb-1.5 text-xs font-medium uppercase tracking-wide text-fg-subtle">Likely causes</h3>
+      <h3 class="mb-1.5 text-xs font-medium uppercase tracking-wide text-ink-3">Likely causes</h3>
       <ul v-if="result.likelyCauses.length" class="space-y-1">
         <li
           v-for="(cause, i) in result.likelyCauses"
           :key="i"
-          class="flex gap-2 text-sm text-fg-muted"
+          class="flex gap-2 text-sm text-ink-2"
         >
-          <span class="mt-1.5 h-1 w-1 shrink-0 rounded-pill bg-fg-subtle" aria-hidden="true" />
+          <span class="mt-1.5 h-1 w-1 shrink-0 rounded-pill bg-ink-3" aria-hidden="true" />
           <span>{{ cause }}</span>
         </li>
       </ul>
-      <p v-else class="text-sm text-fg-subtle">未提供可能原因。</p>
+      <p v-else class="text-sm text-ink-3">未提供可能原因。</p>
     </section>
 
     <!-- 3. Evidence -->
     <section>
-      <h3 class="mb-1.5 text-xs font-medium uppercase tracking-wide text-fg-subtle">Evidence</h3>
+      <h3 class="mb-1.5 text-xs font-medium uppercase tracking-wide text-ink-3">Evidence</h3>
       <ul v-if="result.evidence.length" class="space-y-1.5">
         <li
           v-for="(ev, i) in result.evidence"
           :key="i"
-          class="rounded-control border border-subtle bg-surface px-2.5 py-2"
+          class="rounded-control border border-edge bg-surface px-2.5 py-2"
         >
           <div class="mb-0.5 flex items-center gap-2">
-            <span class="rounded-pill bg-elevated px-1.5 py-0.5 text-2xs font-medium uppercase leading-none text-fg-subtle">
+            <span class="rounded-pill bg-rim px-1.5 py-0.5 text-xs font-medium uppercase leading-none text-ink-3">
               {{ SOURCE_LABEL[ev.source] }}
             </span>
-            <span v-if="ev.id" class="font-mono text-xs text-fg-subtle">{{ ev.id }}</span>
+            <span v-if="ev.id" class="font-mono text-xs text-ink-3">{{ ev.id }}</span>
           </div>
-          <p class="break-words font-mono text-xs text-fg-muted">{{ ev.excerpt }}</p>
+          <p class="break-words font-mono text-xs text-ink-2">{{ ev.excerpt }}</p>
         </li>
       </ul>
-      <p v-else class="text-sm text-fg-subtle">無佐證資料。</p>
+      <p v-else class="text-sm text-ink-3">無佐證資料。</p>
     </section>
 
     <!-- 4. Suggested actions -->
     <section>
-      <h3 class="mb-1.5 text-xs font-medium uppercase tracking-wide text-fg-subtle">Suggested actions</h3>
+      <h3 class="mb-1.5 text-xs font-medium uppercase tracking-wide text-ink-3">Suggested actions</h3>
       <SuggestedActionList v-if="result.suggestedActions.length" :actions="result.suggestedActions" />
-      <p v-else class="text-sm text-fg-subtle">無建議動作。</p>
+      <p v-else class="text-sm text-ink-3">無建議動作。</p>
     </section>
   </div>
 </template>

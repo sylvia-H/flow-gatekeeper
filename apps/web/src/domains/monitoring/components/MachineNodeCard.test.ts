@@ -63,9 +63,9 @@ describe("MachineNodeCard 選取態（WEB-1 回歸）", () => {
 
 describe("MachineNodeCard 狀態徽章與 stale", () => {
   it.each([
-    ["healthy", "Healthy"],
-    ["warning", "Warning"],
-    ["critical", "Critical"],
+    ["healthy", "正常"],
+    ["warning", "警告"],
+    ["critical", "嚴重"],
   ] as const)("state=%s 時徽章文字為 %s", (state, label) => {
     const w = mountCard({ machine: machine(state) });
     expect(w.text()).toContain(label);
@@ -78,20 +78,20 @@ describe("MachineNodeCard 狀態徽章與 stale", () => {
     expect(mountCard().text()).not.toContain("Stale");
 
     const ph = mountCard({ machine: null });
-    expect(ph.text()).not.toMatch(/Healthy|Warning|Critical/);
+    expect(ph.text()).not.toMatch(/正常|警告|嚴重/);
     expect(ph.text()).toContain("—");
-    expect(ph.text()).toContain("updated —");
+    expect(ph.text()).toContain("更新 —");
   });
 });
 
 describe("MachineNodeCard 相對時間", () => {
-  it("隨 now（store 每秒 tick）更新「updated Ns ago」，並以 title 提供絕對時間", async () => {
+  it("隨 now（store 每秒 tick）更新相對時間（「剛剛」／「N 秒前」／「N 分鐘前」，FR-022），並以 title 提供絕對時間", async () => {
     const w = mountCard({ now: T0 + 2_000 });
-    expect(w.text()).toContain("updated just now");
+    expect(w.text()).toContain("更新 剛剛");
     await w.setProps({ now: T0 + 12_000 });
-    expect(w.text()).toContain("updated 12s ago");
+    expect(w.text()).toContain("更新 12 秒前");
     await w.setProps({ now: T0 + 125_000 });
-    expect(w.text()).toContain("updated 2m ago");
+    expect(w.text()).toContain("更新 2 分鐘前");
     expect(w.find("[title]").attributes("title")).toBe(new Date(T0).toLocaleString());
   });
 });

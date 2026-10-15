@@ -12,9 +12,9 @@ type Severity = DiagnosisResult["severity"];
 const props = defineProps<{ severity: Severity }>();
 
 const STYLES: Record<Severity, { label: string; cls: string }> = {
-  ok: { label: "OK", cls: "text-ok-fg bg-ok-bg border-ok-border" },
-  warning: { label: "Warning", cls: "text-warn-fg bg-warn-bg border-warn-border" },
-  critical: { label: "Critical", cls: "text-crit-fg bg-crit-bg border-crit-border" },
+  ok: { label: "OK", cls: "text-ok-fg bg-ok-bg border-ok" },
+  warning: { label: "Warning", cls: "text-warn-fg bg-warn-bg border-warn" },
+  critical: { label: "Critical", cls: "text-crit-fg bg-crit-bg border-crit" },
 };
 
 const badge = computed(() => STYLES[props.severity]);

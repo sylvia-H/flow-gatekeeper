@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><title>flow-gatekeeper GS1</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=JetBrains+Mono:wght@500;700&family=Noto+Sans+TC:wght@400;700&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box;border-radius:0;margin:0}
+:root{--w:#fff;--k:#000;--r:#DC2626;--g:#F3F4F6;--m:#9CA3AF}
+body{margin:0;background:var(--w);color:var(--k);font:400 14px/1.35 "Archivo","Noto Sans TC",sans-serif}
+#root{width:1440px;height:900px;overflow:hidden;margin:0;background:var(--w);display:flex;flex-direction:column}
+.mono{font-family:"JetBrains Mono",monospace;font-weight:700}
+header{height:64px;background:var(--k);color:var(--w);display:flex;align-items:center;gap:14px;padding:0 16px;flex:none}
+header b{font:800 20px "Archivo";letter-spacing:.08em;text-transform:uppercase}
+.env{border:1px solid var(--w);padding:3px 8px;font:700 11px "Archivo";letter-spacing:.08em;text-transform:uppercase}
+.sp{flex:1}
+.in{border:1px solid var(--w);padding:7px 12px;width:200px;font-size:14px;color:var(--m)}
+.bt{border:1px solid var(--w);padding:7px 14px;font-size:14px}
+.bt.off{border-color:var(--m);color:var(--m);border-style:dashed}
+.dx{background:var(--w);color:var(--k);padding:9px 22px;font-weight:700;border:0}
+.bp{height:110px;margin:8px 8px 0;border:1px solid var(--k);position:relative;padding:12px;display:flex;flex:none}
+.bp svg{width:60%;height:84px;flex:none;background:var(--g)}
+.bp .hr{flex:1;padding-left:20px;display:flex;flex-direction:column;justify-content:center}
+.hr small{font:500 12px "JetBrains Mono";color:var(--k)}
+.hr .big{font:800 52px/1.05 "JetBrains Mono";letter-spacing:-.02em}
+.tag{position:absolute;left:-1px;top:-1px;background:var(--k);color:var(--w);font:700 11px/1 "Archivo";letter-spacing:.08em;text-transform:uppercase;padding:4px 8px;z-index:2}
+.box{position:relative;border:1px solid var(--k);padding:12px;padding-top:30px}
+.mid{display:flex;gap:8px;margin:8px;flex:1;min-height:0}
+.flow{flex:1;display:grid;grid-template-columns:1fr 24px 1fr 24px 1fr;min-width:0}
+.stage{display:flex;flex-direction:column;gap:12px}
+.ar{align-self:center;width:0;height:0;border-style:solid;border-color:transparent transparent transparent var(--k);margin:0 auto}
+.a1{border-width:9px 0 9px 14px}.a2{border-width:16px 0 16px 20px}
+.card{position:relative;border:1px solid var(--k);padding:26px 10px 10px;flex:1;background:var(--w)}
+.card .tag{background:var(--w);color:var(--k);border:1px solid var(--k);border-width:0 1px 1px 0}
+.nm{font-weight:700;font-size:14px;margin-bottom:6px}
+.vals{display:grid;grid-template-columns:1fr 1fr;gap:6px 8px}
+.vals div{font:700 28px/1.1 "JetBrains Mono";letter-spacing:-.04em}
+.vals small{font:500 11px "Archivo";letter-spacing:0;color:var(--k);margin-left:2px}
+.crit{border:2px solid var(--r)}.crit .st{color:var(--r)}
+.crit .tag{border-color:var(--r)}
+.sel{outline:3px solid var(--k);outline-offset:2px}
+.st{position:absolute;right:8px;top:6px;font:700 12px "Archivo";letter-spacing:.08em}
+.warn .st{background:var(--k);color:var(--w);padding:2px 6px;top:5px}
+.chip{display:inline-block;margin-top:8px;border:1px solid var(--r);color:var(--r);font:700 12px "Archivo";padding:2px 8px}
+.rec{margin-top:8px;font-size:12px;border-top:1px solid var(--k);padding-top:4px}
+.cop{width:360px;flex:none;display:flex;flex-direction:column;gap:9px}
+.cop h4{font:800 15px "Archivo"}
+.pg{height:10px;border:1px solid var(--k)}.pg i{display:block;width:60%;height:100%;background:var(--k)}
+.cop .lb{font:700 11px "Archivo";letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid var(--k);padding-bottom:2px}
+.cop p,.cop li{font-size:14px}.cop ul{padding-left:18px}
+.ph{background:var(--g);border:1px dashed var(--m);height:26px}
+.raw{background:var(--g);padding:6px;font:500 12px "JetBrains Mono"}
+.stop{margin-top:auto;border:2px solid var(--k);text-align:center;padding:9px;font-weight:800}
+.bot{height:120px;margin:0 8px 8px;display:grid;grid-template-columns:1fr 1fr 1.3fr;gap:8px;flex:none}
+.bot .box{padding:26px 12px 8px}
+.hl{display:flex;gap:18px}.hl span{font:700 28px/1 "JetBrains Mono"}.hl small{display:block;font:500 11px "Archivo";letter-spacing:.08em}
+.bar{display:flex;height:10px;margin-top:8px;border:1px solid var(--k)}.bar i{background:var(--k)}.bar b{background:var(--m)}.bar u{background:var(--r)}
+.row{display:flex;gap:8px;font-size:13px;border-bottom:1px solid var(--g);padding:2px 0}
+.row.sm{font:500 11px "JetBrains Mono";padding:1px 0}
+.k{color:var(--r);font-weight:700}
+</style></head><body><div id="root">
+<header><b>flow-gatekeeper</b><span class="env">開發</span><span class="sp"></span>
+<span class="in">搜尋機台</span><span class="bt">暫停</span><span class="bt off">Mock 頻率</span>
+<span class="bt">● 已連線 · 12 ms</span><span class="bt">淺 ／ 深</span><span class="dx">診斷</span></header>
+
+<section class="bp"><span class="tag">背壓 BACKPRESSURE · 60 秒</span>
+<svg viewBox="0 0 780 84" preserveAspectRatio="none"><g stroke="#000" stroke-width="6" fill="none"><path d="M6 84V22M19 84V30M32 84V16M45 84V34M58 84V20M71 84V40M84 84V12M97 84V28M110 84V36M123 84V18M136 84V32M149 84V10M162 84V26M175 84V38M188 84V14M201 84V30M214 84V22M227 84V42M240 84V16M253 84V34M266 84V24M279 84V12M292 84V36M305 84V20M318 84V30M331 84V14M344 84V40M357 84V26M370 84V18M383 84V34M396 84V10M409 84V28M422 84V38M435 84V16M448 84V32M461 84V22M474 84V42M487 84V12M500 84V30M513 84V24M526 84V36M539 84V14M552 84V28M565 84V20M578 84V40M591 84V16M604 84V34M617 84V10M630 84V26M643 84V38M656 84V18M669 84V30M682 84V12M695 84V32M708 84V22M721 84V36M734 84V14M747 84V28M760 84V20M773 84V10"/></g>
+<g stroke="#9CA3AF" stroke-width="4" fill="none"><path d="M6 84V66M19 84V62M32 84V68M45 84V64M58 84V70M71 84V60M84 84V66M97 84V68M110 84V62M123 84V70M136 84V64M149 84V66M162 84V60M175 84V68M188 84V64M201 84V70M214 84V62M227 84V66M240 84V68M253 84V60M266 84V64M279 84V70M292 84V66M305 84V62M318 84V68M331 84V64M344 84V70M357 84V60M370 84V66M383 84V68M396 84V62M409 84V70M422 84V64M435 84V66M448 84V60M461 84V68M474 84V64M487 84V70M500 84V62M513 84V66M526 84V68M539 84V60M552 84V64M565 84V70M578 84V66M591 84V62M604 84V68M617 84V64M630 84V70M643 84V60M656 84V66M669 84V68M682 84V62M695 84V64M708 84V70M721 84V66M734 84V60M747 84V68M760 84V64M773 84V70"/></g></svg>
+<div class="hr"><small>每秒訊息 1,240 ／ 每秒批次 60</small><span class="big">20.7 : 1</span></div></section>
+
+<section class="mid">
+<div class="flow">
+<div class="box stage"><span class="tag">01 前處理 Prep</span>
+<div class="card"><span class="tag">MIXER-01</span><div class="nm">攪拌機 01</div>
+<div class="vals"><div>55.4<small>°C</small></div><div>0.61<small>mm/s</small></div><div>115<small>u/min</small></div><div>0.0<small>%</small></div></div></div></div>
+<span class="ar a1"></span>
+<div class="box stage"><span class="tag">02 成型烘烤 Forming &amp; Baking</span>
+<div class="card crit sel"><span class="tag">PRESS-02</span><span class="st">嚴重</span><div class="nm">壓製機 02</div>
+<div class="vals"><div>97.0<small>°C</small></div><div>2.19<small>mm/s</small></div><div>73<small>u/min</small></div><div>16.0<small>%</small></div></div><span class="chip">診斷中 60%</span></div>
+<div class="card warn"><span class="tag">OVEN-04</span><span class="st">警告</span><div class="nm">烤爐 04</div>
+<div class="vals"><div>81.3<small>°C</small></div><div>1.10<small>mm/s</small></div><div>118<small>u/min</small></div><div>3.2<small>%</small></div></div><div class="rec">警告 · 12 秒前</div></div></div>
+<span class="ar a2"></span>
+<div class="box stage"><span class="tag">03 包裝分揀 Fulfilment</span>
+<div class="card"><span class="tag">PACK-03</span><div class="nm">包裝機 03</div>
+<div class="vals"><div>63.5<small>°C</small></div><div>0.30<small>mm/s</small></div><div>121<small>u/min</small></div><div>0.2<small>%</small></div></div></div>
+<div class="card"><span class="tag">SORTER-05</span><div class="nm">分揀機 05</div>
+<div class="vals"><div>69.8<small>°C</small></div><div>0.69<small>mm/s</small></div><div>126<small>u/min</small></div><div>1.0<small>%</small></div></div></div></div>
+</div>
+<aside class="box cop"><span class="tag">AI 診斷</span>
+<h4>AI 診斷 · press-02 <span style="float:right;font-size:12px">進行中</span></h4>
+<div class="pg"><i></i></div><div class="mono" style="font-size:24px">60%</div>
+<div class="lb">摘要</div><p>壓製機 02 在維修後出現間歇性過熱…</p>
+<div class="lb">建議動作</div><ul><li>降低壓製頻率並檢查冷卻迴路</li><li>排程停機檢測主軸軸承</li></ul>
+<div class="lb">可能原因</div><div class="ph"></div>
+<div class="lb">證據　還有 6 筆 ▾</div>
+<div class="raw">原始串流 ▸ {"token":"過熱…"}</div>
+<div class="stop">中止診斷</div></aside>
+</section>
+
+<section class="bot">
+<div class="box"><span class="tag">機群健康</span><div class="hl"><div><span>3</span><small>正常</small></div><div><span>1</span><small>警告</small></div><div><span style="color:var(--r)">1</span><small>嚴重</small></div><div><span>0</span><small>停滯</small></div></div>
+<div class="bar"><i style="width:60%"></i><b style="width:20%"></b><u style="width:20%"></u></div></div>
+<div class="box"><span class="tag">最近異常</span>
+<div class="row"><span class="k">壓製機 02 · 嚴重 · 剛剛</span></div><div class="row"><b>烤爐 04 · 警告 · 12 秒前</b></div></div>
+<div class="box"><span class="tag">事件流 10/50</span>
+<div class="row sm"><span>14:10:56</span><span class="k">嚴重</span><span>壓製機 02 進入嚴重</span></div>
+<div class="row sm"><span>14:10:55</span><b>警告</b><span>烤爐 04 進入警告 ×3</span></div>
+<div class="row sm"><span>14:10:40</span><span>正常</span><span>烤爐 04 回復正常</span></div>
+<div class="row sm"><span>14:10:12</span><span class="k">嚴重</span><span>壓製機 02 進入嚴重</span></div></div>
+</section>
+</div></body></html>

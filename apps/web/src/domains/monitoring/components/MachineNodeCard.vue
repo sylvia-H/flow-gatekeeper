@@ -38,7 +38,7 @@ const stateClass = computed(() => cardStateClass(props.machine ? props.machine.s
 
 const PLACEHOLDER = "—";
 
-/** 越界數值染色（FR-002）：warn→amber（`text-warn`）、crit→`text-crit`、否則預設 `text-fg`。 */
+/** 越界數值染色（FR-002）：warn→`text-warn-fg`、crit→`text-crit-fg`（文字用 *-fg 才達 4.5:1）、否則 `text-ink`。 */
 interface MetricView {
   key: MetricKey;
   label: string;
@@ -68,7 +68,7 @@ const metrics = computed<MetricView[]>(() => {
   const off = m ? offendingMetrics(m.telemetry) : null;
   return METRIC_DESCRIPTORS.map((d) => {
     const offense = off ? off[d.key] : null;
-    const cls = offense === "crit" ? "text-crit" : offense === "warn" ? "text-warn" : "text-fg";
+    const cls = offense === "crit" ? "text-crit-fg" : offense === "warn" ? "text-warn-fg" : "text-ink";
     return {
       key: d.key,
       label: d.label,
@@ -79,7 +79,7 @@ const metrics = computed<MetricView[]>(() => {
   });
 });
 
-/** 相對時間「Ns ago」＋絕對時間 tooltip（FR-004）。 */
+/** 相對時間（「剛剛」／「N 秒前」，FR-022）＋絕對時間 tooltip（FR-004）。 */
 const relativeTime = computed(() =>
   props.machine ? relativeTimeLabel(props.machine.lastUpdated, props.now) : PLACEHOLDER,
 );
@@ -92,7 +92,7 @@ const absoluteTime = computed(() =>
   <div class="group relative min-w-0">
     <button
       type="button"
-      class="flex min-h-[148px] w-full min-w-0 flex-col gap-3 rounded-card border p-3 text-left shadow-card transition duration-150 hover:-translate-y-px hover:border-strong hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      class="flex min-h-[148px] w-full min-w-0 flex-col gap-3 rounded-card border p-3 text-left shadow-glass transition duration-150 hover:-translate-y-px hover:border-etch hover:bg-rim/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       :class="[CARD_ROOT_CLASS, stateClass, stale ? CARD_STALE_CLASS : '']"
       :data-selected="selected ? 'true' : 'false'"
       :aria-pressed="selected"
@@ -102,18 +102,18 @@ const absoluteTime = computed(() =>
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
           <div class="flex items-center gap-1.5">
-            <span class="truncate text-sm font-medium text-fg">{{ label }}</span>
+            <span class="truncate text-sm font-medium text-ink">{{ label }}</span>
             <span
               v-if="stale"
-              class="shrink-0 rounded-pill border border-warn-border bg-warn-bg px-1.5 py-0.5 text-2xs font-medium uppercase leading-none text-warn-fg"
+              class="shrink-0 rounded-pill border border-warn bg-warn-bg px-1.5 py-0.5 text-xs font-medium uppercase leading-none text-warn-fg"
             >Stale</span>
           </div>
-          <div class="truncate font-mono text-xs text-fg-muted">{{ machineId }}</div>
+          <div class="truncate font-mono text-xs text-ink-2">{{ machineId }}</div>
         </div>
         <div class="flex shrink-0 items-center gap-1.5">
           <span
             v-if="machine"
-            class="rounded-pill px-1.5 py-0.5 text-2xs font-semibold uppercase leading-none tracking-wide"
+            class="rounded-pill px-1.5 py-0.5 text-xs font-semibold uppercase leading-none tracking-wide"
             :class="[STATE_STYLE[machine.state].badgeText, STATE_STYLE[machine.state].badgeSurface]"
           >{{ STATE_STYLE[machine.state].label }}</span>
           <StatusLight
@@ -122,7 +122,7 @@ const absoluteTime = computed(() =>
             :pulse="machine.state === 'critical'"
           />
           <span v-else class="inline-flex h-3 w-3 items-center justify-center">
-            <span class="block h-[9px] w-[9px] rounded-pill bg-strong" />
+            <span class="block h-[9px] w-[9px] rounded-pill bg-etch" />
           </span>
         </div>
       </div>
@@ -130,16 +130,16 @@ const absoluteTime = computed(() =>
       <!-- Telemetry：固定 2×2 grid，數值 mono，越界值染 amber/crit；避免寬度跳動造成 layout shift -->
       <div class="grid grid-cols-2 gap-x-3 gap-y-2">
         <div v-for="metric in metrics" :key="metric.key">
-          <div class="text-xs text-fg-subtle">{{ metric.label }}</div>
+          <div class="text-xs text-ink-3">{{ metric.label }}</div>
           <div class="flex flex-wrap items-baseline gap-x-1 font-mono">
             <span class="text-number leading-none" :class="metric.cls">{{ metric.value }}</span>
-            <span class="text-2xs text-fg-subtle">{{ metric.unit }}</span>
+            <span class="text-xs text-ink-3">{{ metric.unit }}</span>
           </div>
         </div>
       </div>
 
-      <div class="mt-auto font-mono text-xs text-fg-subtle" :title="absoluteTime">
-        updated {{ relativeTime }}
+      <div class="mt-auto font-mono text-xs text-ink-3" :title="absoluteTime">
+        更新 {{ relativeTime }}
       </div>
     </button>
 
@@ -147,7 +147,7 @@ const absoluteTime = computed(() =>
          觸控裝置沒有 hover：`opacity-0` 的按鈕看不見卻點得到，所以 (hover: none) 時常駐顯示。 -->
     <button
       type="button"
-      class="absolute bottom-2 right-2 rounded-control border border-subtle bg-surface p-1.5 text-fg-subtle opacity-0 transition hover:bg-surface-hover hover:text-accent focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+      class="absolute bottom-2 right-2 rounded-control border border-edge bg-surface p-1.5 text-ink-3 opacity-0 transition hover:bg-rim/60 hover:text-accent focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus group-hover:opacity-100 [@media(hover:none)]:opacity-100"
       :aria-label="`Diagnose ${label}`"
       @click="emit('diagnose', machineId)"
     >

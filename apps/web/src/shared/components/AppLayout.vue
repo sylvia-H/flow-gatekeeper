@@ -46,10 +46,10 @@ const { size: sidebarWidth, startDrag: onSidebarHandleDown } = useResizeDrag({
 
 <template>
   <!-- App shell：不讓 body scroll，內部各區自行 scroll（design-spec §6.1） -->
-  <div class="flex h-screen w-screen overflow-hidden bg-canvas font-sans text-fg">
+  <div class="flex h-screen w-screen overflow-hidden bg-bench font-sans text-ink">
     <!-- Left sidebar（預設 240px，可拖曳調整寬度；mobile 收起交給 Polish 處理） -->
     <aside
-      class="hidden shrink-0 flex-col border-r border-subtle bg-surface md:flex"
+      class="hidden shrink-0 flex-col border-r border-edge bg-surface md:flex"
       :style="{ width: `${sidebarWidth}px` }"
     >
       <slot name="sidebar" />
@@ -67,7 +67,7 @@ const { size: sidebarWidth, startDrag: onSidebarHandleDown } = useResizeDrag({
     <!-- Main column：top bar（56px）+ main（fill） -->
     <div class="flex min-w-0 flex-1 flex-col">
       <header
-        class="flex h-14 min-w-0 shrink-0 items-center overflow-hidden border-b border-subtle bg-surface px-4"
+        class="flex h-14 min-w-0 shrink-0 items-center overflow-hidden border-b border-edge bg-surface px-4"
       >
         <slot name="topbar" />
       </header>
@@ -79,7 +79,7 @@ const { size: sidebarWidth, startDrag: onSidebarHandleDown } = useResizeDrag({
     <!-- 手機 bottom-sheet 背景遮罩：起於 top-14 不遮頂欄；點擊關閉（桌機隱藏） -->
     <div
       v-if="drawerOpen"
-      class="fixed inset-x-0 bottom-0 top-14 z-40 bg-black/50 md:hidden"
+      class="fixed inset-x-0 bottom-0 top-14 z-40 bg-ink/50 md:hidden"
       aria-hidden="true"
       @click="emit('close-drawer')"
     />
@@ -89,7 +89,7 @@ const { size: sidebarWidth, startDrag: onSidebarHandleDown } = useResizeDrag({
       :class="[
         drawerOpen ? 'flex' : 'hidden',
         panelOpen ? 'md:flex' : 'md:hidden',
-        'fixed inset-x-0 bottom-0 z-50 max-h-[85vh] min-h-[70vh] flex-col rounded-t-card border-t border-subtle bg-elevated shadow-drawer',
+        'fixed inset-x-0 bottom-0 z-50 max-h-[85vh] min-h-[70vh] flex-col rounded-t-card border-t border-edge bg-surface-strong shadow-sheet',
         'md:static md:z-auto md:h-auto md:max-h-none md:min-h-0 md:w-[400px] md:shrink-0 md:rounded-none md:border-l md:border-t-0',
       ]"
       aria-label="AI Copilot"
@@ -101,7 +101,7 @@ const { size: sidebarWidth, startDrag: onSidebarHandleDown } = useResizeDrag({
     <button
       v-if="!panelOpen"
       type="button"
-      class="hidden w-9 shrink-0 flex-col items-center justify-center border-l border-subtle bg-surface text-fg-subtle hover:bg-surface-hover hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent md:flex"
+      class="hidden w-9 shrink-0 flex-col items-center justify-center border-l border-edge bg-surface text-ink-3 hover:bg-rim/60 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-focus md:flex"
       aria-label="展開 AI Copilot 面板"
       title="展開 AI Copilot 面板"
       @click="emit('open-panel')"

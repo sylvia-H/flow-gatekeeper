@@ -39,8 +39,8 @@ const jobShort = computed(() =>
 
 /** 狀態 chip（狀態不只靠顏色：附文字 label）。 */
 const STATUS_CHIP: Record<CopilotJobState["status"], { cls: string; label: string }> = {
-  idle: { cls: "text-fg-subtle bg-elevated", label: "Idle" },
-  active: { cls: "text-accent bg-accent-bg", label: "Active" },
+  idle: { cls: "text-ink-3 bg-rim", label: "Idle" },
+  active: { cls: "text-accent bg-accent-wash", label: "Active" },
   completed: { cls: "text-ok-fg bg-ok-bg", label: "Completed" },
   failed: { cls: "text-crit-fg bg-crit-bg", label: "Failed" },
 };
@@ -71,9 +71,9 @@ const jobMeta = computed<readonly { label: string; value: string }[]>(() => [
 ]);
 
 const STEP_STYLE: Record<StepStatus, { dot: string; text: string }> = {
-  done: { dot: "bg-ok", text: "text-fg-muted" },
-  active: { dot: "bg-accent animate-critical-pulse", text: "text-fg" },
-  todo: { dot: "bg-strong", text: "text-fg-subtle" },
+  done: { dot: "bg-ok", text: "text-ink-2" },
+  active: { dot: "bg-accent animate-critical-pulse", text: "text-ink" },
+  todo: { dot: "bg-etch", text: "text-ink-3" },
 };
 
 /**
@@ -132,21 +132,21 @@ watch(
     <div class="sr-only" aria-live="polite" aria-atomic="true">{{ announcement }}</div>
 
     <!-- Header：machine label / job short / close -->
-    <div class="flex shrink-0 items-center gap-2 border-b border-subtle px-4 py-3">
+    <div class="flex shrink-0 items-center gap-2 border-b border-edge px-4 py-3">
       <Stethoscope class="h-4 w-4 shrink-0 text-accent" aria-hidden="true" />
       <div class="min-w-0 flex-1">
-        <div :id="titleId" class="truncate text-sm font-semibold text-fg">AI Copilot</div>
-        <div class="truncate font-mono text-xs text-fg-subtle">
+        <div :id="titleId" class="truncate text-sm font-semibold text-ink">AI Copilot</div>
+        <div class="truncate font-mono text-xs text-ink-3">
           {{ machineId ?? "—" }}<span v-if="jobShort"> · {{ jobShort }}</span>
         </div>
       </div>
       <span
-        class="shrink-0 rounded-pill px-2 py-0.5 text-pill font-medium"
+        class="shrink-0 rounded-pill px-2 py-0.5 text-xs font-medium"
         :class="STATUS_CHIP[state.status].cls"
       >{{ STATUS_CHIP[state.status].label }}</span>
       <button
         type="button"
-        class="ml-1 shrink-0 rounded-control p-1 text-fg-subtle hover:bg-surface-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        class="ml-1 shrink-0 rounded-control p-1 text-ink-3 hover:bg-rim/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
         aria-label="關閉／收合 Copilot 面板"
         title="關閉／收合 Copilot 面板"
         @click="emit('close')"
@@ -158,37 +158,37 @@ watch(
     <!-- Body -->
     <div class="min-h-0 flex-1 overflow-auto px-4 py-4">
       <!-- 未選機台：空狀態 -->
-      <div v-if="machineId === null" class="pt-6 text-center text-sm text-fg-subtle">
+      <div v-if="machineId === null" class="pt-6 text-center text-sm text-ink-3">
         選取機台以開始 AI 診斷。
       </div>
 
       <!-- idle：機台摘要 + Run diagnosis -->
       <div v-else-if="state.status === 'idle'" class="space-y-4">
-        <div class="rounded-card border border-subtle bg-surface p-3">
-          <div class="mb-2 text-sm font-medium text-fg">{{ machineLabel }}</div>
+        <div class="rounded-card border border-edge bg-surface p-3">
+          <div class="mb-2 text-sm font-medium text-ink">{{ machineLabel }}</div>
           <dl v-if="summary" class="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs">
             <div>
-              <dt class="text-fg-subtle">State</dt>
-              <dd class="text-fg">{{ summary.state }}</dd>
+              <dt class="text-ink-3">State</dt>
+              <dd class="text-ink">{{ summary.state }}</dd>
             </div>
             <div>
-              <dt class="text-fg-subtle">Temp</dt>
-              <dd class="font-mono text-fg">{{ summary.telemetry.temperature.toFixed(1) }}°</dd>
+              <dt class="text-ink-3">Temp</dt>
+              <dd class="font-mono text-ink">{{ summary.telemetry.temperature.toFixed(1) }}°</dd>
             </div>
             <div>
-              <dt class="text-fg-subtle">Vibration</dt>
-              <dd class="font-mono text-fg">{{ summary.telemetry.vibration.toFixed(2) }}</dd>
+              <dt class="text-ink-3">Vibration</dt>
+              <dd class="font-mono text-ink">{{ summary.telemetry.vibration.toFixed(2) }}</dd>
             </div>
             <div>
-              <dt class="text-fg-subtle">Errors</dt>
-              <dd class="font-mono text-fg">{{ (summary.telemetry.errorRate * 100).toFixed(1) }}%</dd>
+              <dt class="text-ink-3">Errors</dt>
+              <dd class="font-mono text-ink">{{ (summary.telemetry.errorRate * 100).toFixed(1) }}%</dd>
             </div>
           </dl>
-          <p v-else class="text-xs text-fg-subtle">尚未收到此機台遙測。</p>
+          <p v-else class="text-xs text-ink-3">尚未收到此機台遙測。</p>
         </div>
         <button
           type="button"
-          class="flex w-full items-center justify-center gap-2 rounded-control bg-accent px-3 py-2 text-sm font-medium text-canvas hover:bg-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
+          class="flex w-full items-center justify-center gap-2 rounded-control bg-accent px-3 py-2 text-sm font-medium text-surface-strong hover:bg-accent-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="!canDiagnose"
           :title="connectionBlockedReason ?? undefined"
           @click="emit('diagnose')"
@@ -201,7 +201,7 @@ watch(
       <!-- active：進度 + 串流 -->
       <div v-else-if="state.status === 'active'" class="space-y-4">
         <div class="space-y-1.5">
-          <div class="flex items-center justify-between text-xs text-fg-muted">
+          <div class="flex items-center justify-between text-xs text-ink-2">
             <span>診斷進行中</span>
             <span class="font-mono">{{ progressText }}</span>
           </div>
@@ -213,10 +213,10 @@ watch(
           <div
             v-for="meta in jobMeta"
             :key="meta.label"
-            class="rounded-control border border-subtle bg-surface px-2 py-1.5"
+            class="rounded-control border border-edge bg-surface px-2 py-1.5"
           >
-            <dt class="text-2xs uppercase tracking-wide text-fg-subtle">{{ meta.label }}</dt>
-            <dd class="truncate font-mono text-xs text-fg">{{ meta.value }}</dd>
+            <dt class="text-xs uppercase tracking-wide text-ink-3">{{ meta.label }}</dt>
+            <dd class="truncate font-mono text-xs text-ink">{{ meta.value }}</dd>
           </div>
         </dl>
 
@@ -234,7 +234,7 @@ watch(
               aria-hidden="true"
             />
             <span class="flex-1">{{ step.label }}</span>
-            <span class="font-mono text-2xs text-fg-subtle">{{ step.milestone }}%</span>
+            <span class="font-mono text-xs text-ink-3">{{ step.milestone }}%</span>
           </li>
         </ol>
 
@@ -243,7 +243,7 @@ watch(
         <!-- 中止／放棄：診斷卡住或不想等時的脫身出口（→ idle，可立即重新診斷） -->
         <button
           type="button"
-          class="flex w-full items-center justify-center gap-2 rounded-control border border-subtle bg-surface px-3 py-2 text-sm text-fg-muted hover:bg-surface-hover hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          class="flex w-full items-center justify-center gap-2 rounded-control border border-edge bg-surface px-3 py-2 text-sm text-ink-2 hover:bg-rim/60 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           @click="emit('cancel')"
         >
           <Ban class="h-4 w-4" aria-hidden="true" />
@@ -258,15 +258,15 @@ watch(
           <!-- Cached badge：快取命中時顯示（FR-009；快取／去重屬後端 003，前端僅呈現） -->
           <span
             v-if="state.cached"
-            class="shrink-0 rounded-pill border border-accent-bg-strong bg-accent-bg px-2 py-0.5 text-pill font-medium text-accent"
+            class="shrink-0 rounded-pill border border-accent bg-accent-wash px-2 py-0.5 text-xs font-medium text-accent"
             aria-label="結果來自快取"
           >Cached</span>
         </div>
         <DiagnosisResultView :result="state.result" />
-        <div v-if="state.streamText" class="border-t border-subtle pt-3">
+        <div v-if="state.streamText" class="border-t border-edge pt-3">
           <button
             type="button"
-            class="flex w-full items-center justify-between text-xs font-medium text-fg-subtle hover:text-fg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            class="flex w-full items-center justify-between text-xs font-medium text-ink-3 hover:text-ink-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             :aria-expanded="showStream"
             @click="showStream = !showStream"
           >
@@ -285,12 +285,12 @@ watch(
       <div v-else-if="state.status === 'failed'" class="space-y-4">
         <ProgressBar status="failed" />
         <!-- 不另掛 role="alert"：失敗已由上方 live region 公告，避免同一則錯誤被念兩次 -->
-        <div class="rounded-control border border-crit-border bg-crit-bg px-3 py-2.5 text-sm text-crit-fg">
+        <div class="rounded-control border border-crit bg-crit-bg px-3 py-2.5 text-sm text-crit-fg">
           {{ state.error }}
         </div>
         <button
           type="button"
-          class="flex w-full items-center justify-center gap-2 rounded-control bg-accent px-3 py-2 text-sm font-medium text-canvas hover:bg-accent-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-50"
+          class="flex w-full items-center justify-center gap-2 rounded-control bg-accent px-3 py-2 text-sm font-medium text-surface-strong hover:bg-accent-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
           :disabled="!canDiagnose"
           :title="connectionBlockedReason ?? undefined"
           @click="emit('retry')"
@@ -298,10 +298,10 @@ watch(
           <RotateCcw class="h-4 w-4" aria-hidden="true" />
           Retry
         </button>
-        <div v-if="state.streamText" class="border-t border-subtle pt-3">
+        <div v-if="state.streamText" class="border-t border-edge pt-3">
           <button
             type="button"
-            class="flex w-full items-center justify-between text-xs font-medium text-fg-subtle hover:text-fg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            class="flex w-full items-center justify-between text-xs font-medium text-ink-3 hover:text-ink-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             :aria-expanded="showStream"
             @click="showStream = !showStream"
           >

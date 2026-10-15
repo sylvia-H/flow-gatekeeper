@@ -90,8 +90,8 @@ const STATUS_META: Record<MetricsStatus, { label: string; dot: string; text: str
   },
   empty: {
     label: "No data",
-    dot: "bg-fg-subtle",
-    text: "text-fg-subtle",
+    dot: "bg-ink-3",
+    text: "text-ink-3",
     // 不寫死秒數：此時還沒有 payload，`windowMs` 無從得知，寫「預設 60 秒」在非預設間隔下會誤導。
     hint: "尚未收到任何指標摘要（每個週期一則）",
   },
@@ -129,7 +129,7 @@ const windowText = computed(() =>
     <button
       ref="triggerRef"
       type="button"
-      class="flex h-9 items-center gap-1.5 rounded-control border border-subtle bg-surface px-2.5 text-xs text-fg-muted hover:bg-surface-hover hover:text-fg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      class="flex h-9 items-center gap-1.5 rounded-control border border-edge bg-surface px-2.5 text-xs text-ink-2 hover:bg-rim/60 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
       :aria-expanded="open"
       aria-label="Metrics panel"
       :title="meta.hint"
@@ -150,48 +150,48 @@ const windowText = computed(() =>
       <div
         v-if="open"
         ref="panelRef"
-        class="fixed z-[60] w-72 rounded-card border border-subtle bg-elevated p-3 font-sans shadow-card"
+        class="fixed z-[60] w-72 rounded-card border border-edge bg-surface-strong p-3 font-sans shadow-glass"
         :style="panelPosition"
         role="status"
       >
         <!-- 樣態列：四態以文案 + 色點雙重編碼，stale 與 disconnected 必須一眼分得開 -->
-        <div class="flex items-center justify-between gap-2 border-b border-subtle pb-2">
+        <div class="flex items-center justify-between gap-2 border-b border-edge pb-2">
           <span class="inline-flex items-center gap-1.5 text-xs" :class="meta.text">
             <span class="h-2 w-2 rounded-pill" :class="meta.dot" aria-hidden="true" />
             {{ meta.label }}
           </span>
-          <span class="font-mono text-xs text-fg-subtle">
+          <span class="font-mono text-xs text-ink-3">
             {{ ageText }}<template v-if="windowText"> · {{ windowText }}</template>
           </span>
         </div>
-        <p class="pt-2 text-xs text-fg-subtle">{{ meta.hint }}</p>
+        <p class="pt-2 text-xs text-ink-3">{{ meta.hint }}</p>
 
         <dl v-if="snapshot" class="mt-2 space-y-1.5 text-xs">
           <div class="flex items-baseline justify-between gap-2">
-            <dt class="text-fg-muted">Queue（waiting/active/failed）</dt>
-            <dd class="font-mono text-fg">
+            <dt class="text-ink-2">Queue（waiting/active/failed）</dt>
+            <dd class="font-mono text-ink">
               {{ num(snapshot.queue.waiting) }}/{{ num(snapshot.queue.active) }}/{{
                 num(snapshot.queue.failed)
               }}
             </dd>
           </div>
           <div class="flex items-baseline justify-between gap-2">
-            <dt class="text-fg-muted">WS connections</dt>
-            <dd class="font-mono text-fg">{{ num(snapshot.wsConnections) }}</dd>
+            <dt class="text-ink-2">WS connections</dt>
+            <dd class="font-mono text-ink">{{ num(snapshot.wsConnections) }}</dd>
           </div>
           <div class="flex items-baseline justify-between gap-2">
-            <dt class="text-fg-muted">LLM latency（avg/p95/max）</dt>
-            <dd class="font-mono text-fg">
+            <dt class="text-ink-2">LLM latency（avg/p95/max）</dt>
+            <dd class="font-mono text-ink">
               {{ ms(snapshot.worker?.llmLatency.avgMs) }}/{{
                 ms(snapshot.worker?.llmLatency.p95Ms)
               }}/{{ ms(snapshot.worker?.llmLatency.maxMs) }}
             </dd>
           </div>
           <div class="flex items-baseline justify-between gap-2">
-            <dt class="text-fg-muted">Cache hit rate</dt>
-            <dd class="font-mono text-fg">
+            <dt class="text-ink-2">Cache hit rate</dt>
+            <dd class="font-mono text-ink">
               {{ hitRateText }}
-              <span class="text-fg-subtle">
+              <span class="text-ink-3">
                 （{{ num(snapshot.worker?.cache.hits) }}/{{
                   num(
                     snapshot.worker
@@ -203,10 +203,10 @@ const windowText = computed(() =>
             </dd>
           </div>
           <div class="flex items-baseline justify-between gap-2">
-            <dt class="text-fg-muted">Persist（dropped/failed）</dt>
-            <dd class="font-mono text-fg">{{ persist.dropped }}/{{ persist.failed }}</dd>
+            <dt class="text-ink-2">Persist（dropped/failed）</dt>
+            <dd class="font-mono text-ink">{{ persist.dropped }}/{{ persist.failed }}</dd>
           </div>
-          <p v-if="snapshot.worker === null" class="pt-1 text-fg-subtle">
+          <p v-if="snapshot.worker === null" class="pt-1 text-ink-3">
             worker 指標缺席（快照不存在／過期／畸形）——api 側兩項仍為即時值。
           </p>
         </dl>

@@ -37,11 +37,11 @@ function onDiagnose(machineId: string): void {
 </script>
 
 <template>
-  <div class="topology-bg h-full overflow-auto bg-surface-inset p-4 md:p-6">
+  <div class="topology-bg h-full overflow-auto bg-bench p-4 md:p-6">
     <!-- search 查無相符：空狀態（非破版空白，FR-015／Edge Cases） -->
     <div
       v-if="nodes.length === 0"
-      class="flex h-full items-center justify-center text-sm text-fg-subtle"
+      class="flex h-full items-center justify-center text-sm text-ink-3"
     >
       無符合「{{ store.searchQuery }}」的機台。
     </div>
@@ -68,11 +68,11 @@ function onDiagnose(machineId: string): void {
 </template>
 
 <style scoped>
-/* design-spec §6.3 grid overlay（底色用 bg-surface-inset token，僅格線走 spec 定義的疊圖） */
+/* 實驗桌面 24px 極細格線（底色 bg-bench；格線色走語意變數 --c-bench-grid，013 T022 會移到主區容器） */
 .topology-bg {
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    linear-gradient(rgb(var(--c-bench-grid)) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--c-bench-grid)) 1px, transparent 1px);
   background-size: 24px 24px;
 }
 </style>

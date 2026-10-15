@@ -13,7 +13,7 @@
 - `tailwind.config.ts` 的 `theme.extend.colors` 一律寫成 `"rgb(var(--c-surface) / <alpha-value>)"`，元件只用 `bg-surface`、`text-ink` 等語意 class；磨砂玻璃的半透明用 `bg-surface/72` 這類 alpha 修飾。
 - `main.ts` 在 `createApp` 之前讀 localStorage `fg.theme`（try/catch），立即設定 `document.documentElement.dataset.theme`，無值則 `light`；**不讀 `prefers-color-scheme`**（spec Assumptions）。
 - `useTheme()` composable 提供 `theme`／`toggle()`；切換時先在 `<html>` 加 `data-theme-switching` 一幀以停用所有 transition（避免各元件以不同時序漸變造成閃爍），下一幀移除。
-- 兩套主題共用同一組語意名稱；dark 的玻璃為「煙燻」：`--c-surface` 較深且 alpha 提高，對比以 quickstart 的抽測驗證。
+- 兩套主題共用同一組語意名稱；dark 的玻璃為「煙燻」：`--c-surface` 色值較深，對比以 quickstart 的抽測驗證。兩套主題玻璃 alpha 皆為 72%，dark 的煙燻感由 `--c-surface` 色值達成。
 
 **Rationale**：Tailwind 3 無原生多主題；變數法讓 token 名稱唯一、兩套值並存、切換零 re-render（只改一個屬性）；hex 集中一檔符合憲章 II 的「不散落 hex」且便於 `impeccable detect` 的 design-system 檢查。
 

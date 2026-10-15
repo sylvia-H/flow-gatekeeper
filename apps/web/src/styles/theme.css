@@ -1,0 +1,120 @@
+/*
+ * 主題變數——全站唯一允許出現色值數字的檔案（spec FR-007、research R1）。
+ *
+ * - 兩組同名變數：`:root[data-theme="light"]`（預設）與 `:root[data-theme="dark"]`；
+ *   名稱與用途見 `specs/013-ui-redesign/contracts/ui-contract.md` §1。
+ * - 值一律是 `R G B` 三元組（空白分隔），供 Tailwind 寫成 `rgb(var(--c-…) / <alpha-value>)`；
+ *   元件只用語意 class（`bg-bench`、`text-ink`…），半透明一律由 class 的 alpha 修飾決定
+ *   （例：磨砂玻璃 `bg-surface/72`），變數本身只存不透明色。
+ * - `--c-edge` 存的是「rgba(31,42,51,0.18) 疊在桌面上」的合成色（不透明），讓 `border-edge`
+ *   不必再帶 alpha 修飾。
+ * - `--c-etch` 只給刻度線、短線等非文字裝飾；刻度旁的數字與文字一律用 ink 階。
+ * - 禁止 backdrop-filter、光暈、色彩漸層（direction contract OWN-WORLD）。
+ *
+ * 對比（WCAG 2.x 相對亮度公式自算；「玻璃」= `--c-surface` 72% 疊在 `--c-bench` 上的合成色）：
+ *
+ * light（玻璃合成 ≈ #F5F7F9）
+ *   ink    ：bench 11.29、玻璃 13.61、rim 9.46
+ *   ink-2  ：bench  7.83、玻璃  9.43、rim  6.56
+ *   ink-3  ：bench  5.72、玻璃  6.90、rim 4.80、warn-bg 6.23（最低者 rim 4.80 ≥ 4.5）
+ *   accent（深青，文字用）：玻璃 5.39、surface-strong 5.79、bench 4.47 ✗、rim 3.75 ✗
+ *            → 桌面／桌邊上的深青文字改用 accent-strong（bench 5.96、rim 4.99）
+ *   白字（surface-strong）在 accent 底 5.79、在 accent-strong 底 7.71
+ *   ok-fg/ok-bg 6.80、warn-fg/warn-bg 6.04、crit-fg/crit-bg 6.62；*-fg 對玻璃皆 ≥ 6.6、對 rim ≥ 4.65
+ *   狀態實心色（非文字）對玻璃：ok 4.70、warn 3.39、crit 5.24（warn 作文字不達標 → 文字用 warn-fg）
+ *   stale 對玻璃 3.43（非文字 ≥ 3）；focus 對玻璃 5.39、對 bench 4.47
+ *
+ * dark（煙燻玻璃合成 ≈ #222C35）
+ *   ink    ：bench 13.90、玻璃 11.59、rim 15.13
+ *   ink-2  ：bench  9.70、玻璃  8.09、rim 10.56
+ *   ink-3  ：bench  6.92、玻璃  5.77、rim  7.54、accent-wash 5.58、ok-bg 5.24
+ *   accent（文字用）：bench 7.05、玻璃 5.88、rim 7.68
+ *   on-accent（surface-strong 字在 accent 底）6.20、在 accent-strong 底 7.74
+ *   ok-fg/ok-bg 8.42、warn-fg/warn-bg 9.15、crit-fg/crit-bg 8.30；*-fg 對玻璃皆 ≥ 7.7
+ *   狀態實心色對玻璃：ok 6.30、warn 6.61、crit 4.42（crit 作文字改用 crit-fg）
+ *   stale 對玻璃 4.02；focus 對玻璃 7.35
+ */
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  /* 實驗桌面與桌邊 */
+  --c-bench: 221 227 232; /* #DDE3E8 */
+  --c-bench-grid: 208 215 221; /* #D0D7DD，24px 極細格線 */
+  --c-rim: 201 209 216; /* #C9D1D8，rail／工具列／面板標頭 */
+
+  /* 磨砂白玻璃：以 `bg-surface/72` 使用 → rgba(255,255,255,0.72) */
+  --c-surface: 255 255 255; /* #FFFFFF */
+  --c-surface-strong: 255 255 255; /* #FFFFFF，不透明覆蓋層／說明層，也作 accent 底上的文字色 */
+  --c-edge: 186 194 200; /* #BAC2C8 ≈ rgba(31,42,51,0.18) 疊在 bench 上 */
+  --c-highlight: 255 255 255; /* #FFFFFF，內側上緣 1px 高光（shadow-glass 以 0.9 使用） */
+
+  /* 墨色三階 */
+  --c-ink: 31 42 51; /* #1F2A33 */
+  --c-ink-2: 54 67 79; /* #36434F */
+  --c-ink-3: 74 87 99; /* #4A5763 */
+  --c-etch: 154 167 178; /* #9AA7B2，蝕刻刻度（非文字） */
+
+  /* 深青 accent：主要動作、選取、液位線 */
+  --c-accent: 15 110 140; /* #0F6E8C */
+  --c-accent-strong: 11 90 115; /* #0B5A73，hover／按下、桌面上的深青文字 */
+  --c-accent-wash: 217 236 242; /* #D9ECF2，選取底 */
+
+  /* 狀態三件套：實心（點、刻度、邊框）／前景文字／徽章底 */
+  --c-ok: 46 125 79; /* #2E7D4F */
+  --c-ok-fg: 30 90 55; /* #1E5A37 */
+  --c-ok-bg: 220 239 227; /* #DCEFE3 */
+  --c-warn: 183 121 31; /* #B7791F */
+  --c-warn-fg: 122 78 12; /* #7A4E0C */
+  --c-warn-bg: 247 234 210; /* #F7EAD2 */
+  --c-crit: 198 40 40; /* #C62828 */
+  --c-crit-fg: 155 28 28; /* #9B1C1C */
+  --c-crit-bg: 251 226 224; /* #FBE2E0 */
+  --c-stale: 122 135 146; /* #7A8792 */
+
+  --c-focus: 15 110 140; /* #0F6E8C */
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* 深鋼灰桌面；桌邊比桌面更深（與 light 的「桌邊較深」同向） */
+  --c-bench: 22 29 35; /* #161D23 */
+  --c-bench-grid: 31 39 46; /* #1F272E */
+  --c-rim: 15 20 24; /* #0F1418 */
+
+  /* 煙燻玻璃：同樣以 `bg-surface/72` 使用，色值較 bench 亮、合成後 ≈ #222C35 */
+  --c-surface: 39 50 60; /* #27323C */
+  --c-surface-strong: 31 40 48; /* #1F2830，不透明覆蓋層，也作 accent 底上的文字色 */
+  --c-edge: 59 72 83; /* #3B4853 */
+  --c-highlight: 64 78 90; /* #404E5A，低調的上緣高光 */
+
+  --c-ink: 227 233 238; /* #E3E9EE */
+  --c-ink-2: 186 197 206; /* #BAC5CE */
+  --c-ink-3: 154 167 178; /* #9AA7B2 */
+  --c-etch: 86 99 110; /* #56636E */
+
+  --c-accent: 79 179 209; /* #4FB3D1 */
+  --c-accent-strong: 115 198 223; /* #73C6DF */
+  --c-accent-wash: 20 49 59; /* #14313B */
+
+  --c-ok: 76 194 126; /* #4CC27E */
+  --c-ok-fg: 155 224 182; /* #9BE0B6 */
+  --c-ok-bg: 23 56 38; /* #173826 */
+  --c-warn: 224 167 67; /* #E0A743 */
+  --c-warn-fg: 242 207 133; /* #F2CF85 */
+  --c-warn-bg: 58 43 18; /* #3A2B12 */
+  --c-crit: 240 96 95; /* #F0605F */
+  --c-crit-fg: 255 168 168; /* #FFA8A8 */
+  --c-crit-bg: 63 26 28; /* #3F1A1C */
+  --c-stale: 125 138 149; /* #7D8A95 */
+
+  --c-focus: 115 198 223; /* #73C6DF */
+}
+
+/* 切換主題的那一幀停用所有過渡，避免各元件以不同時序漸變而閃爍（useTheme 加上、兩幀後移除）。 */
+:root[data-theme-switching] *,
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after {
+  transition: none !important;
+}

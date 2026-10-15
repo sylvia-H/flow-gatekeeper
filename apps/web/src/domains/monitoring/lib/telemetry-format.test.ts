@@ -42,20 +42,19 @@ describe("offendingMetrics（FR-002；門檻鏡射 002 producer）", () => {
   });
 });
 
-describe("relativeTimeLabel（FR-004 邊界）", () => {
+describe("relativeTimeLabel（委派 formatRelative，FR-022 邊界）", () => {
   const now = 1_000_000_000;
-  it("<5s → just now", () => {
-    expect(relativeTimeLabel(now, now)).toBe("just now");
-    expect(relativeTimeLabel(now - 4_999, now)).toBe("just now");
+  it("≤ 2s（閉區間）→ 剛剛", () => {
+    expect(relativeTimeLabel(now, now)).toBe("剛剛");
+    expect(relativeTimeLabel(now - 2_000, now)).toBe("剛剛");
   });
-  it("秒/分/時/日 邊界", () => {
-    expect(relativeTimeLabel(now - 5_000, now)).toBe("5s ago");
-    expect(relativeTimeLabel(now - 59_000, now)).toBe("59s ago");
-    expect(relativeTimeLabel(now - 60_000, now)).toBe("1m ago");
-    expect(relativeTimeLabel(now - 60 * 60_000, now)).toBe("1h ago");
-    expect(relativeTimeLabel(now - 24 * 60 * 60_000, now)).toBe("1d ago");
+  it("秒／分邊界", () => {
+    expect(relativeTimeLabel(now - 2_001, now)).toBe("2 秒前");
+    expect(relativeTimeLabel(now - 59_000, now)).toBe("59 秒前");
+    expect(relativeTimeLabel(now - 60_000, now)).toBe("1 分鐘前");
+    expect(relativeTimeLabel(now - 60 * 60_000, now)).toBe("60 分鐘前");
   });
-  it("未來時間夾為 just now（不出現負值）", () => {
-    expect(relativeTimeLabel(now + 5_000, now)).toBe("just now");
+  it("未來時間夾為剛剛（不出現負值）", () => {
+    expect(relativeTimeLabel(now + 5_000, now)).toBe("剛剛");
   });
 });

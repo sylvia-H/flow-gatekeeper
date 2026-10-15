@@ -1,11 +1,11 @@
 import type { MachineState } from "@flow-gatekeeper/contracts";
 
 /**
- * `MachineNodeCard` 狀態 → 卡片外觀 token（design-spec §7.3）。
+ * `MachineNodeCard` 狀態 → 卡片外觀語意 token（013 ui-contract §1）。
  *
- * - warning：`bg-surface` + `warn-bg` subtle inset（`ring-1 ring-inset ring-warn-bg` 內嵌環；
- *   非盒模型、不位移，FR-002/005）。
- * - critical：crit-bg tint + `animate-critical-pulse`（動畫只動 box-shadow）。
+ * - warning：`bg-surface` + 1px `border-warn` 全邊框（013 FR-030；替換 border 顏色、不改寬度，
+ *   盒模型不變、不位移）。
+ * - critical：`border-crit` + crit-bg tint + `animate-critical-pulse`（動畫只動 box-shadow）。
  * - placeholder（冷啟動／首批未到）：中性面。
  *
  * **選取態不在這裡**：選取以 `.machine-card[data-selected="true"]` 規則呈現（見 `styles/tailwind.css`），
@@ -14,15 +14,15 @@ import type { MachineState } from "@flow-gatekeeper/contracts";
  * 若把選取改回一般 utility class，會重現「選取與未選取看起來一樣」的缺陷
  * （回歸測試：`MachineNodeCard.css.test.ts`）。
  */
-export const CARD_PLACEHOLDER_CLASS = "border-subtle bg-surface";
+export const CARD_PLACEHOLDER_CLASS = "border-edge bg-surface";
 
 export const CARD_STATE_CLASS: Record<MachineState, string> = {
-  healthy: "border-subtle bg-surface",
-  warning: "border-subtle bg-surface ring-1 ring-inset ring-warn-bg",
-  critical: "border-crit-border bg-crit-bg animate-critical-pulse",
+  healthy: "border-edge bg-surface",
+  warning: "border-warn bg-surface",
+  critical: "border-crit bg-crit-bg animate-critical-pulse",
 };
 
-/** stale：降透明（design-spec §7.3），與狀態 class 疊加。 */
+/** stale：降透明，與狀態 class 疊加（視覺於 013 T027 重做）。 */
 export const CARD_STALE_CLASS = "opacity-[0.55]";
 
 /** 卡片根元素的固定 class（選取規則以它為錨點）。 */
