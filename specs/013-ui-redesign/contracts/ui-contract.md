@@ -15,7 +15,7 @@
 | `--c-highlight` | （inset shadow 用） | 內側上緣高光 |
 | `--c-ink` / `--c-ink-2` / `--c-ink-3` | `text-ink` / `text-ink-2` / `text-ink-3` | 三階文字（ink-3 仍 ≥ 4.5:1） |
 | `--c-etch` | `stroke-etch` / `text-etch` | 蝕刻刻度與短線 |
-| `--c-accent` / `--c-accent-strong` / `--c-accent-wash` | `bg-accent`… | 深青：主要動作、選取、液位線 |
+| `--c-accent` / `--c-accent-strong` / `--c-accent-wash` | `bg-accent`… | 深青：主要動作、選取、液位線。**當文字用時**：放在玻璃面或 accent-wash 上可用 `text-accent`；放在 bench 或 rim 上 MUST 用 `text-accent-strong`（light 下 `accent` 對 bench 僅 4.47:1、對 rim 3.75:1，Phase 1 審查實測） |
 | `--c-ok` / `--c-ok-fg` / `--c-ok-bg` | `bg-ok`、`text-ok-fg`、`bg-ok-bg` | 正常三件套 |
 | `--c-warn` / `--c-warn-fg` / `--c-warn-bg` | 同上 | 警告 |
 | `--c-crit` / `--c-crit-fg` / `--c-crit-bg` | 同上 | 嚴重 |
