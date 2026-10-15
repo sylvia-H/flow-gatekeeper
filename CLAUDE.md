@@ -1,6 +1,6 @@
 <!-- SPECKIT START -->
 <!-- 提醒：下次執行 speckit-agent-context-update 會覆寫本區塊，屆時再把 current plan 指向新 feature 的 plan.md。 -->
-目前進行中的 SDD feature 為 **013-ui-redesign**（`specs/013-ui-redesign/spec.md`，2026-10-15 完成 specify、待 clarify／plan；impeccable 工件在 `apps/web/PRODUCT.md`、`apps/web/DESIGN.md`、`apps/web/.impeccable/`）；最近一次完成的是 009（`specs/009-observability-baseline/plan.md`）。
+目前進行中的 SDD feature 為 **013-ui-redesign**（`specs/013-ui-redesign/plan.md`，2026-10-15 完成 specify／clarify／plan，待 checklist／tasks；視覺方向「實驗室玻璃與蝕刻刻度」已定，direction contract 在 `apps/web/.impeccable/surfaces/src-app-vue.md`；impeccable 工件在 `apps/web/PRODUCT.md`、`apps/web/DESIGN.md`、`apps/web/.impeccable/`）；最近一次完成的是 009（`specs/009-observability-baseline/plan.md`）。
 009 之後的修復與升級見兩輪審查報告 `docs/20260927-research-review.md`、`docs/20260927-research-review02.md`（數字與結論以第二輪為準；`fix/20260927-research-review`、`upgrade/20260927-tech-stack`、`fix/20260927-research-review02`、`fix/20260927-review02-batch-cd` 皆已併入 `develop`，並於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第三輪審查報告 `docs/20260927-research-review03.md` 已於 2026-10-15 併入 `develop`），
 現況摘要見 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15.6「1.0.0 之後的現況摘要」。技術棧、結構與指令以 README 與指南為準。
 <!-- SPECKIT END -->
