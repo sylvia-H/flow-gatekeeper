@@ -26,6 +26,7 @@
   - 手動收合（只限面板上的收合鈕）→ `open = false`、`manuallyCollapsed = true`。
   - Escape 收合 → 只設當次 `open = false`，`manuallyCollapsed` 不變（不算手動收合）。
   - 取消選取 → `open = false`（`manuallyCollapsed` 不變）。
+  - 手機（< 768px）：`open === false` 且仍有選取機台時（不論由收合鈕或 Escape 收合），bottom-sheet 退為 32px peek 條（`data-fg="copilot-peek"`，顯示選取機台名稱與診斷狀態 chip）；點擊 peek 條等同點展開把手 → `open = true`、`manuallyCollapsed = false`；無選取機台時完全隱藏。Escape 收合仍不寫 `manuallyCollapsed`。
 
 ## 3. RateSeries（背壓速率序列）
 
@@ -68,9 +69,9 @@
 - 時間基準：一律用客端收到批次的時間（`receivedAt`），不用 payload 時戳，避免時鐘偏差吃掉 SC-009 的 ±1 秒。
 - 轉移（於 `applyTelemetryBatch` 既有的 prev→next 判斷處）：
   - 無 latch 或 latch 已回復（`recoveredAt !== null`）時進入 warning／critical：以新異常重建——`level` = 新狀態、`enteredAt = receivedAt`、`recoveredAt = null`、`clearedBy = null`（最新異常為準：critical 回復後 30 秒內再進 warning → `level = "warning"`）。
-  - 仍在異常中：`warning → critical` 升級 `level`；`critical → warning` 維持 `critical`。
+  - 仍在異常中：`warning → critical` 升級 `level` 並重置 `clearedBy = null`（已劃線者恢復未確認）；`critical → warning` 維持 `critical`（`clearedBy` 不變）。
   - `warning/critical → healthy`：`recoveredAt = receivedAt`。
-- 可見性（純函式 `isLatchVisible(latch, staleNow)`）：`recoveredAt === null` 或 `staleNow - recoveredAt < 30_000`。以 `staleNow` 判定，Pause 期間與 stale 一樣凍結。
+- 可見性（純函式 `isLatchVisible(latch, staleNow)`）：`recoveredAt === null` 或 `staleNow - recoveredAt < 30_000`。以 `staleNow` 判定：Pause 期間凍結顯示；恢復後 `staleNow` 回到實際時間，依實際經過時間判定（Pause 期間計入，已滿 30 秒者可能立即消失），不另記 Pause 偏移。
 - 劃線：`isLatchStruck(latch) = clearedBy === "user"`；可見期內劃線呈現，期滿與未劃線者一同消失。
 - 清除：卡片標記、`x` 快捷鍵或異常摘要列（含手機覆蓋層）呼叫 `clearLatch(machineId)` → `clearedBy = "user"`；所有入口讀寫同一 Map。
 - 儲存：`shallowRef<Map<string, AnomalyLatch>>`，批次結束 `triggerRef` 一次。
@@ -83,7 +84,7 @@
 | `level` | `"warning" \| "critical"` | latch 等級 |
 | `active` | `boolean` | 目前仍處於異常 |
 | `struck` | `boolean` | 已由操作者確認（劃線） |
-| `since` | `number` | 進入異常時間（相對時間顯示） |
+| `since` | `number` | 相對時間錨點：仍異常時為 `enteredAt`（顯示「進入 N 秒前」），已回復時為 `recoveredAt`（顯示「已回復 N 秒前」） |
 
 - 來源：對 `AnomalyLatch` Map 過濾 `isLatchVisible`，依 `active` 優先、再依 `enteredAt` 降冪排序。
 - 全部正常時為空陣列，UI 顯示空狀態。
@@ -136,20 +137,22 @@
 - 合併規則（`mergeEvent(list, event, windowMs = 10_000, max = 50)`）：在清單中找**同機台、同嚴重度的最近一筆**（不限頂端）；若 `event.ts - 該筆.ts ≤ 10_000`（閉區間）→ 該筆 `count + 1`、`ts = event.ts`，並移到頂端；否則新事件放頂端。
 - 不變量：清單上限 50（超過裁掉最舊）；`recovered` 事件同樣計入上限，且不阻斷前後同類異常事件的合併（例如 warning、recovered、warning 交錯時，兩筆 warning 仍合併）。
 - 訊息文案繁中：`壓製機 02 進入嚴重`、`烤爐 04 回復正常`。
+- 時鐘來源：事件 `ts` 沿用既有做法用 payload 時戳（解析失敗才退回批次 `receivedAt`），合併視窗以此計；異常標記（§5）則一律用客端 `receivedAt`。兩者的相對時間可能有些微差異，屬預期。
 
 ## 11. ShortcutMap（靜態）
 
 | key | 動作 | 條件 |
 |---|---|---|
 | `/` | 聚焦搜尋 | 焦點不在輸入欄 |
-| `Enter`（搜尋框內） | 選取唯一結果 | 結果恰 1 台且非 IME 組字 |
+| `Enter`（搜尋框內） | 選取唯一結果，並把焦點移到該台卡片（手機覆蓋式搜尋同時收回） | 結果恰 1 台且非 IME 組字 |
 | `ArrowUp/Down/Left/Right`（卡片） | 依視覺位置移焦 | 焦點在卡片 |
 | `Enter`（卡片） | 選取 | |
-| `d` | 診斷選取機台 | 同診斷按鈕前置條件（由 `useDiagnoseTrigger` 提供） |
+| `d` | 診斷**選取**機台（不作用於僅聚焦的卡片；卡片診斷圖示的鍵盤替代為 Enter 選取後按 `d`） | 同診斷按鈕前置條件（由 `useDiagnoseTrigger` 提供） |
 | `x` | 清除（確認）聚焦卡片的異常標記 | 焦點在卡片且標記可見 |
 | `Escape` | 每次只關閉最上層一項：說明層 → 搜尋覆蓋 → 手機異常覆蓋層 → Copilot 面板（手機即 bottom-sheet；只設當次 `open = false`，不寫手動收合偏好）→ 取消選取 | 依序 |
 | `?` | 開關說明層 | 焦點不在輸入欄 |
-| `ArrowLeft/Right`／`ArrowUp/Down`（把手） | 側欄寬度（200–420px）／事件流高度（100–360px）±16px | 焦點在把手 |
+| `ArrowRight`／`ArrowLeft`（側欄把手） | 側欄寬度 +16px／−16px（200–420px） | 焦點在側欄把手 |
+| `ArrowUp`／`ArrowDown`（事件流把手） | 事件流高度 +16px／−16px（100–360px） | 焦點在事件流把手 |
 
 - 字母與符號快捷鍵（`/`、`d`、`x`、`?`）在焦點位於輸入欄或 IME 組字中時不觸發。
 

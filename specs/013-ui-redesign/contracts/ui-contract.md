@@ -49,6 +49,7 @@
 | `[data-fg="anomaly-summary"] [data-machine]` | 異常摘要列（側欄與手機覆蓋層共用） |
 | `[data-fg="fleet-summary-bar"]` | 手機機群健康摘要條 |
 | `[data-fg="copilot"][data-open]` | Copilot 面板 |
+| `[data-fg="copilot-peek"]` | 手機 bottom-sheet 收合（收合鈕或 Escape）且仍有選取機台時的 32px peek 條（點擊展開；無選取時不渲染） |
 | `[data-fg="result-skeleton"] [data-field][data-field-state]` | 漸進骨架 |
 | `[data-fg="timing"][data-cached]` | 完成 meta／快取耗時 |
 | `[data-fg="event"][data-machine][data-severity][data-count]` | 事件列項 |

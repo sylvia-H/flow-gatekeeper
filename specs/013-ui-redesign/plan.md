@@ -2,7 +2,7 @@
 
 **Branch**: `013-ui-redesign` | **Date**: 2026-10-15 | **Spec**: [spec.md](./spec.md)
 
-**Input**: Feature specification from `/specs/013-ui-redesign/spec.md`（含 Clarifications Session 2026-10-15 五項）
+**Input**: Feature specification from `/specs/013-ui-redesign/spec.md`（含 Clarifications 兩輪共八項：specify 階段三項、clarify 階段五項）
 
 ---
 
@@ -11,7 +11,7 @@
 把 1.1.0 的「乾淨但無個性、賣點被藏起來」的監控台（critique 20/40）換成一個**為本產品而作**的視覺世界，並把四個產品機制放到該被看見的位置：
 
 - **視覺世界：「實驗室玻璃與蝕刻刻度」**（plan 階段以 `/impeccable shape` 經三輪決策頁選定，使用者要求的品質是「穩重的專業感與材質層次」）。磨砂白玻璃面板、冷色實驗桌面、蝕刻刻度、深青液位線；**light 預設、dark 次要**（煙燻玻璃），同一套語意 token。direction contract 存於 `apps/web/.impeccable/surfaces/src-app-vue.md`，選定草圖 `apps/web/.impeccable/mocks/decision/assigned.html` 是 finish review 的對照基準。
-- **四個機制**：背壓比值常駐為「橫放的量筒」strip（US2）；主畫面改為三 stage 產線拓樸、連線粗細與流動隨 throughput（US3）；串流漸進解析進結果骨架、Cached 以耗時對比呈現（US4）；異常 latch、側欄異常摘要列、卡片診斷狀態、可點擊事件列（US5）。
+- **四個機制**：背壓比值常駐為「橫放的量筒」strip（US2）；主畫面改為三 stage 產線拓樸、連線粗細與流動隨 throughput（US3）；串流漸進解析進結果骨架、Cached 以耗時對比呈現（US4）；異常 latch、側欄異常摘要列、卡片診斷狀態 chip、可點擊的事件列項（US5）。
 - **其餘**：響應式與平板策略（US6）、最小完整快捷鍵集（US8）、視覺真實來源由 design-spec 切換為 PRODUCT.md + DESIGN.md 並回補憲章／CLAUDE.md／README／指南／CHANGELOG（US7）、UI 文案統一繁體中文、12+2 張 README 截圖以可重播劇本重拍。
 
 技術路徑（詳見 [research.md](./research.md)）：**純前端、契約與後端零變更**。主題以 CSS custom properties 配 Tailwind 3 的 `rgb(var(--…) / <alpha-value>)` 落地，`data-theme` 同幀切換、localStorage 保存；磨砂玻璃只用 rgba 底色加 1px 內側高光，**不用 backdrop-filter**（craft floor 與高頻重繪效能）；背壓速率序列以 1 Hz tick 自既有計數器衍生（不進每幀路徑），比值主顯示改為 60 秒視窗比值、液位線標在 0–60 的比值刻度上；拓樸用 CSS grid 三欄加一層 SVG 連線；串流漸進解析用自寫的容錯 partial-JSON 純函式；latch、事件合併、耗時量測、快捷鍵皆為純函式加 composable，各有單元測試；README 截圖以 `playwright-core` 腳本一次產出。
@@ -41,7 +41,7 @@
 
 **Constraints**: 契約與後端不動；具名 token、元件內無 hex；卡片圓角 ≤ 8px；無 backdrop-filter／光暈／漸層；功能性文字 ≥ 12px、對比 ≥ 4.5:1；reduced-motion 停止循環動畫；UI 文案繁體中文
 
-**Scale/Scope**: 1 個 SPA 首屏、5 台固定機台、3 個 stage、16 個既有元件重做＋約 8 個新元件／composable／lib；28 個既有測試檔維持綠
+**Scale/Scope**: 1 個 SPA 首屏、5 台固定機台、3 個 stage、16 個既有元件重做＋約 23 個新元件／composable／lib（確切清單以 tasks.md 為準）；28 個既有測試檔維持綠
 
 ---
 
@@ -53,12 +53,12 @@
 |---|---|---|
 | **I. 規格驅動開發** | ✅ PASS | 在 `013-ui-redesign` 分支走完整 Spec Kit 流程；plan 階段嵌入 `/impeccable shape` 作為視覺方向的決策工具，不取代流程。implement 期間不手貼完整 code。 |
 | **II. 單一真實來源** | ⚠️ PASS with amendment | 本 feature 的 US7 把視覺真實來源由 `apps/web/design/design-spec.md` 切換為 `apps/web/PRODUCT.md` + `apps/web/DESIGN.md`。**憲章第 II 條的「視覺」條目與「開發工作流程與品質門檻」段對 design-spec 的引用 MUST 在 merge 前經 `/speckit-constitution` 修訂**（FR-035；Complexity Tracking 記錄）。token 紀律（具名 token、不散落 hex）不變且由 `impeccable detect` 與 lint 把關；Argo CD 品牌資產不使用。 |
-| **III. 契約優先與型別安全** | ✅ PASS | 零契約變更（FR-039）；所有新狀態（主題、面板偏好、背壓序列、latch、診斷標記、耗時、partial result）皆為前端衍生，型別定義在 `apps/web` 內、以契約型別為來源，不另寫平行契約。strict TS、無 `any`。 |
+| **III. 契約優先與型別安全** | ✅ PASS | 零契約變更（FR-039）；所有新狀態（主題、面板偏好、背壓序列、latch、診斷狀態 chip、耗時、partial result）皆為前端衍生，型別定義在 `apps/web` 內、以契約型別為來源，不另寫平行契約。strict TS、無 `any`。 |
 | **IV. 即時通道紀律** | ✅ PASS | 原生 ws 不變；遙測仍走 buffer + rAF 批次；新增的背壓速率序列以 **1 Hz tick** 自既有計數器取差分，走勢線與連線粗細以 computed 消費、每幀至多一次；latch 於 `applyTelemetryBatch` 內的既有狀態轉換點衍生（與事件同一處），不逐筆寫新 reactive。串流 token 不進遙測 buffer（既有分流）。 |
 | **V. AI 診斷紀律** | ✅ PASS（不涉） | 不動 worker／provider／cache；前端漸進解析只影響呈現，完成態仍以 `ai/done` 經 schema 驗證的 `DiagnosisResult` 為準，partial result 不當最終結果用。 |
 | **VI. 祕密與設定衛生** | ✅ PASS | 無新 secrets；localStorage 只存主題與面板偏好。 |
 | **VII. 資料可追溯性** | ✅ PASS（不涉） | 不改任何持久化。 |
-| **開發工作流程與品質門檻** | ✅ PASS | 純函式單元測試（FR-042）；可重播驗收：既有 mock producer＋新的截圖劇本；Phase 化 commit；merge 前 analyze 與驗收。 |
+| **開發工作流程與品質門檻** | ✅ PASS | 純函式單元測試（FR-042）；可重播驗收：既有 mock producer＋新的截圖劇本；Phase 化 commit；merge 前 analyze 與驗收。本段「可重播驗收」括號內對 design-spec 的指標（「首屏為可操作監控台」依 design-spec）由 T068 同步修訂為依 `apps/web/PRODUCT.md`（見 Complexity Tracking）。 |
 
 **Post-design re-check（Phase 1 後）**：data-model 與 contracts 未引入任何契約欄位；`contracts/ui-contract.md` 只描述 token 名稱、storage key、`data-*` 測試鉤子與快捷鍵表，不涉 WS／HTTP。判定不變。
 
@@ -109,7 +109,7 @@ apps/web/
 │   ├── main.ts                             # 啟動前套用保存的主題（避免閃爍）
 │   ├── shared/
 │   │   ├── components/
-│   │   │   ├── AppLayout.vue               # rail／工具列／面板預設收合／手機摘要列
+│   │   │   ├── AppLayout.vue               # rail／工具列／面板預設收合／手機 bottom-sheet 把手與 peek 條
 │   │   │   ├── TopBar.vue                  # 語意分組、搜尋收合、主題切換（手機）
 │   │   │   ├── BackpressureStrip.vue       # 新：量筒 strip（取代 BackpressureBadge）
 │   │   │   ├── Sparkline.vue               # 新：60 秒兩線走勢（SVG）
@@ -182,7 +182,7 @@ R1 主題機制 · R2 磨砂玻璃落地 · R3 字型與 CJK · R4 背壓速率�
 
 ## Phase 2 預告（由 `/speckit-tasks` 產出）
 
-建議 phase 切法（供 tasks 參考）：Setup（字型、theme.css、token 重構、useTheme、截圖劇本雛形）→ Foundational（純函式 lib：rate-series、anomaly-latch、partial-json、evidence-merge、flow-link、focus-grid、shortcuts、stage-layout、events 合併，各帶測試）→ US1 視覺世界與雙主題 → US2 背壓 strip → US3 stage 拓樸 → US4 串流與結果 → US5 記憶 → US6 響應式 → US8 鍵盤 → US7 文件回補與截圖 → Finish（impeccable finish-reviewer、documenter 重寫 DESIGN.md、critique 重跑、detect）。
+建議 phase 切法（供 tasks 參考）：Setup（字型、theme.css、token 重構、useTheme、截圖劇本雛形）→ Foundational（純函式 lib：rate-series、anomaly-latch、partial-json、evidence-merge、flow-link、focus-grid、shortcuts、stage-layout、events 合併，各帶測試）→ US1 視覺世界與雙主題 → US2 背壓 strip → US3 stage 拓樸 → US4 串流與結果 → US5 記憶 → US6 響應式 → US8 鍵盤 → US7 文件回補與截圖（此為 plan 階段建議；實際 phase 順序以 tasks.md 為準：US8 鍵盤排在 US6 響應式之前） → Finish（impeccable finish-reviewer、documenter 重寫 DESIGN.md、critique 重跑、detect）。
 
 ---
 
@@ -190,5 +190,5 @@ R1 主題機制 · R2 磨砂玻璃落地 · R3 字型與 CJK · R4 背壓速率�
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| 憲章 II「視覺」條目指向的真實來源將被本 feature 取代 | 全面改版後 design-spec.md 與 refs 已不描述任何現況；impeccable 的 PRODUCT.md + DESIGN.md 是改版後唯一能從實作衍生、可被偵測器驗證的視覺紀錄 | 「同時維護 design-spec 與 DESIGN.md」會製造兩份真實來源，正是憲章 II 要避免的分歧；故以 `/speckit-constitution` 修訂條目，而非並存 |
+| 憲章 II「視覺」條目指向的真實來源將被本 feature 取代（含憲章「開發工作流程與品質門檻」段「可重播驗收」括號內的 design-spec 指標；兩處皆由 T068 修訂） | 全面改版後 design-spec.md 與 refs 已不描述任何現況；impeccable 的 PRODUCT.md + DESIGN.md 是改版後唯一能從實作衍生、可被偵測器驗證的視覺紀錄 | 「同時維護 design-spec 與 DESIGN.md」會製造兩份真實來源，正是憲章 II 要避免的分歧；故以 `/speckit-constitution` 修訂條目，而非並存 |
 | 新增 devDependency `playwright-core`（推翻 `MachineNodeCard.css.test.ts` 註解記載的「以 CSS cascade 測試取代 Playwright 截圖、不新增瀏覽器相依」取捨；回補於指南 §15.6 並更新該註解） | SC-012 要求 14 張 README 截圖由可重播劇本產出；critique、finish review 與 SC-004 的 bounding rect 量測也需要瀏覽器 | 手動截圖不可重播；`tests/e2e` 的 harness 不含瀏覽器自動化；用系統 Chrome 的 `--screenshot` 無法操作互動狀態 |

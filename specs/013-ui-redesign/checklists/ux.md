@@ -10,6 +10,8 @@
 
 **第二輪（2026-10-15，`/speckit-analyze` 回補）**：CHK007、CHK011、CHK023、CHK028、CHK030、CHK036、CHK040、CHK045、CHK050、CHK052 已由 analyze 修訂補齊並勾選（FR-006 圓角例外、FR-009／009a 比值口徑與刻度、FR-021 證據合併鍵、FR-026 起算點與劃線、FR-033 偏好語意、FR-034a Escape 五層順序、FR-005／SC-003 統一 12px、FR-038 指定 R13、FR-035 憲章兩處修訂）。
 
+**第三輪（2026-10-15，`/speckit-analyze` 第二輪回補）**：題幹的 viewport 數改為五個、字級改為 12px、名詞統一為「事件流／診斷狀態 chip／機群健康摘要條／異常摘要列」；CHK025 已由 spec Assumptions（快取對比不區分狀態簽章）補齊並勾選。
+
 ## 雙主題與 token 紀律
 
 - [ ] CHK001 是否明確定義「light 為預設且不跟隨系統偏好」的首次載入行為，以及使用者切換後的優先順序？ [Clarity, Spec §FR-001／Assumptions]
@@ -22,7 +24,7 @@
 
 ## 背壓 strip 常駐可見
 
-- [ ] CHK008 「首屏不捲動即可見」是否對四個 viewport 與 Copilot 面板展開／收合兩種狀態都明確要求？ [Completeness, Spec §FR-009／SC-001]
+- [ ] CHK008 「首屏不捲動即可見」是否對五個 viewport 與 Copilot 面板展開／收合兩種狀態都明確要求？ [Completeness, Spec §FR-009／SC-001]
 - [x] CHK009 手機寬度「至少保留比值數字」時，訊息數與批次數可否隱藏、走勢線是否可省略，是否有明文？ [Clarity, Spec §FR-009]
 - [ ] CHK010 「比值以不小於機台卡片遙測值的字級呈現」是否已對應到具體 token（`text-ratio` 32px）？ [Measurability, Spec US2 AS1, Contract §1]
 - [x] CHK011 走勢線兩條曲線的正規化方式（共用 y 軸或各自）與「比值與兩線關係一致」的判準是否定義？ [Clarity, Spec US2 AS2, Research R4]
@@ -45,7 +47,7 @@
 - [ ] CHK022 解析失敗「不顯示錯誤」時，是否定義操作者如何得知串流仍在進行（而非卡住）？ [Edge Case, Spec §FR-018／Edge Cases]
 - [x] CHK023 證據「同來源同模式」的合併規則（模式的定義、顯示次數與最近時間的格式）是否明確？ [Clarity, Spec §FR-021／Assumptions]
 - [x] CHK024 完成態 meta 的時間格式（24 小時制、時區）與耗時格式（ms／s 切換門檻）是否定義？ [Gap, Spec §FR-022]
-- [ ] CHK025 快取耗時對比在「本 session 內無非快取紀錄」與「上一次非快取屬不同狀態簽章」時的呈現是否定義？ [Edge Case, Spec §FR-023／Assumptions]
+- [x] CHK025 快取耗時對比在「本 session 內無非快取紀錄」與「上一次非快取屬不同狀態簽章」時的呈現是否定義？ [Edge Case, Spec §FR-023／Assumptions]
 - [ ] CHK026 失敗態「人類可讀的分類」是否列出分類清單，且與既有 `humanizeError` 的對應一致？ [Clarity, Spec §FR-024／US4 AS6]
 - [ ] CHK027 減少動態效果時「游標與填入動畫停止、內容仍逐步出現」是否與 FR-041 的循環動畫規則一致？ [Consistency, Spec US4 AS7, §FR-041]
 
@@ -53,17 +55,17 @@
 
 - [x] CHK028 latch 的 30 秒是從回復 healthy 起算還是從進入異常起算，是否無歧義？ [Clarity, Spec §FR-026, Data model §5]
 - [x] CHK029 warning → critical 升級、critical 期間再次 warning 等等級變化的標記語意是否定義？ [Edge Case, Data model §5, Spec §FR-026]
-- [x] CHK030 「兩處清除同一份狀態」是否也涵蓋手機摘要列（FR-033a）這第三個入口？ [Consistency, Spec §FR-026／FR-027／FR-033a]
+- [x] CHK030 「兩處清除同一份狀態」是否也涵蓋手機機群健康摘要條展開的異常摘要列（FR-033a）這第三個入口？ [Consistency, Spec §FR-026／FR-027／FR-033a]
 - [x] CHK031 事件合併視窗 10 秒的起算點（與最新一筆或與第一筆）與合併後 `ts` 的更新規則是否定義？ [Clarity, Spec §FR-029, Data model §10]
-- [x] CHK032 新增的「回復正常」事件是否納入上限 50 的計算，且在事件列的語意色是否定義？ [Gap, Data model §10, Spec §FR-029]
-- [ ] CHK033 卡片診斷狀態標記的五種值是否各自定義視覺形式，且與 Copilot 面板的狀態 chip 用語一致？ [Consistency, Spec §FR-028, Data model §7, Research R13]
+- [x] CHK032 新增的「回復正常」事件是否納入上限 50 的計算，且在事件流的語意色是否定義？ [Gap, Data model §10, Spec §FR-029]
+- [ ] CHK033 卡片診斷狀態 chip 的五種值是否各自定義視覺形式，且與 Copilot 面板的狀態 chip 用語一致？ [Consistency, Spec §FR-028, Data model §7, Research R13]
 
-## 響應式四 viewport
+## 響應式五 viewport
 
-- [ ] CHK034 四個 viewport 的「無溢出、無重疊、無橫向捲動、無 layout shift」是否各有可量測判準（例如 CLS 門檻或像素位移）？ [Measurability, Spec §FR-031／SC-004]
+- [ ] CHK034 五個 viewport 的「無溢出、無重疊、無橫向捲動、無 layout shift」是否各有可量測判準（例如 CLS 門檻或像素位移）？ [Measurability, Spec §FR-031／SC-004]
 - [x] CHK035 搜尋「空間不足」的門檻（容器寬度）與展開後的覆蓋範圍是否定義？ [Clarity, Spec §FR-032, Research R10]
 - [x] CHK036 面板「手動收合偏好」與「選取新機台／觸發診斷時展開」的優先順序是否無衝突？ [Consistency, Spec §FR-033／US6 AS3]
-- [ ] CHK037 手機摘要列展開為覆蓋層時的關閉方式與層級（與 bottom-sheet 同時開啟時）是否定義？ [Edge Case, Spec §FR-033a／Edge Cases]
+- [ ] CHK037 手機機群健康摘要條展開為覆蓋層時的關閉方式與層級（與 bottom-sheet 同時開啟時）是否定義？ [Edge Case, Spec §FR-033a／Edge Cases]
 - [x] CHK038 工具列語意分組「每組 ≤ 4 個可見選項」是否列出各組實際成員？ [Completeness, Spec §FR-034]
 
 ## 鍵盤快捷鍵
@@ -77,7 +79,7 @@
 ## 無障礙：對比、字級、reduced-motion
 
 - [x] CHK044 對比 ≥ 4.5:1 的適用範圍是否明確涵蓋 disabled 狀態與佔位文字，或明文排除？ [Clarity, Spec §FR-005]
-- [x] CHK045 「功能性文字不得小於 11px」與 contract 的最小字級 12px 是否一致，且非功能性文字的例外是否定義？ [Consistency, Spec §FR-005, Contract §1]
+- [x] CHK045 「功能性文字不得小於 12px」（FR-005）與 contract 的最小字級 12px 是否一致，且非功能性文字的例外是否定義？ [Consistency, Spec §FR-005, Contract §1]
 - [x] CHK046 reduced-motion 下的清單是否完整列出所有新動效（走勢線重繪、連線流動、骨架填入、主題切換 transition、latch 出現）？ [Coverage, Spec §FR-041／Edge Cases]
 - [x] CHK047 新元件（strip、拓樸連線、摘要列、說明層、骨架）的輔助技術名稱與角色是否逐一要求？ [Completeness, Spec §FR-004／FR-041]
 - [ ] CHK048 狀態「不只靠顏色」的三重編碼是否也適用於拓樸連線與走勢線（非卡片元件）？ [Coverage, Spec §FR-004]

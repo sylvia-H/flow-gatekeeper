@@ -31,6 +31,7 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 7. **UI 文案一律繁體中文**（FR-038），術語以 research R13 為準；機台中文名的唯一來源是 `machine-labels.ts`，stage 中文名在 `machine-groups.ts`（不附英文副標）。
 8. **分層**：`shared/composables` 與 `shared/lib` MUST NOT import `domains/`（既有 `shared/layering.test.ts`）；需要 store 的行為以 callback 注入。
 9. **phase 收尾 commit**：依 CLAUDE.md 的 `[Phase <n>: <名稱>]` 格式，先勾選 tasks 再 commit。
+10. **視覺真實來源的過渡期**：T068 落地前，憲章與 CLAUDE.md 仍寫「視覺依 design-spec／refs」；本 feature 期間視覺一律依 direction contract（含 AMENDMENTS）與 spec，design-spec 已裁決退役（T068／T069 回補）。
 
 ---
 
@@ -46,10 +47,10 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 - [ ] T006 改寫 `apps/web/src/styles/tailwind.css`：`@import "./theme.css"` 置頂；卷軸色改語意 token；`.machine-card[data-selected]` 規則改用 `--c-accent`；reduced-motion 區塊補停 `animate-flow`、`[data-theme-switching]` 過渡、latch 出現動畫與走勢線 transition；移除對舊 token 的引用
 - [ ] T007 [P] 新建 `apps/web/src/shared/composables/useLocalPreference.ts`：`readPreference<T>(key, fallback, parse)` 與 `writePreference(key, value)`，全部 try/catch、失敗回 fallback 且不拋錯；附單元測試 `useLocalPreference.test.ts`（可用／拋錯／壞 JSON 三例）
 - [ ] T008 新建 `apps/web/src/shared/composables/useTheme.ts`：`theme` ref、`toggle()`、`apply(theme)`（設 `document.documentElement.dataset.theme`、加 `data-theme-switching` 一幀後移除、經 `useLocalPreference` 寫 `fg.theme`）；`apps/web/src/main.ts` 在 `createApp` 前呼叫 `applySavedTheme()`（讀 `fg.theme`，預設 light、不讀 `prefers-color-scheme`）
-- [ ] T009 更新 `apps/web/src/shared/lib/state-style.ts`：label 改中文（正常／警告／嚴重）、token 改為 `bg-ok`／`text-ok-fg`／`bg-ok-bg` 語意名、`STALE_DOT` 改 `bg-stale`；同步 `apps/web/src/domains/monitoring/lib/card-style.ts` 的 class 名；跑 `pnpm --filter web typecheck` 確認舊 class 引用全數浮現，逐檔改為新語意 class（暫不改版面，只換 token）
+- [ ] T009 更新 `apps/web/src/shared/lib/state-style.ts`：label 改中文（正常／警告／嚴重）、token 改為 `bg-ok`／`text-ok-fg`／`bg-ok-bg` 語意名、`STALE_DOT` 改 `bg-stale`；同步 `apps/web/src/domains/monitoring/lib/card-style.ts` 的 class 名；以 grep 舊 token 名單（`canvas|fg-muted|fg-subtle|accent-bg|surface-hover|elevated|subtle|strong|text-2xs|text-pill|border-crit-border` 等，以 T005 移除的 token 為準）掃 `apps/web/src`，逐檔改為新語意 class（含 `text-2xs` → `text-xs` 的清理），要求 0 命中（Tailwind class 是字串，typecheck 抓不到；暫不改版面，只換 token）
 - [ ] T010 新建 `apps/web/src/shared/lib/format.ts`：`formatClock(ts)`（本地 24h `HH:mm:ss`）、`formatRelative(ts, now)`（≤ 2 s 閉區間「剛剛」、`N 秒前`、`N 分鐘前`）、`formatDuration(ms)`（先四捨五入到整數 ms；< 1000 → `N ms`，否則四捨五入到一位小數 `N.N s`，999.6 → `1.0 s`）；附 `format.test.ts`（含 2000／2001 ms 與 999.4／999.6 ms 邊界）；`telemetry-format.ts` 的 `relativeTimeLabel` 改委派至此並保留既有測試綠
 
-**Checkpoint**: `pnpm --filter web typecheck && test` 綠；app 以新 token 渲染（外觀仍舊版版面但已換色系）；主題切換可用；`node apps/web/scripts/screenshots.cjs --viewports` 可產出 10 張截圖。
+**Checkpoint**: `pnpm --filter web typecheck && test` 綠；app 以新 token 渲染（外觀仍舊版版面但已換色系）；`useTheme().toggle()` 可程式切換（切換控制項於 T023 才有）；`node apps/web/scripts/screenshots.cjs --viewports` 可產出 10 張截圖。
 
 ---
 
@@ -58,7 +59,7 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 **Purpose**: 各 User Story 共用的純函式邏輯，先寫測試再實作；不動元件。
 
 - [ ] T011 [P] 新建 `apps/web/src/domains/monitoring/lib/rate-series.ts`：`createRateSeries(capacity=60)`、`pushSample(series, counters, t)`（差分、環狀）、`maxOf(series, key)`、`droppedInWindow(series)`、`windowRatio(series)`（視窗內訊息總數 ÷ 批次總數，批次為 0 回 `null`）、`markStale(series)`；附 `rate-series.test.ts`（差分正確、滿 60 格環狀覆寫、stale 不推入、視窗比值與批次為 0）
-- [ ] T012 [P] 新建 `apps/web/src/domains/monitoring/lib/anomaly-latch.ts`：`applyTransition(latch, prev, next, receivedAt)`、`isLatchVisible(latch, staleNow, holdMs=30_000)`、`isLatchStruck(latch)`、`clearLatch(latch)`、`summarize(latches, staleNow, labels)`（排序規則見 data-model §6）；附 `anomaly-latch.test.ts`（進入／仍異常中升級／critical→warning 維持／回復後 30 s 可見與期滿消失／回復後 30 s 內再進 warning 重置為 warning 且清除劃線／使用者清除後劃線且期滿才消失／`staleNow` 凍結時不倒數）
+- [ ] T012 [P] 新建 `apps/web/src/domains/monitoring/lib/anomaly-latch.ts`：`applyTransition(latch, prev, next, receivedAt)`、`isLatchVisible(latch, staleNow, holdMs=30_000)`、`isLatchStruck(latch)`、`clearLatch(latch)`、`summarize(latches, staleNow, labels)`（排序規則見 data-model §6）；附 `anomaly-latch.test.ts`（進入／仍異常中升級／已劃線的 warning 升為 critical 時重置為未確認／critical→warning 維持／回復後 30 s 可見與期滿消失／回復後 30 s 內再進 warning 重置為 warning 且清除劃線／使用者清除後劃線且期滿才消失／`staleNow` 凍結時不倒數／恢復後 `staleNow` 回到實際時間時依實際經過時間判定（Pause 期間計入、已滿 30 s 即消失）；`summarize` 的相對時間錨點：進行中為 `enteredAt`、回復後為 `recoveredAt`）
 - [ ] T013 [P] 新建 `apps/web/src/domains/monitoring/lib/flow-link.ts`：`throughputSum(stageMachines, machines, now)`（stale 計 0）、`widthFor(sum)`（五段 2–8px）、`speedFor(sum, reducedMotion, vertical)`（none／slow／mid／fast；reducedMotion 或 vertical 時恆為 none）；附 `flow-link.test.ts`
 - [ ] T014 [P] 改寫 `apps/web/src/domains/monitoring/lib/events.ts`：`Severity` 加 `"recovered"`、`DerivedEvent` 加 `count`、`deriveTransitionEvent` 產生回復事件與中文訊息（`壓製機 02 進入嚴重`／`烤爐 04 回復正常`）、新增 `mergeEvent(list, event, windowMs=10_000, max=50)`（找同機台同嚴重度的最近一筆，相距 ≤ 10 s 閉區間則 `count+1`、更新 `ts` 並移到頂端，否則新增於頂端）；更新 `events.test.ts`（合併視窗含 10 000 ms 邊界、次數、移到頂端、warning／recovered 交錯時兩筆 warning 仍合併、回復事件、上限 50）
 - [ ] T015 [P] 新建 `apps/web/src/domains/ai-copilot/lib/partial-json.ts`：`parsePartialDiagnosis(text): PartialResult`（research R6：取第一個 `{`、補齊未閉合字串／括號、寬鬆讀取五欄位、每欄位 missing／streaming／complete）；附 `partial-json.test.ts`（完整 JSON、截斷於字串中、截斷於陣列中、非 JSON、前綴雜訊）
@@ -79,11 +80,11 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 
 **Independent Test**: quickstart 場景 1、2、11；五 viewport × 兩主題截圖（場景 3）對比與可辨性。
 
-- [ ] T022 [US1] 讀 craft-floor.md；依 `assigned.html` 與 direction contract 重做 `apps/web/src/shared/components/AppLayout.vue`：桌面格線的主區容器（`bg-bench` + 1px 格線）、rail 與工具列 `bg-rim`、面板統一 `glass` 樣式 class（`bg-surface/72 border-edge shadow-glass rounded-card`）；Copilot 面板預設收合（`panelOpen` 預設 false，偏好語意於 US6 T059 接線）；手機 bottom-sheet 加抓取把手
+- [ ] T022 [US1] 讀 craft-floor.md；依 `assigned.html` 與 direction contract 重做 `apps/web/src/shared/components/AppLayout.vue`：桌面格線的主區容器（`bg-bench` + 1px 格線）、rail 與工具列 `bg-rim`、面板統一 `glass` 樣式 class（`bg-surface/72 border-edge shadow-glass rounded-card`）；Copilot 面板預設收合（`panelOpen` 預設 false，偏好語意於 US6 T059 接線）；手機 bottom-sheet 加抓取把手，並預留收合（收合鈕或 Escape）且仍有選取機台時的 32px peek 條（`data-fg="copilot-peek"`，無選取時不渲染；行為於 T062 完成）
 - [ ] T023 [P] [US1] 新建 `apps/web/src/shared/components/ThemeToggle.vue`（`data-fg="theme-toggle"`，兩段式控制、`aria-pressed`、中文「主題：淺色／深色」），掛在 rail 底部；手機時由 TopBar 系統狀態分組承載（US6 接線）
 - [ ] T024 [P] [US1] 重皮 `apps/web/src/shared/components/StatusLight.vue`、`SeverityBadge.vue`、`ProgressBar.vue`、`MetricsPanel.vue` 與 `apps/web/src/domains/monitoring/components/FleetHealth.vue`：語意 token、中文 label（FleetHealth 標題「機群健康」、四計數「正常／警告／嚴重／停滯」）、最小字級 12px、徽章 `bg-*-bg + text-*-fg`；FleetHealth 的 stale 色改用 `bg-stale`，與卡片統一（FR-004）
 - [ ] T025 [US1] 重做 `apps/web/src/shared/components/TopBar.vue` 文案與分組（FR-034 四組；搜尋、暫停／恢復、Mock 頻率、連線 chip「已連線 · N ms」／「重新連線中」／「已斷線」、未授權、診斷）；主要動作「診斷」為 `bg-accent` 深青實心
-- [ ] T026 [US1] 重做 `apps/web/src/App.vue` 的 rail 內容：品牌列（名稱、環境「開發」）、`FleetHealth`、`AnomalySummary`（US5 先放空殼）、`ThemeToggle`；移除側欄機台清單（clarify Q1）；連線橫幅文案改中文
+- [ ] T026 [US1] 重做 `apps/web/src/App.vue` 的 rail 內容：品牌列（名稱、環境「開發」）、`FleetHealth`、`AnomalySummary`（本任務建立 `apps/web/src/domains/monitoring/components/AnomalySummary.vue` 空殼並掛進 rail，內容由 US5 T050 改寫）、`ThemeToggle`；移除側欄機台清單（clarify Q1）；連線橫幅文案改中文
 - [ ] T027 [US1] 重做 `apps/web/src/domains/monitoring/components/MachineNodeCard.vue` 視覺層（不含 US3 刻度與 US5 標記）：玻璃卡片、名稱中文、id mono、狀態徽章＋狀態燈、2×2 數值 24px mono、單位 12px、更新時間用 `formatRelative`；嚴重卡片 `bg-crit-bg/…` 加 `border-crit`；warning 改 1px `border-warn` 全邊框（FR-030）；選取 `data-selected` 規則用 accent
 - [ ] T028 [US1] 重做 `apps/web/src/domains/monitoring/components/EventStrip.vue` 視覺層：玻璃面板、標題「事件流」、每個事件列項左側蝕刻短線（依嚴重度上色）、時間 `formatClock`、中文訊息、`count` 顯示 `×N`（資料接線在 US5）
 - [ ] T029 [US1] 重做 `apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue`、`DiagnosisResultView.vue`、`StreamingPanel.vue`、`SuggestedActionList.vue` 的視覺層與文案（AI 診斷／閒置／進行中／已完成／失敗／摘要／可能原因／證據／建議動作／原始串流／中止診斷／重試／快取；嚴重度 ok／warning／critical 譯正常／警告／嚴重）；移除 `border-l-2` 左色條（critique side-tab）
@@ -150,9 +151,9 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 
 **Independent Test**: quickstart 場景 8、9。
 
-- [ ] T049 [US5] 在 `monitoring.store.ts` 的 `applyTelemetryBatch` 既有 prev→next 判斷處接 `anomaly-latch.ts`（時間用該批的客端 `receivedAt`；`latches: shallowRef<Map>`，批次結束 `triggerRef` 一次）、事件改用 `mergeEvent`；新增 `clearLatch(machineId)`、`anomalySummary` getter（`summarize(latches, staleNow, …)`，以 `staleNow` 判定可見性、Pause 時凍結）；更新 `monitoring.store.test.ts`（回復 30 s 期滿、Pause 凍結、清除後劃線）
-- [ ] T050 [P] [US5] 新建 `apps/web/src/domains/monitoring/components/AnomalySummary.vue`（`data-fg="anomaly-summary"`）：`<ul role="list">` 清單（狀態燈、中文名、`formatRelative`；已確認者劃線）、點擊 `selectMachine`、每列清除鈕（`aria-label="清除 ○○ 的異常標記"`）、空狀態「目前沒有異常」；接進 rail（T026 空殼）
-- [ ] T051 [US5] `MachineNodeCard.vue` 底列加異常標記（`data-latch`、確認後 `data-latch-cleared` 並以劃線呈現、可點擊清除、`data-fg="latch-clear"`、`tabindex=-1`；出現動畫在 reduced-motion 下停用）與診斷狀態 chip（`data-diagnosis`：診斷中 N%／結果 · 嚴重度／快取／失敗），皆不改卡片尺寸；chip 資料由 `copilot.store` 的 `badgeFor(machineId)` computed 提供（data-model §7）
+- [ ] T049 [US5] 在 `monitoring.store.ts` 的 `applyTelemetryBatch` 既有 prev→next 判斷處接 `anomaly-latch.ts`（時間用該批的客端 `receivedAt`；`latches: shallowRef<Map>`，批次結束 `triggerRef` 一次）、事件改用 `mergeEvent`；新增 `clearLatch(machineId)`、`anomalySummary` getter（`summarize(latches, staleNow, …)`，以 `staleNow` 判定可見性：Pause 期間凍結顯示、恢復後依實際經過時間判定）；更新 `monitoring.store.test.ts`（回復 30 s 期滿、Pause 凍結、恢復後 Pause 期間計入、清除後劃線、warning 升 critical 重置確認）
+- [ ] T050 [US5] 改寫 T026 建立的 `apps/web/src/domains/monitoring/components/AnomalySummary.vue` 空殼（`data-fg="anomaly-summary"`）：`<ul role="list">` 清單（狀態燈、中文名、相對時間——進行中「進入 N 秒前」錨 `enteredAt`、回復後「已回復 N 秒前」錨 `recoveredAt`，皆用 `formatRelative`；已確認者劃線）、點擊 `selectMachine`、每列清除鈕（`aria-label="清除 ○○ 的異常標記"`）、空狀態「目前沒有異常」；`apps/web/src/App.vue` 的 rail 接線改讀 `anomalySummary`／`clearLatch`
+- [ ] T051 [US5] `MachineNodeCard.vue` 底列加異常標記（`data-latch`、確認後 `data-latch-cleared` 並以劃線呈現、可點擊清除、`data-fg="latch-clear"`、`tabindex=-1`；相對時間錨點同 T050：「嚴重 · 進入 N 秒前」／「嚴重 · 已回復 N 秒前」；出現動畫在 reduced-motion 下停用）與診斷狀態 chip（`data-diagnosis`：診斷中 N%／結果 · 嚴重度／快取／失敗），皆不改卡片尺寸；在 `apps/web/src/domains/ai-copilot/stores/copilot.store.ts` 新增 `badgeFor(machineId)` computed（data-model §7，由每台狀態 Map 衍生）供 chip 使用，並更新 `copilot.store.test.ts`（none／active／completed（含 cached）／failed 四態）
 - [ ] T052 [US5] `EventStrip.vue` 每個事件列項改 `<button>`（`data-fg="event" data-machine data-severity data-count`）點擊 `selectMachine`；合併次數 `×N`；回復事件中性色；上限 50 不變
 - [ ] T053 [US5] 測試：新增 `AnomalySummary.test.ts`（清單角色、排序、空狀態、清除後劃線）；更新 `MachineNodeCard.test.ts`（latch 可見、清除後兩處同步劃線、期滿消失、chip 四態）與 T030 建立的 `EventStrip.test.ts`（事件列項可點擊選台、`×N`、回復事件中性色）
 
@@ -166,11 +167,11 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 
 **Independent Test**: quickstart 場景 10。
 
-- [ ] T054 [US8] 新建 `apps/web/src/shared/composables/useKeyboardShortcuts.ts`：App 層 `keydown`；**只收注入的 callbacks**（`focusSearch`、`selectMachine`、`diagnose`、`clearLatch`、`togglePanel`、`clearSelection`、`toggleHelp`），不 import 任何 `domains/` 模組；`isTypingTarget` 守門；`/` 聚焦搜尋、Enter（搜尋框內且結果恰一台、非 IME）選取、方向鍵用 `focus-grid.ts` 移焦（讀 `.machine-card` 的 `getBoundingClientRect`）、Enter 選取、`d` 診斷、`x` 清除聚焦卡片 latch、Escape 每次只關最上層一項（說明層 → 搜尋覆蓋 → 手機異常覆蓋層 → Copilot 面板（手機即 bottom-sheet；呼叫 `togglePanel` 只關當次，不寫 `manuallyCollapsed`）→ 取消選取）、`?` 開關說明層。`apps/web/src/App.vue` 負責接線，`diagnose` callback 由 `useDiagnoseTrigger` 提供（前置條件與去重同診斷按鈕）；`shared/layering.test.ts` MUST 維持綠
+- [ ] T054 [US8] 新建 `apps/web/src/shared/composables/useKeyboardShortcuts.ts`：App 層 `keydown`；**只收注入的 callbacks**（`focusSearch`、`selectMachine`、`diagnose`、`clearLatch`、`togglePanel`、`clearSelection`、`toggleHelp`），不 import 任何 `domains/` 模組；`isTypingTarget` 守門；`/` 聚焦搜尋、Enter（搜尋框內且結果恰一台、非 IME）選取並把焦點移到該台卡片（手機覆蓋式搜尋同時收回）、方向鍵用 `focus-grid.ts` 移焦（讀 `.machine-card` 的 `getBoundingClientRect`）、Enter 選取、`d` 診斷**選取**機台（不作用於僅聚焦的卡片）、`x` 清除聚焦卡片 latch、Escape 每次只關最上層一項（說明層 → 搜尋覆蓋 → 手機異常覆蓋層 → Copilot 面板（手機即 bottom-sheet；呼叫 `togglePanel` 只關當次，不寫 `manuallyCollapsed`）→ 取消選取）、`?` 開關說明層。`apps/web/src/App.vue` 負責接線，`diagnose` callback 由 `useDiagnoseTrigger` 提供（前置條件與去重同診斷按鈕）；`shared/layering.test.ts` MUST 維持綠
 - [ ] T055 [P] [US8] 新建 `apps/web/src/shared/components/ShortcutHelp.vue`（`data-fg="shortcut-help"`，`role="dialog"`、焦點陷阱、Escape 關閉、不遮工具列），內容由 `SHORTCUTS` 常數渲染
-- [ ] T056 [US8] 改 `MachineNodeCard.vue` 為單一 Tab 停駐點：卡片本體 `tabindex=0`，診斷圖示與 latch 清除鈕 `tabindex=-1`（滑鼠仍可點）；`TopBar.vue` 搜尋框支援 Enter 選取唯一結果
-- [ ] T057 [US8] `apps/web/src/shared/composables/useResizeDrag.ts` 加鍵盤：把手 `tabindex=0`、`role="separator"`、`aria-label`、`aria-valuenow/min/max`、方向鍵 ±16px（範圍沿用既有：側欄 200–420、事件流 100–360）；localStorage 讀寫改經 `useLocalPreference`（key 沿用 `flow-gatekeeper:sidebar-width`／`flow-gatekeeper:event-strip-height`）；`AppLayout.vue` 與 `App.vue` 的把手接線
-- [ ] T058 [US8] 測試：新增 `useKeyboardShortcuts.test.ts`（happy-dom：輸入欄與 IME 守門、Escape 五層順序（說明層 → 搜尋覆蓋 → 手機異常覆蓋層 → Copilot 面板 → 取消選取）每次只關一層且關面板時不寫手動收合偏好、`d` 呼叫注入的 diagnose、`x` 只在聚焦卡片且標記可見時呼叫 clearLatch、`?` 開關）、`ShortcutHelp.test.ts`（dialog 角色、列出含 `x` 的全部快捷鍵、Escape 關閉）、`apps/web/src/shared/composables/useResizeDrag.test.ts`（方向鍵 ±16px、範圍夾限 200–420／100–360、aria 值、localStorage 拋錯時回預設）
+- [ ] T056 [US8] 改 `MachineNodeCard.vue` 為單一 Tab 停駐點：卡片本體 `tabindex=0`，診斷圖示與 latch 清除鈕 `tabindex=-1`（滑鼠仍可點；診斷圖示的鍵盤替代為 Enter 選取後按 `d`）；`TopBar.vue` 搜尋框支援 Enter 選取唯一結果，選取後焦點移到該台 `.machine-card`（手機覆蓋式搜尋同時收回），使後續 `d` 不被輸入欄守門擋下
+- [ ] T057 [US8] `apps/web/src/shared/composables/useResizeDrag.ts` 加鍵盤：把手 `tabindex=0`、`role="separator"`、`aria-label`、`aria-valuenow/min/max`、方向鍵 ±16px（側欄 ArrowRight 加寬／ArrowLeft 減寬；事件流 ArrowUp 增高／ArrowDown 減少，與既有 `direction: -1` 對應；範圍沿用既有：側欄 200–420、事件流 100–360）；localStorage 讀寫改經 `useLocalPreference`（key 沿用 `flow-gatekeeper:sidebar-width`／`flow-gatekeeper:event-strip-height`）；`AppLayout.vue` 與 `App.vue` 的把手接線
+- [ ] T058 [US8] 測試：新增 `useKeyboardShortcuts.test.ts`（happy-dom：輸入欄與 IME 守門、Escape 五層順序（說明層 → 搜尋覆蓋 → 手機異常覆蓋層 → Copilot 面板 → 取消選取）每次只關一層且關面板時不寫手動收合偏好、`d` 呼叫注入的 diagnose、搜尋框 Enter 選取唯一結果後焦點移到該台卡片且接著按 `d` 會呼叫 diagnose、`d` 不作用於僅聚焦未選取的卡片、`x` 只在聚焦卡片且標記可見時呼叫 clearLatch、`?` 開關）、`ShortcutHelp.test.ts`（dialog 角色、列出含 `x` 的全部快捷鍵、Escape 關閉）、`apps/web/src/shared/composables/useResizeDrag.test.ts`（方向鍵 ±16px 且方向對應正確（側欄 Right 加寬、事件流 Up 增高）、範圍夾限 200–420／100–360、aria 值、localStorage 拋錯時回預設）
 
 **Checkpoint**: SC-014 可驗；5 張卡 5 個停駐點。
 
@@ -185,9 +186,9 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 - [ ] T059 [US6] `copilot.store.ts` 加 `panel: { manuallyCollapsed }`（`useLocalPreference` 讀寫 `fg.copilot-panel`）與 `panelOpen` getter（data-model §2：載入收合；無偏好時選台展開；有手動收合偏好時選台不展開；觸發診斷或點展開把手 → 展開並清除偏好；只有面板上的收合鈕記錄手動收合偏好，Escape 收合只設當次 `open = false`；取消選取 → 收合）；`AppLayout.vue`／`App.vue` 改讀此 getter，移除舊 `desktopPanelOpen` ref
 - [ ] T060 [US6] `TopBar.vue` 容器查詢三段：≥820 全部；640–819 只留圖示；<640 搜尋收成圖示鈕（點擊或 `/` 展開覆蓋式輸入、Escape／失焦收回）、Mock 頻率與 Metrics 隱藏、`ThemeToggle` 移入系統狀態分組（手機）；任一分組 ≤ 4 個可見
 - [ ] T061 [US6] `FleetHealth.vue` 加 `compact` 模式＝「機群健康摘要條」（`data-fg="fleet-summary-bar"`，比例條＋四計數一列）；`App.vue` 在 `< md` 時於主畫面頂端渲染摘要條，點擊展開 `AnomalySummary`（異常摘要列）覆蓋層（Escape／點外部收合、`role="dialog"`），不推擠拓樸
-- [ ] T062 [US6] `AppLayout.vue` 手機 bottom-sheet：頂部抓取把手、閒置態高度收斂（`min-h` 改依內容）；1366×768 與 1024×768 面板展開時三欄仍各容一張完整卡片（必要時卡片 `minmax` 調整）
-- [ ] T063 [US6] 擴充 `apps/web/scripts/screenshots.cjs`（自 T002 雛形）：`--viewports` 模式輸出五 viewport × 兩主題 × 面板展開共 10 張，並在 hover／選取／critical 脈動前後量測每張 `.machine-card` 的 bounding rect、差值不為 0 時以非 0 結束（SC-004）；人工逐項檢查 SC-004 並修正發現的溢出／重疊
-- [ ] T064 [US6] 測試：新增 `apps/web/src/shared/components/AppLayout.test.ts`（面板預設收合、無偏好時選台展開、手動收合後選台不展開、診斷後展開並清除偏好、偏好跨重新掛載保留）、`apps/web/src/domains/monitoring/components/FleetHealth.test.ts`（compact 摘要條四計數、點擊展開覆蓋層）；更新 T030 建立的 `TopBar.test.ts`（三段收合與手機主題切換位置）
+- [ ] T062 [US6] `AppLayout.vue` 手機 bottom-sheet：頂部抓取把手、閒置態高度收斂（`min-h` 改依內容）；任何收合（收合鈕或 Escape）只要仍有選取機台即退為 32px peek 條（`data-fg="copilot-peek"`，顯示選取機台中文名與診斷狀態 chip，點擊等同展開把手：展開並清除手動收合偏好；Escape 收合仍不寫偏好），取消選取才完全隱藏；1366×768 與 1024×768 面板展開時三欄仍各容一張完整卡片（必要時卡片 `minmax` 調整）
+- [ ] T063 [US6] 擴充 `apps/web/scripts/screenshots.cjs`（自 T002 雛形）：`--viewports` 模式輸出五 viewport × 兩主題 × 面板展開共 10 張，並在 hover／選取／critical 脈動前後量測每張 `.machine-card` 的 bounding rect、另於搜尋過濾前與清除搜尋後比對 stage 欄與卡片的 rect（FR-015），差值不為 0 時以非 0 結束（SC-004）；人工逐項檢查 SC-004 並修正發現的溢出／重疊
+- [ ] T064 [US6] 測試：新增 `apps/web/src/shared/components/AppLayout.test.ts`（面板預設收合、無偏好時選台展開、手動收合後選台不展開、診斷後展開並清除偏好、偏好跨重新掛載保留、取消選取收合、手機以收合鈕與以 Escape 收合後皆出現 peek 條（Escape 不寫偏好）且點擊展開並清除偏好、取消選取後 peek 條不渲染）、`apps/web/src/domains/monitoring/components/FleetHealth.test.ts`（compact 摘要條四計數、點擊展開覆蓋層）；更新 T030 建立的 `TopBar.test.ts`（三段收合與手機主題切換位置）
 
 **Checkpoint**: SC-004、SC-007 可驗；critique P2 關閉。
 
@@ -199,13 +200,13 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 
 **Independent Test**: quickstart 場景 13、15、16。
 
-- [ ] T065 [US7] 跑 impeccable finish review：spawn `impeccable-finish-reviewer`（給 direction contract 路徑、`assigned.html`、10 張截圖），依其 ordered list 修 material fixes；再跑一次 `impeccable detect` 確認 0 finding（或皆有 ignore 理由）
+- [ ] T065 [US7] 跑 impeccable finish review：spawn `impeccable-finish-reviewer`（給 direction contract 路徑、`assigned.html`、10 張截圖；prompt 明列「FR-009a（比值刻度 0–60，非時間）、FR-005（最小功能性字級 12px）、FR-031（五個 viewport）與 direction contract 的 AMENDMENTS 優先於草圖」），依其 ordered list 修 material fixes；再跑一次 `impeccable detect` 確認 0 finding（或皆有 ignore 理由）
 - [ ] T066 [US7] spawn `impeccable-documenter` 重寫 `apps/web/DESIGN.md` 與 `apps/web/.impeccable/design.json`（從實作萃取兩套主題 token、元件、Named Rules）；人工複核 frontmatter token 與 `theme.css` 一致
-- [ ] T067 [US7] 更新 `apps/web/PRODUCT.md`：Positioning（背壓 strip 取代 TopBar 徽章）、Operating Context（側欄內容、Copilot 面板預設收合與偏好、三 stage 拓樸、手機機群健康摘要條、事件流合併與可點擊）、Accessibility 字級改為 12px，確認或移除所有 [推定] 標記
-- [ ] T068 [US7] `/speckit-constitution`：第 II 條「視覺」條目改為「一律依 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`」，「開發工作流程與品質門檻」段對 design-spec 的引用改為「依 `apps/web/PRODUCT.md`『第一屏就是工作台』」，版本 1.5.0 → 1.6.0，兩處修訂皆記入 Sync Impact Report；同步 `CLAUDE.md`「真實來源」段的視覺條目
+- [ ] T067 [US7] 更新 `apps/web/PRODUCT.md`：Product Purpose（Diagnose／drawer／Cached／Retry 等 UI 術語改為繁中現況用語）、Capabilities and Constraints（token 值落在 `src/styles/theme.css`、`tailwind.config.ts` 只引用變數）、Positioning（背壓 strip 取代 TopBar 徽章）、Operating Context（側欄內容、Copilot 面板預設收合與偏好、三 stage 拓樸、手機機群健康摘要條、事件流合併與可點擊）、Accessibility 字級改為 12px，確認或移除所有 [推定] 標記
+- [ ] T068 [US7] `/speckit-constitution`：第 II 條「視覺」條目改為「一律依 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`」，「開發工作流程與品質門檻」段對 design-spec 的引用改為「依 `apps/web/PRODUCT.md`『第一屏就是工作台』」，版本 1.5.0 → 1.6.0，兩處修訂皆記入 Sync Impact Report；依憲章 Governance 檢查 `.specify/templates` 相依模板有無 design-spec 引用並記入 Sync Impact Report；同步 `CLAUDE.md`「真實來源」段的視覺條目
 - [ ] T069 [US7] `apps/web/design/design-spec.md` 檔頭加退役註記（FR-036 文字）；`git rm -r apps/web/design/refs`（含 `_sources/`）；全文搜尋 `design-spec.md` 與 `refs/` 的引用並逐處改寫或標示歷史，範圍包含 README、指南、CLAUDE.md、`apps/web/src` 內元件與測試的註解及 describe 名稱、`apps/web/index.html`、`apps/web/tailwind.config.ts`；`specs/` 與 `docs/*-research-review*.md` 屬歷史工件豁免
 - [ ] T070 [US7] 完成 `apps/web/scripts/screenshots.cjs --readme`：依劇本產出 `docs/screenshots/` 12 張功能截圖（light）＋ `dark-theme.png`、`topology.png`；README 「功能逐項展示」圖說與術語改中文對照、22 秒 demo 劇本依新 UI 改寫（背壓 strip、串流骨架、快取耗時對比的位置，供 quickstart 場景 16 / SC-008）、設計連結指向 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`、「快速開始」加 `playwright-core` 與本機 Chromium 路徑說明、版本註記更新
-- [ ] T071 [P] [US7] `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15.6 新增「013 UI 全面改版」段：視覺真實來源切換、雙主題、拓樸、背壓 strip（60 秒視窗比值）、文案語言、鍵盤；註明新增 `playwright-core` 推翻了 `MachineNodeCard.css.test.ts` 註解記載的「以 CSS cascade 測試取代 Playwright 截圖、不新增瀏覽器相依」取捨，並同步更新該測試檔註解
+- [ ] T071 [P] [US7] `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15.6 新增「013 UI 全面改版」段：視覺真實來源切換、雙主題、拓樸、背壓 strip（60 秒視窗比值）、文案語言、鍵盤；註明新增 `playwright-core` 推翻了 `MachineNodeCard.css.test.ts` 註解記載的「以 CSS cascade 測試取代 Playwright 截圖、不新增瀏覽器相依」取捨，並同步更新該測試檔註解。UI 術語中文對照（FR-038）只改**現況描述段**：指南 §15.6 新段與其中引用的現況說明；README 的術語由 T070 處理（「功能逐項展示」與「快速開始」）。歷史段落（既有 feature 章節、`docs/*-research-review*.md` 審查報告）依「回補不重寫歷史」豁免
 - [ ] T072 [P] [US7] `CHANGELOG.md` `[Unreleased]`：使用者可見變更（視覺世界、light 預設／dark 切換、stage 拓樸、背壓 strip、串流骨架與快取耗時、異常 latch（確認後劃線）、事件合併與可點擊、面板預設收合與偏好、鍵盤快捷鍵、UI 文案繁中、README 截圖重拍）；契約小節註明「無變更」；相容性注意：localStorage 新 key、`playwright-core` devDependency
 - [ ] T073 [US7] 重跑 `/impeccable critique`（雙 agent，目標 ≥ 30/40），快照存 `apps/web/.impeccable/critique/`；若未達標，依其 priority issues 修正後再跑一次（上限兩輪）
 
@@ -218,9 +219,9 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 **Purpose**: 清理、全棧檢查、驗收與 merge 準備。
 
 - [ ] T074 [P] 清理 `apps/web/.impeccable/`：只保留 `surfaces/`、`critique/`、`design.json`、`mocks/decision/assigned.html`（其餘草圖與 `payload.json` 刪除）；`.gitignore` 加 `apps/web/.impeccable/questions/` 與 `apps/web/.impeccable/hook.cache.json`
-- [ ] T075 [P] 刪除不再使用的程式碼與 token：舊 `text-2xs` 引用、`card-style.ts` 中的 inset ring；確認 `TopologyCanvas`、`BackpressureBadge` 已無殘留引用（檔案已於 T036／T041 刪除）；`pnpm --filter web lint` 零警告
+- [ ] T075 [P] 刪除不再使用的程式碼與 token：`card-style.ts` 中的 inset ring；複跑 T009 的舊 token grep 確認仍為 0 命中（`text-2xs` 已於 T009 清理）；確認 `TopologyCanvas`、`BackpressureBadge` 已無殘留引用（檔案已於 T036／T041 刪除）；`pnpm --filter web lint` 零警告
 - [ ] T076 全棧檢查：`pnpm check`（契約 lint、typecheck、lint、test）與 `pnpm build` 綠；`pnpm --filter web test` 含新增 ≥ 11 個純函式測試檔；`git diff develop -- packages/contracts asyncapi.yaml apps/api apps/worker` MUST 為空；grep `apps/web/dist/` 無 direction contract 字樣（`THESIS`、`OWN-WORLD`、`FIRST VIEWPORT`、`Lab Glass`）
-- [ ] T077 依 [quickstart.md](./quickstart.md) 場景 1–16 逐項驗收並在 quickstart 加「驗收總表」記錄結果與日期；SC-001～SC-014 逐條勾選於 spec.md
+- [ ] T077 依 [quickstart.md](./quickstart.md) 場景 1–16 逐項驗收並在 quickstart 加「驗收總表」記錄結果與日期（場景 4 須記錄 20 ms mock、60 秒的實測每秒提交率與顯示器更新率，供 SC-005）；SC-001～SC-014 逐條勾選於 spec.md
 - [ ] T078 更新 `specs/013-ui-redesign/spec.md` Status 為已完成、`CLAUDE.md` 管理區段改為「目前無進行中的 SDD feature；最近一次完成的是 013」；`/speckit-analyze` 複跑確認無跨工件矛盾；準備 `git merge --no-ff` 回 develop（push 前先與使用者確認）
 
 ---
@@ -232,7 +233,7 @@ Phase 1 Setup ──► Phase 2 Foundational ──► Phase 3 US1（MVP）
                                               │
                                               ├──► Phase 4 US2（背壓 strip；依賴 T032 store tick）
                                               ├──► Phase 5 US3（拓樸；依賴 US1 卡片、flow-link、stage-layout）
-                                              ├──► Phase 6 US4（串流；依賴 partial-json、evidence-merge、timing、US1 drawer）
+                                              ├──► Phase 6 US4（串流；依賴 partial-json、evidence-merge、timing、US1 Copilot 面板）
                                               └──► Phase 7 US5（記憶；依賴 anomaly-latch、events、US1 卡片／事件流）
 US4 與 US5 都完成後 ──► Phase 8 US8（鍵盤：需要卡片、面板、latch 清除都存在）
 US2／US3／US5／US8 完成後 ──► Phase 9 US6（響應式收尾：需要全部元件就位）
@@ -241,10 +242,10 @@ US2／US3／US5／US8 完成後 ──► Phase 9 US6（響應式收尾：需要
 
 - US2、US3、US4、US5 在**行為**上互不相依，可在 US1 之後由不同 agent 推進，但下列共用檔案 MUST 依序修改（同一檔案不得平行）：
   - `apps/web/src/domains/monitoring/components/MachineNodeCard.vue`：T027 → T042 → T051 → T056
-  - `apps/web/src/App.vue`：T026 → T036 → T041 → T054 → T057 → T059 → T061
+  - `apps/web/src/App.vue`：T026 → T036 → T041 → T050 → T054 → T057 → T059 → T061
   - `apps/web/src/domains/monitoring/stores/monitoring.store.ts`：T032 → T049
-  - `apps/web/src/domains/ai-copilot/stores/copilot.store.ts`：T044 → T059
-  - `apps/web/src/shared/components/TopBar.vue`：T025 → T056 → T060
+  - `apps/web/src/domains/ai-copilot/stores/copilot.store.ts`：T044 → T051 → T059
+  - `apps/web/src/shared/components/TopBar.vue`：T025 → T036 → T056 → T060
   - `apps/web/src/shared/components/AppLayout.vue`：T022 → T057 → T059 → T062
   - `apps/web/src/domains/monitoring/components/EventStrip.vue`：T028 → T052
 - US7 的 T068（憲章）MUST 在 T066（DESIGN.md 重寫）與 T067（PRODUCT.md 更新）之後，因為憲章條目要指向已存在且正確的兩份文件。
