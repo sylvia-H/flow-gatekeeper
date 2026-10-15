@@ -59,12 +59,12 @@ flow-gatekeeper 是一個致敬 Argo CD 狀態／拓樸語言的**即時流程�
   - 不使用大面積紫色漸層、裝飾光球、bokeh 背景。
   - mobile／desktop 都不能有文字溢出或 UI 重疊；不得有 layout shift。
 - **已知產品限制（不是 UI 能解的）**：重連不 rebind、沒有診斷結果讀取端點、worker 崩潰後約 92 秒靜默、AI token 串流 at-most-once、mock frequency 控制無後端作用。UI 對這些只能誠實呈現（failed + Retry、watchdog 45 秒），不得假裝已解。
-- **明確未決**：改版後是否重錄 demo 影片與 12 張 README 截圖——待 013 feature 收尾決定。
+- **已決（013）**：README 的 12 張功能截圖在 013 內全部重拍（另加 dark 與拓樸各 1 張）；demo 影片是否重錄留待 release 步驟決定。
 
 ## Brand Commitments
 
 - 名稱 **flow-gatekeeper**，全小寫、連字號。
-- 語氣：工程紀律優先、「每個賣點都可驗收」、不浮誇；UI 文案以英文為主（Diagnose、Fleet monitor、Connected、Cached、Retry…），文件為繁體中文。
+- 語氣：工程紀律優先、「每個賣點都可驗收」、不浮誇。**UI 文案一律繁體中文**（2026-10-15 feature 013 裁決；1.1.0 以前為英文標籤 Diagnose／Fleet monitor／Connected／Cached／Retry 與中文混用），機器產生的識別項（machine id、job id、技術單位）維持原文，AI 回覆依 LLM 輸出；文件為繁體中文。
 - 「致敬 Argo CD」只借用其狀態／拓樸的**語言**（status light、sync/health 語意、topology 視角），不得使用其品牌資產。
 - **[推定]** 既有的「深色、低飽和、工程感」只是舊視覺世界的選擇，**不是**品牌承諾；013 改版可重新選擇視覺世界。
 
