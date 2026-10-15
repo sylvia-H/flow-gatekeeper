@@ -138,6 +138,24 @@ export default tseslint.config(
       sourceType: "module",
     },
   },
+  {
+    // 各 app 的 Node CLI 腳本（CommonJS，如 apps/web/scripts/screenshots.cjs）：repo 未引入 `globals` 套件，手列 Node globals。
+    files: ["apps/*/scripts/**/*.cjs"],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: {
+        require: "readonly",
+        module: "writable",
+        __dirname: "readonly",
+        process: "readonly",
+        console: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+        URL: "readonly",
+        Buffer: "readonly",
+      },
+    },
+  },
 
   // ── 架構邊界（原本只靠註解維持，改由 lint 強制）──────────────────────────────
   {

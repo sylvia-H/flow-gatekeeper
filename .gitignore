@@ -38,3 +38,6 @@ Thumbs.db
 # Stryker 變異測試：sandbox 暫存目錄與報告輸出（皆可重建）
 /.stryker-tmp/
 /reports/
+
+# 013 截圖劇本輸出（apps/web/scripts/screenshots.cjs --viewports；可重建，不入 git）
+apps/web/.screenshots/
