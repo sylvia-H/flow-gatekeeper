@@ -13,7 +13,8 @@
  * - **計數器倒退**（例如上游重置歸零）：無法得知重置發生在這一秒的哪個時點，故同樣只重設基準、
  *   不產生樣本，絕不寫入負值。
  * - **stale**：`markStale(series)` 後 `pushSample` 不推入；`markStale(series, false)` 解除時清掉差分基準，
- *   恢復後第一次 tick 重新取基準，斷線期間累積的量不會一次灌進某一格。既有樣本保留（畫面標示 stale）。
+ *   恢復後第一次 tick 重新取基準，斷線期間累積的量不會一次灌進某一格。斷線期間既有樣本保留（畫面標示
+ *   stale）；重連時由呼叫端以 `clearSamples` 清空，視窗從重連後重新累積。
  * - **環狀**：`samples` 對外一律**由舊到新**（Sparkline 直接依序畫 points）；滿 `capacity` 時丟最舊一筆。
  *   以 push＋shift 實作——每秒一次、60 筆，成本可忽略，換來讀取端不需處理 head 索引。
  *
@@ -106,4 +107,13 @@ export function markStale(series: RateSeries, stale = true): void {
   if (series.stale === stale) return;
   series.stale = stale;
   series.baseline = null;
+}
+
+/**
+ * 清掉所有樣本（stale 旗標與差分基準不動）。store 在 stale 由 true 翻回 false（重連）時呼叫：
+ * 斷線期間的樣本只供畫面標示「連線中斷」時保留，重連後若留著，60 秒視窗比值與走勢線會把
+ * 斷線前的舊樣本當成「最近 60 秒」，而走勢線依序靠右排列、看不出中間的空檔。
+ */
+export function clearSamples(series: RateSeries): void {
+  series.samples.length = 0;
 }

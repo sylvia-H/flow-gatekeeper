@@ -6,6 +6,18 @@ import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
 import { deriveTransitionEvent, pushCapped, type DerivedEvent } from "../lib/events.js";
 import { filterMachineIds } from "../lib/machine-search.js";
 import { staleClock } from "../lib/stale.js";
+import {
+  clearSamples,
+  createRateSeries,
+  droppedInWindow as droppedInWindowOf,
+  markStale,
+  maxOf,
+  pushSample,
+  windowRatio as windowRatioOf,
+  type RateSample,
+  type RateSeries,
+} from "../lib/rate-series.js";
+import { backpressureRatio } from "../../../shared/lib/backpressure.js";
 
 /** US3 事件保留上限（FR-011）。 */
 const EVENT_CAP = 50;
@@ -103,6 +115,18 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   const pausedAt = ref<number | null>(null);
   /** US4 search 查詢字串；空＝全部。sidebar 清單與主區卡片共用 `visibleMachineIds`。 */
   const searchQuery = ref("");
+  /**
+   * 013 US2 背壓速率序列（最近 60 秒，data-model §3）。只在 1 Hz `tickNow` 推入差分樣本，
+   * **不在 rAF 幀或 ws handler**（憲章 IV）：就地修改後 `triggerRef` 一次，下列 getter 由它衍生。
+   * 序列本身不需深層追蹤，故 shallowRef + markRaw。
+   */
+  const rateSeries = shallowRef<RateSeries>(markRaw(createRateSeries()));
+  /**
+   * 自載入起的累計比值（tooltip 用，沿用 `backpressureRatio`）。在 tick 取樣而非 computed：
+   * 兩個計數器每幀都在變，computed 會讓讀它的背壓 strip 每幀重繪；tick 取樣則與序列同為 1 Hz。
+   * 尚無任何批次時為 null（顯示「—」，不顯示成 0:1）。
+   */
+  const cumulativeRatio = ref<number | null>(null);
 
   // ── Getters ────────────────────────────────────────────────────────
   /**
@@ -146,6 +170,34 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   const visibleMachineIds = computed<string[]>(() =>
     filterMachineIds(MACHINE_IDS, searchQuery.value),
   );
+
+  // ── 013 US2 背壓 getter：全部由 `rateSeries` 衍生（每秒至多觸發一次） ──
+  /**
+   * 樣本的**新陣列**（由舊到新）。序列是就地修改的同一個陣列，若直接把 `samples` 當 prop 傳，
+   * 子元件的 prop 比對會判定「沒變」而不重繪；每秒複製 60 筆換一個新參照，成本可忽略。
+   */
+  const rateSamples = computed<readonly RateSample[]>(() => [...rateSeries.value.samples]);
+  /** 最新一筆樣本（strip 的「每秒訊息／每秒批次」）；尚無樣本為 null。 */
+  const latestRate = computed<RateSample | null>(() => {
+    const samples = rateSeries.value.samples;
+    return samples[samples.length - 1] ?? null;
+  });
+  /**
+   * 走勢線 y 軸的共同上限：60 秒內訊息與批次速率的最大值（實務上即訊息峰值）。兩條線共用同一個上限，
+   * 線下面積的比例才會與比值一致（US2 AS2）；取兩者之大，避免批次多於訊息的極端情況畫出界。
+   */
+  const ratePeak = computed(() =>
+    Math.max(maxOf(rateSeries.value, "msgsPerSec"), maxOf(rateSeries.value, "batchesPerSec")),
+  );
+  /** 60 秒視窗比值（FR-009 主顯示）；批次總和為 0 時為 null（顯示「—」）。 */
+  const windowRatio = computed(() => windowRatioOf(rateSeries.value));
+  /** 60 秒視窗內的捨棄總數（FR-011；> 0 才顯示）。 */
+  const droppedInWindow = computed(() => droppedInWindowOf(rateSeries.value));
+  /**
+   * 「連線中斷」標示：序列已停止推入，且本頁曾連上過——首次連線前序列同樣不推入，但那是
+   * 「連線中」（橫幅已說明），不該標成中斷。
+   */
+  const rateStale = computed(() => rateSeries.value.stale && everConnected.value);
 
   // ── Actions ────────────────────────────────────────────────────────
   /**
@@ -227,8 +279,33 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     authError.value = authorized ? null : AUTH_ERROR_MESSAGE;
   }
 
+  /**
+   * 1 Hz tick（App 的 setInterval）：推進 `now`，並為背壓序列取一次差分樣本。
+   * 先依連線狀態同步 stale（`markStale` 冪等；重連時清掉差分基準，斷線期間的累積量不灌進單一格），
+   * 重連那一刻再清空斷線前的舊樣本（否則 60 秒視窗會混入斷線前的資料），然後推入；
+   * Pause 期間照常推入（計數不是畫面內容）。序列有變才 `triggerRef`，每秒至多一次。
+   */
   function tickNow(): void {
-    now.value = Date.now();
+    const t = Date.now();
+    now.value = t;
+    const series = rateSeries.value;
+    const wasStale = series.stale;
+    markStale(series, connectionStatus.value !== "connected");
+    if (wasStale && !series.stale) clearSamples(series);
+    const pushed = pushSample(
+      series,
+      {
+        receivedMessages: receivedMessages.value,
+        renderedBatches: renderedBatches.value,
+        droppedMessages: droppedMessages.value,
+      },
+      t,
+    );
+    if (pushed || wasStale !== series.stale) triggerRef(rateSeries);
+    cumulativeRatio.value =
+      renderedBatches.value > 0
+        ? backpressureRatio(receivedMessages.value, renderedBatches.value)
+        : null;
   }
 
   /** US4：切換 pause（畫面凍結／恢復）。 */
@@ -270,6 +347,14 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     selectedMachine,
     fleetHealth,
     visibleMachineIds,
+    rateSeries,
+    rateSamples,
+    latestRate,
+    ratePeak,
+    windowRatio,
+    droppedInWindow,
+    rateStale,
+    cumulativeRatio,
     applyTelemetryBatch,
     recordDropped,
     selectMachine,

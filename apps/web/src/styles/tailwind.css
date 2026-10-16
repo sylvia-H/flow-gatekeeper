@@ -83,9 +83,10 @@
  * - transition（hover 上移、面板展開、主題切換）縮到近乎瞬間，保留狀態變化本身；
  *   `[data-theme-switching]` 期間的過渡由 theme.css 的 `transition: none !important` 停用
  *   （不論是否 reduced-motion），下方 `*` 規則亦涵蓋，不另寫重複規則。
- * - 預留：異常 latch 出現動畫與走勢線（Sparkline）的 transition 由後續 phase 的元件加上，
- *   一律落在下方 `*` 規則的範圍內（transition 縮為 0.01ms）；若改用 animation，須把其
- *   class 加進第一條規則（例：`.animate-latch-in`）。
+ * - 背壓 strip：走勢線（Sparkline）每秒直接換 points、沒有 transition；液位線的位移過渡只用
+ *   `motion-safe:` 掛上，reduced-motion 下本來就不產生，下方 `*` 規則再兜底。
+ * - 預留：異常 latch 出現動畫由後續 phase 的元件加上，一律落在下方 `*` 規則的範圍內
+ *   （transition 縮為 0.01ms）；若改用 animation，須把其 class 加進第一條規則（例：`.animate-latch-in`）。
  */
 @media (prefers-reduced-motion: reduce) {
   .animate-critical-pulse,

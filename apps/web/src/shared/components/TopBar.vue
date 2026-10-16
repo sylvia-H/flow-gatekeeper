@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { Search, Stethoscope, Gauge, Pause, Play } from "lucide-vue-next";
-import BackpressureBadge from "./BackpressureBadge.vue";
 import MetricsPanel from "./MetricsPanel.vue";
 import {
   useMonitoringStore,
@@ -12,7 +11,7 @@ import { useDiagnoseTrigger } from "../../domains/ai-copilot/composables/useDiag
 /**
  * 工具列（spec FR-034）：四個語意分組，各組可見選項 ≤ 4——
  * 導航（搜尋）／播放控制（暫停・恢復、Mock 頻率）／系統狀態（連線 chip、未授權 chip、
- * dev 指標面板、背壓計量）／主要動作（診斷）。
+ * dev 指標面板）／主要動作（診斷）。背壓計量已移出工具列，改為主區頂端常駐的背壓 strip（US2）。
  * 連線 chip 讀 **store.connectionStatus 單一來源**；診斷可用性集中在 `useDiagnoseTrigger`。
  */
 const store = useMonitoringStore();
@@ -118,19 +117,10 @@ const TOOL_BUTTON =
       </button>
     </div>
 
-    <!-- 系統狀態：靠右；次要項（指標面板、背壓計量）在工具列變窄時先讓位 -->
+    <!-- 系統狀態：靠右；次要項（指標面板）在工具列變窄時先讓位 -->
     <div role="group" aria-label="系統狀態" class="ml-auto flex shrink-0 items-center gap-2">
       <div v-if="showMetricsPanel" class="tb-optional">
         <MetricsPanel />
-      </div>
-
-      <div class="tb-optional">
-        <BackpressureBadge
-          :received-messages="store.receivedMessages"
-          :rendered-batches="store.renderedBatches"
-          :dropped-messages="store.droppedMessages"
-          :invalid-messages="store.invalidMessages"
-        />
       </div>
 
       <!-- 連線 chip：顏色＋文字＋可讀名稱三重編碼（FR-004） -->

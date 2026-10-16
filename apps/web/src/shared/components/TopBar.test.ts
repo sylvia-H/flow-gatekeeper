@@ -69,7 +69,7 @@ describe("TopBar 語意分組（FR-034）", () => {
     const counts = Object.fromEntries(
       w.findAll('[role="group"]').map((g) => [g.attributes("aria-label"), g.findAll(OPTION_SELECTOR).length]),
     );
-    // 系統狀態：指標面板觸發鈕、連線 chip、未授權 chip（背壓計量是唯讀徽章，T036 移除）
+    // 系統狀態：指標面板觸發鈕、連線 chip、未授權 chip（背壓計量已於 T036 移出工具列，改為主區背壓 strip）
     expect(counts).toEqual({ 導航: 1, 播放控制: 2, 系統狀態: 3, 主要動作: 1 });
     for (const g of w.findAll('[role="group"]')) {
       expect(g.element.children.length, g.attributes("aria-label")).toBeLessThanOrEqual(4);

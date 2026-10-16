@@ -361,3 +361,154 @@ describe("monitoring store — 連線真的活著（WEB-3）與授權錯誤（AR
     expect(store.authError).toBeNull();
   });
 });
+
+describe("monitoring store — 背壓速率序列（013 T032、FR-009／FR-011、憲章 IV）", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-16T00:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** 已連線的 store，並先 tick 一次取差分基準（首筆不產生樣本）。 */
+  function connectedStore(): ReturnType<typeof useMonitoringStore> {
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.setClientId("c1");
+    store.tickNow();
+    return store;
+  }
+
+  it("首次 tick 只取基準；之後每次 tick 推入一筆差分，getter 由序列衍生", () => {
+    const store = connectedStore();
+    expect(store.rateSamples).toHaveLength(0);
+    expect(store.windowRatio).toBeNull();
+    expect(store.latestRate).toBeNull();
+
+    // 第 1 秒：3 批、每批 4 筆 → 12 訊息 / 3 批次
+    for (let i = 0; i < 3; i++) store.applyTelemetryBatch(makeBatch(4));
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+    // 第 2 秒：2 批、每批 10 筆 → 20 訊息 / 2 批次
+    for (let i = 0; i < 2; i++) store.applyTelemetryBatch(makeBatch(10));
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+
+    expect(store.rateSamples.map((s) => [s.msgsPerSec, s.batchesPerSec])).toEqual([
+      [12, 3],
+      [20, 2],
+    ]);
+    expect(store.latestRate).toMatchObject({ msgsPerSec: 20, batchesPerSec: 2 });
+    expect(store.windowRatio).toBeCloseTo(32 / 5); // 視窗 Σ訊息 ÷ Σ批次，不是逐秒比值的平均
+    expect(store.ratePeak).toBe(20);
+    expect(store.cumulativeRatio).toBe(Math.round(32 / 5)); // 累計比值（tooltip）沿用 backpressureRatio
+  });
+
+  it("溢位丟棄計入視窗丟棄數；超出 60 秒視窗後歸零", () => {
+    const store = connectedStore();
+    store.recordDropped({ overflow: 7, invalid: 0 });
+    store.applyTelemetryBatch(makeBatch(1));
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+    expect(store.droppedInWindow).toBe(7);
+
+    for (let i = 0; i < 60; i++) {
+      store.applyTelemetryBatch(makeBatch(1));
+      vi.advanceTimersByTime(1000);
+      store.tickNow();
+    }
+    expect(store.rateSamples).toHaveLength(60);
+    expect(store.droppedInWindow).toBe(0);
+  });
+
+  it("斷線即停止推入並標示中斷；重連清空舊樣本、第一次 tick 只重取基準，斷線期間的量不灌進單一格", () => {
+    const store = connectedStore();
+    store.applyTelemetryBatch(makeBatch(5));
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+    expect(store.rateSamples).toHaveLength(1);
+
+    store.setConnectionStatus("reconnecting");
+    store.applyTelemetryBatch(makeBatch(50)); // 斷線前已在 buffer 的殘量
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+    expect(store.rateStale).toBe(true);
+    expect(store.rateSamples).toHaveLength(1); // 既有樣本保留、不再推入
+
+    store.setConnectionStatus("connected");
+    vi.advanceTimersByTime(1000);
+    store.tickNow(); // 清空斷線前的樣本、只取基準
+    expect(store.rateStale).toBe(false);
+    expect(store.rateSamples).toHaveLength(0);
+    expect(store.windowRatio).toBeNull();
+
+    store.applyTelemetryBatch(makeBatch(2));
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+    expect(store.rateSamples.map((s) => s.msgsPerSec)).toEqual([2]); // 視窗不混入斷線前的 5
+  });
+
+  it("尚無任何批次時累計比值為 null（顯示「—」而非 0:1）", () => {
+    const store = connectedStore();
+    expect(store.cumulativeRatio).toBeNull();
+    store.applyTelemetryBatch(makeBatch(3));
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+    expect(store.cumulativeRatio).toBe(3);
+  });
+
+  it("首次連線前序列同樣停推，但不標示「連線中斷」", () => {
+    const store = useMonitoringStore();
+    store.tickNow();
+    expect(store.rateSeries.stale).toBe(true);
+    expect(store.rateStale).toBe(false);
+  });
+
+  it("Pause 期間照常推入（計數不是畫面內容）", () => {
+    const store = connectedStore();
+    store.togglePause();
+    store.applyTelemetryBatch(makeBatch(3));
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+    expect(store.rateSamples).toHaveLength(1);
+  });
+
+  it("每幀批次提交不觸發序列 getter；只有 1 Hz tick 會（憲章 IV）", () => {
+    const store = connectedStore();
+    let runs = 0;
+    const scope = effectScope();
+    scope.run(() => {
+      watchEffect(
+        () => {
+          // strip 讀的全部 getter
+          void store.rateSeries;
+          void store.rateSamples;
+          void store.latestRate;
+          void store.ratePeak;
+          void store.windowRatio;
+          void store.droppedInWindow;
+          void store.rateStale;
+          void store.cumulativeRatio;
+          runs += 1;
+        },
+        { flush: "sync" },
+      );
+    });
+    expect(runs).toBe(1);
+
+    for (let i = 0; i < 30; i++) store.applyTelemetryBatch(makeBatch(5));
+    store.recordDropped({ overflow: 2, invalid: 1 });
+    expect(runs).toBe(1);
+
+    const before = store.rateSamples;
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+    // sync flush 下序列與累計比值各觸發一次；重點是次數與幀數無關
+    expect(runs).toBeGreaterThan(1);
+    expect(runs).toBeLessThanOrEqual(3);
+    expect(store.rateSamples).not.toBe(before); // 新參照：子元件 prop 比對才看得到變化
+    scope.stop();
+  });
+});

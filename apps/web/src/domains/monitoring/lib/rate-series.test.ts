@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  clearSamples,
   createRateSeries,
   droppedInWindow,
   markStale,
@@ -105,6 +106,19 @@ describe("rate-series stale", () => {
     expect(pushSample(s, c(9_000, 400), 30_000)).toBe(false); // 恢復後首筆只取基準
     pushSample(s, c(9_020, 402), 31_000);
     expect(s.samples.map((x) => x.msgsPerSec)).toEqual([10, 20]);
+  });
+
+  it("clearSamples：清空樣本，stale 旗標與基準不動；視窗從頭累積", () => {
+    const s = createRateSeries();
+    pushSample(s, c(0, 0), 0);
+    pushSample(s, c(10, 1), 1_000);
+    pushSample(s, c(30, 2), 2_000);
+    clearSamples(s);
+    expect(s.samples).toEqual([]);
+    expect(s.stale).toBe(false);
+    expect(windowRatio(s)).toBeNull();
+    expect(pushSample(s, c(33, 3), 3_000)).toBe(true); // 基準仍在，下一格照常差分
+    expect(s.samples.map((x) => x.msgsPerSec)).toEqual([3]);
   });
 });
 
