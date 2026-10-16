@@ -193,11 +193,14 @@ describe("monitoring store — events 衍生（FR-009/010/011）", () => {
     expect(store.events[0]?.severity).toBe("critical");
   });
 
-  it("轉回 healthy 不記恢復事件", () => {
+  it("轉回 healthy 記一筆回復事件（013 data-model §10）", () => {
     const store = useMonitoringStore();
     store.applyTelemetryBatch([point("press-02", "critical")]);
     store.applyTelemetryBatch([point("press-02", "healthy")]);
-    expect(store.events.length).toBe(1);
+    expect(store.events.length).toBe(2);
+    expect(store.events[0]?.severity).toBe("recovered");
+    store.applyTelemetryBatch([point("press-02", "healthy")]); // healthy→healthy：不記
+    expect(store.events.length).toBe(2);
   });
 
   it("超過 50 上限：淘汰最舊、長度恆 <= 50", () => {

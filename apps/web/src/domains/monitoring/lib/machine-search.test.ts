@@ -13,7 +13,10 @@ describe("filterMachineIds（FR-015、SC-006）", () => {
     expect(filterMachineIds(MACHINE_IDS, "PRESS-02")).toEqual(["press-02"]);
   });
 
-  it("比對顯示名稱（machineLabel）", () => {
+  it("比對顯示名稱（machineLabel，013 起為繁中名）", () => {
+    expect(filterMachineIds(MACHINE_IDS, "烤爐")).toEqual(["oven-04"]);
+    expect(filterMachineIds(MACHINE_IDS, "壓製機 02")).toEqual(["press-02"]);
+    // id 片段仍可搜（英文 id 與中文名並存）
     expect(filterMachineIds(MACHINE_IDS, "Oven")).toEqual(["oven-04"]);
   });
 

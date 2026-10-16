@@ -12,6 +12,11 @@ describe("machine-groups（FR-017）", () => {
     expect(machineGroup("sorter-05")).toBe("Fulfilment");
   });
 
+  it("stage 繁中名與 data-stage key 依序對應（013 T021、ui-contract §3）", () => {
+    expect(MACHINE_GROUPS.map((g) => g.label)).toEqual(["前處理", "成型烘烤", "包裝分揀"]);
+    expect(MACHINE_GROUPS.map((g) => g.key)).toEqual(["prep", "forming", "fulfilment"]);
+  });
+
   it("每台 roster 機台恰屬一組（涵蓋全部 5 台、無重複）", () => {
     const assigned = MACHINE_GROUPS.flatMap((g) => g.machineIds);
     expect([...assigned].sort()).toEqual([...MACHINE_IDS].sort());

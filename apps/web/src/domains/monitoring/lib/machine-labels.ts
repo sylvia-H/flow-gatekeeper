@@ -6,13 +6,16 @@ import type { MachineId } from "@flow-gatekeeper/contracts";
  * `MACHINE_IDS`／`MachineId`（api 以同一份檢查訂閱與 `POST /diagnoses`；web 的訂閱清單、topology
  * placeholder 與搜尋直接匯入契約，不再另設別名）。
  */
-/** machineId → 顯示名稱靜態對照（以 MachineId 為 key：名冊增減時漏補對照會編譯失敗）。 */
+/**
+ * machineId → 顯示名稱靜態對照（以 MachineId 為 key：名冊增減時漏補對照會編譯失敗）。
+ * 013 起改為繁體中文名稱，是 UI 文案中機台名稱的**唯一來源**（卡片、事件訊息、搜尋、異常摘要皆經 `machineLabel`）。
+ */
 const LABELS: Readonly<Record<MachineId, string>> = {
-  "mixer-01": "Mixer 01",
-  "press-02": "Press 02",
-  "pack-03": "Pack 03",
-  "oven-04": "Oven 04",
-  "sorter-05": "Sorter 05",
+  "mixer-01": "攪拌機 01",
+  "press-02": "壓製機 02",
+  "pack-03": "包裝機 03",
+  "oven-04": "烤爐 04",
+  "sorter-05": "分揀機 05",
 };
 
 /**

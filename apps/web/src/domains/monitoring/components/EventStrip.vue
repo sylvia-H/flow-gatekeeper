@@ -13,6 +13,7 @@ defineProps<{ events: DerivedEvent[]; height: number }>();
 const SEVERITY: Record<DerivedEvent["severity"], { label: string; cls: string; dot: string }> = {
   warning: { label: "WARN", cls: STATE_STYLE.warning.badgeText, dot: STATE_STYLE.warning.dot },
   critical: { label: "CRIT", cls: STATE_STYLE.critical.badgeText, dot: STATE_STYLE.critical.dot },
+  recovered: { label: "回復", cls: "text-ink-2", dot: "bg-stale" },
 };
 
 function clockLabel(ts: number): string {
