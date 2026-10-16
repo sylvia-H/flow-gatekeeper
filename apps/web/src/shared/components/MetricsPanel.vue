@@ -22,9 +22,7 @@ import { formatRelative } from "../lib/format.js";
  *
  * **展開層必須 `Teleport` 到 body**：AppLayout 的 header 是 `h-14` **且 `overflow-hidden`**
  * （AppLayout.vue），面板往按鈕下方展開約 200px，留在 header 內會被整個裁掉、點了像沒反應。
- * 改 `position: fixed` 也救不了——TopBar 的 `.tb-bar` 設了 `container-type: inline-size`，
- * 它會成為 fixed 子孫的 containing block，於是仍受 header 的 overflow 裁切。Teleport 把節點
- * 移出 header 之外才是可靠解，座標再由觸發按鈕的 `getBoundingClientRect()` 對齊。
+ * Teleport 把節點移出 header 之外才是可靠解，座標再由觸發按鈕的 `getBoundingClientRect()` 對齊。
  */
 const metrics = useMetricsStore();
 const open = ref(false); // 預設收合

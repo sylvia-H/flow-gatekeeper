@@ -5,6 +5,7 @@ import { createPinia, setActivePinia, type Pinia } from "pinia";
 import TopBar from "./TopBar.vue";
 import { useMonitoringStore } from "../../domains/monitoring/stores/monitoring.store.js";
 import { CONNECTION_NOT_READY_MESSAGE } from "../../domains/ai-copilot/composables/useDiagnoseTrigger.js";
+import { resetThemeStateForTest } from "../composables/useTheme.js";
 
 /**
  * TopBar 分組與文案（spec FR-034、FR-038、research R13）。
@@ -290,5 +291,403 @@ describe("連線 chip 三態中文文案與顏色（FR-004）", () => {
     expect(text(auth.element)).toBe("未授權");
     expect(auth.attributes("role")).toBe("alert");
     expect(auth.attributes("aria-label")).toBe(store.authError);
+  });
+});
+
+// ── US6 T060：三段收合、手機主題切換位置、覆蓋式搜尋 ─────────────────────────────
+
+/**
+ * happy-dom 沒有版面：以假 ResizeObserver 手動送出工具列寬度驅動三段（full／icons／compact）；
+ * 假 matchMedia 的 `narrow` 控制「手機寬度（rail 隱藏）」。未呼叫 `resize` 前段位為 `full`。
+ */
+let resize: ((width: number) => void) | null = null;
+let narrow = false;
+
+class FakeResizeObserver {
+  constructor(private readonly callback: ResizeObserverCallback) {}
+  observe(target: Element): void {
+    resize = (width) => this.callback([{ target, contentRect: { width } } as unknown as ResizeObserverEntry], this);
+  }
+  unobserve(): void {}
+  disconnect(): void {
+    resize = null;
+  }
+}
+
+function stubLayout(): void {
+  vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: narrow && query.includes("max-width"),
+    media: query,
+    addEventListener: () => undefined,
+    removeEventListener: () => undefined,
+  }));
+}
+
+interface TopBarExposed {
+  searchInput: HTMLInputElement | null;
+  size: "full" | "icons" | "compact";
+  isSearchOverlayOpen: boolean;
+  openSearchOverlay: () => Promise<void>;
+  closeSearchOverlay: (options?: { restoreFocus?: boolean }) => void;
+  focusSearch: () => void;
+}
+const exposed = (w: VueWrapper): TopBarExposed => w.vm as unknown as TopBarExposed;
+
+/** 掛載後送出工具列寬度並等重新渲染。 */
+async function mountAt(width: number): Promise<VueWrapper> {
+  const w = mountBar();
+  resize?.(width);
+  await w.vm.$nextTick();
+  return w;
+}
+
+/** 工具列的四個語意分組（排除主題切換自己的「主題」群組）。 */
+const toolbarGroups = (w: VueWrapper) =>
+  w.findAll('[role="group"][aria-label]').filter((g) => g.attributes("aria-label") !== "主題");
+
+/** 各組「可見選項」：主題切換（內含兩段按鈕）算一項。 */
+function optionCounts(w: VueWrapper): Record<string, number> {
+  return Object.fromEntries(
+    toolbarGroups(w).map((g) => {
+      const toggles = g.findAll('[data-fg="theme-toggle"]').length;
+      const others = g
+        .findAll(OPTION_SELECTOR)
+        .filter((o) => o.element.closest('[data-fg="theme-toggle"]') === null);
+      return [g.attributes("aria-label"), others.length + toggles];
+    }),
+  );
+}
+
+describe("工具列三段收合（T060、FR-032、research R10）", () => {
+  beforeEach(() => {
+    narrow = false;
+    stubLayout();
+  });
+  afterEach(() => {
+    resize = null;
+    vi.unstubAllGlobals();
+    resetThemeStateForTest();
+    delete document.documentElement.dataset["theme"];
+  });
+
+  it("門檻：≥ 820 全部、640–819 只留圖示、< 640 精簡；尚未量到寬度時為 full", async () => {
+    const w = mountBar();
+    expect(exposed(w).size).toBe("full");
+    const cases: [number, string][] = [
+      [1200, "full"],
+      [820, "full"],
+      [819.5, "icons"],
+      [640, "icons"],
+      [639.5, "compact"],
+      [320, "compact"],
+    ];
+    for (const [width, size] of cases) {
+      resize!(width);
+      await w.vm.$nextTick();
+      expect(exposed(w).size, `${width}px`).toBe(size);
+      expect(w.get(".tb-bar").attributes("data-tb-size")).toBe(size);
+    }
+  });
+
+  it("full：控制項文字可見，分組計數與 Phase 3 相同", async () => {
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.setAuthorized(false);
+    const w = await mountAt(1000);
+    const [pause, mock] = group(w, "播放控制").findAll("button");
+    for (const button of [pause!, mock!, diagnoseButton(w)]) {
+      expect(button.get("span").classes()).not.toContain("sr-only");
+    }
+    expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 2, 系統狀態: 3, 主要動作: 1 });
+  });
+
+  it("icons：暫停／Mock 頻率／診斷的文字改為 sr-only，可讀名稱保留；搜尋框與指標面板仍在", async () => {
+    const store = useMonitoringStore();
+    const w = await mountAt(700);
+    const [pause, mock] = group(w, "播放控制").findAll("button");
+    const named = [
+      [pause!, "暫停"],
+      [mock!, "Mock 頻率"],
+      [diagnoseButton(w), "診斷"],
+    ] as const;
+    for (const [button, label] of named) {
+      expect(button.attributes("aria-label")).toBe(label);
+      expect(button.get("span").classes()).toContain("sr-only");
+      expect(text(button.element)).toBe(label);
+    }
+    await pause!.trigger("click");
+    expect(store.paused).toBe(true);
+    expect(pause!.attributes("aria-label")).toBe("恢復");
+    expect(group(w, "導航").find('input[type="search"]').exists()).toBe(true);
+    expect(group(w, "系統狀態").find('button[aria-label="指標面板"]').exists()).toBe(true);
+    expect(w.find('[data-fg="search-toggle"]').exists()).toBe(false);
+  });
+
+  it("compact：搜尋收成圖示鈕、Mock 頻率與指標面板不渲染、RTT 數字省略（可讀名稱仍帶）", async () => {
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.setLatency(12);
+    store.setAuthorized(false);
+    const w = await mountAt(500);
+
+    expect(w.find('input[type="search"]').exists()).toBe(false);
+    expect(exposed(w).searchInput).toBeNull();
+    const toggle = group(w, "導航").get('[data-fg="search-toggle"]');
+    expect(toggle.element.tagName).toBe("BUTTON");
+    expect(toggle.attributes("aria-label")).toBe("搜尋機台");
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+
+    expect(group(w, "播放控制").findAll("button")).toHaveLength(1);
+    expect(w.find('button[aria-label="Mock 頻率"]').exists()).toBe(false);
+    expect(w.find('button[aria-label="指標面板"]').exists()).toBe(false);
+
+    expect(text(chip(w).element)).toBe("已連線");
+    expect(chip(w).attributes("aria-label")).toBe("連線狀態：已連線，延遲 12 ms");
+    const auth = group(w, "系統狀態").get('[data-fg="auth-chip"]');
+    expect(auth.attributes("aria-label")).toBe(store.authError);
+    expect(auth.get("span:not([aria-hidden])").classes()).toContain("sr-only");
+
+    // 桌機（rail 在）時工具列即使 < 640px 也不放主題切換，避免與 rail 重複
+    expect(w.find('[data-fg="theme-toggle"]').exists()).toBe(false);
+    expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 1, 系統狀態: 2, 主要動作: 1 });
+  });
+
+  it("手機寬度（rail 隱藏）：主題切換以單一圖示鈕移入系統狀態分組，各組 ≤ 4", async () => {
+    narrow = true;
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.setAuthorized(false);
+    const w = await mountAt(366);
+    expect(exposed(w).size).toBe("compact");
+    const toggle = group(w, "系統狀態").get('[data-fg="theme-toggle"]');
+    expect(toggle.element.tagName).toBe("BUTTON");
+    expect(toggle.attributes("aria-label")).toBe("切換為深色主題");
+    expect(toggle.attributes("aria-pressed")).toBeUndefined();
+    expect(toggle.find('[role="group"]').exists()).toBe(false);
+    await toggle.trigger("click");
+    expect(document.documentElement.dataset["theme"]).toBe("dark");
+    expect(toggle.attributes("aria-label")).toBe("切換為淺色主題");
+    expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 1, 系統狀態: 3, 主要動作: 1 });
+    for (const g of toolbarGroups(w)) {
+      expect(g.element.children.length, g.attributes("aria-label")).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it("390px 最寬組合（重新連線中＋未授權＋compact）：各元素都在、各組 ≤ 4", async () => {
+    narrow = true;
+    const store = useMonitoringStore();
+    store.setConnectionStatus("reconnecting");
+    store.setAuthorized(false);
+    const w = await mountAt(366);
+    expect(exposed(w).size).toBe("compact");
+    expect(group(w, "導航").find('[data-fg="search-toggle"]').exists()).toBe(true);
+    expect(group(w, "播放控制").findAll("button")).toHaveLength(1);
+    const status = group(w, "系統狀態");
+    expect(text(status.get('[data-fg="connection-chip"]').element)).toBe("重新連線中");
+    expect(status.get('[data-fg="auth-chip"]').attributes("role")).toBe("alert");
+    expect(status.get('[data-fg="theme-toggle"]').element.tagName).toBe("BUTTON");
+    expect(status.find('button[aria-label="指標面板"]').exists()).toBe(false);
+    expect(diagnoseButton(w).attributes("aria-label")).toBe("診斷");
+    expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 1, 系統狀態: 3, 主要動作: 1 });
+  });
+
+  it("640–767px 視窗（rail 已隱藏、工具列仍是 icons）：主題切換進系統狀態分組、指標面板讓位給搜尋框", async () => {
+    narrow = true;
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.setAuthorized(false);
+    const w = await mountAt(700);
+    expect(exposed(w).size).toBe("icons");
+    expect(group(w, "系統狀態").find('[data-fg="theme-toggle"]').exists()).toBe(true);
+    expect(group(w, "系統狀態").find('button[aria-label="指標面板"]').exists()).toBe(false);
+    expect(group(w, "導航").find('input[type="search"]').exists()).toBe(true);
+    expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 2, 系統狀態: 3, 主要動作: 1 });
+  });
+
+  it("桌機寬度（rail 在）的 full：工具列不放主題切換", async () => {
+    const w = await mountAt(1000);
+    expect(w.find('[data-fg="theme-toggle"]').exists()).toBe(false);
+  });
+});
+
+describe("compact 覆蓋式搜尋（T060、FR-032、FR-034a）", () => {
+  beforeEach(() => {
+    narrow = true;
+    stubLayout();
+  });
+  afterEach(() => {
+    resize = null;
+    vi.unstubAllGlobals();
+  });
+
+  const toggleOf = (w: VueWrapper) => w.get('[data-fg="search-toggle"]');
+  const overlayOf = (w: VueWrapper) => w.find('[data-fg="search-overlay"]');
+
+  async function openByClick(w: VueWrapper): Promise<HTMLInputElement> {
+    await toggleOf(w).trigger("click");
+    await flushPromises();
+    return w.get('input[type="search"]').element as HTMLInputElement;
+  }
+
+  function keydown(target: Element, init: KeyboardEventInit): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+    target.dispatchEvent(event);
+    return event;
+  }
+
+  it("點圖示鈕展開覆蓋並聚焦輸入框；aria-expanded／aria-controls 指向覆蓋；導航組 ≤ 4", async () => {
+    const w = await mountAt(366);
+    const input = await openByClick(w);
+    const overlay = overlayOf(w);
+    expect(overlay.exists()).toBe(true);
+    expect(overlay.classes()).toEqual(expect.arrayContaining(["absolute", "inset-0", "z-30"]));
+    expect(document.activeElement).toBe(input);
+    expect(exposed(w).isSearchOverlayOpen).toBe(true);
+    expect(exposed(w).searchInput).toBe(input);
+    expect(toggleOf(w).attributes("aria-expanded")).toBe("true");
+    expect(toggleOf(w).attributes("aria-controls")).toBe(overlay.attributes("id"));
+    expect(optionCounts(w)["導航"]).toBe(3);
+  });
+
+  it("覆蓋內輸入仍寫回 store；收回後搜尋字串保留", async () => {
+    const store = useMonitoringStore();
+    const w = await mountAt(366);
+    await openByClick(w);
+    await w.get('input[type="search"]').setValue("烤爐");
+    expect(store.searchQuery).toBe("烤爐");
+    exposed(w).closeSearchOverlay();
+    await w.vm.$nextTick();
+    expect(overlayOf(w).exists()).toBe(false);
+    expect(store.searchQuery).toBe("烤爐");
+  });
+
+  it("Escape 收回：攔截按鍵（defaultPrevented）、不冒泡到 App 層，焦點回到圖示鈕", async () => {
+    const w = await mountAt(366);
+    const input = await openByClick(w);
+    const onDoc = vi.fn();
+    document.addEventListener("keydown", onDoc);
+    try {
+      const event = keydown(input, { key: "Escape" });
+      await w.vm.$nextTick();
+      expect(event.defaultPrevented).toBe(true);
+      expect(onDoc).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("keydown", onDoc);
+    }
+    expect(overlayOf(w).exists()).toBe(false);
+    expect(exposed(w).isSearchOverlayOpen).toBe(false);
+    expect(document.activeElement).toBe(toggleOf(w).element);
+  });
+
+  it("輸入法組字中的 Escape 不收回、不攔截", async () => {
+    const w = await mountAt(366);
+    const input = await openByClick(w);
+    const event = keydown(input, { key: "Escape", isComposing: true });
+    await w.vm.$nextTick();
+    expect(event.defaultPrevented).toBe(false);
+    expect(overlayOf(w).exists()).toBe(true);
+  });
+
+  it("失焦到覆蓋外收回；焦點在覆蓋內移動（輸入框 → 收回鈕）不收", async () => {
+    const w = await mountAt(366);
+    await openByClick(w);
+    const shell = overlayOf(w).element;
+    const closeButton = overlayOf(w).get("button").element;
+    shell.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: closeButton }));
+    await w.vm.$nextTick();
+    expect(overlayOf(w).exists()).toBe(true);
+
+    shell.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: diagnoseButton(w).element }));
+    await w.vm.$nextTick();
+    expect(overlayOf(w).exists()).toBe(false);
+    // 失焦收回不搶焦點（restoreFocus: false）：焦點要去的地方由使用者決定，不拉回圖示鈕
+    expect(document.activeElement).not.toBe(toggleOf(w).element);
+  });
+
+  it("失焦到頁面以外（relatedTarget 為 null）同樣收回", async () => {
+    const w = await mountAt(366);
+    await openByClick(w);
+    overlayOf(w).element.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: null }));
+    await w.vm.$nextTick();
+    expect(exposed(w).isSearchOverlayOpen).toBe(false);
+  });
+
+  it("收回鈕：可讀名稱「收回搜尋」、mousedown 不搶焦點、點擊收回並把焦點交回圖示鈕", async () => {
+    const w = await mountAt(366);
+    await openByClick(w);
+    const closeButton = overlayOf(w).get("button");
+    expect(text(closeButton.element)).toBe("收回");
+    expect(closeButton.attributes("aria-label")).toBe("收回搜尋");
+    const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    closeButton.element.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+    await closeButton.trigger("click");
+    expect(overlayOf(w).exists()).toBe(false);
+    expect(document.activeElement).toBe(toggleOf(w).element);
+  });
+
+  it("Enter 選取唯一結果：選取該台、覆蓋收回、焦點移到該台卡片", async () => {
+    const store = useMonitoringStore();
+    const card = document.createElement("button");
+    card.className = "machine-card";
+    card.dataset["machine"] = "oven-04";
+    document.body.appendChild(card);
+    const w = await mountAt(366);
+    await openByClick(w);
+    await w.get('input[type="search"]').setValue("烤爐");
+    const event = keydown(w.get('input[type="search"]').element, { key: "Enter" });
+    await flushPromises();
+    expect(event.defaultPrevented).toBe(true);
+    expect(store.selectedMachineId).toBe("oven-04");
+    expect(overlayOf(w).exists()).toBe(false);
+    expect(document.activeElement).toBe(card);
+  });
+
+  it("expose：openSearchOverlay／focusSearch 在 compact 展開並聚焦，closeSearchOverlay 收回並交回焦點", async () => {
+    const w = await mountAt(366);
+    await exposed(w).openSearchOverlay();
+    await w.vm.$nextTick();
+    expect(exposed(w).isSearchOverlayOpen).toBe(true);
+    expect(document.activeElement).toBe(exposed(w).searchInput);
+    exposed(w).closeSearchOverlay();
+    await w.vm.$nextTick();
+    expect(exposed(w).isSearchOverlayOpen).toBe(false);
+    // 焦點原在覆蓋內 → 交回圖示鈕
+    expect(document.activeElement).toBe(toggleOf(w).element);
+
+    exposed(w).focusSearch();
+    await flushPromises();
+    expect(exposed(w).isSearchOverlayOpen).toBe(true);
+  });
+
+  it("非 compact 時 focusSearch 只聚焦一般搜尋框，不開覆蓋", async () => {
+    const w = await mountAt(1000);
+    exposed(w).focusSearch();
+    await flushPromises();
+    expect(exposed(w).isSearchOverlayOpen).toBe(false);
+    expect(overlayOf(w).exists()).toBe(false);
+    expect(document.activeElement).toBe(w.get('input[type="search"]').element);
+  });
+
+  it("覆蓋開著時工具列變寬（離開 compact）：覆蓋收回，輸入框仍是同一元素且保有焦點", async () => {
+    const w = await mountAt(366);
+    const input = await openByClick(w);
+    resize!(700);
+    await w.vm.$nextTick();
+    expect(exposed(w).isSearchOverlayOpen).toBe(false);
+    expect(overlayOf(w).exists()).toBe(false);
+    expect(w.get('input[type="search"]').element).toBe(input);
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("搜尋框有焦點時工具列變窄（進入 compact）：直接展開覆蓋，不把輸入中的框收掉", async () => {
+    const w = await mountAt(700);
+    const input = w.get('input[type="search"]').element as HTMLInputElement;
+    input.focus();
+    resize!(500);
+    await w.vm.$nextTick();
+    expect(exposed(w).isSearchOverlayOpen).toBe(true);
+    expect(w.get('input[type="search"]').element).toBe(input);
   });
 });
