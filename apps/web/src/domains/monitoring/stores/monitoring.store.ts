@@ -34,7 +34,7 @@ const EVENT_CAP = 50;
 const EVENT_MERGE_WINDOW_MS = 10_000;
 
 /**
- * 連線三態（design-spec §8.2）。單一資料來源為本 store 的 `connectionStatus`，
+ * 連線三態（源自 013 前的 design-spec §8.2，已退役）。單一資料來源為本 store 的 `connectionStatus`，
  * 元件（AppLayout / TopBar chip）一律讀它，不另立平行狀態。
  */
 export type ConnectionStatus = "connected" | "reconnecting" | "disconnected";

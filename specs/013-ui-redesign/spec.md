@@ -274,7 +274,7 @@
 - **FR-035**: 合併前 MUST 經 `/speckit-constitution` 修訂憲章：第 II 條「視覺」條目改為指向 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`，「開發工作流程與品質門檻」段對 design-spec 的引用改為「依 `apps/web/PRODUCT.md`『第一屏就是工作台』」，兩者記入 Sync Impact Report；並同步 `apps/web/PRODUCT.md`（Positioning、Operating Context、Accessibility 字級改為改版後現況，[推定] 標記確認或移除）、CLAUDE.md 真實來源段、README 設計連結、指南 §15.6、CHANGELOG `[Unreleased]`。
 - **FR-036**: `apps/web/design/design-spec.md` MUST 在檔頭加「已退役（2026-10，feature 013），現況視覺真實來源見 apps/web/PRODUCT.md 與 apps/web/DESIGN.md」並保留全文；`apps/web/design/refs/` 整個目錄（含 `_sources/`）MUST 自 repo 移除。
 - **FR-037**: `apps/web/DESIGN.md` 與其 sidecar MUST 於改版完成後重新產出，反映實際落地的兩套主題 token 與元件，作為後續 feature 的視覺真實來源。
-- **FR-038**: 全部 UI 文案 MUST 統一為繁體中文（含 Diagnose、Fleet monitor、Connected、Cached、Retry、stage 標題等既有英文標籤；stage 標題不附英文副標）；以下維持原文、為唯一例外：machine id、job id、技術單位（°C、mm/s、u/min、%、ms、s）、`Mock`、`AI`、`WS` 等技術縮寫，以及 AI 回覆內容（依 LLM 輸出）。術語以 research R13 為準。README 與指南**現況描述段**中引用的 UI 術語 MUST 同步改為中文對照；歷史段落（既有 feature 章節、審查報告）依「回補不重寫歷史」豁免。（specify 階段裁決 2026-10-15：使用者選定 B「全部統一繁體中文」，取代 PRODUCT.md 原推定的「UI 文案以英文為主」）
+- **FR-038**: 全部 UI 文案 MUST 統一為繁體中文（含 Diagnose、Fleet monitor、Connected、Cached、Retry、stage 標題等既有英文標籤；stage 標題不附英文副標）；以下維持原文、為唯一例外：machine id、job id、技術單位（°C、mm/s、u/min、%、ms、s）、`Mock`、`AI`、`WS` 等技術縮寫、佇列名稱（`diagnosis`），以及 AI 回覆內容（依 LLM 輸出）。術語以 research R13 為準。README 與指南**現況描述段**中引用的 UI 術語 MUST 同步改為中文對照；歷史段落（既有 feature 章節、審查報告）依「回補不重寫歷史」豁免。（specify 階段裁決 2026-10-15：使用者選定 B「全部統一繁體中文」，取代 PRODUCT.md 原推定的「UI 文案以英文為主」）
 
 **不變量（全 feature）**
 
@@ -312,7 +312,7 @@
 - **SC-010**: 既有 28 個 web 測試檔全數通過；新增純函式測試覆蓋串流漸進解析（含合法、截斷、非 JSON 三類輸入）、異常標記計時、stage 歸屬與空欄、事件合併、耗時量測，皆為綠。
 - **SC-011**: 合併前全文搜尋 `design-spec.md` 與 `refs/` 的引用，每一處都已改寫為指向新真實來源或明確標示為歷史文件；憲章版本號遞增且 Sync Impact Report 記錄本次修訂。
 - **SC-012**: README 的 14 張截圖（12 張功能 light、1 張 dark、1 張拓樸）全部由同一套可重播截圖劇本一次產出，且與合併時的介面一致。
-- **SC-013**: 介面上不存在英文 UI 標籤（例外清單同 FR-038：machine id、job id、技術單位、`Mock`、`AI`、`WS` 與 AI 回覆），以全站文案抽查 100% 為繁體中文驗收。
+- **SC-013**: 介面上不存在英文 UI 標籤（例外清單同 FR-038：machine id、job id、技術單位、`Mock`、`AI`、`WS`、佇列名稱 `diagnosis` 與 AI 回覆），以全站文案抽查 100% 為繁體中文驗收。
 - **SC-014**: 只用鍵盤可完成「搜尋 → 選台 → 診斷 → 關閉面板 → 取消選取」整條流程，從頁面載入到觸發診斷不超過 10 次按鍵；拓樸 5 張卡片共 5 個 Tab 停駐點。
 
 ## Assumptions

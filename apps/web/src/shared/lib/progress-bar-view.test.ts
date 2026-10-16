@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { progressBarView } from "./progress-bar-view.js";
 
-describe("progressBarView — 進度條呈現不變量（design-spec §7.5、FR-004）", () => {
+describe("progressBarView — 進度條呈現不變量（FR-004）", () => {
   it("failed 無 value：非 indeterminate、走靜態 crit 條、aria 不讀「處理中」（迴歸：review finding）", () => {
     const v = progressBarView("failed");
     expect(v.indeterminate).toBe(false);

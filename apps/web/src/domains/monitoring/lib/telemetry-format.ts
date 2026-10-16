@@ -19,7 +19,7 @@ const UNITS: Record<MetricKey, string> = {
   errorRate: "%",
 };
 
-/** 遙測單位（FR-003）；靜態字串常數，design-spec §7.3 未規定字串、無衝突。 */
+/** 遙測單位（FR-003）；靜態字串常數。 */
 export function metricUnit(key: MetricKey): string {
   return UNITS[key];
 }

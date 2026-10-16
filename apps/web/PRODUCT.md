@@ -2,8 +2,8 @@
 
 <!-- impeccable:product-schema 1 -->
 
-> 本檔是 impeccable 的**產品事實**紀錄（PRODUCT.md），只記不隨視覺改版變動的產品真相；視覺系統另見同目錄 `DESIGN.md`。
-> 建立於 2026-10-15（feature 013 UI 全面改版的前置）。標 **[推定]** 的條目是由 README、憲章、指南與既有 design-spec 推得、尚未經使用者逐條確認；其餘為專案文件已明載的事實。
+> 本檔是 impeccable 的**產品事實**紀錄（PRODUCT.md），只記不隨視覺改版變動的產品真相；視覺系統（token 值、元件外觀、Named Rules）另見同目錄 `DESIGN.md`。
+> 建立於 2026-10-15（feature 013 UI 全面改版的前置），2026-10-16 依 013 實作現況更新（T067）。原先標 **[推定]** 的條目已逐條確認或改寫，目前無待確認的推定；內容依據為 README、憲章、指南、`specs/013-ui-redesign/`（spec、clarify 裁決、tasks 的各 phase 實作裁決）。
 
 ## Platform
 
@@ -12,7 +12,7 @@ web
 ## Users
 
 - **主要使用者：監控台操作者**——想長時間盯著一組機台（流程節點）的即時狀態、在異常時按一下就拿到 AI 診斷的工程／維運人員。情境是「掛在螢幕上反覆看」，不是一次性瀏覽。
-- **第二類使用者：展示者／評估者**——拿到 repo、用 `docker compose --profile demo up` 一鍵跑起來，在 22 秒內看懂「高頻遙測如何被背壓壓住、AI 診斷如何逐字串流、快取如何命中」的人（面試官、技術同儕、作品集讀者）。**[推定]** 這一類的比重不低於第一類：README 的 demo 影片、逐項截圖與「每個賣點都可驗收」的寫法都是為他們而設。
+- **第二類使用者：展示者／評估者**——拿到 repo、用 `docker compose --profile demo up` 一鍵跑起來，在 22 秒內看懂「高頻遙測如何被背壓壓住、AI 診斷如何逐字串流、快取如何命中」的人（面試官、技術同儕、作品集讀者）。兩類使用者並列為設計對象：README 的 demo 影片、逐項截圖與「每個賣點都可驗收」的寫法為他們而設，013 也為評估者單獨設了驗收（SC-008：依 22 秒 demo 劇本首次操作即能找到背壓比值、串流骨架與快取耗時對比）。
 
 ## Product Purpose
 
@@ -20,74 +20,92 @@ flow-gatekeeper 是一個致敬 Argo CD 狀態／拓樸語言的**即時流程�
 
 成功的樣子：
 
-1. 開啟第一屏就是可操作的監控台（不是 landing page），5 台機台的遙測即時更新而畫面不卡。
-2. 任一機台轉 warning／critical 時能一眼看出；按 Diagnose 後 drawer 立即進入 active，AI 回覆逐字出現，完成後是結構化的五區塊結果，再按一次會秒回並標 Cached。
-3. 斷線、worker 崩潰、Pub/Sub 中斷時畫面誠實標示（Reconnecting／Disconnected／Stale／failed + Retry），不假裝正常。
-4. 展示者在 demo 影片的 22 秒內看懂上述三點。
+1. 開啟第一屏就是可操作的監控台（不是 landing page），5 台機台依產線三段即時更新而畫面不卡，背壓比值常駐可見。
+2. 任一機台轉為警告／嚴重時能一眼看出，回復後仍留 30 秒的異常標記；按「診斷」後 AI 診斷面板立即展開並進入「進行中」，結果骨架隨串流逐格填入，完成後是結構化結果（摘要與嚴重度、建議動作、可能原因、證據）；再按一次會秒回並標「快取」，同時列出本次與上一次非快取的耗時對比。
+3. 斷線、worker 崩潰、Pub/Sub 中斷時畫面誠實標示（重新連線中／已斷線／停滯／失敗 + 重試），不假裝正常。
+4. 展示者在 demo 影片的 22 秒內看懂背壓、串流、快取三個機制。
 
 ## Positioning
 
 鄰近產品（一般監控儀表板、chat 式 AI 助手）無法如實複製的機制：
 
-- **背壓是畫面的一部分**：高頻 WebSocket 遙測先進 buffer、以 `requestAnimationFrame` 每幀批次提交，「收到的訊息數 ／ 實際渲染的批次數」這個背壓比值直接畫在 TopBar 上（`BackpressureBadge`），是本專案的核心賣點，不是隱藏在工程細節裡的實作。
-- **AI 診斷是跨進程串流**：診斷由獨立 worker 經 BullMQ 消化，token 走 Redis Pub/Sub 由 Gateway 轉發到同一條 WebSocket；cache-aside + dedupe lock 讓同簽章的第二次診斷秒回並可視化為 Cached。
+- **背壓是畫面的一部分**：高頻 WebSocket 遙測先進 buffer、以 `requestAnimationFrame` 每幀批次提交；主區頂端常駐一條**背壓 strip**（`BackpressureStrip`，013 起取代 1.1.0 的 TopBar 背壓徽章），顯示每秒訊息數 → 每秒批次數 → 最近 60 秒視窗比值，並把比值以液位線標在 0–60 的比值刻度上。這是本專案的核心賣點，不是隱藏在工程細節裡的實作。
+- **AI 診斷是跨進程串流**：診斷由獨立 worker 經 BullMQ 消化，token 走 Redis Pub/Sub 由 Gateway 轉發到同一條 WebSocket；前端邊收邊以容錯方式解析，把結果逐格填入骨架。cache-aside + dedupe lock 讓同簽章的第二次診斷秒回，畫面以「快取」標記與耗時對比把命中可視化。
+- **產線拓樸而非機台網格**：機台依產線順序分成三段，段間連線的粗細與流速取自既有 throughput 遙測，不新增任何契約。
 - **生產化三部曲**：崩潰自癒（007）、整棧容器化單一入口（008）、可觀測性基線（009）——系統「自己也能被監控」。
 
 ## Operating Context
 
 - **兩種執行模式**：開發模式（`pnpm dev`，web 走 Vite 5173、api 3000）與一鍵 demo（nginx 單一入口 `http://localhost:8080`，`/ws` 與 `/diagnoses` 同源反向代理）。
-- **資料來源是 mock producer**：5 台固定示範機台 `mixer-01`／`press-02`／`pack-03`／`oven-04`／`sorter-05`（跨端單一來源 `packages/contracts/src/machines.ts`），遙測以決定性規律產生、含週期性 warning／critical 尖峰，demo 劇本可重播。
-- **每台機台的遙測欄位**：state（healthy／warning／critical）、temperature（°C）、vibration（mm/s）、throughput（u/min）、errorRate（%）、lastUpdated。
-- **診斷流程狀態機**：idle → waiting → active（有 0／20／40／60／80／100 進度里程碑與處理步驟清單）→ streaming tokens → completed（severity、summary、likely causes、evidence、suggested actions，可帶 Cached 標記）｜failed（可 Retry）。每台機台各自一份狀態，多台可並存；drawer 一次只呈現目前選取的那台。Active 期間同一台不得重複送出。
-- **連線狀態**：connected／reconnecting（指數退避 + 抖動）／disconnected；另有「未授權」chip（設了 `WS_AUTH_SECRET` 時）。斷線保留最後資料並標 stale；stale 判定為 10 秒無新資料，Pause 且連線中時凍結 stale 判定。
-- **TopBar 控制**：connection chip（含延遲 ms）、search 即時過濾 sidebar 與卡片、Pause／Resume、mock frequency 控制（目前無實際後端作用，屬 UI 占位）、Diagnose 動作。
-- **其他面板**：Fleet Health（healthy／warning／critical／stale 計數 + 比例條）、Event Stream（狀態轉換事件列，去重、上限 50）、sidebar 機台分組、dev-only Metrics Panel（`VITE_METRICS_PANEL`，唯讀、預設收合）。
-- **響應式**：桌機為 sidebar + 中央 node grid + 右側常駐 Copilot drawer；手機為 drawer 改 bottom-sheet。
+- **資料來源是 mock producer**：5 台固定示範機台 `mixer-01`／`press-02`／`pack-03`／`oven-04`／`sorter-05`（跨端單一來源 `packages/contracts/src/machines.ts`；中文名「攪拌機 01／壓製機 02／包裝機 03／烤爐 04／分揀機 05」的唯一來源為 `machine-labels.ts`），遙測以決定性規律產生、含週期性警告／嚴重尖峰，demo 劇本可重播。
+- **每台機台的遙測欄位**：state（正常／警告／嚴重；前端另判停滯）、溫度（°C）、振動（mm/s）、產能（u/min）、錯誤率（%）、lastUpdated。
+- **側欄（rail，≥ 768px）**：只含品牌列、機群健康（正常／警告／嚴重／停滯四個計數 + 比例條）、異常摘要列（目前異常與最近 30 秒內曾異常的機台：狀態燈、名稱、相對時間，點列選取該台、每列可清除標記，全部正常時顯示「目前沒有異常」）與主題切換（淺色｜深色）。不再列完整機台清單。寬度可拖曳或以鍵盤調整（200–420px）。
+- **手機（< 768px）**：側欄隱藏；主區頂端常駐「機群健康摘要條」（比例條與四個計數一列），點擊展開為異常清單覆蓋層（同一份異常摘要資料與行為，不推擠拓樸，Escape 或點外部收合）；主題切換移入工具列的系統狀態分組，為單一圖示鈕。
+- **工具列**：四組語意分組——導航（搜尋，即時過濾拓樸卡片）、播放控制（暫停／恢復、Mock 頻率）、系統狀態（連線 chip 含延遲 ms、未授權 chip、dev 指標面板、手機時的主題切換）、主要動作（診斷）；任一分組可見項目不超過 4 個。依工具列可用寬度三段收合：≥ 820px 全部顯示、640–819px 只留圖示、< 640px 搜尋收成圖示鈕（點擊或按 `/` 展開覆蓋式輸入框，Escape／失焦收回），Mock 頻率與指標面板隱藏。Mock 頻率維持 disabled 占位（後端無對應能力）。
+- **背壓 strip**：主區頂端常駐，五個驗收 viewport 下皆不需捲動即可見。內容為每秒訊息數、每秒批次數、最近 60 秒視窗比值（累計比值放 tooltip）、0–60 比值刻度與液位線（> 60 釘在右端標「>60」）、近 60 秒走勢線（訊息與批次兩條，時間軸與比值刻度分開），以及 60 秒內有丟棄時才出現的丟棄數。手機至少保留比值、每秒訊息數與丟棄數。
+- **三 stage 拓樸**：主畫面依序為「前處理 → 成型烘烤 → 包裝分揀」三欄（分組單一來源 `machine-groups.ts`，未分組的機台歸入最後一欄），相鄰欄之間有指向下游的流向連線；拓樸容器寬度 < 708px 時改為上下堆疊、段間以向下短箭頭連接（無流動）。搜尋過濾後空欄保留並顯示「此階段無符合的機台」。
+- **機台卡片**：中文名稱 + mono id、狀態徽章與狀態燈、溫度／振動／產能／錯誤率四個等寬數值各附小刻度（超標換警示色）、更新時間；警告卡片加全邊框、嚴重卡片加底色與邊框、停滯為虛線邊框加「停滯」徽章；回復後保留 30 秒的異常標記（「嚴重 · 進入 N 秒前」／「嚴重 · 已回復 N 秒前」，可點擊清除，清除後劃線保留到期滿，卡片與異常摘要列同步）；診斷狀態 chip（診斷中 N%／結果 · 嚴重度／快取／失敗）。狀態變化、hover、選取與嚴重脈動皆不改卡片尺寸。
+- **事件流**：主區底部的狀態轉換事件列；同機台、同嚴重度的事件 10 秒內合併為一列並顯示 `×N`，機台回到正常時新增中性色的「回復正常」事件，上限 50 筆；每一列可點擊選取對應機台。高度可拖曳或以鍵盤調整（100–360px）。
+- **診斷流程狀態機**：idle → waiting → active（有 0／20／40／60／80／100 進度里程碑與處理步驟清單）→ streaming tokens → completed｜failed。每台機台各自一份狀態，多台可並存；面板一次只呈現目前選取的那台；進行中時同一台不得重複送出，可中止診斷。
+- **Copilot 面板（UI 標籤「AI 診斷」）**：所有寬度預設收合；無手動收合偏好時選取機台即自動展開。以面板上的收合鈕收合會記下手動收合偏好（localStorage `fg.copilot-panel`，跨重新載入保留），之後選台不再自動展開，只有「觸發診斷」或「點展開把手」才展開並清除偏好；Escape 收合只影響當次、不寫偏好；取消選取時收合。寬度 ≥ 1024px 為推擠式側面板（收合時留一條展開窄條）；768–1023px 與手機改為底部抽屜（bottom-sheet，附抓取把手），收合後仍有選取機台時退為底部 32px 的 peek 條（機台名稱與診斷狀態），點一下即展開。
+  - 進行中：結果骨架隨串流逐格填入，未解析出的欄位以佔位呈現；原始串流可展開查看（預設收合）。
+  - 已完成：結果順序為摘要與嚴重度 → 建議動作 → 可能原因 → 證據；證據預設展開前 2 筆，來源與內容相同者合併並顯示 `×N`；頂部嚴重度色條加一行 meta「完成 HH:mm:ss · 耗時」。
+  - 快取命中：結果整塊直接呈現、不走逐字動畫，meta 顯示「快取 · N ms」並列該台上一次非快取耗時。
+  - 失敗：以分類文案說明錯誤、提供「重試」，並展開原始串流保留中斷前的推理（不顯示骨架）；45 秒無進展收尾的語意不變。
+- **連線狀態**：已連線／重新連線中（指數退避 + 抖動）／已斷線；另有「未授權」chip（設了 `WS_AUTH_SECRET` 時）。斷線保留最後資料並標停滯；停滯判定為 10 秒無新資料，暫停且連線中時凍結停滯判定（異常標記的 30 秒倒數同樣凍結）。
+- **鍵盤操作**：`/` 聚焦搜尋（結果只剩一台時 Enter 直接選取並把焦點移到該卡片）、方向鍵依視覺位置在卡片間移動焦點、Enter 選取聚焦卡片、`d` 對選取機台觸發診斷（前置條件與去重同診斷按鈕）、`x` 清除聚焦卡片的異常標記、Escape 每次只關最上層一項（快捷鍵說明 → 搜尋覆蓋 → 手機異常清單 → AI 診斷面板 → 取消選取）、`?` 開關快捷鍵說明層；焦點在輸入欄時字母與符號快捷鍵不觸發。說明層與快捷鍵判定共用同一份 `SHORTCUTS` 常數。
+- **時間與數值格式**：絕對時間為本地 24 小時制 `HH:mm:ss`；相對時間 2 秒內顯示「剛剛」，其餘「N 秒前／N 分鐘前」；耗時 < 1000 ms 顯示整數 ms、否則一位小數的秒。
+- **其他**：dev-only 指標面板（`VITE_METRICS_PANEL`，唯讀、預設收合，只在非 compact 工具列且側欄在時渲染）。
+- **本機偏好**：`fg.theme`（主題，預設淺色、不跟隨作業系統）、`fg.copilot-panel`（面板手動收合偏好）、`flow-gatekeeper:sidebar-width`、`flow-gatekeeper:event-strip-height`；讀寫失敗時以預設運作、不顯示錯誤。
 
 ## Capabilities and Constraints
 
-- **只動前端**：契約（`packages/contracts`，Zod 單一來源；`asyncapi.yaml` 1.2.0）與後端行為在 UI 改版中一律不變；UI 只消費既有的 12 則 WS 訊息與 `POST /diagnoses`。
-- **高頻事件不得逐筆寫 reactive state**：WebSocket telemetry MUST 先進 buffer、再以 `requestAnimationFrame` 每幀批次提交（憲章硬規則）。任何改版都不得破壞這條。
+- **只動前端**：契約（`packages/contracts`，Zod 單一來源；`asyncapi.yaml` 1.2.0）與後端行為在 UI 改版中一律不變；UI 只消費既有的 12 則 WS 訊息與 `POST /diagnoses`。背壓 strip、拓樸連線、異常標記、診斷耗時全部在前端由既有訊息衍生。
+- **高頻事件不得逐筆寫 reactive state**：WebSocket telemetry MUST 先進 buffer、再以 `requestAnimationFrame` 每幀批次提交（憲章硬規則）。走勢線、拓樸連線、異常標記、診斷狀態 chip 等新元件同樣不得逐筆寫入畫面狀態。
 - **即時通道是原生 `WebSocket`**（ADR-001），不是 Socket.IO。
-- **技術棧固定**：Vue 3.5、Pinia 3、Tailwind 3（token 落在 `tailwind.config.ts` 的 `theme.extend`）、lucide icons、Vite 7、vitest 4、strict TypeScript。
-- **Token 紀律**：顏色、圓角、陰影、間距 MUST 用具名 token，MUST NOT 在元件內散落 hex（憲章）。
-- **產品層級的介面約束**（原載於 design-spec §1，改版後仍須保留）：
+- **技術棧固定**：Vue 3.5、Pinia 3、Tailwind 3、lucide icons、Vite 7、vitest 4、strict TypeScript。截圖劇本 `apps/web/scripts/screenshots.cjs` 另用 devDependency `playwright-core`（不進 production bundle）。
+- **Token 紀律**：顏色、圓角、陰影、間距 MUST 用具名 token，MUST NOT 在元件內散落 hex（憲章）。**色值只出現在 `apps/web/src/styles/theme.css`**（淺色與深色兩組同名 CSS 變數，只換值）；`tailwind.config.ts` 只以 `rgb(var(--c-…) / <alpha-value>)` 引用變數、不寫色值。token 名稱與用途見 `specs/013-ui-redesign/contracts/ui-contract.md` §1，實際值與元件外觀見 `DESIGN.md`。
+- **深淺雙主題**：淺色為首次載入預設、深色為次要；切換以單一控制項在同一幀完成，不得白屏、閃爍或版面位移。
+- **UI 術語**：以 `specs/013-ui-redesign/research.md` R13 術語表為準——診斷、AI 診斷（文件稱 Copilot 面板）、快取、重試、中止診斷、機群健康、事件流、正常／警告／嚴重／停滯、前處理／成型烘烤／包裝分揀、已連線／重新連線中／已斷線、暫停／恢復、Mock 頻率。
+- **產品層級的介面約束**（原載於已退役的 design-spec §1，改版後保留並收緊）：
   - 第一屏必須是可操作的監控台，不做 landing page。
-  - 卡片圓角不超過 8px；除 badge／pill 外不用過度圓潤造型。
-  - 按鈕優先用 lucide icon 搭配 tooltip；清楚的命令才用文字按鈕。
-  - 不使用官方 Argo CD logo、商標或直接複製官方素材。
-  - 不使用大面積紫色漸層、裝飾光球、bokeh 背景。
-  - mobile／desktop 都不能有文字溢出或 UI 重疊；不得有 layout shift。
-- **已知產品限制（不是 UI 能解的）**：重連不 rebind、沒有診斷結果讀取端點、worker 崩潰後約 92 秒靜默、AI token 串流 at-most-once、mock frequency 控制無後端作用。UI 對這些只能誠實呈現（failed + Retry、watchdog 45 秒），不得假裝已解。
-- **已決（013）**：README 的 12 張功能截圖在 013 內全部重拍（另加 dark 與拓樸各 1 張）；demo 影片是否重錄留待 release 步驟決定。
+  - 一般圓角不超過 6px；只有 badge／pill 例外。
+  - 不用 backdrop-filter、光暈與色彩漸層（唯一例外是桌面的 1px 格線）；不使用大面積紫色漸層、裝飾光球、bokeh 背景。
+  - 按鈕優先用 lucide icon 搭配 tooltip 與可讀名稱；清楚的命令才用文字按鈕。
+  - 不使用官方 Argo CD logo、商標、品牌配色或直接複製官方素材。
+  - 於 1366×768、1440×900、1024×768、768×1024、390×844 五個驗收 viewport、兩套主題下，不得有文字溢出、控制項重疊或裁切、橫向捲動；hover／選取／嚴重脈動與搜尋過濾不得造成 layout shift（截圖劇本自動量測）。
+- **已知產品限制（不是 UI 能解的）**：重連不 rebind、沒有診斷結果讀取端點、worker 崩潰後約 92 秒靜默、AI token 串流 at-most-once、Mock 頻率控制無後端作用。UI 對這些只能誠實呈現（失敗 + 重試、watchdog 45 秒），不得假裝已解。
+- **已決（013）**：README 的 12 張功能截圖在 013 內全部重拍（另加深色主題與拓樸各 1 張）；demo 影片是否重錄留待 release 步驟決定。
 
 ## Brand Commitments
 
 - 名稱 **flow-gatekeeper**，全小寫、連字號。
-- 語氣：工程紀律優先、「每個賣點都可驗收」、不浮誇。**UI 文案一律繁體中文**（2026-10-15 feature 013 裁決；1.1.0 以前為英文標籤 Diagnose／Fleet monitor／Connected／Cached／Retry 與中文混用），機器產生的識別項（machine id、job id、技術單位）維持原文，AI 回覆依 LLM 輸出；文件為繁體中文。
+- 語氣：工程紀律優先、「每個賣點都可驗收」、不浮誇。**UI 文案全部為繁體中文**（2026-10-15 feature 013 裁決，取代原先「UI 文案以英文為主」的推定；1.1.0 以前為英文標籤 Diagnose／Fleet monitor／Connected／Cached／Retry 與中文混用；stage 標題不附英文副標）。唯一例外：machine id、job id、技術單位（°C、mm/s、u/min、%、ms、s）、`Mock`／`AI`／`WS` 等技術縮寫，以及 AI 回覆內容（依 LLM 輸出）。文件為繁體中文。
 - 「致敬 Argo CD」只借用其狀態／拓樸的**語言**（status light、sync/health 語意、topology 視角），不得使用其品牌資產。
-- **[推定]** 既有的「深色、低飽和、工程感」只是舊視覺世界的選擇，**不是**品牌承諾；013 改版可重新選擇視覺世界。
+- 視覺世界不是品牌承諾：1.1.0 的「深色、低飽和、工程感」只是當時的選擇，013 已換成以淺色為預設的新視覺世界「實驗室玻璃與蝕刻刻度」（像擺在實驗桌上的玻璃量具，數值讀在蝕刻刻度上）；細節以 `DESIGN.md` 為準，日後改版仍可重新選擇。
 
 ## Evidence on Hand
 
 - 實機 demo 影片與海報：`docs/demo/flow-gatekeeper-demo.mp4`（22 秒，1.0.0 畫面）、`docs/demo/flow-gatekeeper-demo-poster.jpg`。
-- 12 張實機截圖（1.0.0 發布前攝）：`docs/screenshots/*.png`（monitoring-live、monitoring-states、fleet-health、event-stream、monitoring-search、monitoring-selected、monitoring-reconnecting-stale、copilot-streaming、copilot-completed、copilot-cached、copilot-failed、responsive-mobile）。
-- 舊視覺世界的參考圖與規格：`apps/web/design/refs/*.png` 與 `apps/web/design/design-spec.md` v0.6（**自 013 起為歷史文件**，僅作反面參考與產品約束來源）。
+- README 功能截圖：`docs/screenshots/*.png`（monitoring-live、monitoring-states、fleet-health、event-stream、monitoring-search、monitoring-selected、monitoring-reconnecting-stale、copilot-streaming、copilot-completed、copilot-cached、copilot-failed、responsive-mobile，另加 dark-theme、topology），由截圖劇本 `apps/web/scripts/screenshots.cjs --readme` 以 013 新介面重拍。
+- 舊視覺世界的規格：`apps/web/design/design-spec.md` v0.6（**自 013 起已退役**，保留全文作歷史與反面參考；`apps/web/design/refs/` 參考圖已自 repo 移除）。
+- impeccable 工件：`apps/web/DESIGN.md`（視覺系統）、`apps/web/.impeccable/`（critique 快照、surface 方向紀錄）。
 - 真實量化數據：README「技術亮點深入」的背壓與限流數字、第三輪審查報告的實測；**沒有**使用者見證、客戶名單、市場數據——未來工作不得捏造。
 
 ## Product Principles
 
 1. **第一屏就是工作台**：開啟即可操作，資訊密度要能支撐長時間監看，不為美觀犧牲可掃讀性。
-2. **狀態永遠誠實**：healthy／warning／critical／stale／reconnecting／failed 要一眼可辨，且不只靠顏色；系統做不到的事（斷線、靜默）直接標示，不粉飾。
-3. **背壓與串流是可見的賣點**：批次比值、逐字串流、Cached 標記是產品要展示的機制，UI 要把它們放在能被看見、被驗收的位置。
-4. **可反覆操作、動效克制**：操作者會反覆按 Diagnose、切機台、暫停；動效只用來說明狀態轉換，不做表演。
+2. **狀態永遠誠實**：正常／警告／嚴重／停滯／重新連線中／失敗要一眼可辨，且不只靠顏色；系統做不到的事（斷線、靜默）直接標示，不粉飾。
+3. **背壓與串流是可見的賣點**：60 秒視窗比值、逐格填入的串流骨架、快取標記與耗時對比是產品要展示的機制，UI 要把它們放在能被看見、被驗收的位置。
+4. **可反覆操作、動效克制**：操作者會反覆按診斷、切機台、暫停；動效只用來說明狀態轉換，不做表演。
 5. **契約與後端不動**：任何 UI 決策都在既有 12 則 WS 訊息與一個 REST 端點之內完成。
 
 ## Accessibility & Inclusion
 
-原載於 design-spec §10，屬產品要求而非視覺風格，改版後保留：
+原載於已退役的 design-spec §10，屬產品要求而非視覺風格；013 起依 spec FR-004、FR-005、FR-034a–d、FR-041 擴充：
 
-- icon-only 按鈕必須有 `aria-label` 或 tooltip；狀態不能只靠顏色，需有文字 label 或 aria label。
-- progress bar 要有 `aria-valuenow` 或 indeterminate 描述；drawer 可用 Escape 關閉；keyboard focus ring 不可移除。
-- critical pulse 不可過快；`prefers-reduced-motion: reduce` 時停掉 pulse、串流游標與 indeterminate 循環動畫。
-- 小字（10–12px）文字對其背景對比 MUST ≥ 4.5:1（WCAG AA）。
+- **字級與對比**：最小功能性字級 12px（徽章、單位、計數、時間戳等小字不得更小）；兩套主題下功能性文字對其底色對比 MUST ≥ 4.5:1（WCAG AA；disabled 控制項與 placeholder 例外但 ≥ 3:1）。半透明玻璃面板以**合成後的實際底色**量測，不以面板本身色值；量測表記在 `src/styles/theme.css` 檔頭。
+- **狀態三重編碼**：機台與連線狀態同時具備顏色、文字標籤與輔助技術可讀名稱，兩套主題下同一狀態在所有面板用同一組語意色。
+- **可讀名稱與角色**：icon-only 按鈕有 `aria-label` 或 tooltip；進度元件有 `aria-valuenow` 或不定態描述；背壓 strip 為區域且名稱含目前比值；走勢線與刻度為圖片角色加文字摘要；stage 欄為區域；流向連線為裝飾、對輔助技術隱藏（流向由 stage 標題順序傳達）；異常摘要列為清單；快捷鍵說明層為對話框（焦點陷阱、不遮工具列）；串流骨架各欄位狀態以文字傳達。
+- **鍵盤**：焦點環不可移除（卡片以 outline 呈現，不被嚴重脈動蓋掉）；每張拓樸卡片只佔一個 Tab 停駐點，卡片上的診斷圖示與清除鈕不另佔停駐點（鍵盤替代為 Enter 選取後按 `d`、聚焦時按 `x`）；Escape 分層，每次只關最上層一項；側欄與事件流拖曳把手可 Tab 聚焦，方向鍵以 16px 步距調整並報讀目前值。
+- **減少動態效果**：`prefers-reduced-motion: reduce` 時停止走勢線平滑重繪（改瞬間更新）、拓樸連線流動（只變粗細）、骨架填入與游標動畫、主題切換過渡、異常標記出現動畫、嚴重脈動、串流游標與不定態進度；嚴重脈動在一般情況下也不可過快。

@@ -17,7 +17,7 @@ flow-gatekeeper 是一個致敬 Argo CD 的即時流程監控與 AI 診斷 side 
 
 ## 真實來源（Source of Truth，不得憑空發明）
 
-- **視覺**：一律依 `apps/web/design/design-spec.md` 與 `apps/web/design/refs/*.png`。顏色、圓角、陰影、間距一律用具名 token，**不在元件內散落 hex**。
+- **視覺**：一律依 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`（impeccable 工件；`apps/web/design/design-spec.md` 與 `refs/` 已於 2026-10 退役，design-spec 保留全文作歷史）。顏色、圓角、陰影、間距一律用具名 token，色值只存在 `apps/web/src/styles/theme.css`，**不在元件內散落 hex**；禁用 `backdrop-filter`、光暈與色彩漸層（唯一例外 1px 桌面格線）。
 - **通訊契約**：一律依 `packages/contracts`（Zod schema 為單一來源，type 由 `z.infer` 推導）與 `asyncapi.yaml`。新增 event/payload 先改契約，再改 API/worker/web。
 - **開發步驟**：依 `docs/Flow-Gatekeeper-SDD-完整實作指南.md`。指南中的完整 code 區塊是「期望產出 / reference」，正式流程仍走 Spec Kit。
 - **架構決策**：重大技術取捨記錄在 `docs/adr-*.md`。即時通道為何用原生 ws 而非 Socket.IO，見 `docs/adr-001-native-websocket.md`。

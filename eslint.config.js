@@ -26,14 +26,12 @@ const SOCKET_IO_BAN = [
 export default tseslint.config(
   {
     // 各套件 lint script 為 `eslint .`（連設定檔一起 lint），產物與相依一律排除。
-    // apps/web/design/refs/_sources 是設計稿匯出的參考腳本（design-spec 真實來源的附件），不是產品程式碼。
     ignores: [
       "**/dist/**",
       "**/build/**",
       "**/coverage/**",
       "**/node_modules/**",
       "**/.vite/**",
-      "apps/web/design/refs/**",
     ],
   },
   eslint.configs.recommended,

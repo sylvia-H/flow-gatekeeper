@@ -3,7 +3,7 @@ import { isStale } from "./stale.js";
 
 /**
  * US2 Fleet Health 四類聚合（data-model §2、research R4）。前端衍生，不新增契約。
- * stale 沿用既有 `isStale`（design-spec §8.3，>10s），與 US1 卡片 Stale 共用同一判斷。
+ * stale 沿用既有 `isStale`（>10s；語意源自已退役 design-spec §8.3），與 US1 卡片 Stale 共用同一判斷。
  */
 export interface FleetHealthSummary {
   healthy: number;
