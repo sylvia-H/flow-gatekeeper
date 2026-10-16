@@ -10,13 +10,14 @@ import {
 import { useDiagnoseTrigger } from "../../domains/ai-copilot/composables/useDiagnoseTrigger.js";
 
 /**
- * TopBar（design-spec §7.2）：search（外觀）、connection chip、BackpressureBadge、
- * diagnose（作用於 selectedMachineId）、mock-frequency 佔位（FR-027）。
- * connection chip 讀 **store.connectionStatus 單一來源**。
+ * 工具列（spec FR-034）：四個語意分組，各組可見選項 ≤ 4——
+ * 導航（搜尋）／播放控制（暫停・恢復、Mock 頻率）／系統狀態（連線 chip、未授權 chip、
+ * dev 指標面板、背壓計量）／主要動作（診斷）。
+ * 連線 chip 讀 **store.connectionStatus 單一來源**；診斷可用性集中在 `useDiagnoseTrigger`。
  */
 const store = useMonitoringStore();
 
-/** diagnose 可用性：有選台、有連線、該台非進行中（去重）——判斷集中在共用入口。 */
+/** 診斷可用性：有選台、有連線、該台非進行中（去重）——判斷集中在共用入口。 */
 const { connectionBlockedReason, canDiagnoseSelected: canDiagnose, diagnose } = useDiagnoseTrigger();
 
 function onDiagnose(): void {
@@ -24,95 +25,105 @@ function onDiagnose(): void {
   diagnose(store.selectedMachineId);
 }
 
+const diagnoseHint = computed(() =>
+  store.selectedMachineId === null
+    ? "先選取機台"
+    : (connectionBlockedReason.value ?? "對選取機台執行 AI 診斷"),
+);
+
 const CONNECTION_LABEL: Record<ConnectionStatus, string> = {
-  connected: "Connected",
-  reconnecting: "Reconnecting",
-  disconnected: "Disconnected",
+  connected: "已連線",
+  reconnecting: "重新連線中",
+  disconnected: "已斷線",
 };
-/** chip 上色（design-spec §7.1/§8.2，connected→ok / reconnecting→warn / disconnected→crit）。 */
-const CONNECTION_CHIP: Record<ConnectionStatus, { dot: string; text: string }> = {
-  connected: { dot: "bg-ok", text: "text-ok-fg" },
-  reconnecting: { dot: "bg-warn", text: "text-warn-fg" },
-  disconnected: { dot: "bg-crit", text: "text-crit-fg" },
+/** chip 三態：狀態點與邊框用實心色、文字用 *-fg（對桌邊 rim ≥ 4.5:1）。 */
+const CONNECTION_CHIP: Record<ConnectionStatus, { dot: string; text: string; border: string }> = {
+  connected: { dot: "bg-ok", text: "text-ok-fg", border: "border-ok" },
+  reconnecting: { dot: "bg-warn", text: "text-warn-fg", border: "border-warn" },
+  disconnected: { dot: "bg-crit", text: "text-crit-fg", border: "border-crit" },
 };
 const connectionLabel = computed(() => CONNECTION_LABEL[store.connectionStatus]);
 const connectionChip = computed(() => CONNECTION_CHIP[store.connectionStatus]);
-const chipPulse = computed(() => store.connectionStatus === "disconnected");
 
-/** US4：連線中顯示 RTT ms；首個 pong 前（latencyMs===null）顯示 `—`；未連線回 null（不顯示）。 */
+/** 連線中顯示 RTT（`N ms`）；首個 pong 前（latencyMs===null）顯示 `—`；未連線回 null（不顯示）。 */
 const latencyText = computed(() => {
   if (store.connectionStatus !== "connected") return null;
-  return store.latencyMs !== null ? `${store.latencyMs}ms` : "—";
+  return store.latencyMs !== null ? `${store.latencyMs} ms` : "—";
 });
+const connectionAria = computed(() =>
+  latencyText.value === null
+    ? `連線狀態：${connectionLabel.value}`
+    : `連線狀態：${connectionLabel.value}，延遲 ${latencyText.value === "—" ? "尚未量測" : latencyText.value}`,
+);
 
 /**
  * 009 US3：dev 指標面板旗標（`VITE_METRICS_PANEL`，dev 預設開、production build 預設關）。
- * 旗標關閉時整個面板 MUST NOT 渲染，使首屏與改動前逐項一致（FR-012 零回歸）。
- * 生效來源是 `apps/web/.env`（Vite 以 `apps/web/` 為 env 根目錄，未設 `envDir`），
- * 放 repo 根的 `.env` 讀不到。未設定時取 `import.meta.env.DEV` 作為預設。
+ * 旗標關閉時整個面板 MUST NOT 渲染（FR-012 零回歸）。生效來源是 `apps/web/.env`
+ * （Vite 以 `apps/web/` 為 env 根目錄，未設 `envDir`）。未設定時取 `import.meta.env.DEV`。
  */
 const showMetricsPanel =
   (import.meta.env.VITE_METRICS_PANEL ?? String(import.meta.env.DEV)) === "true";
 
-/** US4 search：綁定 store.searchQuery（sidebar 清單與主區卡片共用）。 */
+/** 搜尋綁定 store.searchQuery（主區卡片過濾）。 */
 function onSearchInput(event: Event): void {
   store.setSearchQuery((event.target as HTMLInputElement).value);
 }
+
+/** 工具列次要按鈕的共用外觀：桌邊上的玻璃小鈕。 */
+const TOOL_BUTTON =
+  "flex h-9 items-center gap-1.5 rounded-control border border-edge bg-surface/72 px-2.5 text-sm text-ink-2 shadow-glass focus:outline-none focus-visible:ring-2 focus-visible:ring-focus";
 </script>
 
 <template>
-  <div class="tb-bar flex w-full items-center gap-3">
-    <!-- Search：可隨中間欄寬度收縮（min-w-0 flex-1），最寬到 xs；空間不足時先讓它讓位 -->
-    <div class="relative min-w-0 flex-1 max-w-xs">
-      <Search
-        class="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-3"
-        aria-hidden="true"
-      />
-      <input
-        type="search"
-        placeholder="Search machines"
-        aria-label="Search machines"
-        :value="store.searchQuery"
-        class="h-9 w-full rounded-control border border-edge bg-bench pl-8 pr-3 text-sm text-ink placeholder:text-ink-3 focus:border-etch focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-        @input="onSearchInput"
-      />
+  <div class="tb-bar flex w-full min-w-0 items-center gap-3">
+    <!-- 導航：搜尋可隨可用寬度收縮（min-w-0 flex-1），最寬到 xs -->
+    <div role="group" aria-label="導航" class="flex min-w-0 max-w-xs flex-1 items-center">
+      <div class="relative w-full min-w-0">
+        <Search
+          class="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-3"
+          aria-hidden="true"
+        />
+        <input
+          type="search"
+          placeholder="搜尋機台"
+          aria-label="搜尋機台"
+          :value="store.searchQuery"
+          class="h-9 w-full rounded-control border border-edge bg-surface/72 pl-8 pr-3 text-sm text-ink shadow-glass placeholder:text-ink-3 focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          @input="onSearchInput"
+        />
+      </div>
     </div>
 
-    <!-- 右側工具群組：整體 shrink-0 並固定在右緣；空間不足時先隱藏次要項（見下），
-         確保 Diagnose 永遠完整可見、不被中間欄壓縮而裁切。 -->
-    <div class="flex shrink-0 items-center gap-2 sm:gap-3">
-      <!-- Pause/Resume：凍結/恢復畫面更新（US4）；暫停期間續收 buffer、resume 跳最新 -->
+    <!-- 播放控制：暫停期間續收 buffer、恢復跳到最新 -->
+    <div role="group" aria-label="播放控制" class="flex shrink-0 items-center gap-2">
       <button
         type="button"
-        class="flex h-9 items-center gap-1.5 rounded-control border border-edge bg-surface px-2.5 text-xs text-ink-2 hover:bg-rim/60 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-        :aria-pressed="store.paused"
-        :aria-label="store.paused ? 'Resume telemetry' : 'Pause telemetry'"
-        :title="store.paused ? '恢復畫面更新' : '暫停畫面更新（續收 buffer）'"
+        :class="[TOOL_BUTTON, 'transition-colors duration-150 hover:bg-surface hover:text-ink']"
+        :title="store.paused ? '恢復畫面更新' : '暫停畫面更新（續收資料）'"
         @click="store.togglePause()"
       >
-        <component :is="store.paused ? Play : Pause" class="h-4 w-4" aria-hidden="true" />
-        <span class="hidden md:inline">{{ store.paused ? "Resume" : "Pause" }}</span>
+        <component :is="store.paused ? Play : Pause" class="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span class="sr-only md:not-sr-only">{{ store.paused ? "恢復" : "暫停" }}</span>
       </button>
 
-      <!-- Mock frequency 控制（disabled 佔位，FR-027）：次要項；工具列自身變窄時（容器查詢）
-           先隱藏以把空間留給 Diagnose，避免溢出遮住右側 Copilot 面板。 -->
+      <!-- Mock 頻率（disabled 佔位，FR-027）：工具列變窄時先讓位給「診斷」 -->
       <button
         type="button"
         disabled
-        title="Mock telemetry frequency（後續啟用）"
-        aria-label="Mock telemetry frequency"
-        class="tb-optional flex h-9 cursor-not-allowed items-center gap-1.5 rounded-control border border-edge bg-surface px-2.5 text-xs text-ink-3 opacity-60"
+        title="Mock 頻率（後續啟用）"
+        class="tb-optional flex h-9 cursor-not-allowed items-center gap-1.5 rounded-control border border-dashed border-edge px-2.5 text-sm text-ink-3"
       >
-        <Gauge class="h-4 w-4" aria-hidden="true" />
-        <span class="hidden md:inline">Mock Hz</span>
+        <Gauge class="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span class="sr-only md:not-sr-only">Mock 頻率</span>
       </button>
+    </div>
 
-      <!-- 009 dev 指標面板（唯讀、預設收合）：次要項，與背壓計量同層讓位 -->
+    <!-- 系統狀態：靠右；次要項（指標面板、背壓計量）在工具列變窄時先讓位 -->
+    <div role="group" aria-label="系統狀態" class="ml-auto flex shrink-0 items-center gap-2">
       <div v-if="showMetricsPanel" class="tb-optional">
         <MetricsPanel />
       </div>
 
-      <!-- 背壓計量：次要項，工具列變窄時先讓位（寬螢幕/收合面板時仍完整呈現） -->
       <div class="tb-optional">
         <BackpressureBadge
           :received-messages="store.receivedMessages"
@@ -122,47 +133,46 @@ function onSearchInput(event: Event): void {
         />
       </div>
 
-      <!-- Connection status chip（讀 store.connectionStatus 單一來源，依三態上色） -->
+      <!-- 連線 chip：顏色＋文字＋可讀名稱三重編碼（FR-004） -->
       <span
-        class="inline-flex items-center gap-1.5 rounded-pill bg-rim px-2.5 py-1 text-xs"
-        :class="connectionChip.text"
+        data-fg="connection-chip"
+        class="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-pill border px-3 text-sm font-semibold"
+        :class="[connectionChip.text, connectionChip.border]"
         role="status"
-        :aria-label="`Connection: ${connectionLabel}`"
+        :aria-label="connectionAria"
       >
-        <span
-          class="h-2 w-2 rounded-pill"
-          :class="[connectionChip.dot, chipPulse ? 'animate-critical-pulse' : '']"
-        />
-        {{ connectionLabel }}
-        <span v-if="latencyText" class="font-mono text-ink-2">· {{ latencyText }}</span>
+        <span class="h-2 w-2 shrink-0 rounded-pill" :class="connectionChip.dot" aria-hidden="true" />
+        <span>{{ connectionLabel }}</span>
+        <span v-if="latencyText" class="font-mono font-medium tabular-nums" aria-hidden="true">
+          · {{ latencyText }}
+        </span>
       </span>
 
-      <!-- 訂閱授權失敗（system/unauthorized）：沿用 crit token 的小 chip，完整說明放 title -->
+      <!-- 訂閱授權失敗（system/unauthorized）：完整說明放 title 與可讀名稱 -->
       <span
         v-if="store.authError"
-        class="inline-flex items-center rounded-pill bg-crit-bg px-2.5 py-1 text-xs text-crit-fg"
+        data-fg="auth-chip"
+        class="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-pill border border-crit bg-crit-bg px-3 text-sm font-semibold text-crit-fg"
         role="alert"
         :title="store.authError"
         :aria-label="store.authError"
       >
+        <span class="h-2 w-2 shrink-0 rounded-pill bg-crit" aria-hidden="true" />
         未授權
       </span>
+    </div>
 
-      <!-- Diagnose：作用於 selectedMachineId；無選取／無連線／該台 active 時 disabled -->
+    <!-- 主要動作：作用於選取機台；無選取／無連線／該台進行中時 disabled -->
+    <div role="group" aria-label="主要動作" class="flex shrink-0 items-center">
       <button
         type="button"
         :disabled="!canDiagnose"
-        :title="
-          store.selectedMachineId === null
-            ? '先選取機台'
-            : (connectionBlockedReason ?? 'Run AI diagnosis')
-        "
-        aria-label="Run AI diagnosis"
-        class="flex h-9 shrink-0 items-center gap-1.5 rounded-control bg-accent px-3 text-sm font-medium text-surface-strong hover:bg-accent-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:opacity-50"
+        :title="diagnoseHint"
+        class="flex h-9 shrink-0 items-center gap-1.5 rounded-control border border-accent-strong bg-accent px-4 text-sm font-semibold text-surface-strong transition-colors duration-150 hover:bg-accent-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-rim disabled:cursor-not-allowed disabled:border-edge disabled:bg-surface/72 disabled:text-ink-3"
         @click="onDiagnose"
       >
-        <Stethoscope class="h-4 w-4" aria-hidden="true" />
-        <span class="hidden md:inline">Diagnose</span>
+        <Stethoscope class="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span>診斷</span>
       </button>
     </div>
   </div>
@@ -170,9 +180,9 @@ function onSearchInput(event: Event): void {
 
 <style scoped>
 /*
- * 依「工具列自身的實際寬度」（＝中間欄可用空間，會隨 Copilot 面板開合與視窗寬度變化）決定
- * 是否隱藏次要項——比視窗斷點更準：面板開啟壓縮中間欄時，即使視窗很寬也會讓位給 Diagnose，
- * 避免工具列溢出遮住右側面板；面板收合、空間變寬時自動恢復顯示。
+ * 依「工具列自身的實際寬度」（＝中間欄可用空間，隨 Copilot 面板開合與視窗寬度變化）決定
+ * 是否隱藏次要項——比視窗斷點更準：面板展開壓縮中間欄時，即使視窗很寬也會讓位給「診斷」，
+ * 避免工具列溢出；面板收合、空間變寬時自動恢復顯示。三段收合於 US6 T060 改寫。
  */
 .tb-bar {
   container-type: inline-size;

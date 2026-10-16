@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
  *
  * 目前只守 `shared/composables` 與 `shared/lib`（非 UI 的共用邏輯）：`useDiagnoseTrigger`
  * 因為同時依賴 monitoring 與 ai-copilot 兩個 store，已移到 `domains/ai-copilot/composables/`。
- * `shared/components/*.vue` 仍有既存的反向匯入（TopBar／MetricsPanel／AppLayout），另案處理。
+ * `shared/components/*.vue` 仍有既存的反向匯入（TopBar／MetricsPanel），另案處理。
  */
 const here = dirname(fileURLToPath(import.meta.url));
 const GUARDED = ["composables", "lib"];

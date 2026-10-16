@@ -1,0 +1,18 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-font",
+        "value": "source sans 3",
+        "createdAt": "2026-10-16T02:29:08.860Z"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "noto sans tc",
+        "createdAt": "2026-10-16T02:29:09.781Z"
+      }
+    ]
+  }
+}

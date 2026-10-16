@@ -239,11 +239,16 @@ async function selectMachine(page) {
 
 async function ensureCopilotOpen(page, name) {
   const panel = page.locator('[data-fg="copilot"]').first();
+  // 只取看得見的那顆：手機寬度下桌機的展開窄條仍在 DOM 裡但隱藏，不加 :visible 會永遠點不到 peek 條。
   const expand = page
-    .locator('button[aria-label*="展開"][aria-label*="Copilot"], button[aria-label*="展開"][aria-label*="診斷"]')
+    .locator(
+      'button[aria-label*="展開"][aria-label*="Copilot"]:visible, button[aria-label*="展開"][aria-label*="診斷"]:visible',
+    )
     .first();
   const collapse = page
-    .locator('button[aria-label*="收合"][aria-label*="Copilot"], button[aria-label*="收合"][aria-label*="診斷"]')
+    .locator(
+      'button[aria-label*="收合"][aria-label*="Copilot"]:visible, button[aria-label*="收合"][aria-label*="診斷"]:visible',
+    )
     .first();
   const visible = async (loc) => (await loc.count()) > 0 && (await loc.isVisible());
   // true＝已展開；false＝確定收合；null＝無法判定。
@@ -267,10 +272,16 @@ async function ensureCopilotOpen(page, name) {
 
 async function applyTheme(page, theme) {
   const current = () => page.evaluate(() => document.documentElement.dataset.theme || "light");
-  const toggle = page.locator('[data-fg="theme-toggle"]');
-  if ((await toggle.count()) > 0 && (await current()) !== theme) {
-    await toggle.first().click();
-    await sleep(300);
+  // ThemeToggle 是兩段式按鈕群：點「未按下」的那一段才會切換；容器中心點會落在目前主題上、等於沒切。
+  // 手機寬度下 rail 隱藏（主題切換移入工具列是 T060），看不見時不點、直接退回寫 dataset。
+  if ((await current()) !== theme) {
+    const target = page.locator('[data-fg="theme-toggle"] button[aria-pressed="false"]:visible');
+    if ((await target.count()) > 0) {
+      // 用 dispatchEvent 而非 click()：768–1023 寬度下 sheet 展開時，rail 上的切換鈕被遮罩（z-40）蓋住，
+      // click() 會等不到可點狀態而逾時；force click 則會點到遮罩、把 sheet 收合。
+      await target.first().dispatchEvent("click");
+      await sleep(300);
+    }
   }
   if ((await current()) !== theme) {
     await page.evaluate((t) => {

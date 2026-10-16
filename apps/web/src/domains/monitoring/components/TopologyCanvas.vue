@@ -37,7 +37,9 @@ function onDiagnose(machineId: string): void {
 </script>
 
 <template>
-  <div class="topology-bg h-full overflow-auto bg-bench p-4 md:p-6">
+  <!-- 桌面底色與 24px 格線由 AppLayout 的主區容器提供（013 T022），這裡不再自帶，避免兩套格線原點錯位。
+       捲動容器內保留 8px 內距：卡片的焦點環（2px）與 critical 光暈（6px）超出 padding box，貼邊會被 overflow 裁掉 -->
+  <div class="h-full overflow-auto p-2">
     <!-- search 查無相符：空狀態（非破版空白，FR-015／Edge Cases） -->
     <div
       v-if="nodes.length === 0"
@@ -66,13 +68,3 @@ function onDiagnose(machineId: string): void {
     </div>
   </div>
 </template>
-
-<style scoped>
-/* 實驗桌面 24px 極細格線（底色 bg-bench；格線色走語意變數 --c-bench-grid，013 T022 會移到主區容器） */
-.topology-bg {
-  background-image:
-    linear-gradient(rgb(var(--c-bench-grid)) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(var(--c-bench-grid)) 1px, transparent 1px);
-  background-size: 24px 24px;
-}
-</style>

@@ -23,6 +23,8 @@
  *   ok-fg/ok-bg 6.80、warn-fg/warn-bg 6.04、crit-fg/crit-bg 6.62；*-fg 對玻璃皆 ≥ 6.6、對 rim ≥ 4.65
  *   狀態實心色（非文字）對玻璃：ok 4.70、warn 3.39、crit 5.24（warn 作文字不達標 → 文字用 warn-fg）
  *   stale 對玻璃 3.43（非文字 ≥ 3）；focus 對玻璃 5.39、對 bench 4.47
+ *   accent 字在 accent-wash 底 4.75（Copilot「進行中」chip，僅略高於門檻）；etch 短線對玻璃 2.29（非文字裝飾，狀態另有文字）
+ *   crit-bg 80% 疊玻璃上的 ink-3 5.82、crit-fg 6.40（嚴重卡片）；玻璃疊 rim 上的 ink-3 6.61（rail 內面板）
  *
  * dark（煙燻玻璃合成 ≈ #222C35）
  *   ink    ：bench 13.90、玻璃 11.59、rim 15.13
@@ -33,6 +35,7 @@
  *   ok-fg/ok-bg 8.42、warn-fg/warn-bg 9.15、crit-fg/crit-bg 8.30；*-fg 對玻璃皆 ≥ 7.7
  *   狀態實心色對玻璃：ok 6.30、warn 6.61、crit 4.42（crit 作文字改用 crit-fg）
  *   stale 對玻璃 4.02；focus 對玻璃 7.35
+ *   accent 字在 accent-wash 底 5.68；crit-bg 80% 疊玻璃上的 ink-3 6.26；玻璃疊格線上的 ink-3 5.55
  */
 
 :root[data-theme='light'] {
@@ -73,6 +76,8 @@
   --c-stale: 122 135 146; /* #7A8792 */
 
   --c-focus: 15 110 140; /* #0F6E8C */
+  /* 遮罩（bottom-sheet 後方的蒙層）：兩套主題都用深色，以 `bg-scrim/50` 使用；不可用 ink（dark 下 ink 是淺色） */
+  --c-scrim: 31 42 51; /* #1F2A33 */
 }
 
 :root[data-theme='dark'] {
@@ -110,6 +115,7 @@
   --c-stale: 125 138 149; /* #7D8A95 */
 
   --c-focus: 115 198 223; /* #73C6DF */
+  --c-scrim: 8 12 16; /* #080C10 */
 }
 
 /* 切換主題的那一幀停用所有過渡，避免各元件以不同時序漸變而閃爍（useTheme 加上、兩幀後移除）。 */

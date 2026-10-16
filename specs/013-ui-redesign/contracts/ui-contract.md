@@ -21,6 +21,7 @@
 | `--c-crit` / `--c-crit-fg` / `--c-crit-bg` | 同上 | 嚴重 |
 | `--c-stale` | `bg-stale` | 停滯（卡片與聚合面板統一） |
 | `--c-focus` | `ring-focus` | 鍵盤焦點環 |
+| `--c-scrim` | `bg-scrim/50` | bottom-sheet 後方遮罩；兩套主題皆為深色（Phase 3 新增：`ink` 在 dark 下是淺色，不能當遮罩） |
 
 圓角：`rounded-control`（4px）、`rounded-card`（6px）、`rounded-pill`（999px，僅 badge／pill 用，屬 spec FR-006 與 direction contract「圓角 ≤ 6px」的明文例外）。陰影只有 `shadow-glass`（inset 高光）與 `shadow-sheet`（手機 bottom-sheet）。字級：`text-2xs` 退役，最小功能性字級 `text-xs`（12px，FR-005）；新增 `text-ratio`（32px）給背壓比值與快取耗時。
 

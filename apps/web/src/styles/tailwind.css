@@ -42,6 +42,20 @@
   }
 }
 
+@layer utilities {
+  /*
+   * 主區桌面的 24px 極細格線（AppLayout 主區容器用，底色另由 `bg-bench` 給）。
+   * 全站唯一允許的 linear-gradient：兩道 1px 實線、不做色彩漸變；色走 `bench.grid` token，
+   * 兩套主題由 CSS 變數自動切換。
+   */
+  .bg-bench-grid-lines {
+    background-image:
+      linear-gradient(theme('colors.bench.grid') 1px, transparent 1px),
+      linear-gradient(90deg, theme('colors.bench.grid') 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+}
+
 /*
  * MachineNodeCard 選取態（深青 2px 框、accent-wash 底；direction contract FIRST VIEWPORT）。
  * 刻意放在 `@tailwind utilities` 之後、不進任何 layer，並以 `.machine-card[data-selected]`
