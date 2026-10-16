@@ -108,6 +108,8 @@
 
 **Decision**：`apps/web/scripts/screenshots.cjs`（devDependency `playwright-core`；Setup 階段先建 `--viewports` 雛形，US6／US7 完成 `--readme`）：連本機 dev server（或 demo 入口），依劇本操作（載入、選台、診斷、等待完成、再診斷命中快取、搜尋、斷線模擬以關閉 api 觸發）並在五個 viewport × 兩主題截圖，輸出到 `docs/screenshots/`（12 張功能 light）與 `docs/screenshots/{dark,topology}.png`。瀏覽器路徑由 `PLAYWRIGHT_CHROMIUM` 環境變數指定，預設找 `~/AppData/Local/ms-playwright/chromium*`；README 記錄一次性安裝指令。本次 critique 用的截圖腳本即此劇本的雛形。
 
+**實作裁決（2026-10-16，T070）**：斷線情境不關 api，截圖劇本以 playwright `page.routeWebSocket` 代理 `/ws`，於劇本自己的分頁內切斷並拒絕重連——關 api 會讓同時進行的驗收與其他分頁一起斷線、還得手動重啟；失敗情境同理以 `page.route` 把該分頁的 `POST /diagnoses` 攔成 503，不停 worker。上文「斷線模擬以關閉 api 觸發」保留為原始敘述，現況以本段為準。
+
 **Alternatives considered**：完整 `playwright` 套件（會下載瀏覽器，體積大）；把劇本放進 `tests/e2e`（該套件以 ws 客戶端 harness 為主、無瀏覽器）。
 
 ## R12 impeccable 在 implement 階段的用法

@@ -1,10 +1,27 @@
-// flow-gatekeeper 監控台截圖劇本（feature 013，research R11；雛形 T002，後續由 T063／T070 擴充）。
+// flow-gatekeeper 監控台截圖劇本（feature 013，research R11；雛形 T002，T063 擴充 --viewports，T070 完成 --readme）。
 //
 // 用法（於 repo 根目錄；需先起 api 與 web dev server）：
 //   node apps/web/scripts/screenshots.cjs --viewports [--url <url>] [--out <dir>] [--settle <ms>]
 //     [--search <query>] [--pulse-wait <ms>] [--no-fail] [--only <WxH,...>]
-//   node apps/web/scripts/screenshots.cjs --readme        # 佔位：尚未實作（T070），exit 2
+//   node apps/web/scripts/screenshots.cjs --readme [--url <url>] [--out <dir>] [--settle <ms>] [--search <query>] [--no-fail]
 //   各選項說明見 --help。
+//
+// --readme（T070；spec SC-012）：README「功能逐項展示」的 14 張截圖，預設輸出到 docs/screenshots/：
+//   12 張功能截圖（淺色）＋ dark-theme.png（深色全景）＋ topology.png（拓樸區裁切）。每組情境開一個乾淨 context
+//   （localStorage 全空 → 淺色主題、AI 診斷面板無手動收合偏好），依序：
+//   1. 1440×900（裝置像素比 2）：monitoring-live（載入滿 20 秒，走勢線有內容）→ monitoring-states（等 press-02 嚴重與
+//      oven-04 警告同屏，mock 每 36 秒一次）→ 從同一張全景裁切 fleet-health（機群健康＋異常摘要列）、
+//      event-stream、topology（四張同一瞬間）→ monitoring-search（查詢「p」，前處理欄清空、欄位保留）→ monitoring-selected
+//      （先選取 press-02、面板自動展開，等它嚴重時拍）→ 等 press-02 回到正常再按「診斷」：copilot-streaming（骨架填入中途）、
+//      copilot-completed → 再等一次回到正常後按工具列「診斷」：copilot-cached（「快取 · 耗時」並列上一次耗時）→
+//      dark-theme（切深色拍全景後切回）→ copilot-failed（攔截 POST /diagnoses 回 503，重現可讀錯誤與「重試」）。
+//      「回到正常再診斷」是為了讓兩次診斷的快取簽章（含最近一筆 state）相同，第二次才會命中快取。
+//   2. 1440×900：monitoring-reconnecting-stale——以 page.routeWebSocket 代理 /ws，在 press-02 嚴重時切斷並拒絕重連，
+//      等全部卡片顯示「停滯」再拍；不必關掉 api，也不影響其他連線。
+//   3. 390×844（裝置像素比 3、觸控）：responsive-mobile——選取 press-02 開 bottom-sheet、診斷完成後拍。
+//   前置：worker 需有效 GEMINI_API_KEY；先執行 ./scripts/demo-reset.ps1 清 ai-cache，否則第一次診斷直接命中快取、
+//   拍不到串流（copilot-streaming／copilot-completed 會記為缺漏）。拍不到的截圖不寫檔（保留舊檔），
+//   結束時列出缺漏並以 exit 1 結束（--no-fail 只報告）。
 //
 // --viewports：五個驗收 viewport × 兩主題（light／dark）× Copilot 面板展開，共 10 張，
 //   輸出 `{viewport}-{theme}.png`，並把每張 `.machine-card` 與 stage 欄的 getBoundingClientRect() 寫成同名 `.json`
@@ -71,6 +88,44 @@ const PULSE_SAMPLES = 7;
 const PULSE_INTERVAL_MS = 200;
 const MAX_VIOLATIONS_PER_STEP = 12;
 
+// --readme（T070）
+const DEFAULT_README_OUT = path.resolve(__dirname, "..", "..", "..", "docs", "screenshots");
+const README_DESKTOP = { width: 1440, height: 900, scale: 2 };
+const README_MOBILE = { width: 390, height: 844, scale: 3, mobile: true };
+// 命中 press-02、pack-03（machine id 含 p）：成型烘烤、包裝分揀各留一台，前處理欄清空但保留空狀態（FR-015）。
+const DEFAULT_README_SEARCH = "p";
+// 示範機台：mock 每 240 tick（約 12 秒）一次 critical 尖峰；oven-04 每 180 tick 一次 warning，兩者每 720 tick（36 秒）重疊約 1.45 秒。
+const README_MACHINE = "press-02";
+const README_WARNING_MACHINE = "oven-04";
+// 依劇本執行順序；也是結束時總表的列順序。
+const README_SHOTS = [
+  "monitoring-live",
+  "monitoring-states",
+  "fleet-health",
+  "event-stream",
+  "topology",
+  "monitoring-search",
+  "monitoring-selected",
+  "copilot-streaming",
+  "copilot-completed",
+  "copilot-cached",
+  "dark-theme",
+  "copilot-failed",
+  "monitoring-reconnecting-stale",
+  "responsive-mobile",
+];
+const LIVE_WARMUP_MS = 20000; // 全景前至少載入 20 秒，讓近 60 秒走勢線有內容
+const STATES_WAIT_MS = 40000; // 等嚴重與警告同屏的上限（一輪 36 秒）
+const SPIKE_WAIT_MS = 30000; // 等 press-02 尖峰或回復的上限（一輪 12 秒，給兩輪多）
+const HISTORY_FLUSH_MS = 2000; // api 每 1 秒 flush 遙測進 Mongo；回到正常後多等一輪，worker 讀到的最近 state 才是 healthy
+const DIAGNOSIS_TIMEOUT_MS = 60000;
+const STALE_WAIT_MS = 25000; // 停滯門檻 10 秒，每秒 tick 重算
+const RATIO_WAIT_MS = 15000;
+const SKELETON_TARGET_FIELDS = 2; // 串流骨架拍到 2／5 欄已填入就停（摘要、嚴重度），建議動作仍在填、可能原因與證據為佔位
+const CLIP_PADDING_PX = 8;
+const WS_ROUTE = /\/ws$/;
+const SIMULATED_CLOSE = { code: 4000, reason: "screenshots: 模擬斷線" };
+
 const INSTALL_HINT =
   "找不到可用的 Chromium。請執行 `pnpm --filter web exec playwright-core install chromium-headless-shell`，" +
   "或設定環境變數 PLAYWRIGHT_CHROMIUM 指向 chrome／chrome-headless-shell 可執行檔。";
@@ -87,18 +142,21 @@ function printUsage() {
       "",
       "模式：",
       "  --viewports        五 viewport × 兩主題 × Copilot 面板展開，共 10 張，並量測 layout shift（SC-004）",
-      "  --readme           README 功能截圖（尚未實作，見 T070）",
+      "  --readme           README「功能逐項展示」14 張：12 張功能（淺色）＋ dark-theme ＋ topology（SC-012）",
+      "                     前置：worker 有效 GEMINI_API_KEY，並先 ./scripts/demo-reset.ps1 清 AI 快取（否則拍不到串流）",
       "",
       "選項：",
       `  --url <url>        dev server 位址（預設 ${DEFAULT_URL}）`,
-      `  --out <dir>        輸出目錄（預設 apps/web/.screenshots）`,
+      "  --out <dir>        輸出目錄（預設 --viewports：apps/web/.screenshots；--readme：docs/screenshots）",
       `  --settle <ms>      載入後等待遙測到齊的毫秒數（預設 ${DEFAULT_SETTLE_MS}）`,
-      `  --search <query>   FR-015 量測用、只命中一台的搜尋字串（預設「${DEFAULT_SEARCH}」）`,
-      `  --pulse-wait <ms>  等待 critical 卡片出現的上限（預設 ${DEFAULT_PULSE_WAIT_MS}；0＝只看當下）`,
-      "  --no-fail          有 violation 時仍以 0 結束（只報告）",
-      "  --only <WxH,...>   只跑指定 viewport（例 768x1024,390x844；除錯用）",
+      `  --search <query>   --viewports：FR-015 量測用、只命中一台的搜尋字串（預設「${DEFAULT_SEARCH}」）`,
+      `                     --readme：monitoring-search 的查詢（預設「${DEFAULT_README_SEARCH}」）`,
+      `  --pulse-wait <ms>  --viewports：等待 critical 卡片出現的上限（預設 ${DEFAULT_PULSE_WAIT_MS}；0＝只看當下）`,
+      "  --no-fail          有 violation（--viewports）或缺漏截圖（--readme）時仍以 0 結束（只報告）",
+      "  --only <WxH,...>   --viewports：只跑指定 viewport（例 768x1024,390x844；除錯用）",
       "",
       "環境變數：PLAYWRIGHT_CHROMIUM＝Chromium 可執行檔路徑（未設定時自動尋找 ms-playwright 目錄）",
+      "          PLAYWRIGHT_BROWSERS_PATH＝自訂 ms-playwright 目錄（優先於預設位置）",
     ].join("\n"),
   );
 }
@@ -107,9 +165,9 @@ function parseArgs(argv) {
   const opts = {
     mode: null,
     url: DEFAULT_URL,
-    out: DEFAULT_OUT,
+    out: null, // 依模式決定預設（迴圈後補）
     settle: DEFAULT_SETTLE_MS,
-    search: DEFAULT_SEARCH,
+    search: null, // 同上
     pulseWait: DEFAULT_PULSE_WAIT_MS,
     only: null,
     fail: true,
@@ -171,6 +229,10 @@ function parseArgs(argv) {
         throw new UserError(`未知參數：${arg}`);
     }
   }
+  const readme = opts.mode === "--readme";
+  if (readme && opts.only) throw new UserError("--only 只適用 --viewports");
+  if (opts.out === null) opts.out = readme ? DEFAULT_README_OUT : DEFAULT_OUT;
+  if (opts.search === null) opts.search = readme ? DEFAULT_README_SEARCH : DEFAULT_SEARCH;
   return opts;
 }
 
@@ -833,6 +895,426 @@ function printSummary(rows) {
   console.log("");
 }
 
+// ---------- README 截圖（T070） ----------
+
+/** 每 intervalMs 呼叫一次 fn，回傳第一個 truthy 結果；逾時回 null。 */
+async function pollUntil(fn, timeoutMs, intervalMs = 200) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await fn();
+    if (value) return value;
+    if (Date.now() >= deadline) return null;
+    await sleep(intervalMs);
+  }
+}
+
+const cardOf = (page, id) => page.locator(`.machine-card[data-machine="${id}"]`).first();
+const cardState = (page, id) => cardOf(page, id).getAttribute("data-state", { timeout: 2000 }).catch(() => null);
+
+/** 截圖紀錄：拍到才寫檔（拍不到時保留舊檔），結束時依 README_SHOTS 順序列總表。 */
+function createShotLog(out) {
+  const results = new Map(README_SHOTS.map((name) => [name, { status: "missing", reason: "未執行" }]));
+  return {
+    results,
+    write(name, buffer, note) {
+      fs.writeFileSync(path.join(out, `${name}.png`), buffer);
+      results.set(name, { status: "written", note });
+      log(`寫入 ${name}.png${note ? `（${note}）` : ""}`);
+    },
+    miss(name, reason) {
+      results.set(name, { status: "missing", reason });
+      log(`✗ ${name}：${reason}`);
+    },
+  };
+}
+
+/** 一段劇本：拋錯時把這段負責、尚未寫入的截圖記為缺漏，不中斷其他段。 */
+async function scene(shots, names, run) {
+  try {
+    await run();
+  } catch (err) {
+    const message = err && err.message ? err.message.split("\n")[0] : String(err);
+    for (const name of names) if (shots.results.get(name).status !== "written") shots.miss(name, message);
+  }
+}
+
+/** 開乾淨 context（localStorage 全空：淺色主題、AI 診斷面板無偏好）並載入；beforeGoto 供掛 route。 */
+async function openReadmePage(browser, vp, opts, name, beforeGoto) {
+  const context = await browser.newContext({
+    viewport: { width: vp.width, height: vp.height },
+    deviceScaleFactor: vp.scale,
+    isMobile: Boolean(vp.mobile),
+    hasTouch: Boolean(vp.mobile),
+  });
+  context.setDefaultTimeout(10000);
+  context.setDefaultNavigationTimeout(30000);
+  const page = await context.newPage();
+  page.on("console", (m) => {
+    if (m.type() === "error") log(`${name} console.error：${m.text().slice(0, 200)}`);
+  });
+  if (beforeGoto) await beforeGoto(page);
+  const loadedAt = Date.now();
+  await page.goto(opts.url, { waitUntil: "networkidle" });
+  await waitForCards(page);
+  await sleep(opts.settle);
+  await applyTheme(page, "light");
+  return { context, page, loadedAt };
+}
+
+/**
+ * 從一張全景截圖切出多個範圍：在同一 context（同 viewport 與裝置像素比）開一頁，把全景以 CSS 原尺寸鋪滿，
+ * 每個 clip 一張——裝置像素一對一，不重新取樣，也不必另裝影像處理套件。
+ */
+async function cropShot(context, vp, buffer, clips) {
+  const page = await context.newPage();
+  try {
+    await page.setContent(
+      `<!doctype html><html><body style="margin:0"><img id="shot" alt="" style="display:block;width:${vp.width}px;height:${vp.height}px" src="data:image/png;base64,${buffer.toString("base64")}"></body></html>`,
+    );
+    await page.locator("#shot").evaluate((img) => img.decode());
+    const out = {};
+    for (const [name, clip] of Object.entries(clips)) out[name] = await page.screenshot({ clip });
+    return out;
+  } finally {
+    await page.close();
+  }
+}
+
+/** 截圖前把滑鼠移開、焦點移走，避免 hover／focus 樣式入鏡。 */
+async function capture(page, options = {}) {
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => {
+    if (document.activeElement && typeof document.activeElement.blur === "function") document.activeElement.blur();
+  });
+  return page.screenshot(options);
+}
+
+/**
+ * 多個元素可見部分的聯集外框（加 padding）：與每一層會裁切的祖先（overflow 非 visible）及視窗取交集，
+ * 拓樸在捲動容器內，直接用 boundingBox 會拍到被截掉的部分。找不到元素時拋錯。
+ */
+async function visibleClip(page, selectors) {
+  const box = await page.evaluate(
+    ({ selectors: sels, padding }) => {
+      const rects = [];
+      for (const sel of sels) {
+        const el = Array.from(document.querySelectorAll(sel)).find((node) => node.getClientRects().length > 0);
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        let left = r.left;
+        let top = r.top;
+        let right = r.right;
+        let bottom = r.bottom;
+        for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) {
+          const s = window.getComputedStyle(p);
+          if (s.overflowX === "visible" && s.overflowY === "visible") continue;
+          const c = p.getBoundingClientRect();
+          left = Math.max(left, c.left);
+          top = Math.max(top, c.top);
+          right = Math.min(right, c.right);
+          bottom = Math.min(bottom, c.bottom);
+        }
+        if (right > left && bottom > top) rects.push({ left, top, right, bottom });
+      }
+      if (rects.length === 0) return null;
+      const vw = document.documentElement.clientWidth;
+      const vh = document.documentElement.clientHeight;
+      const left = Math.max(0, Math.min(...rects.map((r) => r.left)) - padding);
+      const top = Math.max(0, Math.min(...rects.map((r) => r.top)) - padding);
+      const right = Math.min(vw, Math.max(...rects.map((r) => r.right)) + padding);
+      const bottom = Math.min(vh, Math.max(...rects.map((r) => r.bottom)) + padding);
+      return { x: left, y: top, width: right - left, height: bottom - top };
+    },
+    { selectors, padding: CLIP_PADDING_PX },
+  );
+  if (!box) throw new Error(`找不到可見的 ${selectors.join("、")}`);
+  return box;
+}
+
+/**
+ * 等 machineId 經歷一次異常（警告或嚴重）並回到正常，再多等一輪 history flush。
+ * 診斷前這樣等，worker 組脈絡時讀到的最近 state 一定是 healthy，兩次診斷的快取簽章才會相同。
+ */
+async function waitForRecovery(page, machineId) {
+  let sawSpike = false;
+  const recovered = await pollUntil(
+    async () => {
+      const state = await cardState(page, machineId);
+      if (state === "critical" || state === "warning") sawSpike = true;
+      return sawSpike && state === "healthy";
+    },
+    SPIKE_WAIT_MS,
+    100,
+  );
+  if (!recovered) {
+    log(`警告：${SPIKE_WAIT_MS}ms 內沒等到 ${machineId} 由異常回到正常，改為目前正常即送出（兩次診斷的快取簽章可能不同）`);
+    await pollUntil(async () => (await cardState(page, machineId)) === "healthy", SPIKE_WAIT_MS, 100);
+  }
+  await sleep(HISTORY_FLUSH_MS);
+}
+
+/** AI 診斷面板目前狀態：標頭狀態 chip、機台 id · 任務短碼、完成 meta 是否快取、骨架各欄填入狀態。 */
+async function panelSnapshot(page) {
+  return page.evaluate(() => {
+    const panel = document.querySelector('[data-fg="copilot"]');
+    if (!panel) return null;
+    const header = panel.querySelector("header");
+    const chips = header ? Array.from(header.querySelectorAll("span")).map((el) => el.textContent.trim()) : [];
+    const status = { 閒置: "idle", 進行中: "active", 已完成: "completed", 失敗: "failed" };
+    const chip = chips.find((text) => text in status);
+    const job = header ? header.querySelector(".font-mono") : null;
+    const timing = panel.querySelector('[data-fg="timing"]');
+    const skeleton = panel.querySelector('[data-fg="result-skeleton"]');
+    const error = panel.querySelector("p.border-crit");
+    return {
+      error: error ? error.textContent.trim() : null,
+      status: chip ? status[chip] : null,
+      job: job ? job.textContent.trim() : null,
+      cached: timing ? timing.getAttribute("data-cached") === "true" : null,
+      fields: skeleton
+        ? Array.from(skeleton.querySelectorAll("[data-field]")).map((el) => el.getAttribute("data-field-state"))
+        : [],
+    };
+  });
+}
+
+/** 觸發診斷：面板內有「診斷」主按鈕（閒置）就按它，否則按工具列「主要動作」的診斷鈕（完成態面板內沒有診斷鈕）。 */
+async function clickDiagnose(page) {
+  const inPanel = page.locator('[data-fg="copilot"] button:visible', { hasText: /^\s*診斷\s*$/ }).first();
+  const toolbar = page.locator('button[aria-label="診斷"]:visible').first();
+  const target = (await inPanel.count()) > 0 ? inPanel : toolbar;
+  if ((await target.count()) === 0) throw new Error("找不到可見的「診斷」按鈕");
+  await target.click();
+  await page.mouse.move(0, 0);
+}
+
+/**
+ * 按「診斷」並等這一筆（任務短碼與按下前不同）收尾為已完成或失敗。
+ * `streaming: true` 時在進行中每次有新欄位填入就截一張，拍到 SKELETON_TARGET_FIELDS 欄即停，回傳最後一張。
+ */
+async function runDiagnosis(page, { streaming = false } = {}) {
+  const before = await panelSnapshot(page);
+  await clickDiagnose(page);
+  let streamingShot = null;
+  let filled = 0;
+  const deadline = Date.now() + DIAGNOSIS_TIMEOUT_MS;
+  for (;;) {
+    const snap = await panelSnapshot(page);
+    const isNew = snap !== null && snap.job !== (before ? before.job : null);
+    if (isNew && (snap.status === "completed" || snap.status === "failed")) return { ...snap, streamingShot };
+    if (streaming && isNew && snap.status === "active" && filled < SKELETON_TARGET_FIELDS) {
+      const complete = snap.fields.filter((state) => state === "complete").length;
+      if (complete > filled && complete < snap.fields.length) {
+        streamingShot = await page.screenshot();
+        filled = complete;
+      }
+    }
+    if (Date.now() >= deadline) return { ...(snap || {}), timedOut: true, streamingShot };
+    await sleep(100);
+  }
+}
+
+function diagnosisProblem(result) {
+  if (result.timedOut) return `診斷 ${DIAGNOSIS_TIMEOUT_MS / 1000} 秒內未結束（worker 是否在跑？）`;
+  if (result.status === "failed") return `診斷失敗：${result.error || "原因不明"}（檢查 worker log 與 GEMINI_API_KEY）`;
+  return null;
+}
+
+/** 1440×900 主劇本：全景、三態、裁切三張、搜尋、選取、串流、完成、快取、深色、失敗。 */
+async function shootDesktop(browser, opts, shots) {
+  const { context, page, loadedAt } = await openReadmePage(browser, README_DESKTOP, opts, "1440x900");
+  const shoot = async (name, options, note) => shots.write(name, await capture(page, options), note);
+  try {
+    await scene(shots, ["monitoring-live"], async () => {
+      const ratio = page.locator('[data-fg="ratio"]:visible').first();
+      const ready = await pollUntil(async () => {
+        const text = (await ratio.textContent({ timeout: 2000 }).catch(() => null)) || "";
+        return text.trim() !== "" && !text.includes("—");
+      }, RATIO_WAIT_MS);
+      if (!ready) log("警告：背壓 strip 的比值仍是「—」");
+      const rest = LIVE_WARMUP_MS - (Date.now() - loadedAt);
+      if (rest > 0) await sleep(rest);
+      await shoot("monitoring-live");
+    });
+
+    await scene(shots, ["monitoring-states", "fleet-health", "event-stream", "topology"], async () => {
+      const both = await pollUntil(
+        async () =>
+          (await cardState(page, README_MACHINE)) === "critical" &&
+          (await cardState(page, README_WARNING_MACHINE)) === "warning",
+        STATES_WAIT_MS,
+        100,
+      );
+      // 尖峰只有約 1.45 秒：先量好三個裁切範圍，拍一張全景，三張裁切都從這張全景切出，四張是同一瞬間。
+      const clips = {
+        "fleet-health": await visibleClip(page, ['section[aria-label="機群健康"]', '[data-fg="anomaly-summary"]']),
+        "event-stream": await visibleClip(page, ['section[aria-label="事件流"]']),
+        topology: await visibleClip(page, ['[data-fg="stage-topology"]']),
+      };
+      const full = await capture(page);
+      shots.write("monitoring-states", full, both ? undefined : `${STATES_WAIT_MS}ms 內未等到嚴重與警告同屏`);
+      const crops = await cropShot(context, README_DESKTOP, full, clips);
+      for (const [name, buffer] of Object.entries(crops)) shots.write(name, buffer, "自 monitoring-states 裁切");
+    });
+
+    await scene(shots, ["monitoring-search"], async () => {
+      const input = page.locator('input[aria-label="搜尋機台"]:visible').first();
+      try {
+        await input.fill(opts.search);
+        await sleep(400);
+        await page.mouse.move(0, 0);
+        shots.write("monitoring-search", await page.screenshot(), `查詢「${opts.search}」`);
+      } finally {
+        await clearSearch(page, input, "input");
+        await sleep(300);
+      }
+    });
+
+    await scene(shots, ["monitoring-selected"], async () => {
+      // 先選取、面板展開落定，再等嚴重尖峰出現當下拍（尖峰約 1.45 秒，選取與展開的延遲會錯過）。
+      await cardOf(page, README_MACHINE).click({ position: { x: 12, y: 12 } });
+      await sleep(500);
+      await ensureCopilotOpen(page, "1440x900");
+      const critical = await pollUntil(async () => (await cardState(page, README_MACHINE)) === "critical", SPIKE_WAIT_MS, 100);
+      await shoot("monitoring-selected", {}, critical ? undefined : `${README_MACHINE} 選取時不是嚴重`);
+    });
+
+    await scene(shots, ["copilot-streaming", "copilot-completed"], async () => {
+      await waitForRecovery(page, README_MACHINE);
+      const result = await runDiagnosis(page, { streaming: true });
+      const problem = diagnosisProblem(result);
+      if (problem) throw new Error(problem);
+      if (result.cached) {
+        const reason = "第一次診斷就命中快取，拍不到串流——先執行 ./scripts/demo-reset.ps1 清 ai-cache 再重拍";
+        shots.miss("copilot-streaming", reason);
+        shots.miss("copilot-completed", reason);
+        return;
+      }
+      if (result.streamingShot) shots.write("copilot-streaming", result.streamingShot, `骨架已填 ${SKELETON_TARGET_FIELDS} 欄內`);
+      else shots.miss("copilot-streaming", "串流太快，沒拍到骨架填入中途（可改用 fake provider 並調高 FAKE_AI_TOKEN_DELAY_MS）");
+      await sleep(600);
+      await shoot("copilot-completed");
+    });
+
+    await scene(shots, ["copilot-cached"], async () => {
+      // 再診斷前同樣等一次回到正常；簽章若仍不同（最近錯誤類型變了）會再打一次 LLM，此時再試一次。
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        await waitForRecovery(page, README_MACHINE);
+        const result = await runDiagnosis(page);
+        const problem = diagnosisProblem(result);
+        if (problem) throw new Error(problem);
+        if (result.cached) {
+          await sleep(400);
+          await shoot("copilot-cached");
+          return;
+        }
+        log(`copilot-cached 第 ${attempt} 次未命中快取（快取簽章與前一次不同）`);
+      }
+      throw new Error("連續兩次未命中快取");
+    });
+
+    await scene(shots, ["dark-theme"], async () => {
+      // 深色全景與 copilot-cached 同一畫面（README 第 14 節依此說明）；快取那張沒拍到時面板狀態不對，不拍。
+      if (shots.results.get("copilot-cached").status !== "written") throw new Error("copilot-cached 未拍到，深色全景沿用舊檔");
+      try {
+        await applyTheme(page, "dark");
+        await shoot("dark-theme");
+      } finally {
+        await applyTheme(page, "light");
+      }
+    });
+
+    await scene(shots, ["copilot-failed"], async () => {
+      // 攔截這一頁的 POST /diagnoses 回 503（不打到 api），重現「診斷佇列暫時無法使用」的可讀錯誤與「重試」。
+      const pattern = "**/diagnoses";
+      await page.route(pattern, (route) =>
+        route.request().method() === "POST"
+          ? route.fulfill({
+              status: 503,
+              contentType: "application/json",
+              body: JSON.stringify({ statusCode: 503, error: "Service Unavailable" }),
+            })
+          : route.continue(),
+      );
+      try {
+        const result = await runDiagnosis(page);
+        if (result.status !== "failed") throw new Error(`預期失敗，實際為 ${result.status || "未知"}`);
+        await sleep(400);
+        await shoot("copilot-failed", {}, "POST /diagnoses 以 route 攔截回 503");
+      } finally {
+        await page.unroute(pattern);
+      }
+    });
+  } finally {
+    await context.close();
+  }
+}
+
+/**
+ * 斷線重連：以 routeWebSocket 代理 /ws（其餘照常轉發），press-02 嚴重時切斷現有連線並拒絕之後的重連，
+ * 等全部卡片顯示「停滯」再拍。不必關掉 api，dev server 與其他分頁的連線不受影響。
+ */
+async function shootReconnecting(browser, opts, shots) {
+  const gate = { blocked: false, open: [] };
+  const route = (page) =>
+    page.routeWebSocket(WS_ROUTE, (ws) => {
+      if (gate.blocked) {
+        ws.close(SIMULATED_CLOSE).catch(() => {});
+        return;
+      }
+      gate.open.push({ ws, server: ws.connectToServer() });
+    });
+  const { context, page } = await openReadmePage(browser, README_DESKTOP, opts, "reconnecting", route);
+  try {
+    await scene(shots, ["monitoring-reconnecting-stale"], async () => {
+      if (gate.open.length === 0) throw new Error("routeWebSocket 沒有攔到 /ws 連線");
+      const critical = await pollUntil(async () => (await cardState(page, README_MACHINE)) === "critical", SPIKE_WAIT_MS, 100);
+      gate.blocked = true;
+      for (const { ws, server } of gate.open.splice(0)) {
+        await server.close(SIMULATED_CLOSE).catch(() => {});
+        await ws.close(SIMULATED_CLOSE).catch(() => {});
+      }
+      const cards = page.locator(".machine-card");
+      const allStale = await pollUntil(
+        async () => {
+          const total = await cards.count();
+          return total > 0 && (await page.locator(".machine-card", { hasText: "停滯" }).count()) === total;
+        },
+        STALE_WAIT_MS,
+        500,
+      );
+      const notes = [];
+      if (!critical) notes.push(`${README_MACHINE} 斷線時不是嚴重`);
+      if (!allStale) notes.push(`${STALE_WAIT_MS}ms 內未全部停滯`);
+      shots.write("monitoring-reconnecting-stale", await capture(page), notes.join("；") || undefined);
+    });
+  } finally {
+    await context.close();
+  }
+}
+
+/** 手機 390×844：選取 press-02 開 bottom-sheet，診斷完成後拍（多半命中桌機劇本留下的快取）。 */
+async function shootMobile(browser, opts, shots) {
+  const { context, page } = await openReadmePage(browser, README_MOBILE, opts, "390x844");
+  try {
+    await scene(shots, ["responsive-mobile"], async () => {
+      const card = cardOf(page, README_MACHINE);
+      await card.scrollIntoViewIfNeeded();
+      await card.click({ position: { x: 12, y: 12 } });
+      await sleep(500);
+      await ensureCopilotOpen(page, "390x844");
+      await waitForRecovery(page, README_MACHINE);
+      const result = await runDiagnosis(page);
+      const problem = diagnosisProblem(result);
+      if (problem) throw new Error(problem);
+      await sleep(600);
+      shots.write("responsive-mobile", await capture(page), result.cached ? "快取命中" : "未命中快取");
+    });
+  } finally {
+    await context.close();
+  }
+}
+
 // ---------- 模式 ----------
 
 async function runViewports(opts) {
@@ -938,6 +1420,44 @@ async function runViewports(opts) {
   }
 }
 
+async function runReadme(opts) {
+  const executablePath = findChromium();
+  await checkServer(opts.url);
+
+  const { chromium } = require("playwright-core");
+  fs.mkdirSync(opts.out, { recursive: true });
+  log(`瀏覽器：${executablePath}`);
+  log(`目標：${opts.url} → 輸出：${opts.out}`);
+  log("提醒：worker 需有效 GEMINI_API_KEY；先執行 ./scripts/demo-reset.ps1 清 AI 快取，才拍得到串流");
+
+  const shots = createShotLog(opts.out);
+  const browser = await chromium.launch({ executablePath, headless: true });
+  try {
+    // 順序有依賴：手機劇本排最後，才能命中桌機劇本留下的快取、不多打一次 LLM。
+    await shootDesktop(browser, opts, shots);
+    await shootReconnecting(browser, opts, shots);
+    await shootMobile(browser, opts, shots);
+  } finally {
+    await browser.close();
+  }
+
+  console.log("");
+  const missing = [];
+  for (const [name, r] of shots.results) {
+    const mark = r.status === "written" ? "✓" : "✗";
+    const detail = r.status === "written" ? r.note || "" : r.reason;
+    console.log(`${mark} ${`${name}.png`.padEnd(36)}${detail}`);
+    if (r.status !== "written") missing.push(name);
+  }
+  console.log("");
+  if (missing.length > 0) {
+    log(`SC-012：${README_SHOTS.length - missing.length}／${README_SHOTS.length} 張；缺 ${missing.join("、")}（未寫檔，舊檔保留）`);
+    if (opts.fail) process.exitCode = 1;
+  } else {
+    log(`SC-012：${README_SHOTS.length} 張全部寫入 ${opts.out}`);
+  }
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   switch (opts.mode) {
@@ -945,8 +1465,7 @@ async function main() {
       await runViewports(opts);
       return;
     case "--readme":
-      log("--readme 尚未實作，見 T070");
-      process.exitCode = 2;
+      await runReadme(opts);
       return;
     case "--help":
       printUsage();
