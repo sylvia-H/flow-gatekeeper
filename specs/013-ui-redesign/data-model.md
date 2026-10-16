@@ -50,8 +50,8 @@
 
 | 實體 | 欄位 | 說明 |
 |---|---|---|
-| `Stage` | `name: MachineGroupName`、`machineIds: readonly string[]`、`order: 0\|1\|2` | 來源為既有 `MACHINE_GROUPS`（`machine-groups.ts`，前端單一來源），不另寫名冊；由純函式 `assignToStages(visibleIds, groups)`（`stage-layout.ts`）產出，空欄保留；不在任何分組的 id 歸入最後一欄並 `console.warn` 一次 |
-| `FlowLink` | `from: Stage`、`to: Stage`、`throughputSum: number`、`widthPx: 2–8`、`speed: "slow"\|"mid"\|"fast"\|"none"` | `throughputSum` = 下游 stage 各機台最新 throughput 總和（stale 機台計 0）；`widthPx` 與 `speed` 由 `flow-link.ts` 分段映射 |
+| `Stage` | `name: MachineGroupName`、`key: "prep"\|"forming"\|"fulfilment"`、`label: string`（中文）、`machineIds: readonly string[]`、`order: 0\|1\|2` | 來源為既有 `MACHINE_GROUPS`（Phase 2 實作：`name` 保留英文作穩定 key，`key` 對應 ui-contract §3 的 `data-stage`，`label` 為中文 stage 名）（`machine-groups.ts`，前端單一來源），不另寫名冊；由純函式 `assignToStages(visibleIds, groups)`（`stage-layout.ts`）產出，空欄保留；不在任何分組的 id 歸入最後一欄並 `console.warn` 一次 |
+| `FlowLink` | `from: Stage`、`to: Stage`、`throughputSum: number`、`widthPx: 2–8`、`speed: "slow"\|"mid"\|"fast"\|"none"` | `throughputSum` = 下游 stage 各機台最新 throughput 總和（stale 機台計 0；**以完整分組 `MACHINE_GROUPS[i].machineIds` 計，不用搜尋過濾後的 `Stage.machineIds`**，R5「搜尋清空某欄時連線不變」）；`widthPx` 與 `speed` 由 `flow-link.ts` 分段映射（`widthPx` 可為小數） |
 
 - 更新節奏：由 `machines` 的 computed 衍生，每幀至多一次；`speed` 為等級，避免連續值重啟動畫。
 - reduced-motion 或手機垂直模式（< 768px）：`speed` 一律 `"none"`，`widthPx` 照常。
@@ -67,7 +67,7 @@
 | `clearedBy` | `"user" \| null` | 操作者確認後設為 `"user"`（劃線） |
 
 - 時間基準：一律用客端收到批次的時間（`receivedAt`），不用 payload 時戳，避免時鐘偏差吃掉 SC-009 的 ±1 秒。
-- 轉移（於 `applyTelemetryBatch` 既有的 prev→next 判斷處）：
+- 轉移（於 `applyTelemetryBatch` 既有的 prev→next 判斷處；純函式 `applyTransition(latch, prev, next, receivedAt, machineId)`——第 5 參數 `machineId` 供無 latch 時建立新物件，Phase 2 實作時補上；有變化回新物件、無變化回原物件）：
   - 無 latch 或 latch 已回復（`recoveredAt !== null`）時進入 warning／critical：以新異常重建——`level` = 新狀態、`enteredAt = receivedAt`、`recoveredAt = null`、`clearedBy = null`（最新異常為準：critical 回復後 30 秒內再進 warning → `level = "warning"`）。
   - 仍在異常中：`warning → critical` 升級 `level` 並重置 `clearedBy = null`（已劃線者恢復未確認）；`critical → warning` 維持 `critical`（`clearedBy` 不變）。
   - `warning/critical → healthy`：`recoveredAt = receivedAt`。
@@ -107,6 +107,7 @@
 | `pending` | `{ jobId, startedAt }` \| null | `POST` 送出前記錄 `performance.now()`（jobId 由前端先產生） |
 | `lastUncachedMs` | `number \| null` | 最近一次 `cached:false` 的耗時 |
 | `lastCachedMs` | `number \| null` | 最近一次 `cached:true` 的耗時 |
+| `lastKind` | `"cached" \| "uncached" \| null` | 最近一次完成的是哪種（Phase 2 實作補上，供 `compareLabel` 決定主字） |
 
 - 轉移：`startTiming` → `pending`；`ai/done`（jobId 相符）→ 計算 `elapsed`，依 `cached` 寫入對應欄位、清 `pending`；`ai/error`／cancel → 清 `pending`。
 - 存放：`copilot.store` 的 `timings: Map<machineId, DiagnosisTiming>`（不改 `copilot-reducer` 狀態機）。
@@ -116,14 +117,14 @@
 | 欄位 | 型別 | 說明 |
 |---|---|---|
 | `fields.summary` | `{ value: string, state }` | |
-| `fields.severity` | `{ value: Severity, state }` | |
+| `fields.severity` | `{ value: DiagnosisSeverity \| null, state }` | `missing`、或串流中尚拼不出合法等級時為 `null`（型別名 `DiagnosisSeverity` 以區別 `events.ts` 的 `Severity`） |
 | `fields.likelyCauses` | `{ value: string[], state }` | |
 | `fields.evidence` | `{ value: EvidenceItem[], state }` | |
 | `fields.suggestedActions` | `{ value: SuggestedAction[], state }` | |
 | `state` | `"missing" \| "streaming" \| "complete"` | 每欄位各自；最後一個被截斷的字串欄位為 `streaming` |
 | `raw` | `string` | 原文（供「原始串流」展開） |
 
-- 純函式 `parsePartialDiagnosis(text)`；非 JSON 或無法補齊時所有欄位 `missing`。
+- 純函式 `parsePartialDiagnosis(text)`；五個欄位永遠存在，非 JSON 或無法補齊時所有欄位 `missing`（value 為空值）。陣列尾端的半截元素：`likelyCauses` 保留半截字串（逐字長出），`evidence`／`suggestedActions` 丟掉半截物件（避免顯示半截 excerpt 或指令）。
 - PartialResult 僅用於 `active`：完成態一律改用 `ai/done` 經 `DiagnosisResultSchema` 驗證的 `result`；失敗態以 `raw`（原始串流）呈現中斷前推理，不顯示骨架。
 
 ## 10. EventGroup（事件列項合併，衍生自既有 `DerivedEvent`）
@@ -134,7 +135,7 @@
 | `severity` | 擴充為 `"warning" \| "critical" \| "recovered"` | 新增回復事件 |
 | `count` | `number` | 合併次數（≥ 1） |
 
-- 合併規則（`mergeEvent(list, event, windowMs = 10_000, max = 50)`）：在清單中找**同機台、同嚴重度的最近一筆**（不限頂端）；若 `event.ts - 該筆.ts ≤ 10_000`（閉區間）→ 該筆 `count + 1`、`ts = event.ts`，並移到頂端；否則新事件放頂端。
+- 合併規則（`mergeEvent(list, event, windowMs = 10_000, max = 50)`）：在清單中找**同機台、同嚴重度的最近一筆**（不限頂端）；若 `|event.ts - 該筆.ts| ≤ 10_000`（閉區間；取絕對值，避免亂序時差值為負而無限期合併）→ 該筆 `count + 1`、`ts = max(該筆.ts, event.ts)`（亂序時不讓相對時間倒退），並移到頂端；否則新事件放頂端。
 - 不變量：清單上限 50（超過裁掉最舊）；`recovered` 事件同樣計入上限，且不阻斷前後同類異常事件的合併（例如 warning、recovered、warning 交錯時，兩筆 warning 仍合併）。
 - 訊息文案繁中：`壓製機 02 進入嚴重`、`烤爐 04 回復正常`。
 - 時鐘來源：事件 `ts` 沿用既有做法用 payload 時戳（解析失敗才退回批次 `receivedAt`），合併視窗以此計；異常標記（§5）則一律用客端 `receivedAt`。兩者的相對時間可能有些微差異，屬預期。
@@ -162,7 +163,7 @@
 |---|---|---|
 | `source` | `"telemetry" \| "errorlog" \| "maintenance"` | 契約既有欄位 |
 | `excerpt` | `string` | 第一筆的原文（顯示用） |
-| `key` | `string` | `source` + 正規化後的 `excerpt` |
+| `key` | `string` | `source` + `"|"` + 正規化後的 `excerpt`；正規化後為空者用 `source|#EMPTY-<序號>` 保唯一（大寫標記不可能與小寫的正規化 key 相撞） |
 | `count` | `number` | 合併筆數（≥ 1），顯示為 `×N` |
 
 - 正規化：去除首尾與連續空白、轉小寫、去除 `[…]` 形式的時間戳樣式。正規化後為空字串者不合併（各自成列）。

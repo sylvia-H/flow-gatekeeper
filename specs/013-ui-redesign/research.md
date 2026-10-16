@@ -66,7 +66,7 @@
 1. 從第一個 `{` 起取子字串；
 2. 掃描追蹤字串／跳脫／括號堆疊，於字串尾端補齊未閉合的引號、括號；
 3. `JSON.parse` 成功則以 `DiagnosisResultSchema.partial()`-等價的寬鬆讀取（只取已存在且型別正確的欄位：`summary`、`severity`、`likelyCauses[]`、`evidence[]`、`suggestedActions[]`），並標記每個欄位 `complete | streaming | missing`（最後一個被截斷的字串欄位為 `streaming`）；
-4. 任一步失敗回 `{ fields: {}, raw: text }`，UI 顯示骨架佔位，不顯示錯誤。
+4. 任一步失敗時五個欄位仍存在、全部 `missing`（value 為空值）、`raw: text`（data-model §9），UI 顯示骨架佔位，不顯示錯誤。
 呼叫時機：`CopilotDrawer` 以 computed 對 `streamText` 計算；token 事件頻率（每秒數十）遠低於遙測，且解析成本 O(n) 於幾 KB 文字，不需額外節流。完成態一律以 `ai/done` 的已驗證 `result` 取代 partial；失敗態不顯示骨架，以原始串流呈現中斷前推理（FR-024）。
 
 **附：證據合併（FR-021）**：evidence 契約只有 `source`、`id?`、`excerpt`，沒有時間與結構化的狀態轉換欄位，故 `evidence-merge.ts` 以 `source` + 正規化 `excerpt`（去首尾與連續空白、小寫、去 `[…]` 時間戳樣式）為合併鍵，只顯示 `×N`、不顯示時間；正規化後為空者不合併（data-model §12）。
