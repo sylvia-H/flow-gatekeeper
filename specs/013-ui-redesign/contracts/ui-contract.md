@@ -44,7 +44,9 @@
 |---|---|
 | `[data-fg="backpressure"]` | 背壓 strip 根；`[data-fg="ratio"]` 比值數字（60 秒視窗比值） |
 | `[data-fg="stage"][data-stage="prep\|forming\|fulfilment"]` | stage 欄 |
-| `[data-fg="flow-link"][data-speed="none\|slow\|mid\|fast"]` | 連線 |
+| `[data-fg="flow-link"][data-speed="none\|slow\|mid\|fast"][data-orientation="horizontal\|vertical"]` | 連線 |
+| `[data-fg="stage-topology"][data-layout="row\|stacked"]` | 拓樸根；並排或堆疊由容器寬度決定（< 708px 堆疊，Phase 5 實作裁決：1024×768 面板展開時主區僅約 400px，用斷點會橫向捲動） |
+| `[data-fg="metric-tick"]` | 卡片數值旁的 3 格小刻度（`stroke-etch`／`stroke-warn`／`stroke-crit`，依該指標自身越界等級） |
 | `.machine-card[data-machine="<id>"][data-selected][data-state][data-latch][data-latch-cleared][data-diagnosis]` | 卡片（`data-latch` = `warning\|critical\|none`；`data-latch-cleared` 於操作者確認、劃線期間存在；`data-diagnosis` = `none\|active\|completed\|failed`） |
 | `[data-fg="latch-clear"]` | 卡片上的清除按鈕 |
 | `[data-fg="anomaly-summary"] [data-machine]` | 異常摘要列（側欄與手機覆蓋層共用） |
@@ -53,6 +55,7 @@
 | `[data-fg="copilot-peek"]` | 手機 bottom-sheet 收合（收合鈕或 Escape）且仍有選取機台時的 32px peek 條（點擊展開；無選取時不渲染） |
 | `[data-fg="result-skeleton"] [data-field][data-field-state]` | 漸進骨架 |
 | `[data-fg="timing"][data-cached]` | 完成 meta／快取耗時 |
+| `[data-section]`、`[data-severity]`、`[data-evidence][data-evidence-count]` | 結果檢視內部的測試屬性（區段、色條嚴重度、合併後證據列；Phase 6 新增，僅供測試） |
 | `[data-fg="event"][data-machine][data-severity][data-count]` | 事件列項 |
 | `[data-fg="theme-toggle"]` | 主題切換 |
 | `[data-fg="shortcut-help"]` | 說明層 |

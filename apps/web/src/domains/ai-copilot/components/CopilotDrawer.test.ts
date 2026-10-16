@@ -203,22 +203,46 @@ describe("CopilotDrawer active：進度、Attempt、串流", () => {
     expect(metaValue(w, "嘗試")).toBe("1 / 3");
     expect(metaValue(w, "佇列")).toBe("diagnosis"); // 技術識別碼維持原文
     expect(w.text()).not.toMatch(LEGACY_EN_LABEL);
-    // 步驟標籤全中文（job-steps 的 context／token 由元件層對照翻譯）
+    // 步驟標籤全中文（標籤來自 job-steps.ts，元件層不再另放對照表）
     const steps = w.get('[aria-label="診斷處理步驟"]').text();
     expect(steps).toContain("彙整診斷資料");
     expect(steps).toContain("收到首段串流");
     expect(steps).not.toMatch(/context|token/);
+    // 尚無 token：骨架四區段全是佔位（不顯示錯誤、不空白）
+    const fields = w.findAll('[data-fg="result-skeleton"] [data-field]');
+    expect(fields.map((f) => f.attributes("data-field-state"))).toEqual([
+      "missing",
+      "missing",
+      "missing",
+      "missing",
+      "missing",
+    ]);
 
     useCopilotStore().applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "active", progress: 40 });
     await flushPromises();
     expect(w.text()).toContain("40%");
   });
 
-  it("ai/token 逐段累加到原始串流區；換輪（attempt 2）清空舊輪文字並顯示嘗試 2 / 3", async () => {
+  it("ai/token 逐段累加到原始串流區（預設收合、展開後可見）；換輪（attempt 2）清空舊輪文字並顯示嘗試 2 / 3", async () => {
     const w = mountWithStore();
     const jobId = await startJob();
     const copilot = useCopilotStore();
     const stream = () => w.get('[aria-label="原始串流"]');
+
+    // 進行中的主角是骨架：原始串流預設收合，展開鈕可切換
+    expect(w.find('[aria-label="原始串流"]').exists()).toBe(false);
+    const toggle = buttonExact(w, "原始串流")!;
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    expect(toggle.attributes("aria-controls")).toBeUndefined(); // 收合時面板不在 DOM，不指向它
+    await toggle.trigger("click");
+    expect(toggle.attributes("aria-expanded")).toBe("true");
+    expect(toggle.attributes("aria-controls")).toBe(stream().attributes("id"));
+    expect(stream().attributes("id")).toBeTruthy();
+
+    // 中止鈕在進度列旁、位於骨架之前（骨架填滿後不必捲動也找得到）
+    const cancel = buttonByText(w, "中止診斷")!.element;
+    const skeleton = w.get('[data-fg="result-skeleton"]').element;
+    expect(cancel.compareDocumentPosition(skeleton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     copilot.applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 0, text: "檢查振動" });
     copilot.applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 1, text: "與溫度…" });
@@ -230,6 +254,54 @@ describe("CopilotDrawer active：進度、Attempt、串流", () => {
     await flushPromises();
     expect(stream().text()).toBe("重試");
     expect(metaValue(w, "嘗試")).toBe("2 / 3");
+  });
+
+  it("串流中的 JSON 逐格填入骨架：同一掛載下欄位狀態隨 token 推進、游標跟著移到正在生成的欄位", async () => {
+    const w = mountWithStore();
+    const jobId = await startJob();
+    const copilot = useCopilotStore();
+    const field = (name: string) => w.get(`[data-fg="result-skeleton"] [data-field="${name}"]`);
+    const state = (name: string) => field(name).attributes("data-field-state");
+    const hasCaret = (name: string) => field(name).find(".animate-stream-caret").exists();
+
+    // 第一段：摘要與嚴重度完成、可能原因截斷中
+    copilot.applyEvent({
+      type: "ai/token",
+      jobId,
+      attempt: 1,
+      seq: 0,
+      text: '{"summary":"主軸軸承磨耗","severity":"warning","likelyCauses":["潤滑不',
+    });
+    await flushPromises();
+    expect(state("summary")).toBe("complete");
+    expect(field("summary").text()).toContain("主軸軸承磨耗");
+    expect(field("severity").text()).toContain("警告");
+    expect(state("likelyCauses")).toBe("streaming");
+    expect(field("likelyCauses").text()).toContain("潤滑不");
+    expect(field("likelyCauses").text()).toContain("生成中");
+    expect(hasCaret("likelyCauses")).toBe(true);
+    expect(state("evidence")).toBe("missing");
+    expect(hasCaret("evidence")).toBe(false);
+
+    // 第二段：可能原因收尾、證據開始（半截物件元素不顯示）
+    copilot.applyEvent({
+      type: "ai/token",
+      jobId,
+      attempt: 1,
+      seq: 1,
+      text: '足"],"evidence":[{"source":"telemetry","excerpt":"vib',
+    });
+    await flushPromises();
+    expect(state("likelyCauses")).toBe("complete");
+    expect(field("likelyCauses").text()).toContain("潤滑不足");
+    expect(field("likelyCauses").text()).toContain("已完成");
+    expect(hasCaret("likelyCauses")).toBe(false);
+    expect(state("evidence")).toBe("streaming");
+    expect(field("evidence").text()).toContain("生成中");
+    expect(field("evidence").text()).not.toContain("vib");
+    expect(hasCaret("evidence")).toBe(true);
+    expect(w.findAll('[data-fg="result-skeleton"] .animate-stream-caret')).toHaveLength(1);
+    expect(w.text()).not.toMatch(LEGACY_EN_LABEL);
   });
 
   it("中止診斷 → store.cancel 讓畫面回到閒置（診斷鈕可再按）", async () => {
@@ -245,21 +317,27 @@ describe("CopilotDrawer active：進度、Attempt、串流", () => {
 });
 
 describe("CopilotDrawer 終態", () => {
-  it("ai/done → 已完成、四區段結果與嚴重度、快取徽章，並以 polite live region 公告摘要", async () => {
+  it("ai/done → 已完成、四區段依「摘要→建議動作→可能原因→證據」、快取標記，無骨架與滿版進度條，並以 polite live region 公告摘要", async () => {
     const w = mountWithStore();
     const jobId = await startJob();
     useCopilotStore().applyEvent({ type: "ai/done", jobId, attempt: 1, cached: true, result: RESULT });
     await flushPromises();
 
     expect(headerText(w)).toContain("已完成");
-    expect(w.findAll("h3").map((x) => x.text())).toEqual(["摘要", "可能原因", "證據", "建議動作"]);
+    expect(w.findAll("h3").map((x) => x.text())).toEqual(["摘要", "建議動作", "可能原因", "證據"]);
+    expect(w.find('[data-fg="result-skeleton"]').exists()).toBe(false); // 完成態只用驗證過的 result
+    expect(w.find('[role="progressbar"]').exists()).toBe(false); // 不以滿版進度條表達完成（FR-022）
+    const timing = w.get('[data-fg="timing"]');
+    expect(timing.attributes("data-cached")).toBe("true");
+    expect(timing.text()).toContain("快取 ·");
+    expect(timing.text()).not.toContain("上一次"); // 無非快取紀錄時只顯示本次
     expect(w.text()).toContain("警告"); // severity warning → 中文徽章（SeverityBadge）
     expect(w.text()).toContain("遙測"); // evidence source telemetry → 中文標籤
     expect(w.text()).toContain(RESULT.summary);
     expect(w.text()).toContain("軸承潤滑不足");
     expect(w.text()).toContain("vibration 2.4 > 2.0");
     expect(w.text()).toContain("無建議動作。"); // 空陣列以空狀態文字呈現、不崩潰
-    expect(spanExact(w, "結果來自快取")).toBeDefined(); // 視覺隱藏前綴＋可見「快取」
+    expect(timing.text()).toMatch(/^結果來自快取 · /); // 視覺隱藏前綴＋可見「快取 · N ms」
     expect(w.text()).not.toMatch(LEGACY_EN_LABEL);
     expect(w.get('[aria-live="polite"]').text()).toBe(`${MACHINE} 診斷完成（快取）：${RESULT.summary}`);
   });
@@ -291,6 +369,64 @@ describe("CopilotDrawer 終態", () => {
     // 重試與「診斷」同為主要層級（失敗態唯一動作）；停用態同樣改 rim 底＋ink-3 字
     expect(blockedRetry.classes()).toEqual(expect.arrayContaining(["bg-accent", "disabled:bg-rim", "disabled:text-ink-3"]));
   });
+
+  it("串流中途失敗 → 不顯示骨架，原始串流預設展開保留中斷前推理（FR-024）", async () => {
+    const w = mountWithStore();
+    const jobId = await startJob();
+    const copilot = useCopilotStore();
+    copilot.applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 0, text: '{"summary":"比對振動' });
+    await flushPromises();
+    expect(w.find('[data-fg="result-skeleton"]').exists()).toBe(true);
+
+    copilot.applyEvent({ type: "ai/error", jobId, attempt: 1, code: "provider", message: "socket hang up" });
+    await flushPromises();
+    expect(headerText(w)).toContain("失敗");
+    expect(w.text()).toContain("無法連線 AI 服務，請稍後重試。"); // humanizeError 分類文案
+    expect(w.find('[data-fg="result-skeleton"]').exists()).toBe(false);
+    expect(buttonExact(w, "原始串流（中斷前）")!.attributes("aria-expanded")).toBe("true");
+    const panel = w.get('[aria-label="原始串流"]');
+    expect(panel.text()).toBe('{"summary":"比對振動');
+    expect(panel.find(".animate-stream-caret").exists()).toBe(false);
+  });
+});
+
+describe("CopilotDrawer 完成 meta 與快取耗時對比（FR-022／FR-023）", () => {
+  /** 跑完一輪診斷：送出時 performance.now()=start，ai/done 時 =end。 */
+  async function runOnce(start: number, end: number, cached: boolean): Promise<void> {
+    const perf = vi.spyOn(performance, "now").mockReturnValue(start);
+    const jobId = await startJob();
+    perf.mockReturnValue(end);
+    useCopilotStore().applyEvent({ type: "ai/done", jobId, attempt: 1, cached, result: RESULT });
+    await flushPromises();
+  }
+
+  it("非快取：一行「完成 HH:mm:ss · N.N s」、data-cached=false、不用大字", async () => {
+    const doneAt = new Date(2026, 9, 15, 14, 10, 56).getTime();
+    vi.spyOn(Date, "now").mockReturnValue(doneAt);
+    const w = mountWithStore();
+    await runOnce(1_000, 9_200, false);
+
+    const timing = w.get('[data-fg="timing"]');
+    expect(timing.attributes("data-cached")).toBe("false");
+    expect(timing.text()).toBe("完成 14:10:56 · 8.2 s");
+    expect(timing.find(".text-ratio").exists()).toBe(false);
+  });
+
+  it("再診斷命中快取：「快取 · N ms」以 text-ratio 大字並列「上一次 N.N s」，結果整塊直接呈現", async () => {
+    const w = mountWithStore();
+    await runOnce(1_000, 9_200, false);
+    await runOnce(20_000, 20_014, true);
+
+    const timing = w.get('[data-fg="timing"][data-cached="true"]');
+    const big = timing.get(".text-ratio");
+    expect(big.text()).toBe("結果來自快取 · 14 ms");
+    expect(big.classes()).toContain("font-mono");
+    expect(timing.text()).toContain("上一次 8.2 s");
+    // 整塊結果直接在 DOM 上（沒有骨架、沒有逐字游標）
+    expect(w.text()).toContain(RESULT.summary);
+    expect(w.find('[data-fg="result-skeleton"]').exists()).toBe(false);
+    expect(w.find(".animate-stream-caret").exists()).toBe(false);
+  });
 });
 
 describe("CopilotDrawer 建議動作與原始串流（013 視覺層）", () => {
@@ -320,7 +456,9 @@ describe("CopilotDrawer 建議動作與原始串流（013 視覺層）", () => {
     expect(w.text()).not.toMatch(LEGACY_EN_LABEL);
     expect(w.text()).toContain("AI 建議，執行前請審閱");
     expect(w.text()).toContain("嚴重"); // severity critical → 中文徽章
-    expect(spanExact(w, "結果來自快取")).toBeUndefined();
+    // 非快取且 store 沒有這台的量測與完成時刻 → 不畫空的 meta 列，也不出現快取字樣
+    expect(w.find('[data-fg="timing"]').exists()).toBe(false);
+    expect(w.text()).not.toContain("快取");
   });
 
   it("完成後原始串流預設收合，展開後顯示串流文字且不帶游標", async () => {
@@ -335,12 +473,16 @@ describe("CopilotDrawer 建議動作與原始串流（013 視覺層）", () => {
     expect(panel.find(".animate-stream-caret").exists()).toBe(false);
   });
 
-  it("失敗後的串流殘文以「原始串流（中斷前）」展開回看", async () => {
+  it("失敗後的串流殘文以「原始串流（中斷前）」預設展開，可收合；不顯示骨架", async () => {
     const w = mountDrawer({
       state: { status: "failed", machineId: MACHINE, streamText: "比對到一半", error: "AI 診斷逾時，請重試。" },
     });
-    await buttonExact(w, "原始串流（中斷前）")!.trigger("click");
+    expect(w.find('[data-fg="result-skeleton"]').exists()).toBe(false);
+    const toggle = buttonExact(w, "原始串流（中斷前）")!;
+    expect(toggle.attributes("aria-expanded")).toBe("true");
     expect(w.get('[aria-label="原始串流"]').text()).toBe("比對到一半");
+    await toggle.trigger("click");
+    expect(w.find('[aria-label="原始串流"]').exists()).toBe(false);
   });
 });
 

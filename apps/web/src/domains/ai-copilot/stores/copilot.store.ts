@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { ref, shallowRef, triggerRef } from "vue";
 import { AiDoneSchema } from "@flow-gatekeeper/contracts";
 import {
   copilotReducer,
@@ -13,6 +13,12 @@ import {
   UNAUTHORIZED_DIAGNOSE_MESSAGE,
   postDiagnose,
 } from "../lib/diagnose-api.js";
+import {
+  cancelTiming,
+  settleTiming,
+  startTiming,
+  type DiagnosisTiming,
+} from "../lib/diagnosis-timing.js";
 
 /** `diagnose`／`retry` 的選用參數。 */
 export interface DiagnoseOptions {
@@ -72,11 +78,29 @@ export const useCopilotStore = defineStore("copilot", () => {
    * 往返期間即使使用者先按了中止（狀態回 idle），也不該再送出第二筆，否則同台會有兩個 job。
    */
   const inFlight = ref<Set<string>>(new Set());
+  /**
+   * 每台診斷耗時量測（data-model §8、research R7；session 內記憶）。轉移邏輯在純函式
+   * `diagnosis-timing.ts`，這裡只負責在 POST 前 start、任務收尾時 settle／cancel。
+   * 每次診斷才動一兩次（低頻），用 shallowRef 整份換 Map 內容後 `triggerRef` 一次即可。
+   */
+  const timings = shallowRef<Map<string, DiagnosisTiming>>(new Map());
+  /** 每台最近一次「active → 已完成」的時刻（epoch ms，`ai/done` 經 reducer 轉完成當下記錄），供完成 meta 的 `HH:mm:ss`。 */
+  const completedAt = shallowRef<Map<string, number>>(new Map());
 
   // ── Getters ────────────────────────────────────────────────────────
   /** 取某台狀態（無則 idle）；drawer 依 selectedMachineId 呼叫。 */
   function stateFor(machineId: string): CopilotJobState {
     return jobs.value.get(machineId) ?? { status: "idle", machineId };
+  }
+
+  /** 取某台耗時量測（從未診斷過則 undefined）。 */
+  function timingFor(machineId: string): DiagnosisTiming | undefined {
+    return timings.value.get(machineId);
+  }
+
+  /** 取某台最近一次完成的時刻（epoch ms；從未完成過則 undefined）。 */
+  function completedAtFor(machineId: string): number | undefined {
+    return completedAt.value.get(machineId);
   }
 
   /** 送出前置條件（FR-008/FR-014）：有選台、有連線、該台非 active 且沒有送出中的請求（去重）。 */
@@ -87,6 +111,19 @@ export const useCopilotStore = defineStore("copilot", () => {
   }
 
   // ── Internal ───────────────────────────────────────────────────────
+  /** 寫回某台耗時量測；與原值相同（純函式原樣回傳）時不觸發更新。 */
+  function putTiming(machineId: string, next: DiagnosisTiming): void {
+    if (timings.value.get(machineId) === next) return;
+    timings.value.set(machineId, next);
+    triggerRef(timings);
+  }
+
+  /** 任務離開 active 但未完成（失敗／中止）：清掉進行中的量測，保留歷史耗時。 */
+  function dropPendingTiming(machineId: string): void {
+    const timing = timings.value.get(machineId);
+    if (timing) putTiming(machineId, cancelTiming(timing));
+  }
+
   /** ai/* 事件無 machineId：以 jobId 反查該台（O(台數)，5 台可忽略成本）。 */
   function findMachineByJobId(jobId: string): string | undefined {
     for (const [machineId, state] of jobs.value) {
@@ -136,6 +173,9 @@ export const useCopilotStore = defineStore("copilot", () => {
     jobs.value.set(machineId, startActiveState(machineId, jobId));
     touch(machineId);
     inFlight.value.add(machineId);
+    // 耗時自「送出請求」起算（FR-023）：jobId 由前端先產生，所以能在 POST 前就開始量測，
+    // 早於 HTTP 回應抵達的 cache 命中 `ai/done` 也對得上。
+    putTiming(machineId, startTiming(timings.value.get(machineId), jobId, performance.now()));
     try {
       await postDiagnose(jobId, machineId, socketId as string, options?.requestedBy);
     } catch (err) {
@@ -150,6 +190,7 @@ export const useCopilotStore = defineStore("copilot", () => {
           error: failureMessage(err, options),
         });
         lastActivityAt.value.delete(machineId);
+        dropPendingTiming(machineId);
       }
     } finally {
       inFlight.value.delete(machineId);
@@ -179,12 +220,23 @@ export const useCopilotStore = defineStore("copilot", () => {
       incoming.type === "job/status" ? incoming.machineId : findMachineByJobId(incoming.jobId);
     if (machineId === undefined) return;
     const event = guardDone(incoming);
-    const next = copilotReducer(stateFor(machineId), event);
+    const prev = stateFor(machineId);
+    const next = copilotReducer(prev, event);
     jobs.value.set(machineId, next);
     // watchdog 計時：只有「屬於當前 job 且仍 active」的事件才算有進展並重置逾時；
     // 離開 active（completed/failed）即清掉該台計時。
     if (next.status === "active" && event.jobId === next.jobId) touch(machineId);
     else if (next.status !== "active") lastActivityAt.value.delete(machineId);
+    // 耗時量測：只在這一則事件讓任務「離開 active」時收尾（reducer 對非 active 一律原樣回傳）。
+    if (prev.status !== "active") return;
+    if (next.status === "completed") {
+      const timing = timings.value.get(machineId);
+      if (timing) putTiming(machineId, settleTiming(timing, next.jobId, next.cached, performance.now()));
+      completedAt.value.set(machineId, Date.now());
+      triggerRef(completedAt);
+    } else if (next.status === "failed") {
+      dropPendingTiming(machineId);
+    }
   }
 
   /**
@@ -194,6 +246,7 @@ export const useCopilotStore = defineStore("copilot", () => {
   function cancel(machineId: string): void {
     jobs.value.set(machineId, { status: "idle", machineId });
     lastActivityAt.value.delete(machineId);
+    dropPendingTiming(machineId);
   }
 
   /**
@@ -214,6 +267,7 @@ export const useCopilotStore = defineStore("copilot", () => {
           error: "診斷逾時或無回應，請重試",
         });
         lastActivityAt.value.delete(machineId);
+        dropPendingTiming(machineId);
       }
     }
   }
@@ -236,14 +290,19 @@ export const useCopilotStore = defineStore("copilot", () => {
           error: "連線中斷，請重試",
         });
         lastActivityAt.value.delete(machineId);
+        dropPendingTiming(machineId);
       }
     }
   }
 
   return {
     jobs,
+    timings,
+    completedAt,
     lastClientId,
     stateFor,
+    timingFor,
+    completedAtFor,
     canDiagnose,
     diagnose,
     retry,

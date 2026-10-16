@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import type { DiagnosisResult } from "@flow-gatekeeper/contracts";
 import { useCopilotStore } from "./copilot.store.js";
@@ -358,5 +358,206 @@ describe("copilot store（contracts/copilot-store）", () => {
     const s = store.stateFor("mixer-01");
     expect(s.status).toBe("failed");
     if (s.status === "failed") expect(s.error).toBe("連線中斷，請重試");
+  });
+});
+
+describe("copilot store 診斷耗時量測（T044、data-model §8、research R7）", () => {
+  /** 以 spy 控制 `performance.now()`（store 不注入時鐘）。 */
+  let perfNow: MockInstance<() => number>;
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    perfNow = vi.spyOn(performance, "now").mockReturnValue(1_000);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("從未診斷 → timingFor／completedAtFor 皆為 undefined", () => {
+    const store = useCopilotStore();
+    expect(store.timingFor("mixer-01")).toBeUndefined();
+    expect(store.completedAtFor("mixer-01")).toBeUndefined();
+  });
+
+  it("POST 送出前就以前端 jobId 開始量測（送出當下 fetch 被呼叫時 pending 已存在）", async () => {
+    const store = useCopilotStore();
+    let pendingAtSend: unknown;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        pendingAtSend = store.timingFor("mixer-01")?.pending;
+        return okResponse(bodyOf(init));
+      }),
+    );
+    await store.diagnose("mixer-01", SOCKET);
+    expect(pendingAtSend).toEqual({ jobId: jobIdOf(store), startedAt: 1_000 });
+  });
+
+  it("ai/done（非快取）→ 寫入 lastUncachedMs、清 pending、記完成時刻", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_760_000_000_000);
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    perfNow.mockReturnValue(9_200);
+    store.applyEvent({ type: "ai/done", jobId: jobIdOf(store), attempt: 1, cached: false, result: RESULT });
+    expect(store.timingFor("mixer-01")).toEqual({
+      pending: null,
+      lastUncachedMs: 8_200,
+      lastCachedMs: null,
+      lastKind: "uncached",
+    });
+    expect(store.completedAtFor("mixer-01")).toBe(1_760_000_000_000);
+  });
+
+  it("再次診斷命中快取 → 寫入 lastCachedMs 並保留上一次非快取耗時（供並列對比）", async () => {
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    perfNow.mockReturnValue(9_200);
+    store.applyEvent({ type: "ai/done", jobId: jobIdOf(store), attempt: 1, cached: false, result: RESULT });
+
+    perfNow.mockReturnValue(20_000);
+    await store.diagnose("mixer-01", SOCKET);
+    perfNow.mockReturnValue(20_014);
+    store.applyEvent({ type: "ai/done", jobId: jobIdOf(store), attempt: 1, cached: true, result: RESULT });
+    expect(store.timingFor("mixer-01")).toEqual({
+      pending: null,
+      lastUncachedMs: 8_200,
+      lastCachedMs: 14,
+      lastKind: "cached",
+    });
+  });
+
+  it("cache 命中的 ai/done 早於 HTTP 回應抵達仍能結算（量測在 POST 前開始）", async () => {
+    const http = mockDiagnosePending();
+    const store = useCopilotStore();
+    const p = store.diagnose("mixer-01", SOCKET);
+    perfNow.mockReturnValue(1_012);
+    store.applyEvent({ type: "ai/done", jobId: jobIdOf(store), attempt: 1, cached: true, result: RESULT });
+    http.respond();
+    await p;
+    expect(store.timingFor("mixer-01")).toMatchObject({ pending: null, lastCachedMs: 12, lastKind: "cached" });
+  });
+
+  it("ai/error、中止、POST 失敗、watchdog 逾時、重連中斷 → 清 pending，保留歷史耗時", async () => {
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    // 先有一筆非快取紀錄
+    await store.diagnose("mixer-01", SOCKET);
+    perfNow.mockReturnValue(9_200);
+    store.applyEvent({ type: "ai/done", jobId: jobIdOf(store), attempt: 1, cached: false, result: RESULT });
+    const history = { lastUncachedMs: 8_200, lastCachedMs: null, lastKind: "uncached" };
+
+    // ai/error
+    await store.diagnose("mixer-01", SOCKET);
+    expect(store.timingFor("mixer-01")?.pending).not.toBeNull();
+    store.applyEvent({ type: "ai/error", jobId: jobIdOf(store), attempt: 1, code: "timeout", message: "timed out" });
+    expect(store.timingFor("mixer-01")).toEqual({ pending: null, ...history });
+
+    // 中止
+    await store.diagnose("mixer-01", SOCKET);
+    store.cancel("mixer-01");
+    expect(store.timingFor("mixer-01")).toEqual({ pending: null, ...history });
+
+    // watchdog 逾時
+    vi.spyOn(Date, "now").mockReturnValue(5_000_000);
+    await store.diagnose("mixer-01", SOCKET);
+    store.checkStalls(5_000_000 + 46_000, 45_000);
+    expect(store.stateFor("mixer-01").status).toBe("failed");
+    expect(store.timingFor("mixer-01")).toEqual({ pending: null, ...history });
+
+    // 重連中斷
+    store.onReconnect("client-1");
+    await store.diagnose("mixer-01", SOCKET);
+    store.onReconnect("client-2");
+    expect(store.stateFor("mixer-01").status).toBe("failed");
+    expect(store.timingFor("mixer-01")).toEqual({ pending: null, ...history });
+
+    // POST 失敗
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 500 })));
+    await store.diagnose("mixer-01", SOCKET);
+    expect(store.stateFor("mixer-01").status).toBe("failed");
+    expect(store.timingFor("mixer-01")).toEqual({ pending: null, ...history });
+  });
+
+  it("中止後被放棄任務的遲到 ai/done 不結算、不記完成時刻", async () => {
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    const jobId = jobIdOf(store);
+    store.cancel("mixer-01");
+    store.applyEvent({ type: "ai/done", jobId, attempt: 1, cached: false, result: RESULT });
+    expect(store.timingFor("mixer-01")).toMatchObject({ pending: null, lastUncachedMs: null, lastKind: null });
+    expect(store.completedAtFor("mixer-01")).toBeUndefined();
+  });
+
+  it("cancel → 再診斷 → 舊 job 的 ai/done 晚到：新 pending 不變、不記完成；之後新 job 正確結算", async () => {
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    const oldJob = jobIdOf(store);
+    store.cancel("mixer-01");
+
+    perfNow.mockReturnValue(5_000);
+    await store.diagnose("mixer-01", SOCKET);
+    const newJob = jobIdOf(store);
+    expect(newJob).not.toBe(oldJob);
+    const pending = store.timingFor("mixer-01")?.pending;
+    expect(pending).toEqual({ jobId: newJob, startedAt: 5_000 });
+
+    perfNow.mockReturnValue(6_000);
+    store.applyEvent({ type: "ai/done", jobId: oldJob, attempt: 1, cached: false, result: RESULT });
+    expect(store.stateFor("mixer-01").status).toBe("active");
+    expect(store.timingFor("mixer-01")?.pending).toEqual(pending);
+    expect(store.timingFor("mixer-01")?.lastUncachedMs).toBeNull();
+    expect(store.completedAtFor("mixer-01")).toBeUndefined();
+
+    perfNow.mockReturnValue(7_300);
+    store.applyEvent({ type: "ai/done", jobId: newJob, attempt: 1, cached: false, result: RESULT });
+    expect(store.timingFor("mixer-01")).toEqual({
+      pending: null,
+      lastUncachedMs: 2_300,
+      lastCachedMs: null,
+      lastKind: "uncached",
+    });
+    expect(store.completedAtFor("mixer-01")).toBeDefined();
+  });
+
+  it("完成 A → 診斷 B → A 的 ai/done 重送被忽略：B 的 pending、A 的耗時與完成時刻都不變", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_760_000_000_000);
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    const jobA = jobIdOf(store);
+    perfNow.mockReturnValue(9_200);
+    store.applyEvent({ type: "ai/done", jobId: jobA, attempt: 1, cached: false, result: RESULT });
+
+    perfNow.mockReturnValue(20_000);
+    await store.diagnose("mixer-01", SOCKET);
+    const jobB = jobIdOf(store);
+    nowSpy.mockReturnValue(1_760_000_099_999);
+    perfNow.mockReturnValue(20_500);
+    store.applyEvent({ type: "ai/done", jobId: jobA, attempt: 1, cached: true, result: RESULT });
+
+    expect(store.stateFor("mixer-01").status).toBe("active");
+    expect(store.timingFor("mixer-01")).toEqual({
+      pending: { jobId: jobB, startedAt: 20_000 },
+      lastUncachedMs: 8_200,
+      lastCachedMs: null,
+      lastKind: "uncached",
+    });
+    expect(store.completedAtFor("mixer-01")).toBe(1_760_000_000_000);
+  });
+
+  it("每台各自量測：一台完成不影響另一台的 pending", async () => {
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    perfNow.mockReturnValue(2_000);
+    await store.diagnose("press-02", SOCKET);
+    perfNow.mockReturnValue(3_500);
+    store.applyEvent({ type: "ai/done", jobId: jobIdOf(store, "mixer-01"), attempt: 1, cached: false, result: RESULT });
+    expect(store.timingFor("mixer-01")).toMatchObject({ pending: null, lastUncachedMs: 2_500 });
+    expect(store.timingFor("press-02")?.pending).toEqual({ jobId: jobIdOf(store, "press-02"), startedAt: 2_000 });
   });
 });

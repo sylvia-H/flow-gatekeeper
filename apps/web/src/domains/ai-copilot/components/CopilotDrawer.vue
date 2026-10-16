@@ -4,17 +4,25 @@ import { Stethoscope, X, ChevronDown, RotateCcw, Ban } from "lucide-vue-next";
 import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
 import type { MachineLive } from "../../monitoring/stores/monitoring.store.js";
 import { progressLabel, type CopilotJobState } from "../lib/copilot-reducer.js";
-import { jobSteps, type Milestone, type StepStatus } from "../lib/job-steps.js";
+import { jobSteps, type StepStatus } from "../lib/job-steps.js";
+import { parsePartialDiagnosis } from "../lib/partial-json.js";
+import { compareLabel } from "../lib/diagnosis-timing.js";
+import { useCopilotStore } from "../stores/copilot.store.js";
 import { STATE_STYLE } from "../../../shared/lib/state-style.js";
 import ProgressBar from "../../../shared/components/ProgressBar.vue";
 import StreamingPanel from "./StreamingPanel.vue";
 import DiagnosisResultView from "./DiagnosisResultView.vue";
+import ResultSkeleton from "./ResultSkeleton.vue";
 import { useModalSheet } from "../composables/useModalSheet.js";
 
 /**
- * AI 診斷面板內容（FR-002/FR-006/FR-014；013 視覺層與繁中文案，research R13）。依
- * `selectedMachineId` 呈現對應那一份狀態機：閒置（機台摘要＋診斷）／進行中（進度＋串流）／
- * 已完成（結構化結果＋快取徽章，原始串流保留但預設收合，Clarifications Q2）／失敗（可讀錯誤＋重試）。
+ * AI 診斷面板內容（FR-002/FR-006/FR-014、FR-018～FR-024；013 視覺層與繁中文案，research R13）。依
+ * `selectedMachineId` 呈現對應那一份狀態機：
+ * - 閒置：機台摘要＋診斷；
+ * - 進行中：進度、隨串流逐格填入的結果骨架（ResultSkeleton）、可展開的原始串流（預設收合）、處理步驟；
+ * - 已完成：嚴重度色條＋完成 meta（時間與耗時；快取時大字耗時對比上一次）＋結構化結果，
+ *   原始串流保留但預設收合（Clarifications Q2）；結果整塊直接出現，不走任何出現動畫；
+ * - 失敗：可讀分類錯誤＋重試，原始串流預設展開以保留中斷前推理，不顯示骨架。
  *
  * 外框（半透明面板、邊與高光）由 AppLayout 的 aside 負責；本元件只畫內容，不再包一層面板，
  * 內部分區以 `border-edge` 分隔線與 `bg-rim` 標頭區隔。
@@ -62,17 +70,27 @@ const steps = computed(() =>
 );
 
 /**
- * 步驟標籤的繁中對照（FR-038：`job-steps.ts` 的標籤夾有 context／token 等英文字）。
- * 暫放元件層、以里程碑為 key；Phase 6 整理步驟清單時再收斂回 `job-steps.ts`。
+ * 串流漸進解析（research R6）：只在 active 對 `streamText` 計算，token 每秒數十次、O(n) 於幾 KB，
+ * computed 即可。PartialResult 只拿來畫骨架；完成態改用 `ai/done` 驗證過的 `result`（工程硬規則 6）。
  */
-const STEP_LABEL: Record<Milestone, string> = {
-  0: "任務啟動",
-  20: "彙整診斷資料",
-  40: "取得去重鎖",
-  60: "收到首段串流",
-  80: "解析結果成功",
-  100: "寫入並完成",
-};
+const partial = computed(() =>
+  props.state.status === "active" ? parsePartialDiagnosis(props.state.streamText) : null,
+);
+
+/**
+ * 完成 meta（FR-022／FR-023）：耗時與完成時刻由 copilot store 在任務收尾時記錄（每台一份）。
+ * 直接讀本 domain 的 store，App 的接線不必多傳兩個 prop。
+ */
+const copilot = useCopilotStore();
+const resultMeta = computed(() => {
+  const s = props.state;
+  if (s.status !== "completed") return undefined;
+  return {
+    cached: s.cached,
+    completedAt: copilot.completedAtFor(s.machineId) ?? null,
+    elapsed: compareLabel(copilot.timingFor(s.machineId)),
+  };
+});
 
 /** 003 設定的最大嘗試次數（BullMQ attempts）；僅用於呈現。 */
 const MAX_ATTEMPTS = 3;
@@ -100,9 +118,9 @@ const STEP_STYLE: Record<StepStatus, { tick: string; text: string; sr: string }>
 /** 主要動作（診斷，及失敗態再次觸發診斷的重試）；停用時改為 rim 底＋ink-3 字，不用整顆半透明（停用對比仍 ≥ 3:1）。 */
 const PRIMARY_BTN =
   "flex w-full items-center justify-center gap-2 rounded-control border border-accent-strong bg-accent px-3 py-2 text-sm font-semibold text-surface-strong hover:bg-accent-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:border-edge disabled:bg-rim disabled:text-ink-3";
-/** 次要動作（中止診斷）。 */
+/** 次要動作（中止診斷）：與進度列同一行的精簡鈕。 */
 const SECONDARY_BTN =
-  "flex w-full items-center justify-center gap-2 rounded-control border border-edge bg-surface/72 px-3 py-2 text-sm font-medium text-ink shadow-glass hover:bg-rim/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:bg-rim disabled:text-ink-3 disabled:shadow-none";
+  "flex shrink-0 items-center justify-center gap-1.5 rounded-control border border-edge bg-surface/72 px-2.5 py-1 text-sm font-medium text-ink shadow-glass hover:bg-rim/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:bg-rim disabled:text-ink-3 disabled:shadow-none";
 /** 原始串流的展開鈕。 */
 const DISCLOSURE_BTN =
   "flex w-full items-center justify-between rounded-control text-sm font-semibold text-ink-2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-focus";
@@ -137,13 +155,19 @@ const root = ref<HTMLElement | null>(null);
 const titleId = useId();
 const { isSheet, onKeydown } = useModalSheet(root, () => emit("dismiss"));
 
-/** completed/failed 後原始串流預設收合（Q2）；每次任務切換重置為收合。 */
+/**
+ * 原始串流的展開狀態：進行中與已完成預設收合（主角是骨架與結果，Q2）；失敗預設展開，
+ * 讓中斷前的推理直接可見（FR-024）。每次狀態或任務切換都回到該態的預設。
+ */
 const showStream = ref(false);
+/** 原始串流面板的 id，供展開鈕的 aria-controls（收合時面板不在 DOM，就不指向它）。 */
+const streamPanelId = useId();
 watch(
   () => ("jobId" in props.state ? `${props.state.status}:${props.state.jobId}` : props.state.status),
   () => {
-    showStream.value = false;
+    showStream.value = props.state.status === "failed";
   },
+  { immediate: true },
 );
 </script>
 
@@ -245,14 +269,42 @@ watch(
         </button>
       </div>
 
-      <!-- 進行中：進度 + 串流 -->
+      <!-- 進行中：進度（含中止）→ 逐格填入的結果骨架 → 原始串流（收合）→ 處理步驟 -->
       <div v-else-if="state.status === 'active'" class="space-y-4">
         <div class="space-y-2">
-          <div class="flex items-baseline justify-between gap-2">
+          <div class="flex items-center gap-2">
             <span class="text-sm text-ink-2">診斷進行中</span>
             <span class="font-mono text-md font-medium tabular-nums text-ink">{{ progressText }}</span>
+            <!-- 中止：診斷卡住或不想等時的脫身出口（→ 閒置，可立即重新診斷）。
+                 放在進度列旁，骨架填滿後不必捲動也找得到。 -->
+            <button type="button" class="ml-auto" :class="SECONDARY_BTN" @click="emit('cancel')">
+              <Ban class="h-4 w-4" aria-hidden="true" />
+              中止診斷
+            </button>
           </div>
           <ProgressBar status="active" :value="state.progress" />
+        </div>
+
+        <!-- 結果骨架：與完成態同順序的四個區段，隨 token 逐格填入 -->
+        <ResultSkeleton v-if="partial" :partial="partial" />
+
+        <!-- 原始串流：逐字文字仍可展開查看（FR-019），預設收合 -->
+        <div class="border-t border-edge pt-3">
+          <button
+            type="button"
+            :class="DISCLOSURE_BTN"
+            :aria-expanded="showStream"
+            :aria-controls="showStream ? streamPanelId : undefined"
+            @click="showStream = !showStream"
+          >
+            <span>原始串流</span>
+            <ChevronDown
+              class="h-4 w-4 transition-transform"
+              :class="showStream ? 'rotate-180' : ''"
+              aria-hidden="true"
+            />
+          </button>
+          <StreamingPanel v-if="showStream" :id="streamPanelId" class="mt-2" :text="state.streamText" :streaming="true" />
         </div>
 
         <!-- job meta（queue 自契約常數；attempt 取自串流事件） -->
@@ -278,41 +330,23 @@ watch(
               aria-hidden="true"
             />
             <span class="flex-1">
-              {{ STEP_LABEL[step.milestone] }}<span class="sr-only">（{{ STEP_STYLE[step.status].sr }}）</span>
+              {{ step.label }}<span class="sr-only">（{{ STEP_STYLE[step.status].sr }}）</span>
             </span>
             <span class="font-mono text-xs tabular-nums text-ink-3">{{ step.milestone }}%</span>
           </li>
         </ol>
-
-        <section class="space-y-2 border-t border-edge pt-3">
-          <h3 class="text-sm font-semibold text-ink-2">原始串流</h3>
-          <StreamingPanel :text="state.streamText" :streaming="true" />
-        </section>
-
-        <!-- 中止：診斷卡住或不想等時的脫身出口（→ 閒置，可立即重新診斷） -->
-        <button type="button" :class="SECONDARY_BTN" @click="emit('cancel')">
-          <Ban class="h-4 w-4" aria-hidden="true" />
-          中止診斷
-        </button>
       </div>
 
-      <!-- 已完成：結構化結果 + 收合的原始串流 -->
+      <!-- 已完成：嚴重度色條 + 完成 meta（快取時大字耗時對比）+ 結構化結果 + 收合的原始串流。
+           不畫滿版完成進度條（FR-022）；快取標記與耗時在 meta 列（FR-009／FR-023，快取屬後端 003，前端僅呈現）。 -->
       <div v-else-if="state.status === 'completed'" class="space-y-4">
-        <div class="flex items-center gap-2.5">
-          <ProgressBar status="completed" />
-          <!-- 快取徽章：快取命中時顯示（FR-009；快取／去重屬後端 003，前端僅呈現）。
-               用中性色：深青只留給主要動作、選取與液位線。 -->
-          <span
-            v-if="state.cached"
-            class="shrink-0 rounded-pill bg-rim px-2 py-0.5 text-xs font-semibold leading-4 text-ink-2"
-          ><span class="sr-only">結果來自</span>快取</span>
-        </div>
-        <DiagnosisResultView :result="state.result" />
+        <DiagnosisResultView :result="state.result" :meta="resultMeta" />
         <div v-if="state.streamText" class="border-t border-edge pt-3">
           <button
             type="button"
             :class="DISCLOSURE_BTN"
             :aria-expanded="showStream"
+            :aria-controls="showStream ? streamPanelId : undefined"
             @click="showStream = !showStream"
           >
             <span>原始串流</span>
@@ -322,11 +356,11 @@ watch(
               aria-hidden="true"
             />
           </button>
-          <StreamingPanel v-if="showStream" class="mt-2" :text="state.streamText" :streaming="false" />
+          <StreamingPanel v-if="showStream" :id="streamPanelId" class="mt-2" :text="state.streamText" :streaming="false" />
         </div>
       </div>
 
-      <!-- 失敗：可讀錯誤 + 重試（FR-007）；串流殘文可展開回看 -->
+      <!-- 失敗：可讀分類錯誤 + 重試（FR-007／FR-024）；中斷前推理以原始串流預設展開保留，不顯示骨架 -->
       <div v-else-if="state.status === 'failed'" class="space-y-4">
         <ProgressBar status="failed" />
         <!-- 不另掛 role="alert"：失敗已由上方 live region 公告，避免同一則錯誤被念兩次 -->
@@ -348,6 +382,7 @@ watch(
             type="button"
             :class="DISCLOSURE_BTN"
             :aria-expanded="showStream"
+            :aria-controls="showStream ? streamPanelId : undefined"
             @click="showStream = !showStream"
           >
             <span>原始串流（中斷前）</span>
@@ -357,7 +392,7 @@ watch(
               aria-hidden="true"
             />
           </button>
-          <StreamingPanel v-if="showStream" class="mt-2" :text="state.streamText" :streaming="false" />
+          <StreamingPanel v-if="showStream" :id="streamPanelId" class="mt-2" :text="state.streamText" :streaming="false" />
         </div>
       </div>
     </div>

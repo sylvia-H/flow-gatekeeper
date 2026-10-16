@@ -101,12 +101,12 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 
 **Independent Test**: quickstart 場景 1、3、4；mock 20 ms 下觀察 60 秒。
 
-- [ ] T032 [US2] 在 `apps/web/src/domains/monitoring/stores/monitoring.store.ts` 掛 `RateSeries`：於既有 1 秒 `tickNow` 推入差分樣本（`receivedMessages`／`renderedBatches`／`droppedMessages`）、斷線時 `markStale`；暴露 `rateSeries`（shallowRef）、`ratePeak`、`windowRatio`、`droppedInWindow` getter；累計比值沿用 `backpressure.ts` 供 tooltip
-- [ ] T033 [P] [US2] 新建 `apps/web/src/shared/components/Graduation.vue`：靜態 SVG **比值刻度**（FR-009a：0–60、線性、1 格 = 1:1、每 10 格大格並標數字、`stroke-etch`），`role="img"` 加 `aria-label`（例：「背壓比值刻度 0 到 60」）
-- [ ] T034 [P] [US2] 新建 `apps/web/src/shared/components/Sparkline.vue`：props `samples`、`peak`；兩條 polyline（訊息實線、批次虛線）、`preserveAspectRatio="none"`、旁標「近 60 秒」小字（不共用比值刻度）；reduced-motion 時無 transition、瞬間更新；`role="img"` 加文字摘要（例：「近 60 秒每秒訊息 N、每秒批次 M」）
-- [ ] T035 [US2] 新建 `apps/web/src/shared/components/BackpressureStrip.vue`（`data-fg="backpressure"`，`role="region"`、`aria-label` 含目前比值，例：「背壓，比值 4.2 比 1」）：三組數字（每秒訊息 → 每秒批次 → 60 秒視窗比值 `text-ratio` mono，`data-fg="ratio"`，累計比值放 tooltip）、`Graduation`、液位線（2px `bg-accent`，left = `min(windowRatio, 60) / 60`，超過上限釘右端標「>60」）、`Sparkline`、丟棄數（`droppedInWindow > 0` 才顯示、`text-warn`）、斷線標示「連線中斷」；手機只保留比值與訊息數
-- [ ] T036 [US2] 在 `apps/web/src/App.vue` 用 `BackpressureStrip` 取代「Fleet monitor · N machines」標題列與 TopBar 內的 `BackpressureBadge`；刪除 `apps/web/src/shared/components/BackpressureBadge.vue`（無既有測試檔），`backpressure.ts` 保留累計比值計算；確認五個 viewport 不捲動可見
-- [ ] T037 [US2] 新增元件測試 `apps/web/src/shared/components/BackpressureStrip.test.ts`：比值大字存在且為視窗比值、region 名稱含比值、丟棄數為 0 時不渲染、stale 時顯示「連線中斷」、比值 > 60 時液位線釘右端並顯示「>60」
+- [X] T032 [US2] 在 `apps/web/src/domains/monitoring/stores/monitoring.store.ts` 掛 `RateSeries`：於既有 1 秒 `tickNow` 推入差分樣本（`receivedMessages`／`renderedBatches`／`droppedMessages`）、斷線時 `markStale`；暴露 `rateSeries`（shallowRef）、`ratePeak`、`windowRatio`、`droppedInWindow` getter；累計比值沿用 `backpressure.ts` 供 tooltip
+- [X] T033 [P] [US2] 新建 `apps/web/src/shared/components/Graduation.vue`：靜態 SVG **比值刻度**（FR-009a：0–60、線性、1 格 = 1:1、每 10 格大格並標數字、`stroke-etch`），`role="img"` 加 `aria-label`（例：「背壓比值刻度 0 到 60」）
+- [X] T034 [P] [US2] 新建 `apps/web/src/shared/components/Sparkline.vue`：props `samples`、`peak`；兩條 polyline（訊息實線、批次虛線）、`preserveAspectRatio="none"`、旁標「近 60 秒」小字（不共用比值刻度）；reduced-motion 時無 transition、瞬間更新；`role="img"` 加文字摘要（例：「近 60 秒每秒訊息 N、每秒批次 M」）
+- [X] T035 [US2] 新建 `apps/web/src/shared/components/BackpressureStrip.vue`（`data-fg="backpressure"`，`role="region"`、`aria-label` 含目前比值，例：「背壓，比值 4.2 比 1」）：三組數字（每秒訊息 → 每秒批次 → 60 秒視窗比值 `text-ratio` mono，`data-fg="ratio"`，累計比值放 tooltip）、`Graduation`、液位線（2px `bg-accent`，left = `min(windowRatio, 60) / 60`，超過上限釘右端標「>60」）、`Sparkline`、丟棄數（`droppedInWindow > 0` 才顯示、`text-warn`）、斷線標示「連線中斷」；手機保留比值與訊息數，**丟棄數手機也顯示**（Phase 4 審查裁決：FR-011 無 viewport 例外，以短文案「丟棄 N」恆佔位、不改高度；「連線中斷」手機隱藏，由主區橫幅說明）。其他 Phase 4 實作裁決：`Graduation`／`Sparkline` 檔名保留、以 `defineOptions({ name })` 過 lint；刻度加 5 的中格；走勢線與狀態欄同一固定高度外層（窄版 ≤ 32rem 時整塊換列，strip 約 146px、不隨狀態長高）；液位線用 `translateX` 不用 `left`；重連時 `clearSamples` 清掉斷線前樣本；累計比值無批次時為 null、併入 region 名稱；`BackpressureStrip` 只收 props
+- [X] T036 [US2] 在 `apps/web/src/App.vue` 用 `BackpressureStrip` 取代「Fleet monitor · N machines」標題列與 TopBar 內的 `BackpressureBadge`；刪除 `apps/web/src/shared/components/BackpressureBadge.vue`（無既有測試檔），`backpressure.ts` 保留累計比值計算；確認五個 viewport 不捲動可見（strip 放在連線橫幅之上，斷線橫幅不會把比值往下推；2026-10-16 十張截圖確認）
+- [X] T037 [US2] 新增元件測試 `apps/web/src/shared/components/BackpressureStrip.test.ts`：比值大字存在且為視窗比值、region 名稱含比值、丟棄數為 0 時不渲染、stale 時顯示「連線中斷」、比值 > 60 時液位線釘右端並顯示「>60」
 
 **Checkpoint**: SC-001、SC-005 可驗；critique P0 關閉。
 
@@ -118,12 +118,12 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 
 **Independent Test**: quickstart 場景 3、4；搜尋清空某欄；reduced-motion。
 
-- [ ] T038 [P] [US3] 新建 `apps/web/src/domains/monitoring/components/FlowLink.vue`（`data-fg="flow-link" data-speed`）：SVG 線＋箭頭、`aria-hidden="true"`（裝飾性）、`stroke-width` 由 props、`animate-flow` 依 speed 等級設定 `animation-duration`（三檔）、`none` 時無動畫；垂直模式（手機）props `orientation="vertical"` 時 speed 強制 `none`（FR-016）
-- [ ] T039 [P] [US3] 新建 `apps/web/src/domains/monitoring/components/StageColumn.vue`（`data-fg="stage" data-stage`）：`role="region"`、`aria-label`＝中文 stage 名；標題只用中文（不附英文副標，FR-038）、機台數、卡片 `flex-col gap-3`、空狀態文案「此階段無符合的機台」
-- [ ] T040 [US3] 新建 `apps/web/src/domains/monitoring/components/StageTopology.vue`：grid 三欄（`minmax(220px,1fr)`）＋兩個 `FlowLink`；以 `stage-layout.ts` 的 `assignToStages(store.visibleMachineIds, MACHINE_GROUPS)` computed 分欄；`flow-link.ts` 計算每段 width／speed（每幀至多一次）；`< md` 時單欄堆疊、FlowLink 垂直；主區容器保留桌面格線
-- [ ] T041 [US3] 在 `apps/web/src/App.vue` 以 `StageTopology` 取代 `TopologyCanvas`，刪除 `TopologyCanvas.vue`（無既有測試檔；搜尋空狀態改由 T043 的 `StageColumn.test.ts` 新增斷言覆蓋）；StageTopology 的捲動容器 MUST 保留 ≥ 8px 內距（App.vue 外層有 `overflow-hidden rounded-card`，卡片焦點環 2px 與 critical 光暈 6px 貼邊會被裁掉，Phase 3 審查提醒）
-- [ ] T042 [US3] `MachineNodeCard.vue` 加每個數值旁的 3 格蝕刻小刻度（inline SVG），超標門檻沿用 `telemetry-format.ts` 既有的 `offendingMetrics` 越界判定（`card-style.ts` 只放外觀 class；warning／critical 時 `stroke-warn`／`stroke-crit`），並確認狀態變化不改尺寸（既有 `min-h` 與固定 StatusLight 外框維持）
-- [ ] T043 [US3] 新增元件測試 `StageTopology.test.ts`（三欄順序與歸屬、空欄保留）、`StageColumn.test.ts`（中文標題無英文副標、region 名稱、空狀態文案）、`FlowLink.test.ts`（速度等級映射到 `data-speed`、reduced-motion 與垂直模式下為 `none`、`aria-hidden`）
+- [X] T038 [P] [US3] 新建 `apps/web/src/domains/monitoring/components/FlowLink.vue`（`data-fg="flow-link" data-speed`）：SVG 線＋箭頭、`aria-hidden="true"`（裝飾性）、`stroke-width` 由 props、`animate-flow` 依 speed 等級設定 `animation-duration`（三檔）、`none` 時無動畫；垂直模式（手機）props `orientation="vertical"` 時 speed 強制 `none`（FR-016）
+- [X] T039 [P] [US3] 新建 `apps/web/src/domains/monitoring/components/StageColumn.vue`（`data-fg="stage" data-stage`）：`role="region"`、`aria-label`＝中文 stage 名；標題只用中文（不附英文副標，FR-038）、機台數、卡片 `flex-col gap-3`、空狀態文案「此階段無符合的機台」。Phase 5 實作裁決：stage 欄**不包玻璃面板**（卡片本身是玻璃片，再包一層成卡中卡，craft-floor 明列；草圖 `assigned.html` 亦為卡片直接放桌面、只有標題），direction contract 前文「三片並排玻璃」以草圖為準；T065 finish review 的 prompt 要註明此裁決
+- [X] T040 [US3] 新建 `apps/web/src/domains/monitoring/components/StageTopology.vue`：grid 三欄（`minmax(220px,1fr)`）＋兩個 `FlowLink`；以 `stage-layout.ts` 的 `assignToStages(store.visibleMachineIds, MACHINE_GROUPS)` computed 分欄；`flow-link.ts` 計算每段 width／speed（每幀至多一次）；單欄堆疊、FlowLink 垂直的切換依**容器寬度**（ResizeObserver，< 708px 堆疊；無此 API 退回 `< md`，Phase 5 裁決，見 T062 註記）；主區容器保留桌面格線；流動虛線 `6 6`（週期 12 整除 keyframe -24）、`stroke-ink-3` 不用 accent、三檔 2.4／1.2／0.6s
+- [X] T041 [US3] 在 `apps/web/src/App.vue` 以 `StageTopology` 取代 `TopologyCanvas`，刪除 `TopologyCanvas.vue`（無既有測試檔；搜尋空狀態改由 T043 的 `StageColumn.test.ts` 新增斷言覆蓋）；StageTopology 的捲動容器 MUST 保留 ≥ 8px 內距（App.vue 外層有 `overflow-hidden rounded-card`，卡片焦點環 2px 與 critical 光暈 6px 貼邊會被裁掉，Phase 3 審查提醒）
+- [X] T042 [US3] `MachineNodeCard.vue` 加每個數值旁的 3 格蝕刻小刻度（inline SVG），超標門檻沿用 `telemetry-format.ts` 既有的 `offendingMetrics` 越界判定（`card-style.ts` 只放外觀 class；warning／critical 時 `stroke-warn`／`stroke-crit`），並確認狀態變化不改尺寸（既有 `min-h` 與固定 StatusLight 外框維持）
+- [X] T043 [US3] 新增元件測試 `StageTopology.test.ts`（三欄順序與歸屬、空欄保留）、`StageColumn.test.ts`（中文標題無英文副標、region 名稱、空狀態文案）、`FlowLink.test.ts`（速度等級映射到 `data-speed`、reduced-motion 與垂直模式下為 `none`、`aria-hidden`）
 
 **Checkpoint**: 拓樸可用、連線隨 throughput 變化、手機堆疊無溢出。
 
@@ -135,11 +135,11 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 
 **Independent Test**: quickstart 場景 5、6、7、16。
 
-- [ ] T044 [US4] 在 `apps/web/src/domains/ai-copilot/stores/copilot.store.ts` 加 `timings: Map<machineId, DiagnosisTiming>`：`diagnose()` 送 POST 前 `startTiming`，reducer 之後若轉 completed 則 `settleTiming`，failed／cancel 則 `cancelTiming`；暴露 `timingFor(machineId)`；更新 `copilot.store.test.ts`
-- [ ] T045 [P] [US4] 新建 `apps/web/src/domains/ai-copilot/components/ResultSkeleton.vue`（`data-fg="result-skeleton"`，每欄位 `data-field data-field-state`）：props `partial: PartialResult`；missing 顯示佔位條、streaming 顯示已解析內容＋游標（`animate-stream-caret`，reduced-motion 停）、complete 正常顯示；每欄位以視覺隱藏文字傳達狀態（「尚未產生」／「生成中」／「已完成」）；順序 摘要＋嚴重度 → 建議動作 → 可能原因 → 證據
-- [ ] T046 [US4] 改寫 `apps/web/src/domains/ai-copilot/components/DiagnosisResultView.vue`：區段順序改為 摘要＋嚴重度 → 建議動作 → 可能原因 → 證據；證據用 `evidence-merge.ts` 合併（顯示 `×N`、不顯示時間）並預設 2 筆＋「還有 N 筆」展開；嚴重度色條（頂部 2px）
-- [ ] T047 [US4] 改寫 `apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue`：active 態以 `parsePartialDiagnosis(streamText)` computed 餵 `ResultSkeleton`，`StreamingPanel` 改為可展開的「原始串流」區（預設收合）；completed 態移除滿版 ProgressBar，改 meta 一行（`data-fg="timing" data-cached`：`完成 HH:mm:ss · N.N s`，快取時 `快取 · N ms` 用 `text-ratio` 並列 `上一次 N.N s`）；cached 結果不走動畫；failed 態用既有 `humanizeError` 分類文案、提供重試，並以原始串流（展開）呈現中斷前推理、不顯示骨架；步驟清單標籤改中文
-- [ ] T048 [US4] 測試：更新 `CopilotDrawer.test.ts`（failed 態顯示原始串流不顯示骨架、cached 對比）；新增 `ResultSkeleton.test.ts`（三態與狀態文字、順序）、`DiagnosisResultView.test.ts`（順序、證據收合與 `×N` 合併、meta、cached 對比）
+- [X] T044 [US4] 在 `apps/web/src/domains/ai-copilot/stores/copilot.store.ts` 加 `timings: Map<machineId, DiagnosisTiming>`：`diagnose()` 送 POST 前 `startTiming`，reducer 之後若轉 completed 則 `settleTiming`，failed／cancel 則 `cancelTiming`；暴露 `timingFor(machineId)`；更新 `copilot.store.test.ts`
+- [X] T045 [P] [US4] 新建 `apps/web/src/domains/ai-copilot/components/ResultSkeleton.vue`（`data-fg="result-skeleton"`，每欄位 `data-field data-field-state`）：props `partial: PartialResult`；missing 顯示佔位條、streaming 顯示已解析內容＋游標（`animate-stream-caret`，reduced-motion 停）、complete 正常顯示；每欄位以視覺隱藏文字傳達狀態（「尚未產生」／「生成中」／「已完成」）；順序 摘要＋嚴重度 → 建議動作 → 可能原因 → 證據
+- [X] T046 [US4] 改寫 `apps/web/src/domains/ai-copilot/components/DiagnosisResultView.vue`：區段順序改為 摘要＋嚴重度 → 建議動作 → 可能原因 → 證據；證據用 `evidence-merge.ts` 合併（顯示 `×N`、不顯示時間）並預設 2 筆＋「還有 N 筆」展開；嚴重度色條（頂部 2px）
+- [X] T047 [US4] 改寫 `apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue`：active 態以 `parsePartialDiagnosis(streamText)` computed 餵 `ResultSkeleton`，`StreamingPanel` 改為可展開的「原始串流」區（預設收合）；completed 態移除滿版 ProgressBar，改 meta 一行（`data-fg="timing" data-cached`：`完成 HH:mm:ss · N.N s`，快取時 `快取 · N ms` 用 `text-ratio` 並列 `上一次 N.N s`）；cached 結果不走動畫；failed 態用既有 `humanizeError` 分類文案、提供重試，並以原始串流（展開）呈現中斷前推理、不顯示骨架；步驟清單標籤改中文。Phase 6 實作裁決：drawer 直接讀 copilot store 的 `timingFor`／`completedAtFor`（不經 App.vue props）；meta 畫在 `DiagnosisResultView`（prop `meta`）；嚴重度色條在結果區頂端；失敗態保留 `ProgressBar status="failed"`；證據合併後不顯示 `ev.id`；「中止診斷」移到進度列旁；骨架佔位條 `bg-ink/20`；`STEP_LABEL` 已收斂回 `job-steps.ts`
+- [X] T048 [US4] 測試：更新 `CopilotDrawer.test.ts`（failed 態顯示原始串流不顯示骨架、cached 對比）；新增 `ResultSkeleton.test.ts`（三態與狀態文字、順序）、`DiagnosisResultView.test.ts`（順序、證據收合與 `×N` 合併、meta、cached 對比）
 
 **Checkpoint**: critique 的兩個 P1（結果順序、串流／Cached）關閉；SC-008 可驗。
 
@@ -186,7 +186,7 @@ pnpm monorepo：本 feature 只動 `apps/web/`（`src/shared/`、`src/domains/mo
 - [ ] T059 [US6] `copilot.store.ts` 加 `panel: { manuallyCollapsed }`（`useLocalPreference` 讀寫 `fg.copilot-panel`）與 `panelOpen` getter（data-model §2：載入收合；無偏好時選台展開；有手動收合偏好時選台不展開；觸發診斷或點展開把手 → 展開並清除偏好；只有面板上的收合鈕記錄手動收合偏好，Escape 收合只設當次 `open = false`；取消選取 → 收合）；`AppLayout.vue`／`App.vue` 改讀此 getter，移除 Phase 3 的 `panelOpen` ref；接線依 Phase 3 既定的事件分流：CopilotDrawer 收合鈕 emit `close`（寫偏好）、Escape／遮罩 emit `dismiss`（不寫偏好）、AppLayout 的 `dismiss-panel`（桌機 Escape）同樣不寫偏好
 - [ ] T060 [US6] `TopBar.vue` 容器查詢三段：≥820 全部；640–819 只留圖示；<640 搜尋收成圖示鈕（點擊或 `/` 展開覆蓋式輸入、Escape／失焦收回）、Mock 頻率與 Metrics 隱藏、`ThemeToggle` 移入系統狀態分組（手機）；任一分組 ≤ 4 個可見
 - [ ] T061 [US6] `FleetHealth.vue` 加 `compact` 模式＝「機群健康摘要條」（`data-fg="fleet-summary-bar"`，比例條＋四計數一列）；`App.vue` 在 `< md` 時於主畫面頂端渲染摘要條，點擊展開 `AnomalySummary`（異常摘要列）覆蓋層（Escape／點外部收合、`role="dialog"`），不推擠拓樸
-- [ ] T062 [US6] `AppLayout.vue` 手機 bottom-sheet：頂部抓取把手、閒置態高度收斂（`min-h` 改依內容）；任何收合（收合鈕或 Escape）只要仍有選取機台即退為 32px peek 條（`data-fg="copilot-peek"`，顯示選取機台中文名與診斷狀態 chip，點擊等同展開把手：展開並清除手動收合偏好；Escape 收合仍不寫偏好），取消選取才完全隱藏；1366×768 與 1024×768 面板展開時三欄仍各容一張完整卡片（必要時卡片 `minmax` 調整）
+- [ ] T062 [US6] `AppLayout.vue` 手機 bottom-sheet：頂部抓取把手、閒置態高度收斂（`min-h` 改依內容）；任何收合（收合鈕或 Escape）只要仍有選取機台即退為 32px peek 條（`data-fg="copilot-peek"`，顯示選取機台中文名與診斷狀態 chip，點擊等同展開把手：展開並清除手動收合偏好；Escape 收合仍不寫偏好），取消選取才完全隱藏；1366×768 與 1024×768 面板展開時三欄仍各容一張完整卡片（必要時卡片 `minmax` 調整；Phase 5 現況：StageTopology 以容器寬度 < 708px 切堆疊，1024 展開面板時主區約 400px 會走堆疊，本任務要決定縮 `minmax` 讓三欄並排或接受堆疊，並更新 `StageTopology.test.ts`）
 - [ ] T063 [US6] 擴充 `apps/web/scripts/screenshots.cjs`（自 T002 雛形）：`--viewports` 模式輸出五 viewport × 兩主題 × 面板展開共 10 張，並在 hover／選取／critical 脈動前後量測每張 `.machine-card` 的 bounding rect、另於搜尋過濾前與清除搜尋後比對 stage 欄與卡片的 rect（FR-015），差值不為 0 時以非 0 結束（SC-004）；人工逐項檢查 SC-004 並修正發現的溢出／重疊
 - [ ] T064 [US6] 測試：新增 `apps/web/src/shared/components/AppLayout.test.ts`（面板預設收合、無偏好時選台展開、手動收合後選台不展開、診斷後展開並清除偏好、偏好跨重新掛載保留、取消選取收合、手機以收合鈕與以 Escape 收合後皆出現 peek 條（Escape 不寫偏好）且點擊展開並清除偏好、取消選取後 peek 條不渲染）、`apps/web/src/domains/monitoring/components/FleetHealth.test.ts`（compact 摘要條四計數、點擊展開覆蓋層）；更新 T030 建立的 `TopBar.test.ts`（三段收合與手機主題切換位置）
 
