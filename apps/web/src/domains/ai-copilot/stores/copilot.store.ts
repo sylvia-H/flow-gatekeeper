@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
-import { computed, ref, shallowRef, triggerRef } from "vue";
+import { computed, reactive, ref, shallowRef, triggerRef } from "vue";
+import { readPreference, writePreference } from "../../../shared/composables/useLocalPreference.js";
 import { AiDoneSchema } from "@flow-gatekeeper/contracts";
 import {
   copilotReducer,
@@ -35,6 +36,22 @@ export interface DiagnoseOptions {
    * 「未授權」句，而不是「請等待重連」——未授權時重連不會自己好。以 getter 傳入，store 之間不互相匯入。
    */
   authError?: () => string | null;
+}
+
+/** Copilot 面板手動收合偏好的 localStorage key（ui-contract §2；只存 `{"manuallyCollapsed":boolean}`）。 */
+export const PANEL_PREFERENCE_KEY = "fg.copilot-panel";
+
+/** 解析面板偏好；格式不符就拋錯，讓 `readPreference` 退回預設。 */
+function parsePanelPreference(raw: string): boolean {
+  const value: unknown = JSON.parse(raw);
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as { manuallyCollapsed?: unknown }).manuallyCollapsed !== "boolean"
+  ) {
+    throw new Error("invalid copilot panel preference");
+  }
+  return (value as { manuallyCollapsed: boolean }).manuallyCollapsed;
 }
 
 /** 把 POST 失敗轉成使用者看得懂的句子。 */
@@ -93,8 +110,20 @@ export const useCopilotStore = defineStore("copilot", () => {
   const timings = shallowRef<Map<string, DiagnosisTiming>>(new Map());
   /** 每台最近一次「active → 已完成」的時刻（epoch ms，`ai/done` 經 reducer 轉完成當下記錄），供完成 meta 的 `HH:mm:ss`。 */
   const completedAt = shallowRef<Map<string, number>>(new Map());
+  /**
+   * Copilot 面板開關與手動收合偏好（data-model §2、FR-033）。載入時一律收合（`open = false`），
+   * `manuallyCollapsed` 從 `fg.copilot-panel` 讀回並跨重新載入保留；讀不到或格式不符時為 false。
+   * 只有面板上的收合鈕會把它寫成 true；Escape／遮罩收合只影響當次。
+   */
+  const panel = reactive({
+    open: false,
+    manuallyCollapsed: readPreference(PANEL_PREFERENCE_KEY, false, parsePanelPreference),
+  });
 
   // ── Getters ────────────────────────────────────────────────────────
+  /** Copilot 面板是否展開（所有寬度共用；AppLayout 與快捷鍵的面板層都讀這一份）。 */
+  const panelOpen = computed(() => panel.open);
+
   /** 取某台狀態（無則 idle）；drawer 依 selectedMachineId 呼叫。 */
   function stateFor(machineId: string): CopilotJobState {
     return jobs.value.get(machineId) ?? { status: "idle", machineId };
@@ -185,7 +214,40 @@ export const useCopilotStore = defineStore("copilot", () => {
     };
   }
 
+  /** 寫回手動收合偏好；值沒變就不寫，避免每次展開都碰 storage。 */
+  function setManuallyCollapsed(next: boolean): void {
+    if (panel.manuallyCollapsed === next) return;
+    panel.manuallyCollapsed = next;
+    writePreference(PANEL_PREFERENCE_KEY, JSON.stringify({ manuallyCollapsed: next }));
+  }
+
   // ── Actions ────────────────────────────────────────────────────────
+  /**
+   * 選取機台變更（App 在選取改變、或再次選取同一台時呼叫）：取消選取（null）→ 收合；
+   * 選了某台 → 沒有手動收合偏好時展開，有偏好時維持原狀（不自動展開）。偏好本身不動。
+   */
+  function onMachineSelected(machineId: string | null): void {
+    if (machineId === null) panel.open = false;
+    else if (!panel.manuallyCollapsed) panel.open = true;
+  }
+
+  /** 展開面板並清除手動收合偏好：觸發診斷、桌機展開窄條、手機 peek 條都走這裡。 */
+  function openPanel(): void {
+    panel.open = true;
+    setManuallyCollapsed(false);
+  }
+
+  /** 面板上的收合鈕：收合並記下手動收合偏好（之後選台不再自動展開）。 */
+  function collapsePanel(): void {
+    panel.open = false;
+    setManuallyCollapsed(true);
+  }
+
+  /** Escape／手機遮罩：只收合這一次，不寫偏好（不算手動收合）。 */
+  function dismissPanel(): void {
+    panel.open = false;
+  }
+
   /**
    * 觸發診斷：前置檢查（去重／有連線）→ 前端產生 jobId 並**先**建該台 active（pending）→
    * POST /diagnoses。
@@ -197,12 +259,16 @@ export const useCopilotStore = defineStore("copilot", () => {
    * POST 失敗（400／409 失效／503 佇列不可用／逾時／網路）→ 仍是這筆任務才回滾為 failed，
    * 訊息由 `postDiagnose` 轉成可讀中文；若期間已被中止或事件已把它推進到 completed，
    * 就不覆寫使用者當下看到的狀態。
+   *
+   * 觸發診斷一律先展開面板並清除手動收合偏好（data-model §2），即使前置條件擋下也一樣：
+   * 卡片圖示在斷線時仍可點，面板展開才看得到停用原因。
    */
   async function diagnose(
     machineId: string,
     socketId: string | null,
     options?: DiagnoseOptions,
   ): Promise<void> {
+    openPanel();
     if (!canDiagnose(machineId, socketId !== null && socketId !== "")) return;
     const jobId = newJobId();
     jobs.value.set(machineId, startActiveState(machineId, jobId));
@@ -335,6 +401,12 @@ export const useCopilotStore = defineStore("copilot", () => {
     timings,
     completedAt,
     lastClientId,
+    panel,
+    panelOpen,
+    onMachineSelected,
+    openPanel,
+    collapsePanel,
+    dismissPanel,
     stateFor,
     timingFor,
     completedAtFor,

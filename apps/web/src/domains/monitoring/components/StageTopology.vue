@@ -34,7 +34,15 @@ const store = useMonitoringStore();
 const trigger = useDiagnoseTrigger();
 const copilot = useCopilotStore();
 
-/** 三欄最小寬 220px 加兩條 24px 溝槽：容器內容寬小於此值即改為單欄堆疊。 */
+/**
+ * 三欄最小寬 220px 加兩條 24px 溝槽：容器內容寬小於此值即改為單欄堆疊。
+ *
+ * 220 是卡片數值列的下限，不能再縮：卡片內容寬＝欄寬 − 30（內距＋邊框），2×2 數值每格約 89px，
+ * 5 位數值（嚴重時的溫度「108.0」、產能「1,180」）在 24px mono 下約 72px，加間距與刻度要 86px；
+ * 縮到 200px 每格只剩約 81px，嚴重卡片最需要看清的溫度會被截斷。
+ * 面板展開時：1366×768 主區容器內容寬恰為 708px → 三欄並排；1024×768 只剩約 366px，
+ * 三欄各約 106px 怎麼縮都放不下一張完整卡片，維持單欄堆疊（每段一欄滿寬，FR-031 不溢出優先）。
+ */
 const MIN_ROW_WIDTH = 3 * 220 + 2 * 24;
 
 const hasMatchMedia = typeof window !== "undefined" && typeof window.matchMedia === "function";

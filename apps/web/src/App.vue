@@ -8,6 +8,7 @@ import BackpressureStrip from "./shared/components/BackpressureStrip.vue";
 import StageTopology from "./domains/monitoring/components/StageTopology.vue";
 import FleetHealth from "./domains/monitoring/components/FleetHealth.vue";
 import AnomalySummary from "./domains/monitoring/components/AnomalySummary.vue";
+import AnomalyOverlay from "./domains/monitoring/components/AnomalyOverlay.vue";
 import EventStrip from "./domains/monitoring/components/EventStrip.vue";
 import CopilotDrawer from "./domains/ai-copilot/components/CopilotDrawer.vue";
 import { useMonitoringStore } from "./domains/monitoring/stores/monitoring.store.js";
@@ -19,6 +20,7 @@ import { useKeyboardShortcuts } from "./shared/composables/useKeyboardShortcuts.
 import { useDiagnoseTrigger } from "./domains/ai-copilot/composables/useDiagnoseTrigger.js";
 import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
 import { machineLabel } from "./domains/monitoring/lib/machine-labels.js";
+import { diagnosisBadgeText } from "./domains/ai-copilot/lib/diagnosis-badge.js";
 import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.js";
 
 /**
@@ -50,26 +52,20 @@ const {
 });
 
 /**
- * Copilot 面板開關（所有寬度共用；spec FR-033）：預設收合；選台 → 展開；取消選取 → 收合；
- * 面板收合鈕、Escape、手機遮罩 → 收合。手動收合偏好（`fg.copilot-panel`）於 US6 T059 接線，
- * 屆時 `onClosePanel`（收合鈕）與 `onDismissPanel`（Escape／遮罩）的語意才會分開。
+ * Copilot 面板開關與手動收合偏好都在 copilot store（T059、data-model §2、FR-033），這裡只接線：
+ * - 選取改變 → `onMachineSelected`（取消選取收合；選台時無偏好才展開）。再次選取同一台不會觸發
+ *   watch，另以 `$onAction` 補上：Escape 收合後再點同一張卡片，與選了別台一樣依偏好展開。
+ * - 事件分流：drawer 收合鈕 `close` → `collapsePanel`（寫偏好）；drawer `dismiss`（手機 sheet 內 Escape）、
+ *   AppLayout `dismiss-panel`（遮罩）與快捷鍵的面板層（桌機 Escape）→ `dismissPanel`（不寫偏好）；
+ *   展開窄條／peek 條 `open-panel` → `openPanel`（展開並清除偏好）。觸發診斷由 store 的 `diagnose` 自行展開。
  */
-const panelOpen = ref(false);
 watch(
   () => store.selectedMachineId,
-  (id) => {
-    panelOpen.value = id !== null;
-  },
+  (id) => copilot.onMachineSelected(id),
 );
-
-/** 面板上的收合鈕（手動收合）。 */
-function onClosePanel(): void {
-  panelOpen.value = false;
-}
-/** Escape（App 層快捷鍵的 Copilot 面板層，或手機 sheet 內的 drawer `dismiss`）／手機遮罩點擊（只影響當次）。 */
-function onDismissPanel(): void {
-  panelOpen.value = false;
-}
+store.$onAction(({ name, args }) => {
+  if (name === "selectMachine" && args[0] === store.selectedMachineId) copilot.onMachineSelected(args[0]);
+});
 
 /** drawer 恆依 selectedMachineId 取對應那一份狀態（未選取→idle 空殼，由 machineId=null 走空狀態）。 */
 const selectedState = computed<CopilotJobState>(() =>
@@ -82,6 +78,10 @@ const selectedLabel = computed(() =>
 );
 /** 手機 peek 條的機台名稱；無選取時為 null（peek 條不渲染）。 */
 const peekLabel = computed(() => (store.selectedMachineId !== null ? selectedLabel.value : null));
+/** 手機 peek 條的診斷狀態 chip 文字（同卡片 chip 的 `diagnosisBadgeText`）；無選取或無診斷為 null。 */
+const peekStatus = computed(() =>
+  store.selectedMachineId !== null ? diagnosisBadgeText(copilot.badgeFor(store.selectedMachineId)) : null,
+);
 
 // 診斷觸發走共用入口（TopBar／卡片 icon／drawer 同一份邏輯），clientId 只從 monitoring store 讀。
 const trigger = useDiagnoseTrigger();
@@ -100,7 +100,7 @@ function onCancel(): void {
   }
 }
 
-/** 取消選取（Escape 最後一層）：store 沒有專屬 action，直接寫回 null；面板隨上方 watch 收合。 */
+/** 取消選取（Escape 最後一層）：store 沒有專屬 action，直接寫回 null；面板隨上方 watch 收合（偏好不變）。 */
 function clearSelection(): void {
   store.selectedMachineId = null;
 }
@@ -113,21 +113,54 @@ const topBar = useTemplateRef<InstanceType<typeof TopBar>>("topBar");
 const searchInput = (): HTMLInputElement | null => topBar.value?.searchInput ?? null;
 
 /**
+ * 手機寬度（< md，rail 隱藏；斷點同 AppLayout 的 `md:` 與 TopBar 的主題切換位置）。
+ * mounted 後才掛 change 監聽；環境沒有 `matchMedia` 時視為桌機。
+ */
+const mobileQuery =
+  typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia("(max-width: 767.98px)")
+    : null;
+const isMobile = ref(mobileQuery?.matches ?? false);
+function onMobileChange(event: MediaQueryListEvent): void {
+  isMobile.value = event.matches;
+}
+onMounted(() => {
+  if (typeof mobileQuery?.addEventListener === "function") mobileQuery.addEventListener("change", onMobileChange);
+});
+onUnmounted(() => {
+  if (typeof mobileQuery?.removeEventListener === "function") {
+    mobileQuery.removeEventListener("change", onMobileChange);
+  }
+});
+
+/**
+ * 手機異常清單覆蓋層（T061、FR-033a）：主區頂端的機群健康摘要條點擊開關。
+ * 只在手機寬度渲染；寬度回到 ≥ md 時一併歸零，否則看不見的層仍佔著 Escape 分層、吃掉一次 Escape。
+ */
+const anomalyOverlayOpen = ref(false);
+watch(isMobile, (mobile) => {
+  if (!mobile) anomalyOverlayOpen.value = false;
+});
+
+/**
  * App 層鍵盤快捷鍵（T054；FR-034a～FR-034d）。composable 位於 shared/，store 與診斷入口一律由這裡注入。
- * - `d` 與診斷按鈕同一道前置條件（`canDiagnoseSelected`），送出走同一份 `useDiagnoseTrigger`。
+ * - `d` 與卡片診斷圖示同一條路：一律交 `useDiagnoseTrigger`，copilot store 的 `diagnose()` 先展開面板，
+ *   再由前置條件與去重把關（斷線或診斷中不送 POST），所以被擋下時面板仍展開並顯示停用原因。
  * - 搜尋框 Enter 由 TopBar 主處理並同步 `preventDefault`，App 層見 `defaultPrevented` 即略過。
- * - Escape 分層：搜尋覆蓋（T060）與手機異常覆蓋層（T061）尚未落地，先恆為關著。
- *   手機 bottom-sheet 內的 Escape 由 drawer 的 `useModalSheet` 攔下並 emit `dismiss`，不會到這裡。
+ * - `/`：交給 TopBar 的 `focusSearch`——工具列 compact（< 640px）時展開覆蓋式搜尋再聚焦，其餘直接聚焦搜尋框。
+ * - Escape 分層：搜尋覆蓋讀 TopBar expose 的 `isSearchOverlayOpen`、手機異常覆蓋層讀 `anomalyOverlayOpen`。
+ *   焦點在覆蓋內時由元件自己攔下 Escape；手機 bottom-sheet 內的 Escape 由 drawer 的 `useModalSheet`
+ *   攔下並 emit `dismiss`，都不會到這裡。
  */
 useKeyboardShortcuts({
   searchInput,
   handlers: {
-    focusSearch: () => searchInput()?.focus(),
+    focusSearch: () => {
+      topBar.value?.focusSearch();
+    },
     selectMachine: store.selectMachine,
     clearSelection,
-    diagnose: () => {
-      if (canDiagnose.value) onDiagnose();
-    },
+    diagnose: onDiagnose,
     clearLatch: store.clearLatch,
     isLatchVisible: store.latchVisible,
     toggleHelp: () => {
@@ -142,10 +175,20 @@ useKeyboardShortcuts({
           helpOpen.value = false;
         },
       },
-      "search-overlay": { isOpen: () => false, close: () => {} },
-      "anomaly-overlay": { isOpen: () => false, close: () => {} },
-      // 只關當次，不寫手動收合偏好（T059 的偏好語意落地後仍走 dismiss 路徑）。
-      "copilot-panel": { isOpen: () => panelOpen.value, close: onDismissPanel },
+      "search-overlay": {
+        isOpen: () => topBar.value?.isSearchOverlayOpen === true,
+        close: () => {
+          topBar.value?.closeSearchOverlay();
+        },
+      },
+      "anomaly-overlay": {
+        isOpen: () => anomalyOverlayOpen.value,
+        close: () => {
+          anomalyOverlayOpen.value = false;
+        },
+      },
+      // 只關當次，不寫手動收合偏好（Escape 不算手動收合，FR-034a）。
+      "copilot-panel": { isOpen: () => copilot.panelOpen, close: copilot.dismissPanel },
       selection: { isOpen: () => store.selectedMachineId !== null, close: clearSelection },
     },
   },
@@ -234,10 +277,11 @@ const handle = useHighFrequencyWs({
 
 <template>
   <AppLayout
-    :panel-open="panelOpen"
+    :panel-open="copilot.panelOpen"
     :peek-label="peekLabel"
-    @open-panel="panelOpen = true"
-    @dismiss-panel="onDismissPanel"
+    :peek-status="peekStatus"
+    @open-panel="copilot.openPanel"
+    @dismiss-panel="copilot.dismissPanel"
   >
     <template #sidebar>
       <div class="flex min-h-full flex-col gap-3 p-4">
@@ -277,6 +321,15 @@ const handle = useHighFrequencyWs({
     <template #main>
       <div class="flex h-full min-h-0 flex-col gap-3">
         <h1 class="sr-only">機群總覽 · {{ machineCount }} 台</h1>
+        <!-- 手機（rail 隱藏）：機群健康摘要條在最上方（44px），比值仍落在首屏；點擊開異常清單覆蓋層，不推擠拓樸 -->
+        <FleetHealth
+          v-if="isMobile"
+          class="shrink-0"
+          compact
+          :summary="store.fleetHealth"
+          :expanded="anomalyOverlayOpen"
+          @toggle="anomalyOverlayOpen = !anomalyOverlayOpen"
+        />
         <!-- 背壓 strip：工具列正下方常駐（FR-009）；在橫幅之上，斷線時橫幅出現也不把它往下推 -->
         <BackpressureStrip
           class="shrink-0"
@@ -333,11 +386,23 @@ const handle = useHighFrequencyWs({
         @diagnose="onDiagnose"
         @retry="onRetry"
         @cancel="onCancel"
-        @close="onClosePanel"
-        @dismiss="onDismissPanel"
+        @close="copilot.collapsePanel"
+        @dismiss="copilot.dismissPanel"
       />
     </template>
   </AppLayout>
   <!-- 說明層掛在 AppLayout 之外（根層），fixed 定位不受任何祖先 transform 影響；起於 top-14 不遮工具列 -->
   <ShortcutHelp :open="helpOpen" @close="helpOpen = false" />
+  <!-- 手機異常清單覆蓋層（z-[60]）：起於 top-14 不遮工具列，蓋過 peek 條（z-40）與 bottom-sheet（z-50），
+       在說明層（z-[70]）之下；選一台後元件自己 emit close -->
+  <AnomalyOverlay
+    v-if="isMobile"
+    :open="anomalyOverlayOpen"
+    :items="store.anomalySummary"
+    :now="store.staleNow"
+    :selected-id="store.selectedMachineId"
+    @close="anomalyOverlayOpen = false"
+    @select="store.selectMachine"
+    @clear="store.clearLatch"
+  />
 </template>

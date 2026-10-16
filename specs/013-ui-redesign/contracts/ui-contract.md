@@ -50,14 +50,17 @@
 | `.machine-card[data-machine="<id>"][data-selected][data-state][data-latch][data-latch-cleared][data-diagnosis]` | 卡片（`data-latch` = `warning\|critical\|none`；`data-latch-cleared` 於操作者確認、劃線期間存在；`data-diagnosis` = `none\|active\|completed\|failed`） |
 | `[data-fg="latch-clear"]` | 卡片上的清除按鈕 |
 | `[data-fg="anomaly-summary"] [data-machine]` | 異常摘要列（側欄與手機覆蓋層共用）；列內選取鈕 `[data-fg="anomaly-select"]`、清除鈕 `[data-fg="anomaly-clear"]`（與卡片的 `latch-clear` 區分，避免 E2E 同時命中兩顆；Phase 7 裁決）；列屬性 `data-level="warning\|critical"`、`data-active`／`data-struck`（有屬性才算，與卡片 `data-latch-cleared` 同寫法） |
-| `[data-fg="fleet-summary-bar"]` | 手機機群健康摘要條 |
+| `[data-fg="fleet-summary-bar"][aria-expanded]` | 手機機群健康摘要條（`<button>` 固定 44px，`aria-controls` 只在展開時指向覆蓋層面板 id，預設 `anomaly-overlay-panel`） |
+| `[data-fg="anomaly-overlay"]`、`[data-fg="anomaly-overlay-scrim"]` | 手機異常清單覆蓋層（`role="dialog"`，`fixed top-14 z-[60]`，面板自摘要條下緣起；內含 `[data-fg="anomaly-summary"]`）與其遮罩（點擊收合） |
 | `[data-fg="copilot"][data-open]` | Copilot 面板 |
 | `[data-fg="copilot-peek"]` | 手機 bottom-sheet 收合（收合鈕或 Escape）且仍有選取機台時的 32px peek 條（點擊展開；無選取時不渲染） |
 | `[data-fg="result-skeleton"] [data-field][data-field-state]` | 漸進骨架 |
 | `[data-fg="timing"][data-cached]` | 完成 meta／快取耗時 |
 | `[data-section]`、`[data-severity]`、`[data-evidence][data-evidence-count]` | 結果檢視內部的測試屬性（區段、色條嚴重度、合併後證據列；Phase 6 新增，僅供測試） |
 | `[data-fg="event"][data-machine][data-severity][data-count]` | 事件列項 |
-| `[data-fg="theme-toggle"]` | 主題切換 |
+| `[data-fg="theme-toggle"]` | 主題切換（rail 底部為兩段式「淺色｜深色」；< 768px 視窗時由 TopBar 系統狀態分組承載、依視窗斷點而非工具列段位，compact 段改為**單一圖示鈕**（aria-label「切換為深色／淺色主題」）以免 390 寬「重新連線中＋未授權」時溢出，Phase 9 裁決） |
+| `.tb-bar[data-tb-size="full\|icons\|compact"]` | 工具列三段（ResizeObserver：≥ 820 full、640–819 icons、< 640 compact） |
+| `[data-fg="search-toggle"][aria-expanded]`、`[data-fg="search-overlay"]` | compact 時的搜尋圖示鈕與覆蓋式搜尋（`bg-rim` 橫條蓋住工具列；Escape／失焦／收回鈕／Enter 唯一結果收回） |
 | `[data-fg="shortcut-help"]` | 說明層；每列 `[data-shortcut="<ShortcutId>"]`（Phase 8 新增測試鉤子） |
 
 ## 4. 快捷鍵表

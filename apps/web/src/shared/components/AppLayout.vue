@@ -9,23 +9,29 @@ import { useResizeDrag } from "../composables/useResizeDrag.js";
  *
  * - rail 與工具列是桌邊（`bg-rim`）；主區是帶 24px 格線的桌面（`bg-bench bg-bench-grid-lines`），
  *   其上的面板一律用同一組玻璃 class（`bg-surface/72 border border-edge shadow-glass rounded-card`）。
- * - Copilot 面板只有一個開關 `panelOpen`（所有寬度共用，預設收合由 App 決定；spec FR-033）：
+ * - Copilot 面板只有一個開關 `panelOpen`（所有寬度共用；由 App 傳入 copilot store 的 `panelOpen`，
+ *   預設收合與手動收合偏好都在 store，spec FR-033、data-model §2）：
  *   `lg+`（≥ 1024px）是主區右側 360px 的玻璃片，收合時把寬度還給主區、右緣留「展開 AI 診斷」窄條；
- *   `< lg` 是 bottom-sheet（抓取把手、遮罩、`shadow-sheet`），收合後若仍有選取機台（`peekLabel`
- *   非 null）退為 32px peek 條，點擊即展開；無選取時完全不渲染。768–1023px 雖仍顯示 rail，
- *   面板也走 sheet：rail 240 + 面板 360 並排會把卡片欄擠到約 110px、文字全被截斷。
- *   斷點須與 `useModalSheet` 的 MOBILE_QUERY 一致（sheet 形態才掛 dialog 語意與焦點陷阱）。
+ *   `< lg` 是 bottom-sheet（抓取把手、遮罩、`shadow-sheet`；高度依內容、最高 85vh），任何收合
+ *   （收合鈕、Escape 或遮罩）後若仍有選取機台（`peekLabel` 非 null）退為 32px peek 條，點擊即展開；
+ *   無選取時完全不渲染。768–1023px 雖仍顯示 rail，面板也走 sheet：rail 240 + 面板 360 並排會把
+ *   卡片欄擠到約 110px、文字全被截斷。斷點須與 `useModalSheet` 的 MOBILE_QUERY 一致
+ *   （sheet 形態才掛 dialog 語意與焦點陷阱）。
  * - drawer slot 只渲染一次，由外層 aside 以響應式 class 切換兩種形態，避免重複掛載
  *   CopilotDrawer 造成雙份副作用。
- * - `dismiss-panel` 只來自 sheet 遮罩點擊（不算手動收合）；面板上的收合鈕由 drawer
- *   自己 emit，App 據此區分兩者（偏好語意於 US6 接線）。本元件不監聽 Escape：桌機由 App 層
+ * - 事件分流：`open-panel`（展開窄條、peek 條）＝展開把手，App 接 store `openPanel`（展開並清除偏好）；
+ *   `dismiss-panel` 只來自 sheet 遮罩點擊，App 接 `dismissPanel`（不寫偏好）；面板上的收合鈕由 drawer
+ *   自己 emit `close`，App 接 `collapsePanel`（寫偏好）。本元件不監聽 Escape：桌機由 App 層
  *   `useKeyboardShortcuts` 依分層順序處理（FR-034a），手機 sheet 內由 drawer 的 `useModalSheet` 處理。
+ * - 本元件在 `shared/`，不讀任何 domain store：peek 條的診斷狀態由 App 轉成文字（`peekStatus`）傳入。
  */
 const props = defineProps<{
   /** Copilot 面板是否展開。 */
   panelOpen: boolean;
   /** 選取機台的顯示名稱；null＝無選取（peek 條不渲染）。 */
   peekLabel: string | null;
+  /** peek 條上的診斷狀態 chip 文字（如「診斷中 60%」）；null／未傳＝無診斷，不顯示 chip。 */
+  peekStatus?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -35,6 +41,15 @@ const emit = defineEmits<{
 
 /** peek 條是否渲染：sheet 收合且仍有選取機台（lg+ 由 class 隱藏）。 */
 const peekVisible = computed(() => !props.panelOpen && props.peekLabel !== null);
+
+/**
+ * peek 條是 `<button aria-label>`：aria-label 會蓋掉按鈕內的文字，所以診斷狀態要併進可讀名稱；
+ * 依可見文字的順序（AI 診斷 → 機台名 → 狀態）組句，語音操作念看得到的字也點得到（WCAG 2.5.3）。
+ */
+const peekAriaLabel = computed(() => {
+  const status = props.peekStatus ? `，診斷：${props.peekStatus}` : "";
+  return `展開 AI 診斷：${props.peekLabel ?? ""}${status}`;
+});
 
 /**
  * 寬螢幕（lg+）收合／展開時，若焦點原本在即將消失的那一側（面板內的收合鈕、或展開窄條），
@@ -122,7 +137,9 @@ const {
           @click="emit('dismiss-panel')"
         />
 
-        <!-- Copilot 面板：lg+ 為 360px 玻璃片；小於 lg 為 bottom-sheet（70–85vh，不透明以蓋住下方內容） -->
+        <!-- Copilot 面板：lg+ 為 360px 玻璃片；小於 lg 為 bottom-sheet（不透明以蓋住下方內容）。
+             sheet 高度依內容、最高 85vh：閒置（尚未診斷）只有標頭與一段說明，不留大片空白；
+             結果變長時由 drawer 內容區自行捲動 -->
         <aside
           ref="panelRef"
           tabindex="-1"
@@ -130,8 +147,8 @@ const {
           :data-open="panelOpen ? 'true' : 'false'"
           :class="[
             panelOpen ? 'flex' : 'hidden',
-            'fixed inset-x-0 bottom-0 z-50 max-h-[85vh] min-h-[70vh] flex-col overflow-hidden focus:outline-none rounded-t-card border-t border-edge bg-surface-strong shadow-sheet',
-            'lg:static lg:z-auto lg:my-3 lg:mr-3 lg:max-h-none lg:min-h-0 lg:w-[360px] lg:shrink-0 lg:rounded-card lg:border lg:bg-surface/72 lg:shadow-glass',
+            'fixed inset-x-0 bottom-0 z-50 max-h-[85vh] flex-col overflow-hidden focus:outline-none rounded-t-card border-t border-edge bg-surface-strong shadow-sheet',
+            'lg:static lg:z-auto lg:my-3 lg:mr-3 lg:max-h-none lg:w-[360px] lg:shrink-0 lg:rounded-card lg:border lg:bg-surface/72 lg:shadow-glass',
           ]"
           aria-label="AI 診斷"
         >
@@ -160,22 +177,24 @@ const {
       </div>
     </div>
 
-    <!-- peek 條（小於 lg）：sheet 收合但仍有選取機台時常駐底部 32px；點擊展開 -->
+    <!-- peek 條（小於 lg）：sheet 任何收合後仍有選取機台時常駐底部 32px；點擊＝展開把手。
+         按鈕內一律非互動元素；名稱與狀態已併進 aria-label，chip 不另被念出 -->
     <button
       v-if="peekVisible"
       type="button"
       data-fg="copilot-peek"
-      class="fixed inset-x-0 bottom-0 z-40 flex h-8 items-center gap-2 border-t border-edge bg-surface-strong px-4 text-sm text-ink shadow-sheet focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus lg:hidden"
-      :aria-label="`展開 AI 診斷：${peekLabel}`"
+      class="fixed inset-x-0 bottom-0 z-40 flex h-8 items-center gap-2 border-t border-edge bg-surface-strong px-4 text-sm text-ink shadow-sheet transition-colors duration-150 hover:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus lg:hidden"
+      :aria-label="peekAriaLabel"
       @click="emit('open-panel')"
     >
       <ChevronUp class="h-4 w-4 shrink-0 text-ink-3" aria-hidden="true" />
       <span class="shrink-0 text-xs font-semibold text-ink-2">AI 診斷</span>
       <span class="min-w-0 truncate">{{ peekLabel }}</span>
-      <!-- 診斷狀態 chip 的位置（US5 T051 接線） -->
-      <span class="ml-auto flex shrink-0 items-center">
-        <slot name="peek-status" />
-      </span>
+      <!-- 診斷狀態 chip：只顯示文字，空間不足時機台名稱先截斷、chip 不縮 -->
+      <span
+        v-if="peekStatus"
+        class="ml-auto shrink-0 rounded-pill border border-edge bg-surface px-2 py-px text-xs font-semibold leading-4 text-ink-2"
+      >{{ peekStatus }}</span>
     </button>
   </div>
 </template>

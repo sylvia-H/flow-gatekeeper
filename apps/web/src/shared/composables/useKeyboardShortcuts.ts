@@ -32,6 +32,7 @@ import {
  * 3. 搜尋框內的 Enter 且結果恰一台 → 選取並把焦點移到該台卡片（唯一放行的輸入情境按鍵）。
  * 4. 其餘輸入情境（`isTypingTarget`）→ 一律不處理，Escape 也不處理（覆蓋式搜尋自己收回）。
  * 5. 帶 Ctrl／Meta／Alt 的組合鍵 → 不處理（不搶瀏覽器與系統快捷鍵，例如 Ctrl+D）。
+ * 6. 手機異常覆蓋層（aria-modal）開著 → 只處理 Escape 與 `/`（說明層開著時另於最前面只放行 `?` 與 Escape）。
  */
 
 export interface EscapeLayer {
@@ -185,6 +186,15 @@ export function attachKeyboardShortcuts(options: UseKeyboardShortcutsOptions): (
     }
     if (isTypingTarget(event)) return;
     if (event.ctrlKey || event.metaKey || event.altKey) return;
+    // 手機異常覆蓋層（aria-modal）開著時只處理 Escape 與 `/`：搜尋覆蓋排在它之上（FR-034a）可以放行，
+    // 其餘（`d`、`x`、方向鍵、`?`）會作用到覆蓋層底下看不見的拓樸或疊出第二個對話框。
+    if (
+      handlers.layers["anomaly-overlay"].isOpen() &&
+      !KEYS.escape.includes(key) &&
+      !KEYS.focusSearch.includes(key)
+    ) {
+      return;
+    }
 
     const direction = ARROW_DIRECTIONS[key];
     if (direction !== undefined && CARD_MOVE_KEYS.includes(key)) {

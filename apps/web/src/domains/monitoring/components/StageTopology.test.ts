@@ -210,6 +210,28 @@ describe("StageTopology 容器寬度與堆疊（FR-016、FR-031）", () => {
     expect(linkWidths(w)).toEqual(["8", "8"]);
   });
 
+  it("T062 門檻：1366×768 面板展開的容器寬 708px 恰好並排、欄寬下限維持 220px；1024×768 面板展開（約 366px）堆疊", async () => {
+    const store = useMonitoringStore();
+    store.applyTelemetryBatch(ALL.map((id) => point(id, 125)));
+    const w = mountTopology();
+    const grid = () => w.get('[data-fg="stage-topology"]');
+
+    resize?.(708);
+    await w.vm.$nextTick();
+    expect(grid().attributes("data-layout")).toBe("row");
+    expect(grid().classes()).toContain(
+      "grid-cols-[minmax(220px,1fr)_24px_minmax(220px,1fr)_24px_minmax(220px,1fr)]",
+    );
+
+    resize?.(707);
+    await w.vm.$nextTick();
+    expect(grid().attributes("data-layout")).toBe("stacked");
+
+    resize?.(366);
+    await w.vm.$nextTick();
+    expect(grid().attributes("data-layout")).toBe("stacked");
+  });
+
   it("捲動容器保留 8px 內距（卡片焦點環與 critical 光暈不被外層 overflow 裁掉）", () => {
     const root = mountTopology().get("div");
     expect(root.classes()).toEqual(expect.arrayContaining(["h-full", "overflow-auto", "p-2"]));

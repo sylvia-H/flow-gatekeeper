@@ -434,6 +434,71 @@ describe("說明層開著時只處理 ? 與 Escape", () => {
   });
 });
 
+describe("手機異常覆蓋層開著時只處理 Escape 與 /", () => {
+  it("d、x、方向鍵、?、非按鈕卡片 Enter 都不處理（不在覆蓋層底下對選取機台觸發診斷）", () => {
+    const div = document.createElement("div");
+    div.className = "machine-card";
+    div.tabIndex = 0;
+    div.dataset.machine = "z9";
+    document.body.appendChild(div);
+    attach();
+    state.open = { ...allClosed(), "anomaly-overlay": true, "copilot-panel": true, selection: true };
+    state.selectedId = "a1";
+    state.latchVisible.add("a1");
+
+    card("a1").focus();
+    for (const key of ["d", "x", "ArrowRight"]) {
+      const event = press(card("a1"), key);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(press(card("a1"), "?", { shiftKey: true }).defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(card("a1"));
+    div.focus();
+    press(div, "Enter");
+    expectNoActionCalls();
+  });
+
+  it("/ 放行（搜尋覆蓋在異常覆蓋層之上）；Escape 先關異常覆蓋層，不連帶關面板", () => {
+    attach();
+    state.open = { ...allClosed(), "anomaly-overlay": true, "copilot-panel": true, selection: true };
+    press(document.body, "/");
+    expect(handlers.focusSearch).toHaveBeenCalledTimes(1);
+
+    press(document.body, "Escape");
+    expect(handlers.layers["anomaly-overlay"].close).toHaveBeenCalledTimes(1);
+    expect(handlers.layers["copilot-panel"].close).not.toHaveBeenCalled();
+  });
+
+  it("搜尋覆蓋疊在異常覆蓋層之上時，Escape 先收回搜尋覆蓋", () => {
+    attach();
+    state.open = { ...allClosed(), "search-overlay": true, "anomaly-overlay": true };
+    press(document.body, "Escape");
+    expect(handlers.layers["search-overlay"].close).toHaveBeenCalledTimes(1);
+    expect(handlers.layers["anomaly-overlay"].close).not.toHaveBeenCalled();
+  });
+
+  it("搜尋框內的 Enter 仍照常選取唯一結果（守門在輸入情境判斷之後）", () => {
+    attach();
+    state.open = { ...allClosed(), "anomaly-overlay": true };
+    state.searchResults = ["a2"];
+    searchInput.focus();
+    const event = press(searchInput, "Enter");
+    expect(event.defaultPrevented).toBe(true);
+    expect(handlers.selectMachine).toHaveBeenCalledWith("a2");
+  });
+
+  it("異常覆蓋層關閉後 d 恢復作用", () => {
+    attach();
+    state.open = { ...allClosed(), "anomaly-overlay": true, selection: true };
+    state.selectedId = "a1";
+    press(document.body, "d");
+    expect(handlers.diagnose).not.toHaveBeenCalled();
+    state.open = { ...allClosed(), selection: true };
+    press(document.body, "d");
+    expect(handlers.diagnose).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("方向鍵依視覺位置移焦（3 × 2）", () => {
   it.each([
     ["a2", "ArrowRight", "a3"],

@@ -668,3 +668,166 @@ describe("copilot store 診斷狀態 chip badgeFor（T051、data-model §7、FR-
     expect(store.badgeFor("mixer-01")).toEqual({ kind: "active", progress: 30 });
   });
 });
+
+describe("copilot store 面板偏好 panelOpen（T059、data-model §2、FR-033）", () => {
+  /** 以 Map 模擬 localStorage（新版 Node 的實驗性 localStorage 不可靠），跨 store 重建保留內容。 */
+  let storage: Map<string, string>;
+  const KEY = "fg.copilot-panel";
+
+  beforeEach(() => {
+    storage = new Map();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => storage.get(k) ?? null,
+      setItem: (k: string, v: string) => void storage.set(k, v),
+      removeItem: (k: string) => void storage.delete(k),
+    });
+    setActivePinia(createPinia());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** 模擬重新載入：新的 pinia＋新的 store，從 storage 讀回偏好。 */
+  function reload(): ReturnType<typeof useCopilotStore> {
+    setActivePinia(createPinia());
+    return useCopilotStore();
+  }
+
+  it("載入一律收合；無偏好時 manuallyCollapsed 為 false、不寫 storage", () => {
+    const store = useCopilotStore();
+    expect(store.panelOpen).toBe(false);
+    expect(store.panel.manuallyCollapsed).toBe(false);
+    expect(storage.has(KEY)).toBe(false);
+  });
+
+  it("有手動收合偏好時載入仍收合，且讀回 manuallyCollapsed = true", () => {
+    storage.set(KEY, JSON.stringify({ manuallyCollapsed: true }));
+    const store = useCopilotStore();
+    expect(store.panelOpen).toBe(false);
+    expect(store.panel.manuallyCollapsed).toBe(true);
+  });
+
+  it.each(["not-json", "{}", '{"manuallyCollapsed":"yes"}', "null"])(
+    "偏好內容不合法（%s）→ 退回預設 false",
+    (raw) => {
+      storage.set(KEY, raw);
+      expect(useCopilotStore().panel.manuallyCollapsed).toBe(false);
+    },
+  );
+
+  it("localStorage 拋錯時以預設運作、不拋錯", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    });
+    const store = reload();
+    expect(store.panel.manuallyCollapsed).toBe(false);
+    expect(() => store.collapsePanel()).not.toThrow();
+    expect(store.panelOpen).toBe(false);
+  });
+
+  it("無偏好時選台展開；取消選取收合且偏好不變", () => {
+    const store = useCopilotStore();
+    store.onMachineSelected("mixer-01");
+    expect(store.panelOpen).toBe(true);
+    store.onMachineSelected(null);
+    expect(store.panelOpen).toBe(false);
+    expect(store.panel.manuallyCollapsed).toBe(false);
+  });
+
+  it("收合鈕（collapsePanel）收合並寫入偏好；之後選台不展開", () => {
+    const store = useCopilotStore();
+    store.onMachineSelected("mixer-01");
+    store.collapsePanel();
+    expect(store.panelOpen).toBe(false);
+    expect(store.panel.manuallyCollapsed).toBe(true);
+    expect(JSON.parse(storage.get(KEY) ?? "null")).toEqual({ manuallyCollapsed: true });
+
+    store.onMachineSelected("press-02");
+    expect(store.panelOpen).toBe(false);
+  });
+
+  it("Escape／遮罩（dismissPanel）只收合當次、不寫偏好；之後選台照樣展開", () => {
+    const store = useCopilotStore();
+    store.onMachineSelected("mixer-01");
+    store.dismissPanel();
+    expect(store.panelOpen).toBe(false);
+    expect(store.panel.manuallyCollapsed).toBe(false);
+    expect(storage.has(KEY)).toBe(false);
+
+    store.onMachineSelected("press-02");
+    expect(store.panelOpen).toBe(true);
+  });
+
+  it("有偏好時 Escape 收合也不動偏好", () => {
+    storage.set(KEY, JSON.stringify({ manuallyCollapsed: true }));
+    const store = useCopilotStore();
+    store.openPanel();
+    store.collapsePanel();
+    store.dismissPanel();
+    expect(store.panel.manuallyCollapsed).toBe(true);
+  });
+
+  it("偏好值沒變就不寫 storage：無偏好時 openPanel 不寫；已收合時再按收合鈕不重寫", () => {
+    const store = useCopilotStore();
+    const setItem = vi.spyOn(globalThis.localStorage, "setItem");
+    store.openPanel();
+    expect(store.panelOpen).toBe(true);
+    expect(storage.has(KEY)).toBe(false);
+    expect(setItem).not.toHaveBeenCalled();
+
+    store.collapsePanel();
+    store.openPanel();
+    store.dismissPanel();
+    store.openPanel();
+    expect(setItem).toHaveBeenCalledTimes(2); // true 一次、false 一次
+    store.collapsePanel();
+    store.collapsePanel();
+    expect(setItem).toHaveBeenCalledTimes(3);
+  });
+
+  it("展開把手（openPanel）展開並清除偏好", () => {
+    storage.set(KEY, JSON.stringify({ manuallyCollapsed: true }));
+    const store = useCopilotStore();
+    store.onMachineSelected("mixer-01");
+    expect(store.panelOpen).toBe(false);
+    store.openPanel();
+    expect(store.panelOpen).toBe(true);
+    expect(store.panel.manuallyCollapsed).toBe(false);
+    expect(JSON.parse(storage.get(KEY) ?? "null")).toEqual({ manuallyCollapsed: false });
+  });
+
+  it("觸發診斷展開並清除偏好；前置條件擋下（無連線）時同樣展開，面板才看得到停用原因", async () => {
+    mockDiagnoseOk();
+    storage.set(KEY, JSON.stringify({ manuallyCollapsed: true }));
+    const store = useCopilotStore();
+    store.onMachineSelected("mixer-01");
+    await store.diagnose("mixer-01", SOCKET);
+    expect(store.panelOpen).toBe(true);
+    expect(store.panel.manuallyCollapsed).toBe(false);
+
+    store.collapsePanel();
+    await store.diagnose("press-02", null);
+    expect(store.stateFor("press-02").status).toBe("idle");
+    expect(store.panelOpen).toBe(true);
+    expect(store.panel.manuallyCollapsed).toBe(false);
+  });
+
+  it("偏好跨重新載入保留：收合鈕寫入後重建 store 讀回 true；展開把手清除後讀回 false", () => {
+    useCopilotStore().collapsePanel();
+    let store = reload();
+    expect(store.panelOpen).toBe(false);
+    expect(store.panel.manuallyCollapsed).toBe(true);
+    store.onMachineSelected("mixer-01");
+    expect(store.panelOpen).toBe(false);
+
+    store.openPanel();
+    store = reload();
+    expect(store.panel.manuallyCollapsed).toBe(false);
+  });
+});
