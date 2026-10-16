@@ -134,7 +134,7 @@ function onKeydown(event: KeyboardEvent): void {
       @keydown="onKeydown"
     >
       <div class="flex shrink-0 items-center justify-between gap-3 border-b border-edge py-2 pl-4 pr-2">
-        <h2 :id="TITLE_ID" class="text-base font-semibold text-ink">{{ SHORTCUT_HELP_TITLE }}</h2>
+        <h2 :id="TITLE_ID" class="text-md font-semibold text-ink">{{ SHORTCUT_HELP_TITLE }}</h2>
         <button
           type="button"
           class="flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-2 transition-colors duration-150 hover:bg-rim hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
