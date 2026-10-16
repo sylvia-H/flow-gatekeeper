@@ -33,6 +33,7 @@ export default {
         crit: { DEFAULT: v('crit'), fg: v('crit-fg'), bg: v('crit-bg') },
         stale: v('stale'),
         focus: v('focus'),
+        scrim: v('scrim'),
       },
       // 磨砂玻璃的 72% 不在 Tailwind 預設 opacity 刻度（…70、75…）內；不加這一格，
       // `bg-surface/72` 會被靜默略過、不產生任何規則（回歸測試：src/styles/tailwind-tokens.test.ts）。
@@ -56,7 +57,7 @@ export default {
       fontSize: {
         md: ['16px', '24px'],
         lg: ['20px', '28px'],
-        number: ['22px', '28px'],
+        number: ['24px', '28px'],
         ratio: ['32px', '36px'],
       },
       fontFamily: {

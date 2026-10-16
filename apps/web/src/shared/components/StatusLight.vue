@@ -11,23 +11,23 @@ const props = withDefaults(
   { pulse: false },
 );
 
-/** 狀態 → 色票 token 與 label 皆取自共用 STATE_STYLE（design-spec §7.4）。 */
+/** 狀態 → 語意色 token 與中文 label 皆取自共用 STATE_STYLE（顏色＋文字＋可讀名稱，FR-004）。 */
 const dotClass = computed(() => STATE_STYLE[props.state].dot);
 const label = computed(() => STATE_STYLE[props.state].label);
 
-// critical 且要求 pulse 時才動效；wrapper 尺寸固定，pulse 不造 layout shift（FR-020、§10）。
+// critical 且要求 pulse 時才動效；wrapper 尺寸固定，pulse 不造 layout shift（FR-031）。
 const shouldPulse = computed(() => props.pulse && props.state === "critical");
 </script>
 
 <template>
-  <!-- 固定 12px 方框置中承載 9px 圓點，pulse 只作用於圓點的 box-shadow，不改變 wrapper 尺寸 -->
+  <!-- 固定 12px 方框置中承載 10px 圓點，pulse 只作用於圓點的 box-shadow，不改變 wrapper 尺寸 -->
   <span
     class="inline-flex h-3 w-3 shrink-0 items-center justify-center"
     role="img"
-    :aria-label="`Status: ${label}`"
+    :aria-label="`狀態：${label}`"
   >
     <span
-      class="block h-[9px] w-[9px] rounded-pill"
+      class="block h-2.5 w-2.5 rounded-pill"
       :class="[dotClass, shouldPulse ? 'animate-critical-pulse' : '']"
     />
   </span>

@@ -164,18 +164,59 @@ function token(path: string): string {
   return name;
 }
 
+/**
+ * 底色比較要連透明度一起比：卡片靜止是半透明（`bg-surface/72`、`bg-crit-bg/80`），hover 轉為不透明；
+ * 只比變數名的話，刪掉 `hover:bg-crit-bg` 測試仍會過（靜止與 hover 同為 `--c-crit-bg`）。
+ * Tailwind 對不透明 utility 輸出 `/ var(--tw-bg-opacity)`（該 utility 同時設為 1），`theme()` 輸出 `/ 1`，皆視為 1。
+ * 回傳形如 `--c-crit-bg / 0.8`。
+ */
+function colorWithAlpha(value: string | undefined): string | null {
+  const name = colorVar(value);
+  if (!name || !value) return null;
+  const raw = /\/\s*([\d.]+|var\(--tw-[\w-]+\))\s*\)/.exec(value)?.[1];
+  const alpha = raw === undefined || raw.startsWith("var(") ? 1 : Number(raw);
+  return `${name} / ${alpha}`;
+}
+
+/** 預期底色：`"crit.bg/0.8"` → `--c-crit-bg / 0.8`；未寫透明度視為不透明。 */
+function tokenWithAlpha(spec: string): string {
+  const [path, alpha] = spec.split("/");
+  return `${token(path!)} / ${alpha === undefined ? 1 : Number(alpha)}`;
+}
+
 // ---------- 情境 ----------
 
 type CardState = MachineState | "placeholder";
 const STATES: readonly CardState[] = ["placeholder", ...(Object.keys(STATE_STYLE) as MachineState[])];
 
-/** 狀態 class 預期的未選取底色／邊框（`card-style.ts`；warning 為 1px `border-warn` 全邊框，FR-030）。 */
+/**
+ * 狀態 class 預期的未選取底色／邊框（`card-style.ts`）：
+ * - 靜止：healthy／placeholder 為玻璃 `bg-surface/72` + `border-edge`；warning 為 1px `border-warn` 全邊框（FR-030）；
+ *   critical 為半透明 `crit-bg` + `border-crit`。
+ * - hover：玻璃轉為不透明（`surface-strong`；critical 為不透明 `crit-bg`）；只有 healthy／placeholder 換蝕刻邊框，
+ *   warning／critical 保留狀態邊框（狀態不因 hover 消失）。
+ * - stale：只把邊框改虛線（`border-style`），顏色規則與非 stale 完全相同——不與狀態邊框色競爭輸出順序。
+ * 邊框比 `--c-*` 變數名；底色連透明度一起比（`surface/0.72`、`crit.bg/0.8` 對不透明的 hover 底，見 `colorWithAlpha`）。
+ */
 const EXPECTED_IDLE: Record<CardState, { border: string; bg: string }> = {
-  placeholder: { border: "edge", bg: "surface" },
-  healthy: { border: "edge", bg: "surface" },
-  warning: { border: "warn", bg: "surface" },
-  critical: { border: "crit", bg: "crit.bg" },
+  placeholder: { border: "edge", bg: "surface/0.72" },
+  healthy: { border: "edge", bg: "surface/0.72" },
+  warning: { border: "warn", bg: "surface/0.72" },
+  critical: { border: "crit", bg: "crit.bg/0.8" },
 };
+
+const EXPECTED_HOVER: Record<CardState, { border: string | null; bg: string }> = {
+  placeholder: { border: "etch", bg: "surface.strong" },
+  healthy: { border: "etch", bg: "surface.strong" },
+  warning: { border: null, bg: "surface.strong" }, // null：沿用靜止的狀態邊框
+  critical: { border: null, bg: "crit.bg" },
+};
+
+function expectedUnselected(state: CardState, hover: boolean): { border: string; bg: string } {
+  const idle = EXPECTED_IDLE[state];
+  if (!hover) return idle;
+  return { border: EXPECTED_HOVER[state].border ?? idle.border, bg: EXPECTED_HOVER[state].bg };
+}
 
 type Interaction = "none" | "hover" | "focus" | "hover+focus";
 
@@ -245,7 +286,7 @@ describe("WEB-1：MachineNodeCard 選取態勝過狀態 class", () => {
       it(`${label}：選取 → accent 邊框、accent-wash 底、accent outline`, () => {
         const el = cardElement(state, { selected: true, stale, interaction });
         expect(colorVar(resolveProp(el, "border-color"))).toBe(token("accent"));
-        expect(colorVar(resolveProp(el, "background-color"))).toBe(token("accent.wash"));
+        expect(colorWithAlpha(resolveProp(el, "background-color"))).toBe(tokenWithAlpha("accent.wash"));
         const outline = resolveProp(el, "outline") ?? "";
         expect(outline).toMatch(/\b1px solid\b/);
         expect(colorVar(outline)).toBe(token("accent"));
@@ -255,16 +296,14 @@ describe("WEB-1：MachineNodeCard 選取態勝過狀態 class", () => {
       it(`${label}：未選取 → 狀態自身外觀（與選取可區分）`, () => {
         const el = cardElement(state, { selected: false, stale, interaction });
         const border = colorVar(resolveProp(el, "border-color"));
-        const bg = colorVar(resolveProp(el, "background-color"));
-        if (hover) {
-          expect(border).toBe(token("etch"));
-          expect(bg).toBe(token("rim"));
-        } else {
-          expect(border).toBe(token(EXPECTED_IDLE[state].border));
-          expect(bg).toBe(token(EXPECTED_IDLE[state].bg));
-        }
+        const bg = colorWithAlpha(resolveProp(el, "background-color"));
+        const expected = expectedUnselected(state, hover);
+        // stale 只換線型：虛線在任何互動下都成立，選取規則也不改 border-style
+        expect(resolveProp(el, "border-style")).toBe(stale ? "dashed" : undefined);
+        expect(border).toBe(token(expected.border));
+        expect(bg).toBe(tokenWithAlpha(expected.bg));
         expect(border).not.toBe(token("accent"));
-        expect(bg).not.toBe(token("accent.wash"));
+        expect(colorVar(bg ?? undefined)).not.toBe(token("accent.wash"));
         // 未選取卡片不得帶 accent outline
         expect(colorVar(resolveProp(el, "outline"))).not.toBe(token("accent"));
         // focus 情境確實命中 `focus:outline-none`（證明上方選取案例的 focus 路徑有被模擬到）
