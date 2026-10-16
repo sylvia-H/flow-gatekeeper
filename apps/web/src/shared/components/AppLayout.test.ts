@@ -590,3 +590,63 @@ describe("AppLayout 外觀（純 props）", () => {
     expect(w.find('[data-fg="copilot-peek"]').exists()).toBe(false);
   });
 });
+
+describe("主區欄高度與事件流預設高度（T065：FR-031）", () => {
+  const handle = (w: VueWrapper) => w.get('[aria-label="調整事件流面板高度"]');
+
+  /** 改 window.innerHeight（happy-dom 不做 layout，App 只在掛載當下讀一次）；afterEach 前還原。 */
+  let restoreHeight: (() => void) | null = null;
+  function stubInnerHeight(height: number): void {
+    const original = Object.getOwnPropertyDescriptor(window, "innerHeight");
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: height });
+    restoreHeight = () => {
+      if (original) Object.defineProperty(window, "innerHeight", original);
+      else delete (window as { innerHeight?: number }).innerHeight;
+    };
+  }
+  afterEach(() => {
+    restoreHeight?.();
+    restoreHeight = null;
+  });
+
+  it("<main> 是 flex 直欄，main slot 的根以 flex-1 取高（不用 h-full 百分比）", () => {
+    const w = mountApp();
+    const main = w.get("main");
+    expect(main.classes()).toEqual(expect.arrayContaining(["flex", "flex-col", "min-h-0", "p-3"]));
+    const column = main.element.firstElementChild as HTMLElement;
+    expect([...column.classList]).toEqual(expect.arrayContaining(["flex", "flex-col", "flex-1", "min-h-0"]));
+    expect(column.classList.contains("h-full")).toBe(false);
+  });
+
+  it("拓樸捲動區外層下緣有一道蝕刻邊（捲動邊界，不隨內容捲）", () => {
+    const w = mountApp();
+    const viewport = w.findComponent({ name: "StageTopology" }).element.parentElement as HTMLElement;
+    expect([...viewport.classList]).toEqual(
+      expect.arrayContaining(["min-h-0", "flex-1", "overflow-hidden", "border-b", "border-edge"]),
+    );
+  });
+
+  it("視窗高 ≤ 800px 且無偏好：事件流預設 100px（標題＋2 列，最後一列不被切半）", () => {
+    stubInnerHeight(768);
+    const w = mountApp();
+    expect(handle(w).attributes("aria-valuenow")).toBe("100");
+    expect(handle(w).attributes("aria-valuemin")).toBe("100");
+    expect(w.findComponent({ name: "EventStrip" }).props("height")).toBe(100);
+  });
+
+  it("視窗高 > 800px 且無偏好：事件流預設 164px（標題＋4 列，最後一列不被切半）", () => {
+    stubInnerHeight(900);
+    const w = mountApp();
+    expect(handle(w).attributes("aria-valuenow")).toBe("164");
+  });
+
+  it("已有偏好時用偏好（不論視窗高），仍可用方向鍵調到上限 360", async () => {
+    stubInnerHeight(768);
+    storage.set("flow-gatekeeper:event-strip-height", "220");
+    const w = mountApp();
+    expect(handle(w).attributes("aria-valuenow")).toBe("220");
+    await handle(w).trigger("keydown", { key: "End" });
+    expect(handle(w).attributes("aria-valuenow")).toBe("360");
+    expect(storage.get("flow-gatekeeper:event-strip-height")).toBe("360");
+  });
+});

@@ -172,8 +172,8 @@ const absoluteTime = computed(() => (props.machine ? formatClock(props.machine.l
 
 <template>
   <!-- 每張卡片只佔一個 Tab 停駐點（FR-034d）：卡片主按鈕 tabindex=0，底列清除鈕與診斷圖示 tabindex=-1。
-       焦點環不用 ring（box-shadow）：critical 的 pulse 動畫動的是 box-shadow，會把 ring 蓋掉；
-       改由 tailwind.css 的 `.machine-card:focus-visible` 畫 2px 外框 outline，並排在選取規則之後，選取＋聚焦時焦點環勝出 -->
+       焦點環不用 ring（box-shadow），由 tailwind.css 的 `.machine-card:focus-visible` 畫 2px 外框 outline，
+       並排在選取規則之後，選取＋聚焦時焦點環勝出 -->
   <div class="group relative min-w-0">
     <button
       type="button"
@@ -190,14 +190,23 @@ const absoluteTime = computed(() => (props.machine ? formatClock(props.machine.l
       :aria-describedby="describedBy"
       @click="emit('select', machineId)"
     >
-      <!-- 標頭：名稱列只放中文名稱｜狀態文字徽章 + 狀態燈；id 列（固定 20px 高）依序放 id → 停滯徽章 → 診斷 chip，
-           出現與否不改高度，220px 寬時名稱不被擠成「壓製機 0…」。id 列空間不足時 id 先讓位（shrink 權重大、可截斷），
-           徽章不縮；停滯與 chip 同時出現又極窄時 chip 才截斷（不溢出蓋到右側狀態徽章） -->
+      <!-- 標頭：名稱列只放中文名稱｜狀態文字徽章 + 狀態燈；id 列（固定 20px 高）依序放 id · 更新時間 → 停滯徽章 → 診斷 chip，
+           出現與否不改高度，220px 寬時名稱不被擠成「壓製機 0…」。id 列空間不足時 id 先讓位（shrink 權重最大、可截斷），
+           更新時間次之（極窄又同時有停滯與 chip 才截斷），徽章不縮；chip 最後才截斷（不溢出蓋到右側狀態徽章）。
+           更新時間放在標頭而非底列：底列的異常標記（「嚴重 · 已回復 28 秒前」）在約 230px 寬的卡片會把它擠掉，
+           放這裡則所有寬度同一版面、不靠寬度分支，標記出現與否也不動它的位置 -->
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
           <div class="truncate text-md font-semibold text-ink">{{ label }}</div>
           <div class="flex h-5 min-w-0 items-center gap-1.5">
             <span class="min-w-0 shrink-[999] truncate font-mono text-xs text-ink-3">{{ machineId }}</span>
+            <span class="shrink-0 text-xs text-ink-3" aria-hidden="true">·</span>
+            <!-- 更新時間：畫面只顯示相對時間，「更新」前綴給輔助技術；滑過顯示 24 小時制絕對時間 -->
+            <span
+              :id="updatedId"
+              class="min-w-0 shrink-[99] truncate text-xs text-ink-3"
+              :title="absoluteTime"
+            ><span class="sr-only">更新 </span>{{ relativeTime }}</span>
             <span
               v-if="stale"
               class="inline-flex shrink-0 items-center gap-1 rounded-pill border border-stale bg-surface-strong px-2 py-px text-xs font-semibold leading-4 text-ink-2"
@@ -223,11 +232,8 @@ const absoluteTime = computed(() => (props.machine ? formatClock(props.machine.l
               machine.state === 'critical' ? 'border-crit' : 'border-transparent',
             ]"
           >{{ STATE_STYLE[machine.state].label }}</span>
-          <StatusLight
-            v-if="machine"
-            :state="machine.state"
-            :pulse="machine.state === 'critical'"
-          />
+          <!-- 狀態燈不另脈動：整張嚴重卡片的底色已在脈動，燈再閃會在半週期與 crit-bg 底同色而消失 -->
+          <StatusLight v-if="machine" :state="machine.state" />
           <span v-else class="inline-flex h-3 w-3 items-center justify-center" aria-hidden="true">
             <span class="block h-2.5 w-2.5 rounded-pill bg-etch" />
           </span>
@@ -263,15 +269,14 @@ const absoluteTime = computed(() => (props.machine ? formatClock(props.machine.l
         </div>
       </div>
 
-      <!-- 底列佔位：固定 20px 高，實際內容（異常標記、更新時間）疊在其上（見下方底列）。
+      <!-- 底列佔位：固定 20px 高，異常標記疊在其上（見下方底列）。
            標記清除鈕是按鈕，不能巢狀在卡片按鈕內，所以底列放在卡片按鈕外、絕對定位對齊這一格；
-           佔位恆在，標記出現與否都不改卡片尺寸（FR-026、FR-031）。
-           底列不接收指標事件，滑過時落在這一格，24 小時制絕對時間 tooltip 掛在這裡 -->
-      <div class="mt-auto h-5" :title="absoluteTime" aria-hidden="true" />
+           佔位恆在，標記出現與否都不改卡片尺寸（FR-026、FR-031） -->
+      <div class="mt-auto h-5" aria-hidden="true" />
     </button>
 
-    <!-- 底列：左起 異常標記 → 更新時間，右側留給診斷圖示（right-12 = 圖示 28px ＋ 間距）。
-           位置對齊卡片內容區（1px 邊框 ＋ 14px 內距）。空間不足時更新時間先收（shrink 權重大），標記不縮。
+    <!-- 底列：只放異常標記，右側留給診斷圖示（right-12 = 圖示 28px ＋ 間距）。
+           位置對齊卡片內容區（1px 邊框 ＋ 14px 內距）。標記保留 truncate 當最後防線，正常寬度不觸發。
            整列不接收指標事件（點擊落到卡片＝選台），只有未確認的清除鈕可點；
            mousedown.prevent：點清除後按鈕轉 disabled，不讓焦點先移到它、再掉到 body -->
     <div
@@ -282,7 +287,7 @@ const absoluteTime = computed(() => (props.machine ? formatClock(props.machine.l
         type="button"
         data-fg="latch-clear"
         tabindex="-1"
-        class="max-w-full shrink-0 animate-latch-in truncate rounded-pill border px-2 py-px font-semibold leading-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus"
+        class="min-w-0 max-w-full animate-latch-in truncate rounded-pill border px-2 py-px font-semibold leading-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus"
         :class="[latchView.cls, latchView.struck ? '' : 'pointer-events-auto hover:border-current']"
         :disabled="latchView.struck"
         :aria-label="latchView.ariaLabel"
@@ -291,7 +296,6 @@ const absoluteTime = computed(() => (props.machine ? formatClock(props.machine.l
       >
         <span :id="latchTextId"><span v-if="latchView.struck" class="sr-only">已確認：</span>{{ latchView.text }}</span>
       </button>
-      <span :id="updatedId" class="min-w-0 shrink-[999] truncate">更新 {{ relativeTime }}</span>
     </div>
 
     <!-- 診斷圖示（作用於該台；滑鼠可點）。store 內部去重／連線把關。

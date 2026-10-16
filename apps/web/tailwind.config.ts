@@ -72,9 +72,13 @@ export default {
         mono: ['"JetBrains Mono"', '"Noto Sans TC"', 'ui-monospace', 'monospace'],
       },
       keyframes: {
+        // 嚴重卡片的脈動：只動 background-color 與 border-color——半週期時把半透明的 crit-bg 底「斟滿」
+        // 成不透明、邊框由 crit 換成 crit-fg（只換色不動寬度；dark 主題底色差小，靠邊框色才看得出）。
+        // 不動尺寸、不用 box-shadow 擴散（零位移的外擴陰影就是光暈）。刻意不寫 0%／100%：起訖取元素
+        // 自身的底色與邊框色，hover（底已不透明）時只剩邊框在換色；選取規則另以 `animation: none` 停用
+        // （見 styles/tailwind.css），選取的 accent 邊框與 accent-wash 底不被染紅。
         criticalPulse: {
-          '0%, 100%': { boxShadow: '0 0 0 0 rgb(var(--c-crit) / 0.35)' },
-          '50%': { boxShadow: '0 0 0 6px rgb(var(--c-crit) / 0)' },
+          '50%': { backgroundColor: 'rgb(var(--c-crit-bg) / 1)', borderColor: 'rgb(var(--c-crit-fg) / 1)' },
         },
         streamCaret: {
           '0%, 40%': { opacity: '1' },

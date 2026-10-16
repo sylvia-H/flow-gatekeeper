@@ -8,13 +8,15 @@ import type { MachineState } from "@flow-gatekeeper/contracts";
  * - warning：玻璃 + 1px `border-warn` 全邊框（013 FR-030；只換 border 顏色、不改寬度，
  *   盒模型不變、不位移）。hover 保留警告邊框，只把玻璃轉為不透明——狀態不因 hover 消失。
  * - critical：`border-crit` + 半透明 crit-bg（80%，疊在玻璃位置上仍透出桌面格線）+
- *   `animate-critical-pulse`（動畫只動 box-shadow）。hover 時 crit-bg 轉為不透明。
+ *   `animate-critical-pulse`（動畫只動 background-color 與 border-color：半週期把 80% 的 crit-bg 斟滿成
+ *   不透明、邊框 crit → crit-fg；不動尺寸、不用光暈）。hover 時 crit-bg 轉為不透明，只剩邊框換色；
+ *   選取時由選取規則停用脈動。
  *
  * hover 不用位移（translate）：FR-031 要求 hover 不造成版面跳動。
  *
  * **選取態不在這裡**：選取以 `.machine-card[data-selected="true"]` 規則呈現（見 `styles/tailwind.css`），
  * 放在所有 utilities 之後、特異性 (0,2,0)，才能同時勝過這裡的狀態 class 與 `hover:*`；
- * 選取框用 outline（不是 ring／box-shadow），critical 的 pulse 動畫就不會把它蓋掉。
+ * 選取框用 outline（不是 ring／box-shadow）。
  * 若把選取改回一般 utility class，會重現「選取與未選取看起來一樣」的缺陷
  * （回歸測試：`MachineNodeCard.css.test.ts`）。
  */

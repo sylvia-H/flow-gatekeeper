@@ -19,8 +19,9 @@ import type { RateSample } from "../../domains/monitoring/lib/rate-series.js";
  *   這一格恆佔位，液位線與刻度不會因它出現而位移。
  * - 依 strip 自身寬度（container query）收斂：窄於 36rem 拿掉讀數間的箭頭；窄於 32rem（例：1024 寬
  *   且 Copilot 面板展開、768 直式）整個走勢區改到讀數下方獨佔一列（約 146px 高），狀態仍與走勢線同列。
- * - 手機（< md）只保留每秒訊息、比值與丟棄數（FR-009、FR-011），標籤改放數值左側、單列不換行，
- *   約 50px 高；丟棄數的位置恆存在（無丟棄時為空），出現時不改變高度。「連線中斷」手機不顯示，
+ * - 手機（< md）只保留每秒訊息、比值與丟棄數（FR-009、FR-011），標籤改放數值左側、單列不換行；
+ *   其下仍有比值刻度（`Graduation compact`，18px）與液位線——量筒在手機上也認得出來（FR-009a）。
+ *   約 70px 高；丟棄數的位置恆存在（無丟棄時為空），出現時不改變高度。「連線中斷」手機不顯示，
  *   由主區橫幅說明。
  */
 const props = defineProps<{
@@ -190,7 +191,7 @@ const ratioTitle = computed(
       </div>
     </div>
 
-    <!-- 下列：比值刻度與液位線（手機省略）；右側一格恆佔位給「>60」 -->
+    <!-- 下列：比值刻度與液位線（md+；手機版在下方 .bp-scale-mobile）；右側一格恆佔位給「>60」 -->
     <div class="bp-scale mt-1.5 hidden items-start gap-2 md:flex">
       <div class="relative min-w-0 flex-1">
         <Graduation />
@@ -212,6 +213,31 @@ const ratioTitle = computed(
       </div>
       <span
         class="bp-over w-7 shrink-0 font-mono text-xs font-semibold leading-4 text-accent"
+        aria-hidden="true"
+      >{{ overScale ? ">60" : "" }}</span>
+    </div>
+
+    <!-- 手機（< md）的比值刻度與液位線：同一套量筒縮成 18px 高（刻度 6px＋數字 12px），恆渲染、
+         不隨比值有無或丟棄數出現而改變高度；液位線同桌機以 translateX 位移、>60 釘右端並標「>60」 -->
+    <div class="bp-scale-mobile mt-0.5 flex items-start gap-2 md:hidden">
+      <div class="relative min-w-0 flex-1">
+        <Graduation compact />
+        <div
+          v-if="levelTransform !== null"
+          class="pointer-events-none absolute -inset-x-1 -top-0.5 bottom-0 overflow-hidden"
+          aria-hidden="true"
+        >
+          <div
+            class="bp-level-mobile absolute inset-y-0 left-1 right-1 motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-out"
+            :style="{ transform: levelTransform }"
+            :data-over="overScale ? 'true' : undefined"
+          >
+            <span class="absolute left-0 top-0 h-2 w-0.5 -translate-x-1/2 rounded-control bg-accent" />
+          </div>
+        </div>
+      </div>
+      <span
+        class="bp-over-mobile w-7 shrink-0 font-mono text-xs font-semibold leading-3 text-accent"
         aria-hidden="true"
       >{{ overScale ? ">60" : "" }}</span>
     </div>

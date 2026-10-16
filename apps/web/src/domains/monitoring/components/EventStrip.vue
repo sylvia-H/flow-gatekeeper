@@ -33,7 +33,8 @@ const SEVERITY: Record<DerivedEvent["severity"], { label: string; text: string; 
     :style="{ height: `${height}px` }"
     aria-label="事件流"
   >
-    <div class="flex shrink-0 items-baseline justify-between gap-2 border-b border-edge px-3.5 py-1.5">
+    <!-- 標題列固定 34px（含 1px 底線）：外框 2＋34＋每列 32 × n，100／164px 正好整列（event-strip-size.ts） -->
+    <div class="flex h-[34px] shrink-0 items-baseline justify-between gap-2 border-b border-edge px-3.5 py-1.5">
       <span class="text-sm font-semibold text-ink-2">事件流</span>
       <span class="font-mono text-xs text-ink-3">{{ events.length }}/50</span>
     </div>

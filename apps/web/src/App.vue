@@ -18,6 +18,12 @@ import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFreq
 import { useResizeDrag } from "./shared/composables/useResizeDrag.js";
 import { useKeyboardShortcuts } from "./shared/composables/useKeyboardShortcuts.js";
 import { useDiagnoseTrigger } from "./domains/ai-copilot/composables/useDiagnoseTrigger.js";
+import {
+  EVENT_STRIP_MAX,
+  EVENT_STRIP_MIN,
+  EVENT_STRIP_STORAGE_KEY,
+  eventStripInitialHeight,
+} from "./domains/monitoring/lib/event-strip-size.js";
 import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
 import { machineLabel } from "./domains/monitoring/lib/machine-labels.js";
 import { diagnosisBadgeText } from "./domains/ai-copilot/lib/diagnosis-badge.js";
@@ -35,6 +41,7 @@ const metrics = useMetricsStore();
 /**
  * 事件流面板高度可拖曳或用鍵盤調整（把手在面板上緣，往上拖增高，故 direction: -1；
  * 聚焦把手後 ArrowUp 增高／ArrowDown 減少 16px，FR-034c）。
+ * 未設偏好時的預設依載入當下的視窗高決定（≤ 800px 只留標題＋2 列，見 event-strip-size.ts）。
  */
 const {
   size: eventStripHeight,
@@ -43,10 +50,10 @@ const {
   handleAttrs: eventStripHandleAttrs,
 } = useResizeDrag({
   axis: "y",
-  min: 100,
-  max: 360,
-  initial: 150,
-  storageKey: "flow-gatekeeper:event-strip-height",
+  min: EVENT_STRIP_MIN,
+  max: EVENT_STRIP_MAX,
+  initial: eventStripInitialHeight(typeof window !== "undefined" ? window.innerHeight : Infinity),
+  storageKey: EVENT_STRIP_STORAGE_KEY,
   direction: -1,
   label: "調整事件流面板高度",
 });
@@ -319,7 +326,8 @@ const handle = useHighFrequencyWs({
     </template>
 
     <template #main>
-      <div class="flex h-full min-h-0 flex-col gap-3">
+      <!-- 主區欄是 <main>（flex 直欄）的 flex-1 子項：高度由 flex 分配、不靠 h-full 百分比，事件列下緣與 12px 桌面留邊恆在視窗內 -->
+      <div class="flex min-h-0 flex-1 flex-col gap-3">
         <h1 class="sr-only">機群總覽 · {{ machineCount }} 台</h1>
         <!-- 手機（rail 隱藏）：機群健康摘要條在最上方（44px），比值仍落在首屏；點擊開異常清單覆蓋層，不推擠拓樸 -->
         <FleetHealth
@@ -349,7 +357,9 @@ const handle = useHighFrequencyWs({
         >
           {{ banner.text }}
         </div>
-        <div class="min-h-0 flex-1 overflow-hidden rounded-card">
+        <!-- 拓樸捲動區：下緣一道蝕刻邊是捲動邊界（邊在捲動容器外層、不隨內容捲），
+             卡片被捲動區截斷時讀成「沒入刻線之下」，不與下方事件列玻璃讀成重疊 -->
+        <div class="min-h-0 flex-1 overflow-hidden border-b border-edge">
           <StageTopology />
         </div>
         <!-- 事件流：上方 12px 間隙即高度把手（往上拖增高；可 Tab 聚焦、方向鍵調整，Tab 順序在拓樸之後） -->

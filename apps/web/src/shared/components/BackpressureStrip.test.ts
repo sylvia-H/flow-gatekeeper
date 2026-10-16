@@ -139,7 +139,7 @@ describe("BackpressureStrip", () => {
     expect(trend.classes()).toContain("h-12");
   });
 
-  it("手機省略的項目（每秒批次、走勢區、比值刻度、箭頭）都帶 hidden + md:*", () => {
+  it("手機省略的項目（每秒批次、走勢區、桌機版刻度列、箭頭）都帶 hidden + md:*；手機改用 .bp-scale-mobile", () => {
     const w = mountStrip();
     for (const sel of [".bp-batches", ".bp-trend", ".bp-scale"]) {
       const classes = w.get(sel).classes();
@@ -177,6 +177,39 @@ describe("BackpressureStrip", () => {
     const scale = w.get('[role="img"][aria-label="背壓比值刻度 0 到 60"]');
     expect(scale.findAll("span").map((s) => s.text())).toEqual(["0", "10", "20", "30", "40", "50", "60"]);
     expect(scale.findAll("line")).toHaveLength(1 + 61); // 底線 + 0..60 每格一條
+  });
+
+  it("手機版（< md）也有比值刻度：compact 版每 10 格標數字、18px 高，且只在手機顯示（md:hidden）", () => {
+    const w = mountStrip();
+    const mobile = w.get(".bp-scale-mobile");
+    expect(mobile.classes()).toEqual(expect.arrayContaining(["flex", "md:hidden"]));
+    expect(mobile.classes()).not.toContain("hidden");
+    const scale = mobile.get('[role="img"][aria-label="背壓比值刻度 0 到 60"]');
+    expect(scale.classes()).toContain("h-[18px]");
+    expect(scale.findAll("span").map((s) => s.text())).toEqual(["0", "10", "20", "30", "40", "50", "60"]);
+    expect(scale.findAll("line")).toHaveLength(1 + 61);
+    expect(scale.get("svg").classes()).toContain("h-1.5");
+    // 桌機刻度仍是一般尺寸
+    expect(w.get(".bp-scale").get('[role="img"]').classes()).toContain("h-6");
+  });
+
+  it("手機液位線：2px 深青短線，位置 = 比值 / 60；> 60 釘右端並標「>60」", async () => {
+    const w = mountStrip({ windowRatio: 15 });
+    const line = () => w.get(".bp-level-mobile");
+    expect(line().attributes("style")).toContain("translateX(25%)");
+    expect(line().get("span").classes()).toEqual(expect.arrayContaining(["w-0.5", "bg-accent"]));
+    expect(w.get(".bp-over-mobile").text()).toBe("");
+    await w.setProps({ windowRatio: 84.04 });
+    expect(line().attributes("style")).toContain("translateX(100%)");
+    expect(line().attributes("data-over")).toBe("true");
+    expect(w.get(".bp-over-mobile").text()).toBe(">60");
+  });
+
+  it("手機刻度列恆渲染（無比值、丟棄、斷線都不改變結構）；無比值時不畫液位線，「>60」格恆佔位", () => {
+    const w = mountStrip({ windowRatio: null, dropped: 3, stale: true });
+    expect(w.get(".bp-scale-mobile").find('[role="img"]').exists()).toBe(true);
+    expect(w.find(".bp-level-mobile").exists()).toBe(false);
+    expect(w.get(".bp-over-mobile").classes()).toContain("w-7");
   });
 
   it("走勢線：兩條 polyline（訊息實線、批次虛線），文字摘要與「近 60 秒」標示", () => {

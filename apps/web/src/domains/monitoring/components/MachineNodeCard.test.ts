@@ -476,7 +476,7 @@ describe("MachineNodeCard 診斷狀態 chip（T051、FR-028、US5 Acceptance 3�
     expect(el.classes()).toContain(bg);
   });
 
-  it("chip 在 id 列（id → 停滯徽章 → chip），id 讓位可截斷、徽章不縮；chip 不在底列", () => {
+  it("chip 在 id 列（id · 更新時間 → 停滯徽章 → chip），id 最先讓位可截斷、更新時間次之、徽章不縮；chip 不在底列", () => {
     const w = mountCard({
       stale: true,
       latch: { machineId: "press-02", level: "warning", enteredAt: T0, recoveredAt: null, clearedBy: null },
@@ -486,26 +486,37 @@ describe("MachineNodeCard 診斷狀態 chip（T051、FR-028、US5 Acceptance 3�
     const row = el.element.parentElement!;
     expect(row.classList.contains("h-5")).toBe(true);
     const items = Array.from(row.children).map((c) => c.textContent?.trim());
-    expect(items).toEqual(["press-02", "停滯", "診斷：診斷中 60%"]);
+    expect(items).toEqual(["press-02", "·", "更新 剛剛", "停滯", "診斷：診斷中 60%"]);
     const id = row.children[0]!;
     expect(id.classList.contains("shrink-[999]")).toBe(true);
     expect(id.classList.contains("truncate")).toBe(true);
-    expect(row.children[1]!.classList.contains("shrink-0")).toBe(true);
+    expect(row.children[1]!.getAttribute("aria-hidden")).toBe("true");
+    const time = row.children[2]!;
+    expect(Array.from(time.classList)).toEqual(expect.arrayContaining(["shrink-[99]", "truncate", "min-w-0", "text-ink-3"]));
+    expect(row.children[3]!.classList.contains("shrink-0")).toBe(true);
     expect(cardButton(w).element.contains(el.element)).toBe(true);
     const footer = w.get('[data-fg="latch-clear"]').element.parentElement!;
     expect(footer.contains(el.element)).toBe(false);
   });
 
-  it("底列只有標記與更新時間；底列不接收指標事件，只有未確認的清除鈕可點", () => {
+  it("底列只有異常標記（更新時間在標頭 id 列）；底列不接收指標事件，只有未確認的清除鈕可點", () => {
     const w = mountCard({
       latch: { machineId: "press-02", level: "warning", enteredAt: T0, recoveredAt: null, clearedBy: null },
       badge: { kind: "failed" },
     });
     const btn = w.get('[data-fg="latch-clear"]');
     const footer = btn.element.parentElement!;
-    expect(Array.from(footer.children).map((c) => c.textContent?.trim())).toEqual(["警告 · 剛進入", "更新 剛剛"]);
+    expect(Array.from(footer.children).map((c) => c.textContent?.trim())).toEqual(["警告 · 剛進入"]);
     expect(footer.classList.contains("pointer-events-none")).toBe(true);
     expect(btn.classes()).toContain("pointer-events-auto");
+    // 標記保留截斷當最後防線（可縮），不再 shrink-0 擠壓其他內容
+    expect(btn.classes()).toEqual(expect.arrayContaining(["min-w-0", "truncate"]));
+    expect(btn.classes()).not.toContain("shrink-0");
+    // 更新時間在卡片主按鈕內的 id 列，不受底列標記長度影響
+    const updatedId = cardButton(w).attributes("aria-describedby")!.split(" ").at(-1)!;
+    const time = w.get(`[id="${updatedId}"]`);
+    expect(cardButton(w).element.contains(time.element)).toBe(true);
+    expect(footer.contains(time.element)).toBe(false);
   });
 });
 
@@ -519,10 +530,14 @@ describe("MachineNodeCard 底列不改卡片尺寸（FR-026、FR-031）", () => 
     expect(new Set(cardButton(plain).classes())).toEqual(new Set(cardButton(busy).classes()));
     for (const w of [plain, busy]) {
       expect(cardButton(w).classes()).toContain("min-h-[148px]");
-      const spacer = cardButton(w).get("[title]");
+      const spacer = cardButton(w).get(".mt-auto");
       expect(spacer.classes()).toEqual(expect.arrayContaining(["mt-auto", "h-5"]));
+      // 更新時間所在的 id 列固定 h-5：標記／chip 出現與否都不改標頭高度
       const updatedId = cardButton(w).attributes("aria-describedby")!.split(" ").at(-1)!;
-      const footer = w.get(`[id="${updatedId}"]`).element.parentElement!;
+      expect(w.get(`[id="${updatedId}"]`).element.parentElement!.classList.contains("h-5")).toBe(true);
+    }
+    {
+      const footer = busy.get('[data-fg="latch-clear"]').element.parentElement!;
       expect(Array.from(footer.classList)).toEqual(expect.arrayContaining(["absolute", "h-5", "overflow-hidden"]));
     }
   });

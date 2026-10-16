@@ -64,7 +64,10 @@
  * - 與 `hover:*`／`focus:outline-none`（(0,2,0)）同特異性但輸出在後（variants 已在上方明寫位置），
  *   hover 時選取框不消失。
  * 2px 由 1px accent 邊框 + 內縮 1px 的 outline 組成：不改 border-width（不動盒模型、不位移），
- * 也不用 ring／box-shadow——critical 的 `animate-critical-pulse` 動的是 box-shadow，會把 ring 蓋掉。
+ * 也不用 ring（box-shadow）：outline 不經 box-shadow，與玻璃內側高光及任何動畫都不相干。
+ * critical 的 `animate-critical-pulse` 動的是 background-color 與 border-color：動畫值高於一般宣告，
+ * 選取後若仍在跑，accent 邊框與 accent-wash 底會被週期性染回 crit 色，所以選取時以 `animation: none` 停住脈動
+ * （選取中的嚴重卡片仍有 crit 色徽章與狀態燈，Copilot 面板同時顯示該台）。
  * 回歸測試：`domains/monitoring/components/MachineNodeCard.css.test.ts`。
  */
 .machine-card[data-selected='true'] {
@@ -72,12 +75,13 @@
   background-color: theme('colors.accent.wash');
   outline: 1px solid theme('colors.accent.DEFAULT');
   outline-offset: -2px;
+  animation: none;
 }
 
 /*
  * MachineNodeCard 鍵盤焦點環（FR-034d：卡片是單一 Tab 停駐點，焦點 MUST 看得見）。
- * 用 outline 而非 ring：ring 是 box-shadow，critical 的 `animate-critical-pulse` 每幀改寫 box-shadow，
- * 未選取的嚴重卡片聚焦時會看不到 ring；outline 不受該動畫影響。
+ * 用 outline 而非 ring：與選取框同一套機制（cascade 測試以 outline shorthand 鎖定優先順序）；
+ * outline 與卡片的背景色脈動、玻璃內側高光（box-shadow）都不相干。
  * 2px `focus` 色、向外 2px：畫在卡片外，不與內縮的選取框或狀態邊框重疊（捲動容器留有 8px 內距，不被裁切）。
  * 優先順序：與 `.focus\:outline-none:focus`、選取規則同為 (0,2,0)，刻意排在兩者之後——
  * 聚焦時勝過 outline-none；選取＋聚焦時焦點環取代內縮的選取 outline，選取的 accent 邊框與 accent-wash 底色仍在。
@@ -93,7 +97,7 @@
  * prefers-reduced-motion：放在所有 layer 之後，確保蓋過 animate-* utilities。
  * 狀態本身不靠動畫傳達（critical 有 crit-bg tint 與文字徽章、串流有逐字出現的文字、
  * progress 有 aria 描述、連線粗細仍表達 throughput），所以這裡直接停掉循環動畫：
- * - critical pulse、串流游標、stage 連線流動（animate-flow）：停在靜止樣式。
+ * - critical pulse（底色與邊框色交替）、串流游標、stage 連線流動（animate-flow）：停在靜止樣式。
  * - indeterminate progress：停成一段靜止的 1/3 條，仍看得出「進行中」而非空條。
  * - transition（hover 上移、面板展開、主題切換）縮到近乎瞬間，保留狀態變化本身；
  *   `[data-theme-switching]` 期間的過渡由 theme.css 的 `transition: none !important` 停用

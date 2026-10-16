@@ -125,7 +125,9 @@ const {
         class="flex min-h-0 flex-1 bg-bench bg-bench-grid-lines"
         :class="peekVisible ? 'pb-8 lg:pb-0' : ''"
       >
-        <main class="min-h-0 min-w-0 flex-1 overflow-auto p-3">
+        <!-- flex 直欄：main slot 的根以 flex-1 填滿內容高（扣掉 p-3），不以 h-full 百分比取高；
+             內容放不下時才由這裡捲動（正常情況各區自行捲動，這層不出現捲軸） -->
+        <main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto p-3">
           <slot name="main" />
         </main>
 

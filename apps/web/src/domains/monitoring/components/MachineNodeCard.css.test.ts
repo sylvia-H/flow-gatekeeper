@@ -23,7 +23,8 @@ import { STATE_STYLE } from "../../../shared/lib/state-style.js";
  * class 組合最終生效的 border-color／background-color／outline：比較 (特異性, 輸出順序)，
  * 與瀏覽器對同一元素的判定一致。
  *
- * **刻意以 CSS cascade 測試取代 Playwright 截圖**（不新增瀏覽器相依）。迷你 cascade 的限制：
+ * 013 起已加入 `playwright-core` 與 `scripts/screenshots.cjs` 負責截圖與 layout shift 驗收；本測試保留為
+ * 單元層的 cascade 回歸（不起瀏覽器、CI 可跑），見指南 §15.6「013 UI 全面改版」。迷你 cascade 的限制：
  * - 只看頂層規則：`@media`（含 `md:`、`[@media(hover:none)]:`、reduced-motion）內的規則一律忽略；
  * - 不處理 `!important`、組合子、`:not()`／`:is()` 與偽元素；
  * - 偽類只模擬呼叫端指定的 active 集合（hover／focus／focus-visible；鍵盤聚焦時 focus 與 focus-visible 同時成立）；
@@ -32,8 +33,9 @@ import { STATE_STYLE } from "../../../shared/lib/state-style.js";
  * 卡片的選取／狀態／焦點環規則都落在上述可模擬的範圍內。
  *
  * 缺陷來源（三層）：`colors.inset` 讓 `ring-inset` 變成環顏色；狀態 class 輸出在選取 class 之後
- * 蓋掉選取；critical pulse 動畫（box-shadow）蓋掉 ring 選取框。焦點環同理（T056）：
- * `focus-visible:ring-2` 在嚴重卡片上會被 pulse 蓋掉，改為 `.machine-card:focus-visible` 的 outline。
+ * 蓋掉選取；當時的 critical pulse 動畫（box-shadow 擴散）蓋掉 ring 選取框。焦點環同理（T056）：
+ * 改為 `.machine-card:focus-visible` 的 outline。T065 起 pulse 改為只動 background-color 與 border-color（不用光暈），
+ * 選取規則以 `animation: none` 停住它，選取的 accent-wash 底不被脈動覆寫。
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -322,15 +324,39 @@ describe("WEB-1：MachineNodeCard 選取態勝過狀態 class", () => {
     }
   }
 
-  it("critical pulse 動畫只動 box-shadow，不碰選取態用到的屬性", () => {
-    const animated = new Set<string>();
+  it("critical pulse 只動 background-color（不透明 crit-bg）與 border-color（crit-fg），不用 box-shadow 光暈、不動尺寸", () => {
+    const decls: { selector: string; prop: string; value: string }[] = [];
     root.walkAtRules("keyframes", (at) => {
-      if (at.params === "criticalPulse") at.walkDecls((d) => void animated.add(d.prop));
+      if (at.params !== "criticalPulse") return;
+      at.walkRules((r) => r.walkDecls((d) => void decls.push({ selector: r.selector, prop: d.prop, value: d.value })));
     });
-    expect([...animated]).toEqual(["box-shadow"]);
-    for (const prop of ["border-color", "background-color", "outline", "outline-color"]) {
-      expect(animated.has(prop)).toBe(false);
-    }
+    expect(decls.map((d) => d.prop).sort()).toEqual(["background-color", "border-color"]);
+    // 只寫 50%：起訖沿用元素自身底色與邊框色
+    expect(new Set(decls.map((d) => d.selector))).toEqual(new Set(["50%"]));
+    const value = (prop: string) => decls.find((d) => d.prop === prop)?.value;
+    expect(colorWithAlpha(value("background-color"))).toBe(tokenWithAlpha("crit.bg"));
+    expect(colorVar(value("border-color"))).toBe(token("crit.fg"));
+    // 不動寬度與任何盒模型屬性
+    for (const d of decls) expect(d.prop).not.toMatch(/width|shadow|outline|transform|padding|margin/);
+  });
+
+  it("嚴重卡片帶 animate-critical-pulse；選取規則停用動畫（accent-wash 底不被脈動染回 crit-bg）", () => {
+    expect(cardElement("critical", { selected: false, stale: false, interaction: "none" }).classes.has("animate-critical-pulse")).toBe(
+      true,
+    );
+    let selectedAnimation: string | undefined;
+    root.walkRules((r) => {
+      if (r.selectors.includes(".machine-card[data-selected='true']")) {
+        r.walkDecls("animation", (d) => void (selectedAnimation = d.value));
+      }
+    });
+    expect(selectedAnimation).toBe("none");
+    // 選取規則 (0,2,0) 勝過 `.animate-critical-pulse`（(0,1,0)）
+    const el = cardElement("critical", { selected: true, stale: false, interaction: "none" });
+    expect(resolveProp(el, "animation")).toBe("none");
+    expect(resolveProp(cardElement("critical", { selected: false, stale: false, interaction: "none" }), "animation")).toMatch(
+      /^criticalPulse 1\.2s ease-in-out infinite$/,
+    );
   });
 });
 
@@ -342,7 +368,7 @@ describe("T056：卡片鍵盤焦點環（FR-034d）不被 critical pulse 蓋掉�
     return cls.split(/\s+/).filter(Boolean);
   };
 
-  it("卡片主按鈕不用 ring 畫焦點環（box-shadow 會被 pulse 蓋掉），也不帶 outline longhand utility", () => {
+  it("卡片主按鈕不用 ring 畫焦點環（一律走 outline 規則），也不帶 outline longhand utility", () => {
     const classes = staticClass();
     expect(classes.filter((c) => /(^|:)ring(-|$)/.test(c))).toEqual([]);
     // 只允許 shorthand 的 `focus:outline-none`；longhand（outline-2、outline-focus…）會與 shorthand 規則交錯、迷你 cascade 也算不準
