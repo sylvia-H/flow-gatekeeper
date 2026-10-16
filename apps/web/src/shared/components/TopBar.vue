@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { Search, Stethoscope, Gauge, Pause, Play } from "lucide-vue-next";
 import MetricsPanel from "./MetricsPanel.vue";
+import { isImeComposing } from "../lib/shortcuts.js";
 import {
   useMonitoringStore,
   type ConnectionStatus,
@@ -68,6 +69,35 @@ function onSearchInput(event: Event): void {
   store.setSearchQuery((event.target as HTMLInputElement).value);
 }
 
+/**
+ * 搜尋框 Enter（FR-034a、data-model §11）：結果恰一台且不在輸入法組字中 → 選取該台，並把焦點移到該台卡片
+ * （`.machine-card[data-machine]`），讓後續 `d` 不被輸入欄守門擋下。0 台或多台不動作、不攔截按鍵。
+ *
+ * 與 App 層 `useKeyboardShortcuts` 的分工：這裡是主處理者，命中時 **同步** `preventDefault()`（在任何 await 之前），
+ * 事件冒泡到 App 層時 `defaultPrevented` 已為 true，App 層應略過，避免重複選取與重複移焦。
+ * 選取同一台是冪等（`selectMachine` 只寫 id）。
+ * T060：手機覆蓋式搜尋落地後，於此一併收回覆蓋層。
+ */
+async function onSearchEnter(event: KeyboardEvent): Promise<void> {
+  // 長按 Enter 的重複事件不處理（App 層同樣略過 repeat）：首發已把焦點移到卡片。
+  if (event.repeat || isImeComposing(event)) return;
+  const ids = store.visibleMachineIds;
+  if (ids.length !== 1) return;
+  const id = ids[0]!;
+  event.preventDefault();
+  store.selectMachine(id);
+  // 等選取態渲染後再移焦；卡片不在 DOM（例如版面尚未掛載）時靜默略過。
+  await nextTick();
+  document.querySelector<HTMLElement>(`.machine-card[data-machine="${id}"]`)?.focus();
+}
+
+/**
+ * 搜尋框元素：App 層 `useKeyboardShortcuts` 以它判斷「搜尋框內的 Enter」、`/` 聚焦搜尋時呼叫 `focus()`。
+ * 父層經 template ref 取 `topBar.value?.searchInput`（expose 的 ref 會自動解包成元素）。
+ */
+const searchInput = ref<HTMLInputElement | null>(null);
+defineExpose({ searchInput });
+
 /** 工具列次要按鈕的共用外觀：桌邊上的玻璃小鈕。 */
 const TOOL_BUTTON =
   "flex h-9 items-center gap-1.5 rounded-control border border-edge bg-surface/72 px-2.5 text-sm text-ink-2 shadow-glass focus:outline-none focus-visible:ring-2 focus-visible:ring-focus";
@@ -83,12 +113,14 @@ const TOOL_BUTTON =
           aria-hidden="true"
         />
         <input
+          ref="searchInput"
           type="search"
           placeholder="搜尋機台"
           aria-label="搜尋機台"
           :value="store.searchQuery"
           class="h-9 w-full rounded-control border border-edge bg-surface/72 pl-8 pr-3 text-sm text-ink shadow-glass placeholder:text-ink-3 focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
           @input="onSearchInput"
+          @keydown.enter="onSearchEnter"
         />
       </div>
     </div>

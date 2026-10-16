@@ -26,11 +26,14 @@ import { STATE_STYLE } from "../../../shared/lib/state-style.js";
  * **刻意以 CSS cascade 測試取代 Playwright 截圖**（不新增瀏覽器相依）。迷你 cascade 的限制：
  * - 只看頂層規則：`@media`（含 `md:`、`[@media(hover:none)]:`、reduced-motion）內的規則一律忽略；
  * - 不處理 `!important`、組合子、`:not()`／`:is()` 與偽元素；
- * - 偽類只模擬呼叫端指定的 active 集合（hover／focus），`:focus-visible` 不成立。
- * 卡片的選取／狀態規則都落在上述可模擬的範圍內。
+ * - 偽類只模擬呼叫端指定的 active 集合（hover／focus／focus-visible；鍵盤聚焦時 focus 與 focus-visible 同時成立）；
+ * - 不展開 shorthand：`outline` 與 `outline-width` 等 longhand 各自求值——所以卡片的 outline 規則一律寫 shorthand
+ *   （`focus:outline-none`、選取規則、焦點環規則皆然），並以測試擋下卡片上出現 outline longhand utility。
+ * 卡片的選取／狀態／焦點環規則都落在上述可模擬的範圍內。
  *
  * 缺陷來源（三層）：`colors.inset` 讓 `ring-inset` 變成環顏色；狀態 class 輸出在選取 class 之後
- * 蓋掉選取；critical pulse 動畫（box-shadow）蓋掉 ring 選取框。
+ * 蓋掉選取；critical pulse 動畫（box-shadow）蓋掉 ring 選取框。焦點環同理（T056）：
+ * `focus-visible:ring-2` 在嚴重卡片上會被 pulse 蓋掉，改為 `.machine-card:focus-visible` 的 outline。
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -218,7 +221,14 @@ function expectedUnselected(state: CardState, hover: boolean): { border: string;
   return { border: EXPECTED_HOVER[state].border ?? idle.border, bg: EXPECTED_HOVER[state].bg };
 }
 
-type Interaction = "none" | "hover" | "focus" | "hover+focus";
+/** `focus+focus-visible`＝鍵盤聚焦（Tab／方向鍵／搜尋 Enter 移焦）；只有 `focus`＝滑鼠點選。 */
+type Interaction =
+  | "none"
+  | "hover"
+  | "focus"
+  | "hover+focus"
+  | "focus+focus-visible"
+  | "hover+focus+focus-visible";
 
 function cardElement(state: CardState, opts: { selected: boolean; stale: boolean; interaction: Interaction }): ElementModel {
   const vue = readFileSync(join(here, "MachineNodeCard.vue"), "utf8");
@@ -322,4 +332,63 @@ describe("WEB-1：MachineNodeCard 選取態勝過狀態 class", () => {
       expect(animated.has(prop)).toBe(false);
     }
   });
+});
+
+describe("T056：卡片鍵盤焦點環（FR-034d）不被 critical pulse 蓋掉、與選取框排定優先順序", () => {
+  const staticClass = (): string[] => {
+    const vue = readFileSync(join(here, "MachineNodeCard.vue"), "utf8");
+    const cls = /class="(flex min-h-\[148px\][^"]*)"/.exec(vue)?.[1];
+    if (!cls) throw new Error("找不到 MachineNodeCard 根按鈕的靜態 class");
+    return cls.split(/\s+/).filter(Boolean);
+  };
+
+  it("卡片主按鈕不用 ring 畫焦點環（box-shadow 會被 pulse 蓋掉），也不帶 outline longhand utility", () => {
+    const classes = staticClass();
+    expect(classes.filter((c) => /(^|:)ring(-|$)/.test(c))).toEqual([]);
+    // 只允許 shorthand 的 `focus:outline-none`；longhand（outline-2、outline-focus…）會與 shorthand 規則交錯、迷你 cascade 也算不準
+    expect(classes.filter((c) => /(^|:)outline(-|$)/.test(c))).toEqual(["focus:outline-none"]);
+  });
+
+  it("焦點環規則存在且輸出在選取規則之後（同為 (0,2,0)，靠順序勝出）", () => {
+    let selectedAt = -1;
+    let focusAt = -1;
+    let order = 0;
+    root.each((node) => {
+      if (node.type !== "rule") return;
+      order++;
+      if (node.selectors.includes(".machine-card[data-selected='true']")) selectedAt = order;
+      if (node.selectors.includes(".machine-card:focus-visible")) focusAt = order;
+    });
+    expect(selectedAt).toBeGreaterThan(0);
+    expect(focusAt).toBeGreaterThan(selectedAt);
+  });
+
+  for (const { state, stale } of CASES) {
+    for (const interaction of ["focus+focus-visible", "hover+focus+focus-visible"] as const) {
+      const hover = interaction.startsWith("hover");
+      const label = `${state}${stale ? "+stale" : ""}+${interaction}`;
+
+      it(`${label}：未選取 → 2px focus 色外框 outline，狀態外觀不變`, () => {
+        const el = cardElement(state, { selected: false, stale, interaction });
+        if (state === "critical") expect(el.classes.has("animate-critical-pulse")).toBe(true);
+        const outline = resolveProp(el, "outline") ?? "";
+        expect(outline).toMatch(/\b2px solid\b/);
+        expect(colorVar(outline)).toBe(token("focus"));
+        expect(resolveProp(el, "outline-offset")).toBe("2px");
+        const expected = expectedUnselected(state, hover);
+        expect(colorVar(resolveProp(el, "border-color"))).toBe(token(expected.border));
+        expect(colorWithAlpha(resolveProp(el, "background-color"))).toBe(tokenWithAlpha(expected.bg));
+      });
+
+      it(`${label}：選取 → 焦點環外框勝過內縮選取框，accent 邊框與 accent-wash 底仍在`, () => {
+        const el = cardElement(state, { selected: true, stale, interaction });
+        const outline = resolveProp(el, "outline") ?? "";
+        expect(outline).toMatch(/\b2px solid\b/);
+        expect(colorVar(outline)).toBe(token("focus"));
+        expect(resolveProp(el, "outline-offset")).toBe("2px");
+        expect(colorVar(resolveProp(el, "border-color"))).toBe(token("accent"));
+        expect(colorWithAlpha(resolveProp(el, "background-color"))).toBe(tokenWithAlpha("accent.wash"));
+      });
+    }
+  }
 });

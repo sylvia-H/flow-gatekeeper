@@ -163,7 +163,7 @@ function onClearLatch(machineId: string): void {
 
 <template>
   <!-- 桌面底色與 24px 格線由 AppLayout 的主區容器提供，這裡不另畫，避免兩套格線原點錯位。
-       捲動容器保留 8px 內距：卡片焦點環（2px）與 critical 光暈（6px）超出 padding box，貼邊會被外層 overflow 裁掉 -->
+       捲動容器保留 8px 內距：卡片焦點環（2px 寬＋2px offset，外延 4px）與 critical 光暈（6px）超出 padding box，貼邊會被外層 overflow 裁掉 -->
   <div ref="container" class="h-full overflow-auto p-2">
     <div
       class="grid"

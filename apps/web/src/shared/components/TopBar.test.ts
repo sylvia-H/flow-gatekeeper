@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mount, type VueWrapper } from "@vue/test-utils";
+import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia, type Pinia } from "pinia";
 import TopBar from "./TopBar.vue";
 import { useMonitoringStore } from "../../domains/monitoring/stores/monitoring.store.js";
@@ -97,6 +97,121 @@ describe("TopBar 語意分組（FR-034）", () => {
     expect(text(pause!.element)).toBe("恢復");
     expect(text(mock!.element)).toBe("Mock 頻率");
     expect(mock!.attributes("disabled")).toBeDefined();
+  });
+});
+
+describe("搜尋框 Enter 選取唯一結果（T056、FR-034a）", () => {
+  /** 主區卡片的替身：與 MachineNodeCard 同一個錨點（`.machine-card[data-machine]`、原生 button 可聚焦）。 */
+  function fakeCard(id: string): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "machine-card";
+    btn.dataset["machine"] = id;
+    document.body.appendChild(btn);
+    return btn;
+  }
+
+  async function pressEnter(w: VueWrapper, init: KeyboardEventInit = {}): Promise<KeyboardEvent> {
+    const input = group(w, "導航").get('input[type="search"]');
+    (input.element as HTMLInputElement).focus();
+    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
+    input.element.dispatchEvent(event);
+    await flushPromises();
+    return event;
+  }
+
+  it("結果恰一台：選取該台、攔截按鍵（preventDefault），並把焦點移到該台卡片", async () => {
+    const store = useMonitoringStore();
+    const spy = vi.spyOn(store, "selectMachine");
+    fakeCard("press-02");
+    const oven = fakeCard("oven-04");
+    const w = mountBar();
+    await group(w, "導航").get('input[type="search"]').setValue("烤爐");
+    expect(store.visibleMachineIds).toEqual(["oven-04"]);
+
+    const event = await pressEnter(w);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith("oven-04");
+    expect(store.selectedMachineId).toBe("oven-04");
+    expect(event.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(oven);
+  });
+
+  it("preventDefault 在移焦的 await 之前同步呼叫（冒泡到 App 層時已是 defaultPrevented，App 層據此略過）", async () => {
+    const store = useMonitoringStore();
+    fakeCard("oven-04");
+    const w = mountBar();
+    await group(w, "導航").get('input[type="search"]').setValue("烤爐");
+    let preventedAtBubble: boolean | null = null;
+    const onDoc = (e: Event): void => {
+      preventedAtBubble = e.defaultPrevented;
+    };
+    document.addEventListener("keydown", onDoc);
+    try {
+      await pressEnter(w);
+    } finally {
+      document.removeEventListener("keydown", onDoc);
+    }
+    expect(preventedAtBubble).toBe(true);
+    expect(store.selectedMachineId).toBe("oven-04");
+  });
+
+  it("IME 組字中的 Enter（確認選字）不選取、不攔截", async () => {
+    const store = useMonitoringStore();
+    const spy = vi.spyOn(store, "selectMachine");
+    fakeCard("oven-04");
+    const w = mountBar();
+    await group(w, "導航").get('input[type="search"]').setValue("烤爐");
+
+    for (const init of [{ isComposing: true }, { keyCode: 229 }] as KeyboardEventInit[]) {
+      const event = await pressEnter(w, init);
+      expect(event.defaultPrevented).toBe(false);
+    }
+    expect(spy).not.toHaveBeenCalled();
+    expect(store.selectedMachineId).toBeNull();
+  });
+
+  it("0 台或多台：不選取、不攔截、焦點留在搜尋框", async () => {
+    const store = useMonitoringStore();
+    const spy = vi.spyOn(store, "selectMachine");
+    fakeCard("press-02");
+    const w = mountBar();
+    const input = group(w, "導航").get('input[type="search"]');
+
+    for (const query of ["zzz", "0", ""]) {
+      await input.setValue(query);
+      expect(store.visibleMachineIds.length).not.toBe(1);
+      const event = await pressEnter(w);
+      expect(event.defaultPrevented).toBe(false);
+      expect(document.activeElement).toBe(input.element);
+    }
+    expect(spy).not.toHaveBeenCalled();
+    expect(store.selectedMachineId).toBeNull();
+  });
+
+  it("長按 Enter 的重複事件不處理", async () => {
+    const store = useMonitoringStore();
+    const spy = vi.spyOn(store, "selectMachine");
+    fakeCard("oven-04");
+    const w = mountBar();
+    await group(w, "導航").get('input[type="search"]').setValue("烤爐");
+    const event = await pressEnter(w, { repeat: true });
+    expect(event.defaultPrevented).toBe(false);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("卡片不在 DOM 時仍選取、不拋錯", async () => {
+    const store = useMonitoringStore();
+    const w = mountBar();
+    await group(w, "導航").get('input[type="search"]').setValue("烤爐");
+    await pressEnter(w);
+    expect(store.selectedMachineId).toBe("oven-04");
+  });
+
+  it("expose 搜尋框元素（App 層快捷鍵判斷「搜尋框內的 Enter」與 `/` 聚焦用）", () => {
+    const w = mountBar();
+    const exposed = (w.vm as unknown as { searchInput: HTMLInputElement | null }).searchInput;
+    expect(exposed).toBe(group(w, "導航").get('input[type="search"]').element);
   });
 });
 

@@ -288,6 +288,62 @@ describe("MachineNodeCard 互動", () => {
   });
 });
 
+describe("MachineNodeCard 單一 Tab 停駐點（T056、FR-034d）", () => {
+  const AT = 1_700_000_000_000;
+  const withLatch: AnomalyLatch = {
+    machineId: "press-02",
+    level: "critical",
+    enteredAt: AT,
+    recoveredAt: null,
+    clearedBy: null,
+  };
+
+  it("卡片主按鈕是 .machine-card[data-machine]、tabindex=0；卡片內其他按鈕（清除鈕、診斷圖示）皆 tabindex=-1", () => {
+    const w = mountCard({ latch: withLatch, now: AT });
+    const buttons = w.findAll("button");
+    // 主按鈕 ＋ 清除鈕 ＋ 診斷圖示：確認清除鈕確實有渲染，否則「其他按鈕」的斷言會空轉
+    expect(buttons).toHaveLength(3);
+    const [card, ...rest] = buttons;
+    expect(card!.classes()).toContain(CARD_ROOT_CLASS);
+    expect(card!.attributes("data-machine")).toBe("press-02");
+    expect(card!.attributes("tabindex")).toBe("0");
+    for (const b of rest) expect(b.attributes("tabindex"), b.attributes("aria-label")).toBe("-1");
+  });
+
+  it("卡片內只有主按鈕可被 Tab 走到（focusable 且非 tabindex=-1 的元素恰一個）", () => {
+    const w = mountCard({ latch: withLatch, now: AT });
+    const tabbable = w
+      .findAll("button, a[href], input, select, textarea, [tabindex]")
+      .filter((x) => x.attributes("tabindex") !== "-1" && x.attributes("disabled") === undefined);
+    expect(tabbable).toHaveLength(1);
+    expect(tabbable[0]!.element).toBe(cardButton(w).element);
+  });
+
+  it("診斷圖示：滑鼠仍可點（mousedown 取消預設，不搶走卡片焦點）、卡片取得焦點時可見（group-focus-within）", async () => {
+    const w = mountCard();
+    const diag = w.get('button[aria-label="診斷 壓製機 02"]');
+    expect(diag.classes()).toContain("group-focus-within:opacity-100");
+    expect(diag.attributes("title")).toContain("選取卡片後按 d");
+    const down = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    diag.element.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+    await diag.trigger("click");
+    expect(w.emitted("diagnose")).toEqual([["press-02"]]);
+  });
+
+  it("主按鈕可程式聚焦（搜尋 Enter／方向鍵移焦的落點）", () => {
+    const w = mount(MachineNodeCard, {
+      props: { machine: null, machineId: "press-02", selected: false, stale: false, now: AT },
+      attachTo: document.body,
+    });
+    const el = document.querySelector<HTMLElement>('.machine-card[data-machine="press-02"]');
+    expect(el).not.toBeNull();
+    el!.focus();
+    expect(document.activeElement).toBe(el);
+    w.unmount();
+  });
+});
+
 describe("MachineNodeCard 異常標記（T051、FR-026、US5 Acceptance 1／1a）", () => {
   function latch(over: Partial<AnomalyLatch> = {}): AnomalyLatch {
     return { machineId: "press-02", level: "critical", enteredAt: T0, recoveredAt: null, clearedBy: null, ...over };

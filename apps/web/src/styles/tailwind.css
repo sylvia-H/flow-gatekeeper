@@ -75,6 +75,21 @@
 }
 
 /*
+ * MachineNodeCard 鍵盤焦點環（FR-034d：卡片是單一 Tab 停駐點，焦點 MUST 看得見）。
+ * 用 outline 而非 ring：ring 是 box-shadow，critical 的 `animate-critical-pulse` 每幀改寫 box-shadow，
+ * 未選取的嚴重卡片聚焦時會看不到 ring；outline 不受該動畫影響。
+ * 2px `focus` 色、向外 2px：畫在卡片外，不與內縮的選取框或狀態邊框重疊（捲動容器留有 8px 內距，不被裁切）。
+ * 優先順序：與 `.focus\:outline-none:focus`、選取規則同為 (0,2,0)，刻意排在兩者之後——
+ * 聚焦時勝過 outline-none；選取＋聚焦時焦點環取代內縮的選取 outline，選取的 accent 邊框與 accent-wash 底色仍在。
+ * 滑鼠點選（只有 :focus、沒有 :focus-visible）不畫焦點環，維持選取框。
+ * 回歸測試：`domains/monitoring/components/MachineNodeCard.css.test.ts`。
+ */
+.machine-card:focus-visible {
+  outline: 2px solid theme('colors.focus');
+  outline-offset: 2px;
+}
+
+/*
  * prefers-reduced-motion：放在所有 layer 之後，確保蓋過 animate-* utilities。
  * 狀態本身不靠動畫傳達（critical 有 crit-bg tint 與文字徽章、串流有逐字出現的文字、
  * progress 有 aria 描述、連線粗細仍表達 throughput），所以這裡直接停掉循環動畫：

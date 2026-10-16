@@ -171,10 +171,14 @@ const absoluteTime = computed(() => (props.machine ? formatClock(props.machine.l
 </script>
 
 <template>
+  <!-- 每張卡片只佔一個 Tab 停駐點（FR-034d）：卡片主按鈕 tabindex=0，底列清除鈕與診斷圖示 tabindex=-1。
+       焦點環不用 ring（box-shadow）：critical 的 pulse 動畫動的是 box-shadow，會把 ring 蓋掉；
+       改由 tailwind.css 的 `.machine-card:focus-visible` 畫 2px 外框 outline，並排在選取規則之後，選取＋聚焦時焦點環勝出 -->
   <div class="group relative min-w-0">
     <button
       type="button"
-      class="flex min-h-[148px] w-full min-w-0 flex-col gap-3 rounded-card border p-3.5 text-left shadow-glass transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+      tabindex="0"
+      class="flex min-h-[148px] w-full min-w-0 flex-col gap-3 rounded-card border p-3.5 text-left shadow-glass transition-colors duration-150 focus:outline-none"
       :class="[CARD_ROOT_CLASS, stateClass, stale ? CARD_STALE_CLASS : '']"
       :data-machine="machineId"
       :data-state="machine ? machine.state : 'placeholder'"
@@ -290,12 +294,17 @@ const absoluteTime = computed(() => (props.machine ? formatClock(props.machine.l
       <span :id="updatedId" class="min-w-0 shrink-[999] truncate">更新 {{ relativeTime }}</span>
     </div>
 
-    <!-- 診斷圖示（作用於該台；hover／focus 顯示，鍵盤可達）。store 內部去重／連線把關。
-         觸控裝置沒有 hover：`opacity-0` 的按鈕看不見卻點得到，所以 (hover: none) 時常駐顯示。 -->
+    <!-- 診斷圖示（作用於該台；滑鼠可點）。store 內部去重／連線把關。
+         不另佔 Tab 停駐點（tabindex=-1，FR-034d）：鍵盤替代為 Enter 選取卡片後按 d（d 作用於選取機台）。
+         卡片 hover 或取得焦點（group-focus-within）時顯示；觸控裝置沒有 hover：`opacity-0` 的按鈕看不見卻點得到，
+         所以 (hover: none) 時常駐顯示。mousedown.prevent：點擊不把焦點從卡片搶走，方向鍵與 x 仍作用於原卡片 -->
     <button
       type="button"
-      class="absolute bottom-2.5 right-2.5 rounded-control border border-edge bg-surface-strong p-1.5 text-ink-3 opacity-0 transition hover:border-accent hover:text-accent focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+      tabindex="-1"
+      class="absolute bottom-2.5 right-2.5 rounded-control border border-edge bg-surface-strong p-1.5 text-ink-3 opacity-0 transition hover:border-accent hover:text-accent focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
       :aria-label="`診斷 ${label}`"
+      title="診斷（鍵盤：選取卡片後按 d）"
+      @mousedown.prevent
       @click="emit('diagnose', machineId)"
     >
       <Stethoscope class="h-3.5 w-3.5" aria-hidden="true" />
