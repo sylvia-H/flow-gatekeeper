@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { ChevronUp, PanelRightOpen } from "lucide-vue-next";
 import { useResizeDrag } from "../composables/useResizeDrag.js";
 
@@ -17,8 +17,9 @@ import { useResizeDrag } from "../composables/useResizeDrag.js";
  *   斷點須與 `useModalSheet` 的 MOBILE_QUERY 一致（sheet 形態才掛 dialog 語意與焦點陷阱）。
  * - drawer slot 只渲染一次，由外層 aside 以響應式 class 切換兩種形態，避免重複掛載
  *   CopilotDrawer 造成雙份副作用。
- * - `dismiss-panel` 只來自 Escape 與 sheet 遮罩點擊（不算手動收合）；面板上的收合鈕由 drawer
- *   自己 emit，App 據此區分兩者（偏好語意於 US6 接線）。
+ * - `dismiss-panel` 只來自 sheet 遮罩點擊（不算手動收合）；面板上的收合鈕由 drawer
+ *   自己 emit，App 據此區分兩者（偏好語意於 US6 接線）。本元件不監聽 Escape：桌機由 App 層
+ *   `useKeyboardShortcuts` 依分層順序處理（FR-034a），手機 sheet 內由 drawer 的 `useModalSheet` 處理。
  */
 const props = defineProps<{
   /** Copilot 面板是否展開。 */
@@ -34,15 +35,6 @@ const emit = defineEmits<{
 
 /** peek 條是否渲染：sheet 收合且仍有選取機台（lg+ 由 class 隱藏）。 */
 const peekVisible = computed(() => !props.panelOpen && props.peekLabel !== null);
-
-/** Escape 收合 Copilot 面板（spec FR-034a 的最後兩層；完整的分層順序於 US8 接線）。 */
-function onKeydown(event: KeyboardEvent): void {
-  // 輸入法選字中的 Escape 只取消選字；已被上層（說明層、指標面板等）處理的 Escape 不再往下收合。
-  if (event.isComposing || event.defaultPrevented) return;
-  if (event.key === "Escape" && props.panelOpen) emit("dismiss-panel");
-}
-onMounted(() => window.addEventListener("keydown", onKeydown));
-onUnmounted(() => window.removeEventListener("keydown", onKeydown));
 
 /**
  * 寬螢幕（lg+）收合／展開時，若焦點原本在即將消失的那一側（面板內的收合鈕、或展開窄條），
@@ -63,13 +55,22 @@ watch(
   },
 );
 
-/** 側欄寬度可拖曳調整（預設 240px，200–420），偏好存 localStorage。 */
-const { size: sidebarWidth, startDrag: onSidebarHandleDown } = useResizeDrag({
+/**
+ * 側欄寬度可拖曳或用鍵盤調整（預設 240px，200–420；聚焦把手後 ArrowRight 加寬／ArrowLeft 減寬 16px，
+ * FR-034c），偏好存 localStorage。
+ */
+const {
+  size: sidebarWidth,
+  startDrag: onSidebarHandleDown,
+  onKeydown: onSidebarHandleKeydown,
+  handleAttrs: sidebarHandleAttrs,
+} = useResizeDrag({
   axis: "x",
   min: 200,
   max: 420,
   initial: 240,
   storageKey: "flow-gatekeeper:sidebar-width",
+  label: "調整側欄寬度",
 });
 </script>
 
@@ -87,13 +88,13 @@ const { size: sidebarWidth, startDrag: onSidebarHandleDown } = useResizeDrag({
       <slot name="sidebar" />
     </aside>
 
-    <!-- 側欄寬度拖曳把手（僅桌機；疊在 border-r 上，抓取熱區比 1px 邊線寬） -->
+    <!-- 側欄寬度把手（僅桌機；疊在 border-r 上，抓取熱區比 1px 邊線寬）。可 Tab 聚焦、方向鍵調整；
+         把手只有 6px 寬，聚焦時連同底色一起亮起才看得見。Tab 順序落在 rail 之後、主區之前。 -->
     <div
-      class="z-10 hidden w-1.5 shrink-0 -translate-x-px cursor-col-resize touch-none hover:bg-accent/60 md:block"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="調整側欄寬度"
+      v-bind="sidebarHandleAttrs"
+      class="z-10 hidden w-1.5 shrink-0 -translate-x-px cursor-col-resize touch-none hover:bg-accent/60 focus:outline-none focus-visible:bg-accent/60 focus-visible:ring-2 focus-visible:ring-focus md:block"
       @pointerdown="onSidebarHandleDown"
+      @keydown="onSidebarHandleKeydown"
     />
 
     <div class="flex min-w-0 flex-1 flex-col">

@@ -130,7 +130,7 @@ describe("createModalSheet", () => {
     expect(h.focused.at(-1)).toBe("diagnose");
   });
 
-  it("Esc → 關閉並攔下冒泡（避免 AppLayout 的 window 監聽再關一次）", () => {
+  it("Esc → 關閉並攔下冒泡（避免 App 層 useKeyboardShortcuts 的 window 監聽再關一次）", () => {
     const h = harness({ mobile: true });
     h.show(true);
     const e = h.key("Escape");

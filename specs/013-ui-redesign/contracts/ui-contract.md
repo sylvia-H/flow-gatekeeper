@@ -58,7 +58,7 @@
 | `[data-section]`、`[data-severity]`、`[data-evidence][data-evidence-count]` | 結果檢視內部的測試屬性（區段、色條嚴重度、合併後證據列；Phase 6 新增，僅供測試） |
 | `[data-fg="event"][data-machine][data-severity][data-count]` | 事件列項 |
 | `[data-fg="theme-toggle"]` | 主題切換 |
-| `[data-fg="shortcut-help"]` | 說明層 |
+| `[data-fg="shortcut-help"]` | 說明層；每列 `[data-shortcut="<ShortcutId>"]`（Phase 8 新增測試鉤子） |
 
 ## 4. 快捷鍵表
 

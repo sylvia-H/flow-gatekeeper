@@ -133,7 +133,7 @@ export function createModalSheet(
     const root = getRoot();
     if (!trapActive.value || !root) return;
     if (event.key === "Escape") {
-      // 攔下冒泡：AppLayout 在 window 上也監聽 Esc，避免同一次按鍵關兩次。
+      // 攔下冒泡：App 層的 useKeyboardShortcuts 在 window 上也監聽 Esc（依 ESCAPE_LAYERS 關一層），避免同一次按鍵關兩次。
       event.stopPropagation();
       onClose();
       return;

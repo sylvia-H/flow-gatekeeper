@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, useTemplateRef, watch } from "vue";
 import AppLayout from "./shared/components/AppLayout.vue";
 import TopBar from "./shared/components/TopBar.vue";
+import ShortcutHelp from "./shared/components/ShortcutHelp.vue";
 import ThemeToggle from "./shared/components/ThemeToggle.vue";
 import BackpressureStrip from "./shared/components/BackpressureStrip.vue";
 import StageTopology from "./domains/monitoring/components/StageTopology.vue";
@@ -14,6 +15,7 @@ import { useMetricsStore } from "./domains/monitoring/stores/metrics.store.js";
 import { useCopilotStore } from "./domains/ai-copilot/stores/copilot.store.js";
 import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFrequencyWs.js";
 import { useResizeDrag } from "./shared/composables/useResizeDrag.js";
+import { useKeyboardShortcuts } from "./shared/composables/useKeyboardShortcuts.js";
 import { useDiagnoseTrigger } from "./domains/ai-copilot/composables/useDiagnoseTrigger.js";
 import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
 import { machineLabel } from "./domains/monitoring/lib/machine-labels.js";
@@ -28,14 +30,23 @@ const copilot = useCopilotStore();
 // 009 US3：`system/metrics` 的唯一消費者（dev 面板）。低頻，直接寫入不進 rAF buffer。
 const metrics = useMetricsStore();
 
-/** 事件流面板高度可拖曳調整（把手在面板上緣，往上拖增高，故 direction: -1）。 */
-const { size: eventStripHeight, startDrag: onEventStripHandleDown } = useResizeDrag({
+/**
+ * 事件流面板高度可拖曳或用鍵盤調整（把手在面板上緣，往上拖增高，故 direction: -1；
+ * 聚焦把手後 ArrowUp 增高／ArrowDown 減少 16px，FR-034c）。
+ */
+const {
+  size: eventStripHeight,
+  startDrag: onEventStripHandleDown,
+  onKeydown: onEventStripHandleKeydown,
+  handleAttrs: eventStripHandleAttrs,
+} = useResizeDrag({
   axis: "y",
   min: 100,
   max: 360,
   initial: 150,
   storageKey: "flow-gatekeeper:event-strip-height",
   direction: -1,
+  label: "調整事件流面板高度",
 });
 
 /**
@@ -55,7 +66,7 @@ watch(
 function onClosePanel(): void {
   panelOpen.value = false;
 }
-/** Escape（AppLayout 的 window 監聽或手機 sheet 內的 drawer `dismiss`）／手機遮罩點擊（只影響當次）。 */
+/** Escape（App 層快捷鍵的 Copilot 面板層，或手機 sheet 內的 drawer `dismiss`）／手機遮罩點擊（只影響當次）。 */
 function onDismissPanel(): void {
   panelOpen.value = false;
 }
@@ -88,6 +99,57 @@ function onCancel(): void {
     copilot.cancel(store.selectedMachineId);
   }
 }
+
+/** 取消選取（Escape 最後一層）：store 沒有專屬 action，直接寫回 null；面板隨上方 watch 收合。 */
+function clearSelection(): void {
+  store.selectedMachineId = null;
+}
+
+/** 鍵盤快捷鍵說明層（`?` 開關；FR-034b）。 */
+const helpOpen = ref(false);
+
+/** 工具列 expose 的搜尋框（`searchInput` 經 template ref 自動解包成元素）。 */
+const topBar = useTemplateRef<InstanceType<typeof TopBar>>("topBar");
+const searchInput = (): HTMLInputElement | null => topBar.value?.searchInput ?? null;
+
+/**
+ * App 層鍵盤快捷鍵（T054；FR-034a～FR-034d）。composable 位於 shared/，store 與診斷入口一律由這裡注入。
+ * - `d` 與診斷按鈕同一道前置條件（`canDiagnoseSelected`），送出走同一份 `useDiagnoseTrigger`。
+ * - 搜尋框 Enter 由 TopBar 主處理並同步 `preventDefault`，App 層見 `defaultPrevented` 即略過。
+ * - Escape 分層：搜尋覆蓋（T060）與手機異常覆蓋層（T061）尚未落地，先恆為關著。
+ *   手機 bottom-sheet 內的 Escape 由 drawer 的 `useModalSheet` 攔下並 emit `dismiss`，不會到這裡。
+ */
+useKeyboardShortcuts({
+  searchInput,
+  handlers: {
+    focusSearch: () => searchInput()?.focus(),
+    selectMachine: store.selectMachine,
+    clearSelection,
+    diagnose: () => {
+      if (canDiagnose.value) onDiagnose();
+    },
+    clearLatch: store.clearLatch,
+    isLatchVisible: store.latchVisible,
+    toggleHelp: () => {
+      helpOpen.value = !helpOpen.value;
+    },
+    getSelectedId: () => store.selectedMachineId,
+    getSearchResultIds: () => store.visibleMachineIds,
+    layers: {
+      help: {
+        isOpen: () => helpOpen.value,
+        close: () => {
+          helpOpen.value = false;
+        },
+      },
+      "search-overlay": { isOpen: () => false, close: () => {} },
+      "anomaly-overlay": { isOpen: () => false, close: () => {} },
+      // 只關當次，不寫手動收合偏好（T059 的偏好語意落地後仍走 dismiss 路徑）。
+      "copilot-panel": { isOpen: () => panelOpen.value, close: onDismissPanel },
+      selection: { isOpen: () => store.selectedMachineId !== null, close: clearSelection },
+    },
+  },
+});
 
 // 主區標題「機群總覽 · N 台」（N＝固定名冊長度）：畫面上由背壓 strip 取代，只留給輔助技術（R13）。
 const machineCount = computed(() => MACHINE_IDS.length);
@@ -209,7 +271,7 @@ const handle = useHighFrequencyWs({
     </template>
 
     <template #topbar>
-      <TopBar />
+      <TopBar ref="topBar" />
     </template>
 
     <template #main>
@@ -237,16 +299,17 @@ const handle = useHighFrequencyWs({
         <div class="min-h-0 flex-1 overflow-hidden rounded-card">
           <StageTopology />
         </div>
-        <!-- 事件流：上方 12px 間隙即高度拖曳把手（往上拖增高） -->
+        <!-- 事件流：上方 12px 間隙即高度把手（往上拖增高；可 Tab 聚焦、方向鍵調整，Tab 順序在拓樸之後） -->
         <div class="flex shrink-0 flex-col">
           <div
-            class="group -mt-3 flex h-3 shrink-0 cursor-row-resize touch-none items-center"
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="調整事件流面板高度"
+            v-bind="eventStripHandleAttrs"
+            class="group -mt-3 flex h-3 shrink-0 cursor-row-resize touch-none items-center rounded-control focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
             @pointerdown="onEventStripHandleDown"
+            @keydown="onEventStripHandleKeydown"
           >
-            <span class="h-0.5 w-full rounded-control bg-transparent group-hover:bg-accent/60" />
+            <span
+              class="h-0.5 w-full rounded-control bg-transparent group-hover:bg-accent/60 group-focus-visible:bg-accent/60"
+            />
           </div>
           <!-- US5 T052：事件列項可點擊選台，選取中機台的列以 selectedId 標示 -->
           <EventStrip
@@ -275,4 +338,6 @@ const handle = useHighFrequencyWs({
       />
     </template>
   </AppLayout>
+  <!-- 說明層掛在 AppLayout 之外（根層），fixed 定位不受任何祖先 transform 影響；起於 top-14 不遮工具列 -->
+  <ShortcutHelp :open="helpOpen" @close="helpOpen = false" />
 </template>

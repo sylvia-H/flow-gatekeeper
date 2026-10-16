@@ -50,7 +50,11 @@ function onOutside(event: MouseEvent): void {
 }
 
 function onKeydown(event: KeyboardEvent): void {
-  if (event.key === "Escape") close();
+  if (event.key !== "Escape" || !open.value) return;
+  // 吃掉這次 Escape：document 早於 window 收到事件，App 層快捷鍵見 defaultPrevented 即略過，
+  // 關指標面板時不會順帶關下一層（例如取消選取）。
+  event.preventDefault();
+  close();
 }
 
 function close(): void {
