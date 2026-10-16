@@ -3,7 +3,16 @@ import { computed, markRaw, ref, shallowRef, triggerRef } from "vue";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { fleetHealthOf, type FleetHealthSummary } from "../lib/fleet-health.js";
 import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
-import { deriveTransitionEvent, pushCapped, type DerivedEvent } from "../lib/events.js";
+import { deriveTransitionEvent, mergeEvent, type DerivedEvent } from "../lib/events.js";
+import {
+  applyTransition,
+  clearLatch as clearLatchOf,
+  isLatchVisible,
+  summarize,
+  type AnomalyLatch,
+  type AnomalySummaryItem,
+} from "../lib/anomaly-latch.js";
+import { machineLabel } from "../lib/machine-labels.js";
 import { filterMachineIds } from "../lib/machine-search.js";
 import { staleClock } from "../lib/stale.js";
 import {
@@ -21,6 +30,8 @@ import { backpressureRatio } from "../../../shared/lib/backpressure.js";
 
 /** US3 事件保留上限（FR-011）。 */
 const EVENT_CAP = 50;
+/** 013 事件合併視窗（data-model §10、FR-029）：同機台同嚴重度相距 ≤ 10 秒（閉區間）即合併。 */
+const EVENT_MERGE_WINDOW_MS = 10_000;
 
 /**
  * 連線三態（design-spec §8.2）。單一資料來源為本 store 的 `connectionStatus`，
@@ -103,7 +114,10 @@ export const useMonitoringStore = defineStore("monitoring", () => {
    * 不能被 Pause 凍結；卡片／Fleet Health 的 stale 改讀下方 `staleNow`。
    */
   const now = ref(Date.now());
-  /** US3 前端衍生事件（最近 50 筆，最新在頂端）；於 applyTelemetryBatch 批次點衍生。 */
+  /**
+   * US3 前端衍生事件（最近 50 筆，最新在頂端）；於 applyTelemetryBatch 批次點衍生。
+   * 013 起經 `mergeEvent` 推入：同機台同嚴重度 10 秒內合併為一筆（`count` 累加、移到頂端）。
+   */
   const events = ref<DerivedEvent[]>([]);
   /** US3 事件唯一鍵用單調序號（非 reactive）：保 v-for key 在同批次同機台多筆時仍唯一。 */
   let eventSeq = 0;
@@ -127,6 +141,14 @@ export const useMonitoringStore = defineStore("monitoring", () => {
    * 尚無任何批次時為 null（顯示「—」，不顯示成 0:1）。
    */
   const cumulativeRatio = ref<number | null>(null);
+  /**
+   * 013 US5 異常標記（data-model §5、FR-026）：每台一份，記住「這次異常」直到回復後 30 秒。
+   * 只在 `applyTelemetryBatch` 既有的 prev→next 判斷處更新（憲章 IV）：逐筆 `set` 不觸發依賴，
+   * 整批結束且確有 latch 變化時 `triggerRef` 一次；`clearLatch` 同樣整筆替換後 `triggerRef`。
+   * latch 物件整筆替換、從不就地修改，故 shallowRef + markRaw。對外唯讀語意：只經本 store 的 action 寫入。
+   * 期滿的 latch 不自 Map 移除（名冊固定 5 台，至多 5 筆）；可見性一律經 `isLatchVisible` 判定。
+   */
+  const latches = shallowRef<Map<string, AnomalyLatch>>(markRaw(new Map()));
 
   // ── Getters ────────────────────────────────────────────────────────
   /**
@@ -199,30 +221,63 @@ export const useMonitoringStore = defineStore("monitoring", () => {
    */
   const rateStale = computed(() => rateSeries.value.stale && everConnected.value);
 
+  // ── 013 US5 異常標記 getter：由 `latches` 與 `staleNow` 衍生（批次有 latch 變化或 1 Hz tick 才重算） ──
+  /**
+   * 異常摘要列（data-model §6、FR-027）：可見者，active 優先、再依 enteredAt 降冪；label 用繁中機台名。
+   * 以 `staleNow` 判定可見性：Pause 期間凍結（不倒數），恢復後依實際經過時間判定（Pause 期間計入）。
+   */
+  const anomalySummary = computed<AnomalySummaryItem[]>(() =>
+    summarize(latches.value, staleNow.value, machineLabel),
+  );
+
+  /** 該台目前的 latch（含已期滿、尚未被新異常覆寫者；是否顯示請用 `latchVisible`）。 */
+  function latchFor(machineId: string): AnomalyLatch | undefined {
+    return latches.value.get(machineId);
+  }
+
+  /** 該台的異常標記此刻是否可見（仍異常，或回復未滿 30 秒；以 `staleNow` 計）。供卡片使用。 */
+  function latchVisible(machineId: string): boolean {
+    const latch = latches.value.get(machineId);
+    return latch !== undefined && isLatchVisible(latch, staleNow.value);
+  }
+
   // ── Actions ────────────────────────────────────────────────────────
   /**
    * 每次呼叫 = 一個 rAF 幀 = 一次批次（不論 batch 幾筆）：
    * 逐筆覆寫該台最新快照，received += batch.length，rendered += 1。
+   * 013 US5：同一個 prev→next 判斷處一併更新異常標記（latch），整批結束有變化才 `triggerRef(latches)` 一次。
    */
   function applyTelemetryBatch(batch: TelemetryPoint[]): void {
     const receivedAt = Date.now();
     const map = machines.value;
+    const latchMap = latches.value;
+    let latchChanged = false;
     for (const point of batch) {
-      // US3：覆寫快照**前**讀 prevState，於狀態轉入 warning/critical 時衍生一筆事件（去重、上限 50）。
+      // US3：覆寫快照**前**讀 prevState，於狀態轉入 warning/critical 或回復 healthy 時衍生一筆事件。
       // 事件時間用 payload 自身 timestamp（非批次 receivedAt）：pause 後 resume 一次沖出整段
       // buffer 時，各筆仍保留真實發生時序，不會全被壓成同一個 resume 時刻（review 006）。
       // timestamp 解析失敗才退回 receivedAt。id 唯一性另由單調 eventSeq 保證（見 events.ts）。
+      // 013：改經 mergeEvent 推入（同機台同嚴重度 10 秒內合併、上限 50），合併視窗以事件 ts 計。
       const prevState = map.get(point.machineId)?.state;
       const parsedTs = Date.parse(point.timestamp);
       const eventTs = Number.isNaN(parsedTs) ? receivedAt : parsedTs;
       const event = deriveTransitionEvent(prevState, point.state, point.machineId, eventTs, eventSeq);
       if (event) {
         eventSeq += 1;
-        pushCapped(events.value, event, EVENT_CAP);
+        mergeEvent(events.value, event, EVENT_MERGE_WINDOW_MS, EVENT_CAP);
+      }
+      // 013 US5：latch 時間一律用客端 receivedAt（不用 payload 時戳，data-model §5／§10 末段）。
+      // applyTransition 無變化回原物件（無 latch 時回 null），只有新物件才寫回 Map。
+      const latch = latchMap.get(point.machineId);
+      const nextLatch = applyTransition(latch, prevState, point.state, receivedAt, point.machineId);
+      if (nextLatch !== null && nextLatch !== latch) {
+        latchMap.set(point.machineId, markRaw(nextLatch));
+        latchChanged = true;
       }
       map.set(point.machineId, markRaw(project(point, receivedAt)));
     }
     if (batch.length > 0) triggerRef(machines);
+    if (latchChanged) triggerRef(latches);
     receivedMessages.value += batch.length;
     renderedBatches.value += 1;
   }
@@ -245,6 +300,21 @@ export const useMonitoringStore = defineStore("monitoring", () => {
 
   function selectMachine(machineId: string): void {
     selectedMachineId.value = machineId;
+  }
+
+  /**
+   * 013 US5：操作者確認該台異常標記（FR-026）→ `clearedBy = "user"`（劃線，期滿才消失）。
+   * 卡片標記、`x` 快捷鍵與異常摘要列（含手機覆蓋層）都呼叫這一份，讀寫同一個 Map。
+   * 無 latch、已期滿（不可見）或已確認者不動作、不觸發。
+   */
+  function clearLatch(machineId: string): void {
+    const map = latches.value;
+    const latch = map.get(machineId);
+    if (latch === undefined || !isLatchVisible(latch, staleNow.value)) return;
+    const cleared = clearLatchOf(latch);
+    if (cleared === latch) return;
+    map.set(machineId, markRaw(cleared));
+    triggerRef(latches);
   }
 
   function setConnectionStatus(status: ConnectionStatus): void {
@@ -355,9 +425,14 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     droppedInWindow,
     rateStale,
     cumulativeRatio,
+    latches,
+    anomalySummary,
+    latchFor,
+    latchVisible,
     applyTelemetryBatch,
     recordDropped,
     selectMachine,
+    clearLatch,
     setConnectionStatus,
     setClientId,
     setAuthorized,

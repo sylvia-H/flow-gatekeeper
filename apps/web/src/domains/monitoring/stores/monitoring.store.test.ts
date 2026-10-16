@@ -203,24 +203,373 @@ describe("monitoring store — events 衍生（FR-009/010/011）", () => {
     expect(store.events.length).toBe(2);
   });
 
-  it("超過 50 上限：淘汰最舊、長度恆 <= 50", () => {
+  it("超過 50 上限：淘汰最舊、長度恆 <= 50（60 台各轉入一次，不觸發合併）", () => {
+    const store = useMonitoringStore();
+    // 013 起同機台同嚴重度 10 秒內會合併，故改用 60 台不同機台各記一筆，量的是上限本身。
+    for (let i = 0; i < 60; i += 1) {
+      store.applyTelemetryBatch([point(`m-${i}`, "warning")]);
+    }
+    expect(store.events.length).toBe(50);
+    expect(store.events[0]?.machineId).toBe("m-59"); // 最新在頂
+    expect(store.events[49]?.machineId).toBe("m-10"); // m-0…m-9 被淘汰
+  });
+
+  it("同一批次同機台多次轉態（不同嚴重度）：事件 id 唯一（v-for key 不碰撞）", () => {
+    const store = useMonitoringStore();
+    // 單批、同一 payload 時戳：press-02 warning→critical→healthy 產生三種嚴重度各一筆（不合併），
+    // ts 與 machineId 全同，id 唯一只能靠單調序號。
+    const ts = new Date().toISOString();
+    store.applyTelemetryBatch([
+      { ...point("press-02", "warning"), timestamp: ts },
+      { ...point("press-02", "critical"), timestamp: ts },
+      { ...point("press-02", "healthy"), timestamp: ts },
+    ]);
+    expect(store.events.map((e) => e.severity)).toEqual(["recovered", "critical", "warning"]);
+    expect(new Set(store.events.map((e) => e.id)).size).toBe(3);
+  });
+});
+
+describe("monitoring store — 事件合併（013 T049、data-model §10、FR-029）", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-16T00:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("10 秒內同台同嚴重度合併為一筆（count 累加、移到頂端、id 沿用）；回復事件不阻斷合併", () => {
+    const store = useMonitoringStore();
+    store.applyTelemetryBatch([point("press-02", "warning")]);
+    const firstId = store.events[0]?.id;
+    vi.advanceTimersByTime(3_000);
+    store.applyTelemetryBatch([point("press-02", "healthy")]); // recovered
+    vi.advanceTimersByTime(3_000);
+    store.applyTelemetryBatch([point("mixer-01", "critical")]); // 別台插在中間
+    vi.advanceTimersByTime(4_000); // 與第一筆 warning 相距恰 10 秒（閉區間）
+    store.applyTelemetryBatch([point("press-02", "warning")]);
+
+    expect(store.events.map((e) => [e.machineId, e.severity, e.count])).toEqual([
+      ["press-02", "warning", 2],
+      ["mixer-01", "critical", 1],
+      ["press-02", "recovered", 1],
+    ]);
+    expect(store.events[0]?.id).toBe(firstId);
+    expect(store.events[0]?.ts).toBe(Date.now()); // 時間更新為最近一次發生
+    expect(store.events[0]?.message).toBe("壓製機 02 進入警告");
+  });
+
+  it("相距超過 10 秒另立一筆", () => {
+    const store = useMonitoringStore();
+    store.applyTelemetryBatch([point("press-02", "warning")]);
+    vi.advanceTimersByTime(5_000);
+    store.applyTelemetryBatch([point("press-02", "healthy")]);
+    vi.advanceTimersByTime(5_001); // 與第一筆 warning 相距 10 001 ms
+    store.applyTelemetryBatch([point("press-02", "warning")]);
+    expect(store.events.map((e) => [e.severity, e.count])).toEqual([
+      ["warning", 1],
+      ["recovered", 1],
+      ["warning", 1],
+    ]);
+  });
+
+  it("同一台交替 warning／critical 且每次間隔 11 秒：不合併，上限 50", () => {
     const store = useMonitoringStore();
     for (let i = 0; i < 60; i += 1) {
       store.applyTelemetryBatch([point("press-02", i % 2 === 0 ? "warning" : "critical")]);
+      vi.advanceTimersByTime(11_000);
     }
     expect(store.events.length).toBe(50);
+    expect(store.events.every((e) => e.count === 1)).toBe(true);
+  });
+});
+
+describe("monitoring store — 異常標記 latch（013 T049、data-model §5／§6、FR-026／FR-027）", () => {
+  const T0 = new Date("2026-10-16T00:00:00.000Z").getTime();
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it("同一批次同機台多次轉態：事件 id 唯一（v-for key 不碰撞）", () => {
+  /** 已連線的 store（staleNow 的 Pause 凍結只在連線中生效）。 */
+  function connectedStore(): ReturnType<typeof useMonitoringStore> {
     const store = useMonitoringStore();
-    // 單批 = 同一 receivedAt：press-02 warning→critical→warning 產生 3 筆，id 須各異。
+    store.setConnectionStatus("connected");
+    store.setClientId("c1");
+    store.setAuthorized(true);
+    return store;
+  }
+
+  /** 推進時間並跑一次 1 Hz tick（staleNow 由 tick 推進）。 */
+  function advance(ms: number, store: ReturnType<typeof useMonitoringStore>): void {
+    vi.advanceTimersByTime(ms);
+    store.tickNow();
+  }
+
+  it("首次 healthy 不建 latch；進入 warning 建 latch，enteredAt 為批次 receivedAt（不用 payload 時戳）", () => {
+    const store = connectedStore();
+    store.applyTelemetryBatch([point("press-02", "healthy")]);
+    expect(store.latchFor("press-02")).toBeUndefined();
+    expect(store.latchVisible("press-02")).toBe(false);
+
+    vi.advanceTimersByTime(2_000);
+    // payload 時戳刻意偏離客端時間 1 分鐘：latch 仍以 receivedAt 記
     store.applyTelemetryBatch([
-      point("press-02", "warning"),
-      point("press-02", "critical"),
-      point("press-02", "warning"),
+      { ...point("press-02", "warning"), timestamp: new Date(T0 - 60_000).toISOString() },
     ]);
-    expect(store.events.length).toBe(3);
-    expect(new Set(store.events.map((e) => e.id)).size).toBe(3);
+    expect(store.latchFor("press-02")).toEqual({
+      machineId: "press-02",
+      level: "warning",
+      enteredAt: T0 + 2_000,
+      recoveredAt: null,
+      clearedBy: null,
+    });
+    expect(store.latchVisible("press-02")).toBe(true);
+    // 事件 ts 則仍用 payload 時戳
+    expect(store.events[0]?.ts).toBe(T0 - 60_000);
+  });
+
+  it("仍異常中 warning→critical 升級並重置確認；critical→warning 維持 critical", () => {
+    const store = connectedStore();
+    store.applyTelemetryBatch([point("press-02", "warning")]);
+    store.clearLatch("press-02");
+    expect(store.latchFor("press-02")?.clearedBy).toBe("user");
+
+    vi.advanceTimersByTime(1_000);
+    store.applyTelemetryBatch([point("press-02", "critical")]);
+    expect(store.latchFor("press-02")).toMatchObject({
+      level: "critical",
+      enteredAt: T0, // 同一次異常：進入時間不變
+      clearedBy: null, // 已劃線者恢復未確認
+    });
+
+    store.clearLatch("press-02");
+    vi.advanceTimersByTime(1_000);
+    store.applyTelemetryBatch([point("press-02", "warning")]);
+    expect(store.latchFor("press-02")).toMatchObject({ level: "critical", clearedBy: "user" });
+  });
+
+  it("回復後記 recoveredAt；30 秒內可見，滿 30 秒不可見且摘要不含", () => {
+    const store = connectedStore();
+    store.applyTelemetryBatch([point("oven-04", "critical")]);
+    vi.advanceTimersByTime(5_000);
+    store.applyTelemetryBatch([point("oven-04", "healthy")]);
+    expect(store.latchFor("oven-04")?.recoveredAt).toBe(T0 + 5_000);
+
+    advance(29_000, store); // 回復後 29 秒
+    expect(store.latchVisible("oven-04")).toBe(true);
+    expect(store.anomalySummary).toEqual([
+      {
+        machineId: "oven-04",
+        label: "烤爐 04",
+        level: "critical",
+        active: false,
+        struck: false,
+        since: T0 + 5_000, // 已回復：錨定 recoveredAt
+      },
+    ]);
+
+    advance(1_000, store); // 回復後恰 30 秒
+    expect(store.latchVisible("oven-04")).toBe(false);
+    expect(store.anomalySummary).toEqual([]);
+  });
+
+  it("Pause 期間凍結不倒數；恢復後依實際經過時間判定（Pause 期間計入，已滿 30 秒立即消失）", () => {
+    const store = connectedStore();
+    store.applyTelemetryBatch([point("press-02", "critical")]);
+    vi.advanceTimersByTime(1_000);
+    store.applyTelemetryBatch([point("press-02", "healthy")]); // recoveredAt = T0+1s
+    advance(10_000, store);
+
+    store.togglePause(); // 凍結在 T0+11s（回復後 10 秒）
+    advance(40_000, store); // 實際已過回復後 50 秒
+    expect(store.staleNow).toBe(T0 + 11_000);
+    expect(store.latchVisible("press-02")).toBe(true);
+    expect(store.anomalySummary.map((item) => item.machineId)).toEqual(["press-02"]);
+    store.clearLatch("press-02"); // Pause 中仍可確認（以凍結時鐘判定可見）
+    expect(store.anomalySummary[0]?.struck).toBe(true);
+
+    store.togglePause(); // 恢復：staleNow 回到 T0+51s
+    expect(store.latchVisible("press-02")).toBe(false);
+    expect(store.anomalySummary).toEqual([]);
+  });
+
+  it("Pause 恢復後尚未滿 30 秒者繼續倒數到期滿", () => {
+    const store = connectedStore();
+    store.applyTelemetryBatch([point("press-02", "warning")]);
+    store.applyTelemetryBatch([point("press-02", "healthy")]); // recoveredAt = T0
+    store.togglePause();
+    advance(20_000, store);
+    store.togglePause(); // 實際已過 20 秒
+    expect(store.latchVisible("press-02")).toBe(true);
+    advance(9_000, store);
+    expect(store.latchVisible("press-02")).toBe(true);
+    advance(1_000, store);
+    expect(store.latchVisible("press-02")).toBe(false);
+  });
+
+  it("clearLatch 後劃線（struck）並保留至期滿才消失；有效清除觸發一次，無 latch／已確認者不觸發", () => {
+    const store = connectedStore();
+    let runs = 0;
+    const scope = effectScope();
+    scope.run(() => {
+      watchEffect(
+        () => {
+          void store.latches;
+          runs += 1;
+        },
+        { flush: "sync" },
+      );
+    });
+    expect(runs).toBe(1);
+
+    store.clearLatch("press-02"); // 無 latch：不拋錯、不觸發
+    expect(store.latchFor("press-02")).toBeUndefined();
+    expect(runs).toBe(1);
+
+    store.applyTelemetryBatch([point("press-02", "critical")]); // 建 latch：批次觸發一次
+    expect(runs).toBe(2);
+    store.clearLatch("press-02"); // 有效清除：觸發一次
+    expect(runs).toBe(3);
+    expect(store.anomalySummary[0]).toMatchObject({ machineId: "press-02", active: true, struck: true });
+    const confirmed = store.latchFor("press-02");
+    store.clearLatch("press-02"); // 已確認者再清除：不寫回、不觸發
+    expect(runs).toBe(3);
+    expect(store.latchFor("press-02")).toBe(confirmed);
+
+    vi.advanceTimersByTime(2_000);
+    store.applyTelemetryBatch([point("press-02", "healthy")]);
+    advance(29_000, store);
+    expect(store.latchVisible("press-02")).toBe(true);
+    expect(store.anomalySummary[0]).toMatchObject({ active: false, struck: true });
+    advance(1_000, store);
+    expect(store.anomalySummary).toEqual([]);
+    scope.stop();
+  });
+
+  it("未確認就期滿的 latch：clearLatch 被可見性守門擋下（不劃線、不觸發）", () => {
+    const store = connectedStore();
+    store.applyTelemetryBatch([point("oven-04", "critical")]);
+    vi.advanceTimersByTime(1_000);
+    store.applyTelemetryBatch([point("oven-04", "healthy")]);
+    advance(30_000, store); // 回復後恰 30 秒：期滿、不可見
+    expect(store.latchVisible("oven-04")).toBe(false);
+
+    let runs = 0;
+    const scope = effectScope();
+    scope.run(() => {
+      watchEffect(
+        () => {
+          void store.latches;
+          runs += 1;
+        },
+        { flush: "sync" },
+      );
+    });
+    const expired = store.latchFor("oven-04");
+    store.clearLatch("oven-04");
+    expect(store.latchFor("oven-04")?.clearedBy).toBeNull();
+    expect(store.latchFor("oven-04")).toBe(expired);
+    expect(runs).toBe(1);
+    scope.stop();
+  });
+
+  it("回復後 30 秒內再進 warning：以最新異常重置為 warning、未確認", () => {
+    const store = connectedStore();
+    store.applyTelemetryBatch([point("press-02", "critical")]);
+    store.clearLatch("press-02");
+    vi.advanceTimersByTime(1_000);
+    store.applyTelemetryBatch([point("press-02", "healthy")]);
+    vi.advanceTimersByTime(10_000);
+    store.applyTelemetryBatch([point("press-02", "warning")]);
+    expect(store.latchFor("press-02")).toEqual({
+      machineId: "press-02",
+      level: "warning",
+      enteredAt: T0 + 11_000,
+      recoveredAt: null,
+      clearedBy: null,
+    });
+  });
+
+  it("anomalySummary：active 優先、再依 enteredAt 降冪；label 為繁中機台名；since 錨點依是否回復", () => {
+    const store = connectedStore();
+    store.applyTelemetryBatch([point("mixer-01", "warning")]); // T0
+    vi.advanceTimersByTime(1_000);
+    store.applyTelemetryBatch([point("press-02", "critical")]); // T0+1s
+    vi.advanceTimersByTime(1_000);
+    store.applyTelemetryBatch([point("oven-04", "critical")]); // T0+2s
+    vi.advanceTimersByTime(1_000);
+    store.applyTelemetryBatch([point("oven-04", "healthy"), point("sorter-05", "healthy")]); // oven 回復 T0+3s
+    advance(1_000, store);
+
+    expect(
+      store.anomalySummary.map((item) => [item.label, item.level, item.active, item.since]),
+    ).toEqual([
+      ["壓製機 02", "critical", true, T0 + 1_000],
+      ["攪拌機 01", "warning", true, T0],
+      ["烤爐 04", "critical", false, T0 + 3_000],
+    ]);
+  });
+
+  it("一批內多台 latch 變化只 triggerRef 一次；無 latch 變化的批次不觸發", () => {
+    const store = connectedStore();
+    let runs = 0;
+    const scope = effectScope();
+    scope.run(() => {
+      watchEffect(
+        () => {
+          void store.latches;
+          runs += 1;
+        },
+        { flush: "sync" },
+      );
+    });
+    expect(runs).toBe(1);
+
+    store.applyTelemetryBatch([
+      point("mixer-01", "warning"),
+      point("press-02", "critical"),
+      point("oven-04", "warning"),
+      point("oven-04", "critical"),
+    ]);
+    expect(runs).toBe(2);
+    expect(store.latches.size).toBe(3);
+
+    // 全部 healthy 機台、或異常機台同態抖動：latch 無變化，不觸發
+    store.applyTelemetryBatch([
+      point("pack-03", "healthy"),
+      point("mixer-01", "warning"),
+      point("press-02", "critical"),
+    ]);
+    store.applyTelemetryBatch([]);
+    expect(runs).toBe(2);
+    scope.stop();
+  });
+
+  it("anomalySummary 不隨每幀批次重算：無 latch 變化的批次不觸發", () => {
+    const store = connectedStore();
+    store.applyTelemetryBatch([point("press-02", "critical")]);
+    let runs = 0;
+    const scope = effectScope();
+    scope.run(() => {
+      watchEffect(
+        () => {
+          void store.anomalySummary;
+          runs += 1;
+        },
+        { flush: "sync" },
+      );
+    });
+    expect(runs).toBe(1);
+    for (let i = 0; i < 30; i += 1) store.applyTelemetryBatch([point("press-02", "critical")]);
+    expect(runs).toBe(1);
+    scope.stop();
   });
 });
 

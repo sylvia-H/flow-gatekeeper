@@ -73,7 +73,7 @@ export function deriveTransitionEvent(
 
 /**
  * 新事件 unshift 到頂端，超過 `max` 筆時裁掉最舊者（FR-011）。就地修改並回傳同一陣列。
- * 013 起事件列改走 `mergeEvent`（store 於 T049 接線）；此函式保留給尚未改接的呼叫端。
+ * 013 起事件列改走 `mergeEvent`（store 已於 T049 改接，不再呼叫本函式）；此函式保留匯出與單測。
  */
 export function pushCapped(list: DerivedEvent[], event: DerivedEvent, max = 50): DerivedEvent[] {
   list.unshift(event);
