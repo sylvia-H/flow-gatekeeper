@@ -2,6 +2,9 @@
 import { computed, onMounted, onUnmounted, ref, type Ref } from "vue";
 import { useMonitoringStore, type MachineLive } from "../stores/monitoring.store.js";
 import { useDiagnoseTrigger } from "../../ai-copilot/composables/useDiagnoseTrigger.js";
+import { useCopilotStore } from "../../ai-copilot/stores/copilot.store.js";
+import type { DiagnosisBadge } from "../../ai-copilot/lib/diagnosis-badge.js";
+import type { AnomalyLatch } from "../lib/anomaly-latch.js";
 import { MACHINE_GROUPS } from "../lib/machine-groups.js";
 import { assignToStages, type Stage } from "../lib/stage-layout.js";
 import { speedFor, throughputSum, widthFor, type FlowSpeed } from "../lib/flow-link.js";
@@ -23,9 +26,13 @@ import FlowLink from "./FlowLink.vue";
  *   用 `md:` 斷點會出現橫向捲動（FR-031）。手機（< 768px）的容器必然窄於門檻，同樣走堆疊。
  * - prefers-reduced-motion 時只保留粗細、不流動（FR-014）。
  * - 卡片的選台與診斷接線同既有作法：`store.selectMachine`、`useDiagnoseTrigger().diagnose`。
+ * - 卡片底列（US5）：異常標記只在可見期內傳入（`store.latchVisible`，以 `staleNow` 判定 30 秒期滿），
+ *   清除走 `store.clearLatch`（與異常摘要列同一份狀態）；診斷狀態 chip 取 `copilot.badgeFor`。
+ *   卡片只讀 props、不直接讀 store。
  */
 const store = useMonitoringStore();
 const trigger = useDiagnoseTrigger();
+const copilot = useCopilotStore();
 
 /** 三欄最小寬 220px 加兩條 24px 溝槽：容器內容寬小於此值即改為單欄堆疊。 */
 const MIN_ROW_WIDTH = 3 * 220 + 2 * 24;
@@ -102,6 +109,9 @@ interface CardView {
   machine: MachineLive | null;
   selected: boolean;
   stale: boolean;
+  /** 可見期內的異常標記；不可見（含從未異常、已期滿）為 null。 */
+  latch: AnomalyLatch | null;
+  badge: DiagnosisBadge;
 }
 
 interface ColumnView {
@@ -125,6 +135,8 @@ const columns = computed<ColumnView[]>(() =>
         machine,
         selected: store.selectedMachineId === id,
         stale: machine ? isStale(machine.lastUpdated, store.staleNow) : false,
+        latch: store.latchVisible(id) ? (store.latchFor(id) ?? null) : null,
+        badge: copilot.badgeFor(id),
       };
     }),
     link: links.value[index] ?? null,
@@ -141,6 +153,11 @@ function onSelect(machineId: string): void {
 /** 卡片診斷圖示：選取該台並觸發診斷（去重／連線把關在共用入口與 copilot store）。 */
 function onDiagnose(machineId: string): void {
   trigger.diagnose(machineId);
+}
+
+/** 卡片異常標記的清除鈕：確認（劃線），期滿才消失（FR-026）。 */
+function onClearLatch(machineId: string): void {
+  store.clearLatch(machineId);
 }
 </script>
 
@@ -164,8 +181,11 @@ function onDiagnose(machineId: string): void {
             :selected="card.selected"
             :stale="card.stale"
             :now="store.staleNow"
+            :latch="card.latch"
+            :badge="card.badge"
             @select="onSelect"
             @diagnose="onDiagnose"
+            @clear-latch="onClearLatch"
           />
         </StageColumn>
         <!-- 溝槽：並排時為欄間 24px、箭頭垂直置中；堆疊時為兩段之間 24px 高的朝下短箭頭 -->

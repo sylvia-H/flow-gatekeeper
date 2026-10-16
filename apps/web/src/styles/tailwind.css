@@ -85,14 +85,14 @@
  *   （不論是否 reduced-motion），下方 `*` 規則亦涵蓋，不另寫重複規則。
  * - 背壓 strip：走勢線（Sparkline）每秒直接換 points、沒有 transition；液位線的位移過渡只用
  *   `motion-safe:` 掛上，reduced-motion 下本來就不產生，下方 `*` 規則再兜底。
- * - 預留：異常 latch 出現動畫由後續 phase 的元件加上，一律落在下方 `*` 規則的範圍內
- *   （transition 縮為 0.01ms）；若改用 animation，須把其 class 加進第一條規則（例：`.animate-latch-in`）。
+ * - 卡片異常標記的出現動畫（`animate-latch-in`，一次性）：停用，標記直接以完成樣式出現。
  */
 @media (prefers-reduced-motion: reduce) {
   .animate-critical-pulse,
   .animate-stream-caret,
   .animate-indeterminate,
-  .animate-flow {
+  .animate-flow,
+  .animate-latch-in {
     animation: none;
   }
 

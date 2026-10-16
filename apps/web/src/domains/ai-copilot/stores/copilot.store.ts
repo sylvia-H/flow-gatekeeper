@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, shallowRef, triggerRef } from "vue";
+import { computed, ref, shallowRef, triggerRef } from "vue";
 import { AiDoneSchema } from "@flow-gatekeeper/contracts";
 import {
   copilotReducer,
@@ -19,6 +19,13 @@ import {
   startTiming,
   type DiagnosisTiming,
 } from "../lib/diagnosis-timing.js";
+
+import {
+  NO_DIAGNOSIS_BADGE,
+  diagnosisBadgeOf,
+  sameDiagnosisBadge,
+  type DiagnosisBadge,
+} from "../lib/diagnosis-badge.js";
 
 /** `diagnose`／`retry` 的選用參數。 */
 export interface DiagnoseOptions {
@@ -101,6 +108,34 @@ export const useCopilotStore = defineStore("copilot", () => {
   /** 取某台最近一次完成的時刻（epoch ms；從未完成過則 undefined）。 */
   function completedAtFor(machineId: string): number | undefined {
     return completedAt.value.get(machineId);
+  }
+
+  /**
+   * 每台診斷狀態 chip（data-model §7、FR-028），由 `jobs` 衍生。
+   *
+   * 串流期間每個 `ai/token` 都會寫一次 `jobs`，但 chip 只看 kind／progress／severity／cached：
+   * 以上一輪結果（computed 的 oldValue）比對，內容未變的台沿用舊物件；整份都沒變時回傳舊 Map，
+   * 依賴 chip 的元件（拓樸卡片）就不會因 token 而重算或重繪。
+   */
+  const badges = computed<ReadonlyMap<string, DiagnosisBadge>>((prev) => {
+    const next = new Map<string, DiagnosisBadge>();
+    let changed = prev === undefined || prev.size !== jobs.value.size;
+    for (const [machineId, state] of jobs.value) {
+      const fresh = diagnosisBadgeOf(state);
+      const old = prev?.get(machineId);
+      if (old !== undefined && sameDiagnosisBadge(old, fresh)) {
+        next.set(machineId, old);
+      } else {
+        next.set(machineId, fresh);
+        changed = true;
+      }
+    }
+    return changed || prev === undefined ? next : prev;
+  });
+
+  /** 取某台診斷狀態 chip（從未診斷或 idle 為 `{ kind: "none" }`）。 */
+  function badgeFor(machineId: string): DiagnosisBadge {
+    return badges.value.get(machineId) ?? NO_DIAGNOSIS_BADGE;
   }
 
   /** 送出前置條件（FR-008/FR-014）：有選台、有連線、該台非 active 且沒有送出中的請求（去重）。 */
@@ -303,6 +338,7 @@ export const useCopilotStore = defineStore("copilot", () => {
     stateFor,
     timingFor,
     completedAtFor,
+    badgeFor,
     canDiagnose,
     diagnose,
     retry,

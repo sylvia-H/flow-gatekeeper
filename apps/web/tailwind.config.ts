@@ -89,12 +89,18 @@ export default {
           '0%': { strokeDashoffset: '0' },
           '100%': { strokeDashoffset: '-24' },
         },
+        // 卡片異常標記出現（只動 opacity 與 transform，不影響盒模型）；自半透明而非全透明起跳，出現當下即可讀。
+        latchIn: {
+          '0%': { opacity: '0.35', transform: 'translateY(2px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
       },
       animation: {
         'critical-pulse': 'criticalPulse 1.2s ease-in-out infinite',
         'stream-caret': 'streamCaret 0.8s steps(1) infinite',
         indeterminate: 'indeterminate 1.2s ease-in-out infinite',
         flow: 'flow 1s linear infinite',
+        'latch-in': 'latchIn 160ms cubic-bezier(0.16, 1, 0.3, 1) both',
       },
     },
   },

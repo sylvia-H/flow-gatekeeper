@@ -5,6 +5,7 @@ import { createPinia, setActivePinia, type Pinia } from "pinia";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import StageTopology from "./StageTopology.vue";
 import { useMonitoringStore } from "../stores/monitoring.store.js";
+import { useCopilotStore } from "../../ai-copilot/stores/copilot.store.js";
 
 const diagnoseSpy = vi.hoisted(() => vi.fn<(machineId: string) => void>());
 vi.mock("../../ai-copilot/composables/useDiagnoseTrigger.js", () => ({
@@ -245,5 +246,51 @@ describe("StageTopology 卡片診斷接線", () => {
     await w.get('button[aria-label="診斷 壓製機 02"]').trigger("click");
     expect(diagnoseSpy).toHaveBeenCalledTimes(1);
     expect(diagnoseSpy).toHaveBeenCalledWith("press-02");
+  });
+});
+
+describe("StageTopology 卡片底列接線：異常標記與診斷 chip（T051）", () => {
+  it("可見期內的 latch 傳進卡片；點清除鈕 → store.clearLatch（劃線，不選台）；回復滿 30 秒後不再傳", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    const store = useMonitoringStore();
+    store.tickNow();
+    store.applyTelemetryBatch([point("press-02", 120, "critical")]);
+    const w = mountTopology();
+    const card = () => w.get('.machine-card[data-machine="press-02"]');
+    expect(card().attributes("data-latch")).toBe("critical");
+    expect(w.get('.machine-card[data-machine="oven-04"]').attributes("data-latch")).toBe("none");
+
+    await w.get('[data-fg="latch-clear"]').trigger("click");
+    expect(store.latchFor("press-02")?.clearedBy).toBe("user");
+    expect(card().attributes("data-latch-cleared")).toBe("");
+    expect(store.selectedMachineId).toBeNull();
+
+    clock.mockReturnValue(1_002_000);
+    store.applyTelemetryBatch([point("press-02", 120, "healthy")]);
+    clock.mockReturnValue(1_032_000); // 回復後滿 30 秒
+    store.tickNow();
+    await w.vm.$nextTick();
+    expect(store.latchVisible("press-02")).toBeFalsy();
+    expect(card().attributes("data-latch")).toBe("none");
+    expect(w.find('[data-fg="latch-clear"]').exists()).toBe(false);
+    clock.mockRestore();
+  });
+
+  it("診斷 chip 取 copilot store 的 badgeFor：各卡各自顯示，未診斷者為 none", async () => {
+    const copilot = useCopilotStore();
+    const w = mountTopology();
+    expect(w.get('.machine-card[data-machine="press-02"]').attributes("data-diagnosis")).toBe("none");
+    copilot.jobs.set("press-02", {
+      status: "active",
+      machineId: "press-02",
+      jobId: "j1",
+      attempt: 1,
+      progress: 60,
+      streamText: "",
+    });
+    await w.vm.$nextTick();
+    expect(w.get('.machine-card[data-machine="press-02"]').attributes("data-diagnosis")).toBe("active");
+    expect(w.text()).toContain("診斷中 60%");
+    expect(w.get('.machine-card[data-machine="mixer-01"]').attributes("data-diagnosis")).toBe("none");
   });
 });

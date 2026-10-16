@@ -1,24 +1,24 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { DiagnosisResult } from "@flow-gatekeeper/contracts";
+import { severityLabel, type DiagnosisSeverity } from "../lib/severity-label.js";
 
 /**
  * 診斷嚴重度徽章。severity 型別取自契約 `DiagnosisResult`（單一來源）。
  * ⚠️ 與機台健康狀態（healthy/warning/critical）刻意不同：診斷 severity 有 `ok`（見 contracts），
- * 譯為「正常」（research R13）。狀態不只靠顏色——同時有中文文字 label（憲章 II 無障礙）。
+ * 譯為「正常」（research R13；譯名唯一來源 `severity-label.ts`）。狀態不只靠顏色——同時有中文文字 label（憲章 II 無障礙）。
  * 徽章一律 `bg-*-bg` + `text-*-fg`（徽章底上的文字對比 ≥ 6:1，兩套主題皆然）。
  */
-type Severity = DiagnosisResult["severity"];
+type Severity = DiagnosisSeverity;
 
 const props = defineProps<{ severity: Severity }>();
 
-const STYLES: Record<Severity, { label: string; cls: string }> = {
-  ok: { label: "正常", cls: "bg-ok-bg text-ok-fg" },
-  warning: { label: "警告", cls: "bg-warn-bg text-warn-fg" },
-  critical: { label: "嚴重", cls: "bg-crit-bg text-crit-fg" },
+const STYLES: Record<Severity, string> = {
+  ok: "bg-ok-bg text-ok-fg",
+  warning: "bg-warn-bg text-warn-fg",
+  critical: "bg-crit-bg text-crit-fg",
 };
 
-const badge = computed(() => STYLES[props.severity]);
+const badge = computed(() => ({ label: severityLabel(props.severity), cls: STYLES[props.severity] }));
 </script>
 
 <template>

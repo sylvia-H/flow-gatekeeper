@@ -66,7 +66,7 @@
 | `recoveredAt` | `number \| null` | 回到 healthy 的時間（`receivedAt`）；仍異常時為 null |
 | `clearedBy` | `"user" \| null` | 操作者確認後設為 `"user"`（劃線） |
 
-- 時間基準：一律用客端收到批次的時間（`receivedAt`），不用 payload 時戳，避免時鐘偏差吃掉 SC-009 的 ±1 秒。
+- 時間基準：一律用客端收到批次的時間（`receivedAt`），不用 payload 時戳，避免時鐘偏差吃掉 SC-009 的 ±1 秒。`receivedAt` 是 store 收到 **flush 批次**的時刻：Pause 期間資料留在 buffer、恢復時整段一次沖入，所以 Pause 期間才回復的機台其 `recoveredAt` 為恢復那一刻、恢復後仍顯示 30 秒（Phase 7 審查裁決：維持此語意，不在 ws 入口另記每筆實際到達時間；FR-026「Pause 期間計入、已滿 30 秒者可能立即消失」只對 Pause 之前就回復的機台成立）。
 - 轉移（於 `applyTelemetryBatch` 既有的 prev→next 判斷處；純函式 `applyTransition(latch, prev, next, receivedAt, machineId)`——第 5 參數 `machineId` 供無 latch 時建立新物件，Phase 2 實作時補上；有變化回新物件、無變化回原物件）：
   - 無 latch 或 latch 已回復（`recoveredAt !== null`）時進入 warning／critical：以新異常重建——`level` = 新狀態、`enteredAt = receivedAt`、`recoveredAt = null`、`clearedBy = null`（最新異常為準：critical 回復後 30 秒內再進 warning → `level = "warning"`）。
   - 仍在異常中：`warning → critical` 升級 `level` 並重置 `clearedBy = null`（已劃線者恢復未確認）；`critical → warning` 維持 `critical`（`clearedBy` 不變）。

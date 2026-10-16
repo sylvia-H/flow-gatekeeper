@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
+import { effectScope, watchEffect } from "vue";
 import type { DiagnosisResult } from "@flow-gatekeeper/contracts";
 import { useCopilotStore } from "./copilot.store.js";
 
@@ -559,5 +560,111 @@ describe("copilot store 診斷耗時量測（T044、data-model §8、research R7
     store.applyEvent({ type: "ai/done", jobId: jobIdOf(store, "mixer-01"), attempt: 1, cached: false, result: RESULT });
     expect(store.timingFor("mixer-01")).toMatchObject({ pending: null, lastUncachedMs: 2_500 });
     expect(store.timingFor("press-02")?.pending).toEqual({ jobId: jobIdOf(store, "press-02"), startedAt: 2_000 });
+  });
+});
+
+describe("copilot store 診斷狀態 chip badgeFor（T051、data-model §7、FR-028）", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("none：從未診斷、或中止回 idle → { kind: 'none' }", async () => {
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    expect(store.badgeFor("mixer-01")).toEqual({ kind: "none" });
+    await store.diagnose("mixer-01", SOCKET);
+    store.cancel("mixer-01");
+    expect(store.badgeFor("mixer-01")).toEqual({ kind: "none" });
+  });
+
+  it("active：帶進度（尚無進度為 null，job/status 帶入後更新）", async () => {
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    expect(store.badgeFor("mixer-01")).toEqual({ kind: "active", progress: null });
+    store.applyEvent({ type: "job/status", jobId: jobIdOf(store), machineId: "mixer-01", status: "active", progress: 60 });
+    expect(store.badgeFor("mixer-01")).toEqual({ kind: "active", progress: 60 });
+  });
+
+  it("completed：帶結果嚴重度與是否快取（非快取／快取兩種）", async () => {
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    store.applyEvent({
+      type: "ai/done",
+      jobId: jobIdOf(store),
+      attempt: 1,
+      cached: false,
+      result: { ...RESULT, severity: "critical" },
+    });
+    expect(store.badgeFor("mixer-01")).toEqual({ kind: "completed", severity: "critical", cached: false });
+
+    await store.diagnose("mixer-01", SOCKET);
+    store.applyEvent({ type: "ai/done", jobId: jobIdOf(store), attempt: 1, cached: true, result: RESULT });
+    expect(store.badgeFor("mixer-01")).toEqual({ kind: "completed", severity: "ok", cached: true });
+  });
+
+  it("failed：ai/error 終態 → { kind: 'failed' }", async () => {
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    store.applyEvent({ type: "ai/error", jobId: jobIdOf(store), attempt: 1, code: "x", message: "壞了" });
+    expect(store.badgeFor("mixer-01")).toEqual({ kind: "failed" });
+  });
+
+  it("多台各自衍生，互不影響（US5 Acceptance 3）", async () => {
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    await store.diagnose("press-02", SOCKET);
+    store.applyEvent({ type: "ai/done", jobId: jobIdOf(store, "press-02"), attempt: 1, cached: true, result: RESULT });
+    expect(store.badgeFor("mixer-01")).toEqual({ kind: "active", progress: null });
+    expect(store.badgeFor("press-02")).toEqual({ kind: "completed", severity: "ok", cached: true });
+    expect(store.badgeFor("oven-04")).toEqual({ kind: "none" });
+  });
+
+  it("整份 chip 都沒變時回傳舊 Map：依賴 badgeFor 的副作用在 token 期間不重跑，進度改變才 +1", async () => {
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    await store.diagnose("press-02", SOCKET);
+    const jobId = jobIdOf(store);
+    let runs = 0;
+    const scope = effectScope();
+    scope.run(() => {
+      // 只讀別台（press-02）的 chip：若 Map 每次都換新，mixer-01 的 token 也會讓它重跑
+      watchEffect(
+        () => {
+          store.badgeFor("press-02");
+          runs += 1;
+        },
+        { flush: "sync" },
+      );
+    });
+    expect(runs).toBe(1);
+    store.applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 0, text: "溫" });
+    store.applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 1, text: "度" });
+    expect(runs).toBe(1);
+    store.applyEvent({ type: "job/status", jobId, machineId: "mixer-01", status: "active", progress: 30 });
+    expect(runs).toBe(2);
+    scope.stop();
+  });
+
+  it("串流 token 只改 streamText 時 chip 物件身分不變（依賴 chip 的卡片不因 token 重繪）；進度變了才換新物件", async () => {
+    mockDiagnoseOk();
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    const jobId = jobIdOf(store);
+    const before = store.badgeFor("mixer-01");
+    store.applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 0, text: "溫" });
+    store.applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 1, text: "度" });
+    expect(store.badgeFor("mixer-01")).toBe(before);
+    store.applyEvent({ type: "job/status", jobId, machineId: "mixer-01", status: "active", progress: 30 });
+    expect(store.badgeFor("mixer-01")).not.toBe(before);
+    expect(store.badgeFor("mixer-01")).toEqual({ kind: "active", progress: 30 });
   });
 });

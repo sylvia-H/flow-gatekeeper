@@ -6,6 +6,8 @@ import MachineNodeCard from "./MachineNodeCard.vue";
 import type { MachineLive } from "../stores/monitoring.store.js";
 import { CARD_ROOT_CLASS, CARD_STALE_CLASS, CARD_STATE_CLASS } from "../lib/card-style.js";
 import { formatClock } from "../../../shared/lib/format.js";
+import type { AnomalyLatch } from "../lib/anomaly-latch.js";
+import type { DiagnosisBadge } from "../../ai-copilot/lib/diagnosis-badge.js";
 
 /**
  * MachineNodeCard 元件行為與可及性（review02 Batch D；013 T027 視覺層重做後更新）。
@@ -24,7 +26,16 @@ function machine(state: MachineState, lastUpdated = T0): MachineLive {
   };
 }
 
-function mountCard(over: Partial<{ machine: MachineLive | null; selected: boolean; stale: boolean; now: number }> = {}) {
+function mountCard(
+  over: Partial<{
+    machine: MachineLive | null;
+    selected: boolean;
+    stale: boolean;
+    now: number;
+    latch: AnomalyLatch | null;
+    badge: DiagnosisBadge;
+  }> = {},
+) {
   return mount(MachineNodeCard, {
     props: {
       machine: machine("healthy"),
@@ -39,6 +50,12 @@ function mountCard(over: Partial<{ machine: MachineLive | null; selected: boolea
 
 /** 卡片主按鈕（第一個 button；第二個是診斷圖示）。 */
 const cardButton = (w: ReturnType<typeof mountCard>) => w.findAll("button")[0]!;
+
+/** 卡片主按鈕 aria-describedby 指向的各段文字（以空白串接，同螢幕閱讀器的描述計算）。 */
+function describedText(w: ReturnType<typeof mountCard>): string {
+  const ids = (cardButton(w).attributes("aria-describedby") ?? "").split(" ").filter(Boolean);
+  return ids.map((id) => w.get(`[id="${id}"]`).text()).join(" ");
+}
 
 describe("MachineNodeCard 選取態（WEB-1 回歸）", () => {
   it("selected=true 時輸出選取錨點：machine-card + data-selected='true' + aria-pressed", () => {
@@ -268,5 +285,189 @@ describe("MachineNodeCard 互動", () => {
     await diag.trigger("click");
     expect(w.emitted("diagnose")).toEqual([["press-02"]]);
     expect(w.emitted("select")).toBeUndefined();
+  });
+});
+
+describe("MachineNodeCard 異常標記（T051、FR-026、US5 Acceptance 1／1a）", () => {
+  function latch(over: Partial<AnomalyLatch> = {}): AnomalyLatch {
+    return { machineId: "press-02", level: "critical", enteredAt: T0, recoveredAt: null, clearedBy: null, ...over };
+  }
+  const clearBtn = (w: ReturnType<typeof mountCard>) => w.find('[data-fg="latch-clear"]');
+
+  it("無標記（latch 未傳或為 null，含已期滿）：data-latch='none'、無 data-latch-cleared、不渲染清除鈕", () => {
+    for (const w of [mountCard(), mountCard({ latch: null })]) {
+      expect(cardButton(w).attributes("data-latch")).toBe("none");
+      expect(cardButton(w).attributes("data-latch-cleared")).toBeUndefined();
+      expect(clearBtn(w).exists()).toBe(false);
+    }
+  });
+
+  it("仍異常：錨 enteredAt 顯示「嚴重 · 進入 N 秒前」，卡片根 data-latch 為等級", () => {
+    const w = mountCard({ machine: machine("critical"), latch: latch(), now: T0 + 12_000 });
+    expect(cardButton(w).attributes("data-latch")).toBe("critical");
+    expect(clearBtn(w).text()).toBe("嚴重 · 進入 12 秒前");
+    expect(clearBtn(w).classes()).toEqual(expect.arrayContaining(["text-crit-fg", "bg-crit-bg", "border-crit"]));
+  });
+
+  it("已回復：錨 recoveredAt 顯示「警告 · 已回復 N 秒前」；2 秒內為「剛進入」／「剛回復」", async () => {
+    const w = mountCard({ latch: latch({ level: "warning", recoveredAt: T0 + 20_000 }), now: T0 + 25_000 });
+    expect(cardButton(w).attributes("data-latch")).toBe("warning");
+    expect(clearBtn(w).text()).toBe("警告 · 已回復 5 秒前");
+    expect(clearBtn(w).classes()).toEqual(expect.arrayContaining(["text-warn-fg", "bg-warn-bg", "border-warn"]));
+    await w.setProps({ now: T0 + 21_000 });
+    expect(clearBtn(w).text()).toBe("警告 · 剛回復");
+    await w.setProps({ latch: latch({ level: "warning" }), now: T0 + 1_000 });
+    expect(clearBtn(w).text()).toBe("警告 · 剛進入");
+  });
+
+  it("清除鈕：原生 button、tabindex=-1（不佔 Tab 停駐點，FR-034d）、可讀名稱含可見文字與動作", () => {
+    const btn = clearBtn(mountCard({ latch: latch(), now: T0 + 12_000 }));
+    expect(btn.element.tagName).toBe("BUTTON");
+    expect(btn.attributes("type")).toBe("button");
+    expect(btn.attributes("tabindex")).toBe("-1");
+    expect(btn.attributes("disabled")).toBeUndefined();
+    expect(btn.attributes("aria-label")).toBe("嚴重 · 進入 12 秒前，清除 壓製機 02 的異常標記");
+  });
+
+  it("清除鈕不巢狀在卡片主按鈕內（互動元素不可巢狀）；卡片 aria-describedby 只指向標記文字與更新時間，不含清除動作", () => {
+    const w = mountCard({ latch: latch(), badge: { kind: "failed" } });
+    const card = cardButton(w);
+    expect(card.element.querySelector("button")).toBeNull();
+    expect(describedText(w)).toBe("嚴重 · 剛進入 更新 剛剛");
+    expect(describedText(w)).not.toContain("清除");
+    // chip 在主按鈕內，已含於按鈕名稱，不重複列入描述
+    expect(card.text()).toContain("診斷：失敗");
+  });
+
+  it("已確認時描述帶「已確認：」前綴；無標記時描述只有更新時間", () => {
+    expect(describedText(mountCard({ latch: latch({ clearedBy: "user" }) }))).toBe("已確認：嚴重 · 剛進入 更新 剛剛");
+    expect(describedText(mountCard())).toBe("更新 剛剛");
+  });
+
+  it("清除鈕 mousedown 取消預設（點擊後轉 disabled 時焦點不掉到 body）", async () => {
+    const w = mountCard({ latch: latch() });
+    const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    clearBtn(w).element.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("點清除鈕 emit clear-latch(machineId)，不連帶 select／diagnose", async () => {
+    const w = mountCard({ latch: latch() });
+    await clearBtn(w).trigger("click");
+    expect(w.emitted("clear-latch")).toEqual([["press-02"]]);
+    expect(w.emitted("select")).toBeUndefined();
+    expect(w.emitted("diagnose")).toBeUndefined();
+  });
+
+  it("已確認（clearedBy=user）：data-latch-cleared、劃線、disabled、可讀名稱「已確認：…」，點擊不再 emit", async () => {
+    const w = mountCard({ latch: latch({ recoveredAt: T0 + 3_000, clearedBy: "user" }), now: T0 + 10_000 });
+    const card = cardButton(w);
+    expect(card.attributes("data-latch")).toBe("critical");
+    expect(card.attributes("data-latch-cleared")).toBe("");
+    const btn = clearBtn(w);
+    expect(btn.text()).toBe("已確認：嚴重 · 已回復 7 秒前"); // 「已確認：」為 sr-only 前綴
+    expect(btn.classes()).toEqual(expect.arrayContaining(["line-through", "text-ink-3", "bg-rim"]));
+    expect(btn.classes()).not.toContain("text-crit-fg");
+    expect(btn.attributes("disabled")).toBeDefined();
+    expect(btn.attributes("aria-label")).toBe("已確認：壓製機 02 嚴重 · 已回復 7 秒前");
+    await btn.trigger("click");
+    expect(w.emitted("clear-latch")).toBeUndefined();
+  });
+
+  it("清除後（props 改為已確認）由未劃線轉為劃線；期滿（store 不再傳 latch）即消失", async () => {
+    const w = mountCard({ latch: latch({ recoveredAt: T0 }), now: T0 + 5_000 });
+    expect(clearBtn(w).classes()).not.toContain("line-through");
+    await w.setProps({ latch: latch({ recoveredAt: T0, clearedBy: "user" }) });
+    expect(clearBtn(w).classes()).toContain("line-through");
+    expect(cardButton(w).attributes("data-latch-cleared")).toBe("");
+    await w.setProps({ latch: null, now: T0 + 30_000 });
+    expect(clearBtn(w).exists()).toBe(false);
+    expect(cardButton(w).attributes("data-latch")).toBe("none");
+    expect(cardButton(w).attributes("data-latch-cleared")).toBeUndefined();
+  });
+
+  it("出現動畫用 animate-latch-in（reduced-motion 規則在 tailwind.css 停用）", () => {
+    expect(clearBtn(mountCard({ latch: latch() })).classes()).toContain("animate-latch-in");
+  });
+});
+
+describe("MachineNodeCard 診斷狀態 chip（T051、FR-028、US5 Acceptance 3）", () => {
+  /** chip 以「診斷：」視覺隱藏前綴辨識（非互動 span）。 */
+  const chip = (w: ReturnType<typeof mountCard>) =>
+    w.findAll("span").find((s) => s.element.firstElementChild?.textContent === "診斷：");
+
+  it("無診斷（未傳或 none）：data-diagnosis='none'、不渲染 chip", () => {
+    for (const w of [mountCard(), mountCard({ badge: { kind: "none" } })]) {
+      expect(cardButton(w).attributes("data-diagnosis")).toBe("none");
+      expect(chip(w)).toBeUndefined();
+    }
+  });
+
+  const CASES: readonly [DiagnosisBadge, string, string, string][] = [
+    [{ kind: "active", progress: 60 }, "active", "診斷中 60%", "border-accent"],
+    [{ kind: "active", progress: null }, "active", "診斷中", "border-accent"],
+    [{ kind: "completed", severity: "critical", cached: false }, "completed", "結果 · 嚴重", "bg-surface-strong"],
+    [{ kind: "completed", severity: "ok", cached: true }, "completed", "快取 · 正常", "bg-rim"],
+    [{ kind: "failed" }, "failed", "失敗", "bg-crit-bg"],
+  ];
+
+  it.each(CASES)("%o → data-diagnosis=%s、文案「%s」", (badge, kind, text, bg) => {
+    const w = mountCard({ badge });
+    expect(cardButton(w).attributes("data-diagnosis")).toBe(kind);
+    const el = chip(w)!;
+    expect(el.text()).toBe(`診斷：${text}`);
+    expect(el.element.tagName).toBe("SPAN");
+    expect(el.classes()).toContain(bg);
+  });
+
+  it("chip 在 id 列（id → 停滯徽章 → chip），id 讓位可截斷、徽章不縮；chip 不在底列", () => {
+    const w = mountCard({
+      stale: true,
+      latch: { machineId: "press-02", level: "warning", enteredAt: T0, recoveredAt: null, clearedBy: null },
+      badge: { kind: "active", progress: 60 },
+    });
+    const el = chip(w)!;
+    const row = el.element.parentElement!;
+    expect(row.classList.contains("h-5")).toBe(true);
+    const items = Array.from(row.children).map((c) => c.textContent?.trim());
+    expect(items).toEqual(["press-02", "停滯", "診斷：診斷中 60%"]);
+    const id = row.children[0]!;
+    expect(id.classList.contains("shrink-[999]")).toBe(true);
+    expect(id.classList.contains("truncate")).toBe(true);
+    expect(row.children[1]!.classList.contains("shrink-0")).toBe(true);
+    expect(cardButton(w).element.contains(el.element)).toBe(true);
+    const footer = w.get('[data-fg="latch-clear"]').element.parentElement!;
+    expect(footer.contains(el.element)).toBe(false);
+  });
+
+  it("底列只有標記與更新時間；底列不接收指標事件，只有未確認的清除鈕可點", () => {
+    const w = mountCard({
+      latch: { machineId: "press-02", level: "warning", enteredAt: T0, recoveredAt: null, clearedBy: null },
+      badge: { kind: "failed" },
+    });
+    const btn = w.get('[data-fg="latch-clear"]');
+    const footer = btn.element.parentElement!;
+    expect(Array.from(footer.children).map((c) => c.textContent?.trim())).toEqual(["警告 · 剛進入", "更新 剛剛"]);
+    expect(footer.classList.contains("pointer-events-none")).toBe(true);
+    expect(btn.classes()).toContain("pointer-events-auto");
+  });
+});
+
+describe("MachineNodeCard 底列不改卡片尺寸（FR-026、FR-031）", () => {
+  it("標記與 chip 出現與否，卡片主按鈕 class 與底列佔位相同；底列固定 h-5、絕對定位", () => {
+    const plain = mountCard();
+    const busy = mountCard({
+      latch: { machineId: "press-02", level: "critical", enteredAt: T0, recoveredAt: null, clearedBy: "user" },
+      badge: { kind: "active", progress: 40 },
+    });
+    expect(new Set(cardButton(plain).classes())).toEqual(new Set(cardButton(busy).classes()));
+    for (const w of [plain, busy]) {
+      expect(cardButton(w).classes()).toContain("min-h-[148px]");
+      const spacer = cardButton(w).get("[title]");
+      expect(spacer.classes()).toEqual(expect.arrayContaining(["mt-auto", "h-5"]));
+      const updatedId = cardButton(w).attributes("aria-describedby")!.split(" ").at(-1)!;
+      const footer = w.get(`[id="${updatedId}"]`).element.parentElement!;
+      expect(Array.from(footer.classList)).toEqual(expect.arrayContaining(["absolute", "h-5", "overflow-hidden"]));
+    }
   });
 });

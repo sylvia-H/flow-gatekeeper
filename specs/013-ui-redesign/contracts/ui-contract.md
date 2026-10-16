@@ -49,7 +49,7 @@
 | `[data-fg="metric-tick"]` | 卡片數值旁的 3 格小刻度（`stroke-etch`／`stroke-warn`／`stroke-crit`，依該指標自身越界等級） |
 | `.machine-card[data-machine="<id>"][data-selected][data-state][data-latch][data-latch-cleared][data-diagnosis]` | 卡片（`data-latch` = `warning\|critical\|none`；`data-latch-cleared` 於操作者確認、劃線期間存在；`data-diagnosis` = `none\|active\|completed\|failed`） |
 | `[data-fg="latch-clear"]` | 卡片上的清除按鈕 |
-| `[data-fg="anomaly-summary"] [data-machine]` | 異常摘要列（側欄與手機覆蓋層共用） |
+| `[data-fg="anomaly-summary"] [data-machine]` | 異常摘要列（側欄與手機覆蓋層共用）；列內選取鈕 `[data-fg="anomaly-select"]`、清除鈕 `[data-fg="anomaly-clear"]`（與卡片的 `latch-clear` 區分，避免 E2E 同時命中兩顆；Phase 7 裁決）；列屬性 `data-level="warning\|critical"`、`data-active`／`data-struck`（有屬性才算，與卡片 `data-latch-cleared` 同寫法） |
 | `[data-fg="fleet-summary-bar"]` | 手機機群健康摘要條 |
 | `[data-fg="copilot"][data-open]` | Copilot 面板 |
 | `[data-fg="copilot-peek"]` | 手機 bottom-sheet 收合（收合鈕或 Escape）且仍有選取機台時的 32px peek 條（點擊展開；無選取時不渲染） |

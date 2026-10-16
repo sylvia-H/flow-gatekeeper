@@ -192,8 +192,14 @@ const handle = useHighFrequencyWs({
         <!-- 機群健康：四計數＋比例條，隨遙測即時更新（玻璃片外觀由元件自帶） -->
         <FleetHealth :summary="store.fleetHealth" />
 
-        <!-- 最近異常摘要（US5 T050 接線） -->
-        <AnomalySummary />
+        <!-- 最近異常摘要：清單資料、選台與清除皆接 store（卡片標記與這裡操作同一份 latch） -->
+        <AnomalySummary
+          :items="store.anomalySummary"
+          :now="store.staleNow"
+          :selected-id="store.selectedMachineId"
+          @select="store.selectMachine"
+          @clear="store.clearLatch"
+        />
 
         <!-- 主題切換：rail 底部 -->
         <div class="mt-auto pt-2">
@@ -242,7 +248,13 @@ const handle = useHighFrequencyWs({
           >
             <span class="h-0.5 w-full rounded-control bg-transparent group-hover:bg-accent/60" />
           </div>
-          <EventStrip :events="store.events" :height="eventStripHeight" />
+          <!-- US5 T052：事件列項可點擊選台，選取中機台的列以 selectedId 標示 -->
+          <EventStrip
+            :events="store.events"
+            :height="eventStripHeight"
+            :selected-id="store.selectedMachineId"
+            @select="store.selectMachine"
+          />
         </div>
       </div>
     </template>
