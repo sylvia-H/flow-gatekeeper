@@ -33,14 +33,31 @@ const stateClass = computed(() => cardStateClass(props.machine ? props.machine.s
 
 const PLACEHOLDER = "—";
 
-/** 越界數值染色（FR-002）：warn→`text-warn-fg`、crit→`text-crit-fg`（文字用 *-fg 才達 4.5:1）、否則 `text-ink`。 */
+/**
+ * 越界數值染色（FR-002）：warn→`text-warn-fg`、crit→`text-crit-fg`（文字用 *-fg 才達 4.5:1）、否則 `text-ink`。
+ * 數值旁的 3 格蝕刻小刻度（`tickCls`）同一份越界判定：warn→`stroke-warn`、crit→`stroke-crit`、否則 `stroke-etch`
+ * （刻度是非文字裝飾，用狀態主色即可，不必用 *-fg）。
+ */
 interface MetricView {
   key: MetricKey;
   label: string;
   value: string;
   unit: string;
   cls: string;
+  tickCls: string;
 }
+
+const VALUE_CLASS: Record<"warn" | "crit" | "none", string> = {
+  crit: "text-crit-fg",
+  warn: "text-warn-fg",
+  none: "text-ink",
+};
+
+const TICK_CLASS: Record<"warn" | "crit" | "none", string> = {
+  crit: "stroke-crit",
+  warn: "stroke-warn",
+  none: "stroke-etch",
+};
 
 /**
  * 單一 metric 描述子（key／中文標籤／格式化）——placeholder 與實值分支共用同一份，避免兩處漂移。
@@ -62,14 +79,14 @@ const metrics = computed<MetricView[]>(() => {
   const m = props.machine;
   const off = m ? offendingMetrics(m.telemetry) : null;
   return METRIC_DESCRIPTORS.map((d) => {
-    const offense = off ? off[d.key] : null;
-    const cls = offense === "crit" ? "text-crit-fg" : offense === "warn" ? "text-warn-fg" : "text-ink";
+    const level = (off ? off[d.key] : null) ?? "none";
     return {
       key: d.key,
       label: d.label,
       value: m ? d.format(m.telemetry) : PLACEHOLDER,
       unit: metricUnit(d.key),
-      cls,
+      cls: VALUE_CLASS[level],
+      tickCls: TICK_CLASS[level],
     };
   });
 });
@@ -130,15 +147,31 @@ const absoluteTime = computed(() => (props.machine ? formatClock(props.machine.l
         </div>
       </div>
 
-      <!-- 遙測：固定 2×2，標籤列帶單位、數值列 24px mono；越界值染 warn／crit，位數變化不改版面 -->
+      <!-- 遙測：固定 2×2，標籤列帶單位、數值列 24px mono＋3 格蝕刻小刻度；越界值與其刻度染 warn／crit，
+           刻度固定 10×14px、位數變化與狀態變化皆不改版面（FR-017／FR-031）。
+           220px 欄寬時每格約 90px：「1,180」約 72px ＋ 4px 間距 ＋ 10px 刻度仍放得下 -->
       <div class="grid grid-cols-2 gap-x-3 gap-y-2">
         <div v-for="metric in metrics" :key="metric.key" class="min-w-0">
           <div class="flex items-baseline gap-1 text-xs text-ink-3">
             <span>{{ metric.label }}</span>
             <span class="font-mono">{{ metric.unit }}</span>
           </div>
-          <div class="truncate font-mono text-number font-medium tabular-nums" :class="metric.cls">
-            {{ metric.value }}
+          <div class="flex min-w-0 items-center gap-1">
+            <span class="min-w-0 truncate font-mono text-number font-medium tabular-nums" :class="metric.cls">
+              {{ metric.value }}
+            </span>
+            <!-- 刻度是裝飾：越界與否已由數值顏色與狀態徽章（文字）傳達 -->
+            <svg
+              class="h-3.5 w-2.5 shrink-0 fill-none"
+              :class="metric.tickCls"
+              viewBox="0 0 10 14"
+              stroke-width="1.5"
+              aria-hidden="true"
+              focusable="false"
+              data-fg="metric-tick"
+            >
+              <path d="M0 12.5H10M3 7H10M0 1.5H10" />
+            </svg>
           </div>
         </div>
       </div>

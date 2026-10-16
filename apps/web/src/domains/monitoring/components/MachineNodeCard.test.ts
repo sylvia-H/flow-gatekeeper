@@ -162,6 +162,83 @@ describe("MachineNodeCard 遙測數值", () => {
   });
 });
 
+describe("MachineNodeCard 數值旁的 3 格蝕刻小刻度（T042）", () => {
+  const ticks = (w: ReturnType<typeof mountCard>) => w.findAll('[data-fg="metric-tick"]');
+  const strokeOf = (classes: string[]) => classes.filter((c) => c.startsWith("stroke-"));
+
+  it("四個數值各一個刻度，皆為 aria-hidden 的裝飾 svg、三條刻線", () => {
+    const list = ticks(mountCard());
+    expect(list).toHaveLength(4);
+    for (const tick of list) {
+      expect(tick.element.tagName.toLowerCase()).toBe("svg");
+      expect(tick.attributes("aria-hidden")).toBe("true");
+      expect((tick.get("path").attributes("d") ?? "").match(/M/g)).toHaveLength(3);
+    }
+  });
+
+  it("越界判定沿用 offendingMetrics：crit → stroke-crit、warn → stroke-warn、未越界與 throughput → stroke-etch", () => {
+    const m: MachineLive = {
+      machineId: "press-02",
+      state: "critical",
+      // 溫度 97 > 95（crit）、振動 1.0 > 0.9（warn）、產能不參與越界、錯誤率 1.2% 未越界
+      telemetry: { temperature: 97, vibration: 1.0, throughput: 1180, errorRate: 0.012 },
+      lastUpdated: T0,
+    };
+    const list = ticks(mountCard({ machine: m }));
+    expect(list.map((t) => strokeOf(t.classes()))).toEqual([
+      ["stroke-crit"],
+      ["stroke-warn"],
+      ["stroke-etch"],
+      ["stroke-etch"],
+    ]);
+  });
+
+  /** 四項皆未越界的健康機台（預設 fixture 的振動 1.234 已越 warn 門檻 0.9）。 */
+  const calmMachine: MachineLive = {
+    machineId: "press-02",
+    state: "healthy",
+    telemetry: { temperature: 60, vibration: 0.5, throughput: 1180, errorRate: 0.012 },
+    lastUpdated: T0,
+  };
+
+  it("正常數值與 placeholder 的刻度為 stroke-etch", () => {
+    for (const w of [mountCard({ machine: calmMachine }), mountCard({ machine: null })]) {
+      for (const tick of ticks(w)) expect(strokeOf(tick.classes())).toEqual(["stroke-etch"]);
+    }
+  });
+
+  it("刻度尺寸固定：狀態與越界變化只換 stroke 色，尺寸 class 相同；卡片 min-h 與 2×2 格線不變（FR-031）", () => {
+    const hot: MachineLive = {
+      machineId: "press-02",
+      state: "critical",
+      telemetry: { temperature: 99, vibration: 2, throughput: 60, errorRate: 0.2 },
+      lastUpdated: T0,
+    };
+    const calm = mountCard({ machine: calmMachine });
+    const alarm = mountCard({ machine: hot });
+    const sizeOf = (classes: string[]) => classes.filter((c) => !c.startsWith("stroke-")).sort();
+    const calmTicks = ticks(calm);
+    const alarmTicks = ticks(alarm);
+    calmTicks.forEach((tick, i) => {
+      expect(sizeOf(tick.classes())).toEqual(sizeOf(alarmTicks[i]!.classes()));
+      expect(tick.attributes("viewBox")).toBe(alarmTicks[i]!.attributes("viewBox"));
+    });
+    expect(sizeOf(calmTicks[0]!.classes())).toEqual(expect.arrayContaining(["h-3.5", "w-2.5", "shrink-0"]));
+    for (const w of [calm, alarm]) {
+      expect(cardButton(w).classes()).toContain("min-h-[148px]");
+      expect(w.find(".grid-cols-2").exists()).toBe(true);
+    }
+  });
+
+  it("刻度放在數值同列、數值可截斷而刻度不被擠掉", () => {
+    const tick = ticks(mountCard())[2]!;
+    const row = tick.element.parentElement!;
+    expect(row.querySelector(".text-number")?.textContent?.trim()).toBe("1,180");
+    expect(row.querySelector(".text-number")?.classList.contains("truncate")).toBe(true);
+    expect(row.classList.contains("min-w-0")).toBe(true);
+  });
+});
+
 describe("MachineNodeCard 相對時間", () => {
   it("隨 now（store 每秒 tick）以 formatRelative 更新（「剛剛」／「N 秒前」／「N 分鐘前」，FR-022），並以 title 提供 24 小時制絕對時間", async () => {
     const w = mountCard({ now: T0 + 2_000 });

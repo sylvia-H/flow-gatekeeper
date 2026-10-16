@@ -3,7 +3,8 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import AppLayout from "./shared/components/AppLayout.vue";
 import TopBar from "./shared/components/TopBar.vue";
 import ThemeToggle from "./shared/components/ThemeToggle.vue";
-import TopologyCanvas from "./domains/monitoring/components/TopologyCanvas.vue";
+import BackpressureStrip from "./shared/components/BackpressureStrip.vue";
+import StageTopology from "./domains/monitoring/components/StageTopology.vue";
 import FleetHealth from "./domains/monitoring/components/FleetHealth.vue";
 import AnomalySummary from "./domains/monitoring/components/AnomalySummary.vue";
 import EventStrip from "./domains/monitoring/components/EventStrip.vue";
@@ -88,7 +89,7 @@ function onCancel(): void {
   }
 }
 
-// 主區標題列的機台數（N＝固定名冊長度）；US2 T036 由背壓 strip 取代。
+// 主區標題「機群總覽 · N 台」（N＝固定名冊長度）：畫面上由背壓 strip 取代，只留給輔助技術（R13）。
 const machineCount = computed(() => MACHINE_IDS.length);
 
 /**
@@ -148,7 +149,7 @@ const handle = useHighFrequencyWs({
   onLatency: store.setLatency,
   // 訂閱授權結果（system/unauthorized 不再靜默忽略，TopBar 顯示未授權 chip）。
   onAuthResult: store.setAuthorized,
-  // 溢位合併與入口剔除的筆數計入背壓計量（BackpressureBadge 另列 dropped）。
+  // 溢位合併與入口剔除的筆數計入背壓計量（背壓 strip 另列近 60 秒的丟棄數）。
   onDrop: store.recordDropped,
   // 診斷事件分流交 copilot.store（憲章 IV／FR-017：不進遙測 buffer）。
   onDiagnosisEvent: copilot.applyEvent,
@@ -207,6 +208,19 @@ const handle = useHighFrequencyWs({
 
     <template #main>
       <div class="flex h-full min-h-0 flex-col gap-3">
+        <h1 class="sr-only">機群總覽 · {{ machineCount }} 台</h1>
+        <!-- 背壓 strip：工具列正下方常駐（FR-009）；在橫幅之上，斷線時橫幅出現也不把它往下推 -->
+        <BackpressureStrip
+          class="shrink-0"
+          :samples="store.rateSamples"
+          :peak="store.ratePeak"
+          :window-ratio="store.windowRatio"
+          :cumulative-ratio="store.cumulativeRatio"
+          :dropped="store.droppedInWindow"
+          :stale="store.rateStale"
+          :msgs-per-sec="store.latestRate?.msgsPerSec ?? null"
+          :batches-per-sec="store.latestRate?.batchesPerSec ?? null"
+        />
         <div
           v-if="banner"
           class="shrink-0 rounded-card border px-3.5 py-2 text-sm shadow-glass"
@@ -214,13 +228,8 @@ const handle = useHighFrequencyWs({
         >
           {{ banner.text }}
         </div>
-        <!-- 主區標題列（US2 T036 由背壓 strip 取代） -->
-        <div class="flex shrink-0 items-baseline gap-2 px-1">
-          <h1 class="text-sm font-semibold text-ink">機群總覽</h1>
-          <span class="text-sm text-ink-2">{{ machineCount }} 台</span>
-        </div>
         <div class="min-h-0 flex-1 overflow-hidden rounded-card">
-          <TopologyCanvas />
+          <StageTopology />
         </div>
         <!-- 事件流：上方 12px 間隙即高度拖曳把手（往上拖增高） -->
         <div class="flex shrink-0 flex-col">
