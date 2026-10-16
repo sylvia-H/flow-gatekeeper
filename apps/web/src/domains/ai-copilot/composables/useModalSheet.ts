@@ -1,7 +1,7 @@
 import { nextTick, onMounted, onUnmounted, ref, type Ref } from "vue";
 
-/** 與 Tailwind `md` 斷點（768px）對齊：低於它時 drawer 是覆蓋畫面的 bottom sheet。 */
-const MOBILE_QUERY = "(max-width: 767.98px)";
+/** 與 Tailwind `lg` 斷點（1024px）對齊：低於它時 drawer 是覆蓋畫面的 bottom sheet（768–1023px 的推擠式面板會把卡片欄擠到無法閱讀）。 */
+const MOBILE_QUERY = "(max-width: 1023.98px)";
 
 const FOCUSABLE = [
   "a[href]",
@@ -162,7 +162,7 @@ export function createModalSheet(
  * 為什麼靠 IntersectionObserver 偵測「開啟」：sheet 的外層 `<aside>` 與開關狀態由 AppLayout／
  * App 持有，drawer 元件拿不到 `drawerOpen`；外層以 `display:none` 切換顯示，而 display:none
  * 的元素不會 intersect，觀察 drawer 根節點即可得知 sheet 何時出現／消失，不必改外層介面。
- * 桌機（md+）是常駐側欄、不是對話框，這時完全不介入焦點。
+ * 寬螢幕（lg+，≥ 1024px）是常駐側欄、不是對話框，這時完全不介入焦點。
  */
 export function useModalSheet(root: Ref<HTMLElement | null>, onClose: () => void) {
   const sheet = createModalSheet(() => root.value, onClose, {
