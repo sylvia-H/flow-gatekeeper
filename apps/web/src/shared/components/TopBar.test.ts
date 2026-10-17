@@ -90,28 +90,29 @@ describe("TopBar 語意分組（FR-034）", () => {
     expect(store.searchQuery).toBe("烤爐");
   });
 
-  it("播放控制：暫停是切換鈕——名稱恆為「暫停」、以 aria-pressed 與墨色實底表達按下，Mock 頻率維持 disabled", async () => {
+  it("播放控制：暫停鈕兩態——未暫停「暫停」、暫停中文字與可讀名稱換成「恢復」並以墨色實底標出狀態（無 aria-pressed），Mock 頻率維持 disabled", async () => {
     const store = useMonitoringStore();
     const w = mountBar();
     const [pause, mock] = group(w, "播放控制").findAll("button");
     expect(text(pause!.element)).toBe("暫停");
     expect(pause!.attributes("aria-label")).toBe("暫停");
-    expect(pause!.attributes("aria-pressed")).toBe("false");
+    expect(pause!.attributes("aria-pressed")).toBeUndefined();
     expect(pause!.classes()).not.toContain("bg-ink");
 
     await pause!.trigger("click");
     expect(store.paused).toBe(true);
-    // 按下態：名稱不變（避免「恢復，已按下」的矛盾朗讀），外觀比照 segmented 選中段，圖示實心
-    expect(text(pause!.element)).toBe("暫停");
-    expect(pause!.attributes("aria-label")).toBe("暫停");
-    expect(pause!.attributes("aria-pressed")).toBe("true");
+    // 暫停中：可見文字與可讀名稱一起換成「恢復」（使用者裁決 2026-10-17），不用 aria-pressed；外觀比照 segmented 選中段，Play 圖示實心
+    expect(text(pause!.element)).toBe("恢復");
+    expect(pause!.attributes("aria-label")).toBe("恢復");
+    expect(pause!.attributes("aria-pressed")).toBeUndefined();
     expect(pause!.classes()).toEqual(expect.arrayContaining(["bg-ink", "text-surface-strong", "font-semibold"]));
     expect(pause!.get("svg").classes()).toContain("fill-current");
-    expect(pause!.attributes("title")).toContain("再按一次恢復");
+    expect(pause!.attributes("title")).toContain("恢復");
 
     await pause!.trigger("click");
     expect(store.paused).toBe(false);
-    expect(pause!.attributes("aria-pressed")).toBe("false");
+    expect(text(pause!.element)).toBe("暫停");
+    expect(pause!.attributes("aria-label")).toBe("暫停");
     expect(text(mock!.element)).toBe("Mock 頻率");
     expect(mock!.attributes("disabled")).toBeDefined();
   });
@@ -491,9 +492,10 @@ describe("工具列三段收合（T060、FR-032、research R10）", () => {
     }
     await pause!.trigger("click");
     expect(store.paused).toBe(true);
-    // 只剩圖示的段位也有按下態：aria-pressed、墨色實底、實心圖示；名稱不變
-    expect(pause!.attributes("aria-label")).toBe("暫停");
-    expect(pause!.attributes("aria-pressed")).toBe("true");
+    // 只剩圖示的段位也看得出暫停中：墨色實底、實心 Play 圖示；可讀名稱換成「恢復」
+    expect(pause!.attributes("aria-label")).toBe("恢復");
+    expect(text(pause!.element)).toBe("恢復");
+    expect(pause!.attributes("aria-pressed")).toBeUndefined();
     expect(pause!.classes()).toContain("bg-ink");
     expect(pause!.get("svg").classes()).toContain("fill-current");
     expect(group(w, "導航").find('input[type="search"]').exists()).toBe(true);
