@@ -216,7 +216,7 @@ const machineCount = computed(() => MACHINE_IDS.length);
  * 連線／授權／暫停橫幅（同一位置、同一元件形態）：決策與優先序（斷線 ＞ 未授權 ＞ 暫停）在 `bannerOf`；不清空資料。
  * 暫停橫幅回應 critique 2026-10-17 P1（暫停後卡片停在「剛剛」、連線 chip 仍「已連線」，凍結畫面看起來像即時）。
  * 橫幅不設 live region：連線三態由 TopBar 連線 chip（role=status）、未授權由未授權 chip
- * （role=alert）、暫停由暫停鈕的 aria-pressed 朗讀，避免同一件事念兩次。
+ * （role=alert）；暫停橫幅為 role=status（禮貌朗讀一次），工具列暫停鈕的名稱換成「恢復」本身不會被朗讀。
  */
 const banner = computed(() =>
   bannerOf(store.connectionStatus, store.everConnected, store.authError, store.paused, store.pausedAt),
@@ -356,6 +356,7 @@ const handle = useHighFrequencyWs({
         <div
           v-if="banner"
           :data-fg="banner.pausedAt !== undefined ? 'pause-banner' : undefined"
+          :role="banner.pausedAt !== undefined ? 'status' : undefined"
           class="flex shrink-0 items-center gap-3 rounded-card border px-3.5 py-2 text-sm shadow-glass"
           :class="banner.cls"
         >

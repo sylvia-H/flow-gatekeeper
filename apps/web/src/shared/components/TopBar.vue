@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from "vue";
-import { Search, Stethoscope, Gauge, Pause, ShieldAlert, Keyboard } from "lucide-vue-next";
+import { Search, Stethoscope, Gauge, Pause, Play, ShieldAlert, Keyboard } from "lucide-vue-next";
 import MetricsPanel from "./MetricsPanel.vue";
 import ThemeToggle from "./ThemeToggle.vue";
 import { isImeComposing } from "../lib/shortcuts.js";
@@ -272,7 +272,7 @@ defineExpose({
 const TOOL_BUTTON =
   "flex h-9 items-center gap-1.5 rounded-control border border-edge bg-surface/72 px-2.5 text-sm text-ink-2 shadow-glass focus:outline-none focus-visible:ring-2 focus-visible:ring-focus";
 
-/** 暫停鈕兩態：未按下同一般工具鈕；按下比照 segmented 選中段（`bg-ink text-surface-strong font-semibold`）。 */
+/** 暫停鈕兩態：未暫停同一般工具鈕；暫停中（文字「恢復」）比照 segmented 選中段（`bg-ink text-surface-strong font-semibold`）標出目前狀態。 */
 const PAUSE_BASE =
   "flex h-9 items-center gap-1.5 rounded-control border px-2.5 text-sm transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-rim";
 const PAUSE_IDLE = `${PAUSE_BASE} border-edge bg-surface/72 text-ink-2 shadow-glass hover:bg-surface hover:text-ink`;
@@ -352,22 +352,23 @@ const PAUSE_PRESSED = `${PAUSE_BASE} border-ink bg-ink font-semibold text-surfac
       </div>
     </div>
 
-    <!-- 播放控制：暫停期間續收 buffer、恢復跳到最新。暫停鈕是切換鈕：名稱恆為「暫停」、按下態以
-         aria-pressed 與 segmented 選中段同款的墨色實底表達（只剩圖示的段位也看得出按下）；
-         恢復可再按一次，或用主區暫停橫幅內的「恢復」 -->
+    <!-- 播放控制：暫停期間續收 buffer、恢復跳到最新。暫停鈕是兩態動作鈕：未暫停寫「暫停」（Pause 圖示），
+         暫停中寫「恢復」（Play 圖示）並以 segmented 選中段同款的墨色實底標出「目前處於暫停」（只剩圖示的段位也看得出）；
+         可見文字與可讀名稱一起換、不用 aria-pressed（WCAG 2.5.3 仍成立，且避免「恢復，已按下」的矛盾朗讀）。
+         使用者裁決 2026-10-17：按下後文字要換，原「固定『暫停』＋aria-pressed」作廢。主區暫停橫幅另有「恢復」鈕 -->
     <div role="group" aria-label="播放控制" class="flex shrink-0 items-center gap-2">
       <button
         ref="pauseToggle"
         type="button"
         data-fg="pause-toggle"
         :class="store.paused ? PAUSE_PRESSED : PAUSE_IDLE"
-        aria-label="暫停"
-        :aria-pressed="store.paused ? 'true' : 'false'"
-        :title="store.paused ? '已暫停畫面更新（續收資料）；再按一次恢復' : '暫停畫面更新（續收資料）'"
+        :aria-label="store.paused ? '恢復' : '暫停'"
+        :title="store.paused ? '已暫停畫面更新（續收資料）；按下恢復並跳到最新' : '暫停畫面更新（續收資料）'"
         @click="store.togglePause()"
       >
-        <Pause class="h-4 w-4 shrink-0" :class="store.paused ? 'fill-current' : ''" aria-hidden="true" />
-        <span :class="labelClass">暫停</span>
+        <Play v-if="store.paused" class="h-4 w-4 shrink-0 fill-current" aria-hidden="true" />
+        <Pause v-else class="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span :class="labelClass">{{ store.paused ? "恢復" : "暫停" }}</span>
       </button>
 
       <!-- Mock 頻率（disabled 佔位，FR-027）：compact 不渲染 -->

@@ -335,7 +335,7 @@ components:
 ### Buttons
 - **Shape:** 4px 圓角，高 36px（Copilot 內的全寬主要鈕為 `py-2`），icon 16px 加 6px 間距，文字 14px/600；窄工具列只留 icon，一律有 `aria-label` 與 `title`。lucide 線性圖示，不用 glyph 字型。
 - **Primary**（工具列「診斷」、Copilot「診斷」／「重試」）：`bg-accent text-surface-strong border-accent-strong`，hover `bg-accent-strong`；disabled 工具列版 `bg-surface/72 border-edge text-ink-3`、面板版 `bg-rim border-edge text-ink-3`（不用整顆半透明，停用對比仍 ≥ 3:1）。工具列上的焦點環加 `ring-offset-2 ring-offset-rim`。
-- **Tool**（搜尋圖示鈕、暫停、快捷鍵說明（`Keyboard` 圖示、與 `?` 同一個開關）、主題圖示鈕）：玻璃配方的按鈕版 `bg-surface/72 border-edge text-ink-2 shadow-glass`，hover `bg-surface text-ink`；Mock 頻率以 `border-dashed text-ink-3 cursor-not-allowed` 作停用占位。**暫停是固定文字的切換鈕**（名稱恆為「暫停」、`aria-pressed`）：按下態比照 segmented 選中段 `border-ink bg-ink text-surface-strong font-semibold`，只剩圖示時也看得出按下；恢復可再按一次，或用主區暫停橫幅內的「恢復」。
+- **Tool**（搜尋圖示鈕、暫停、快捷鍵說明（`Keyboard` 圖示、與 `?` 同一個開關）、主題圖示鈕）：玻璃配方的按鈕版 `bg-surface/72 border-edge text-ink-2 shadow-glass`，hover `bg-surface text-ink`；Mock 頻率以 `border-dashed text-ink-3 cursor-not-allowed` 作停用占位。**暫停是兩態動作鈕**：未暫停「暫停」（Pause 圖示）、暫停中「恢復」（Play 實心圖示，可見文字與可讀名稱一起換、不用 `aria-pressed`），暫停中外觀比照 segmented 選中段 `border-ink bg-ink text-surface-strong font-semibold` 標出目前狀態，只剩圖示時也看得出；主區暫停橫幅另有「恢復」鈕。（2026-10-17 使用者裁決：固定文字「暫停」會讓人以為按下沒生效）
 - **Secondary**（Copilot「中止診斷」／「再次診斷」、暫停橫幅「恢復」）：精簡的 Tool 鈕 `rounded-control border-edge bg-surface/72 px-2.5 py-1 text-sm font-medium text-ink shadow-glass`，hover `bg-rim/60`，停用 `bg-rim text-ink-3`；橫幅內的「恢復」為 28px 高 `bg-surface-strong font-semibold` 配 `Play` 圖示，hover `border-etch bg-surface`。完成態的「再次診斷」是次要鈕：主角是結果本身，不與失敗態的主要「重試」搶層級。
 - **Icon-only**（關閉、確認異常（`Check`）、卡片右下診斷、收合把手）：`p-1.5` 或 `h-7 w-7`／`h-8 w-8`，`text-ink-2`／`text-ink-3`，hover 轉 `text-ink` 或 `text-accent`、底轉 `bg-surface/72` 或 `bg-rim`；卡片上的那顆預設 `opacity-0`，hover／focus-within 或無 hover 裝置時顯示，並有 `bg-surface-strong border-edge` 底。
 - **Segmented**（主題切換「淺色｜深色」）：兩段各自帶 1px edge 框、高 32px，選中段 `bg-ink text-surface-strong font-semibold`，未選 `bg-surface/72 text-ink-2`；焦點環 `ring-offset-2 ring-offset-rim`。
@@ -389,7 +389,7 @@ rail 版：玻璃片，標頭「機群健康」+ 「共 N 台」，2×2 計數�
 - **Do** 以邊框「換色不換寬」、底色「換 alpha 不換尺寸」表達狀態；任何徽章、讀數、標記的出現都要有恆在的佔位，不改容器高度。
 - **Do** 在 `prefers-reduced-motion: reduce` 下停掉五種循環／一次性動畫（critical-pulse、stream-caret、indeterminate、flow、latch-in）並把 transition 縮到 0.01ms；主題切換那一幀停用所有過渡。
 - **Do** 以容器寬度（container query／ResizeObserver）而非 viewport 斷點決定背壓帶、拓樸與工具列的收斂。
-- **Do** 讓切換鈕保持固定文字、以 `aria-pressed` 與墨色實底（`bg-ink text-surface-strong`）表達按下（暫停鈕、主題段）；同一視窗口徑的讀數在標籤上寫明「· 近 60 秒」，刻度上的參照（1:1 錨點、最高水位）用 1px `ink-3` 短線、液柱用 `accent/25` 單一實色。
+- **Do** 讓「目前狀態」看得出來：主題段以 `aria-pressed`＋墨色實底表達選中；暫停鈕則是兩態動作鈕，文字與可讀名稱隨狀態換（暫停／恢復）並以墨色實底標出暫停中；同一視窗口徑的讀數在標籤上寫明「· 近 60 秒」，刻度上的參照（1:1 錨點、最高水位）用 1px `ink-3` 短線、液柱用 `accent/25` 單一實色。
 
 ### Don't:
 - **Don't** 在元件或 `tailwind.config.ts` 寫色值；色值只存在 `theme.css`，兩套主題同名換值（憲章硬規則）。

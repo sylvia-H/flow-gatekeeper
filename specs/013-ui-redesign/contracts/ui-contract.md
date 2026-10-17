@@ -44,7 +44,7 @@
 |---|---|
 | `[data-fg="backpressure"]` | 背壓 strip 根；`[data-fg="ratio"]` 比值數字（60 秒視窗比值）；`[data-fg="ratio-plain"]` ≥ md 常駐白話行「每幀合併約 N 則 · 近 60 秒最高 X」（走勢區最左、12px ink-3，不增加 strip 高度，空間不足截斷、全文在 `title`；手機不顯示）；刻度 1:1 處的蝕刻錨點 `.grad-unity`／`.grad-unity-label`「1:1」（桌機與 compact 刻度皆有）；丟棄數一律「丟棄 N 則」（T073 第四輪） |
 | `[data-fg="bp-paused"]` | 背壓 strip 狀態列的「已暫停」pill（手機不顯示；與斷線 pill 同現時只顯示斷線）（T073 第三輪）。斷線 pill 與 TopBar 連線 chip 同字：「已斷線」，`connection` prop 為 `reconnecting` 時「重新連線中」（T073 第四輪由「連線中斷」改） |
-| `[data-fg="pause-toggle"][aria-pressed]` | 工具列暫停鈕：文字與可讀名稱固定「暫停」，按下態 `aria-pressed="true"`＋`bg-ink text-surface-strong`；`screenshots.cjs` 若要暫停請用此選擇器（T073 第三輪） |
+| `[data-fg="pause-toggle"]` | 工具列暫停鈕（兩態動作鈕）：未暫停文字與可讀名稱「暫停」（Pause 圖示）；暫停中「恢復」（Play 實心圖示）＋`bg-ink text-surface-strong` 標出目前狀態；不用 `aria-pressed`（使用者裁決 2026-10-17 推翻 T073 第三輪的固定文字）；`screenshots.cjs` 若要暫停請用此選擇器 |
 | `[data-fg="pause-banner"]`、`[data-fg="banner-resume"]` | 暫停橫幅「已暫停畫面更新 · 暫停於 HH:mm:ss」與內嵌「恢復」鈕（連線／授權橫幅優先；按恢復後焦點回 `pause-toggle`）（T073 第三輪） |
 | `[data-fg="stage"][data-stage="prep\|forming\|fulfilment"]` | stage 欄 |
 | `[data-fg="flow-link"][data-speed="none\|slow\|mid\|fast"][data-orientation="horizontal\|vertical"]` | 連線 |
