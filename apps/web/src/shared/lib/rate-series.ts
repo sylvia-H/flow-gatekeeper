@@ -126,11 +126,15 @@ export function windowRatio(series: RateSeries): number | null {
  * 標示／解除 stale（冪等）。只有狀態真的翻轉時才改旗標並清掉差分基準，
  * 使恢復後第一次 tick 只重新取基準（斷線期間的累積量不灌進單一格）。
  * 狀態不變時呼叫不做任何事——呼叫端可以每次 tick 先同步連線狀態再 `pushSample`，不會把基準一直清掉。
+ * 翻回 fresh（重連）時一併清掉尚未消耗的 `invalidPushes`：斷線期間排下的無效筆數（例如斷線中按「恢復」排的 2 筆）
+ * 針對的那次 flush 早已過去，留著會把重連後頭幾秒的正常樣本標成無效（合併門第 2 輪 #8、第 3 輪 #4）。
+ * 呼叫端若重連當下仍需標無效（仍在暫停），在 `markStale` 之後再 `invalidateNext`。
  */
 export function markStale(series: RateSeries, stale = true): void {
   if (series.stale === stale) return;
   series.stale = stale;
   series.baseline = null;
+  if (!stale) series.invalidPushes = 0;
 }
 
 /**

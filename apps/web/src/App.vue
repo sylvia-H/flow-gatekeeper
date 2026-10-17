@@ -111,6 +111,16 @@ function onDiagnose(): void {
 function onRetry(): void {
   if (store.selectedMachineId !== null) trigger.retry(store.selectedMachineId);
 }
+/**
+ * 展開窄條／peek 條 `open-panel`：展開並清除偏好；peek 條隨展開被移除，焦點交 drawer 接住（只在焦點已遺失時，
+ * 落在閒置單列「診斷」鈕、維持非 modal）。桌機展開窄條時 drawer 不是 sheet，不動作。
+ */
+const drawer = useTemplateRef<InstanceType<typeof CopilotDrawer>>("drawer");
+function onOpenPanel(): void {
+  copilot.openPanel();
+  drawer.value?.focusAfterPeekOpen();
+}
+
 /** 中止：放棄該台目前診斷（→ idle，可立即重新診斷）。 */
 function onCancel(): void {
   if (store.selectedMachineId !== null) {
@@ -272,7 +282,7 @@ const handle = useHighFrequencyWs({
     :peek-status="peekStatus"
     :sheet-engaged="sheetEngaged"
     :sheet-compact="sheetCompact"
-    @open-panel="copilot.openPanel"
+    @open-panel="onOpenPanel"
     @dismiss-panel="copilot.dismissPanel"
   >
     <template #sidebar>
@@ -393,6 +403,7 @@ const handle = useHighFrequencyWs({
 
     <template #drawer>
       <CopilotDrawer
+        ref="drawer"
         :state="selectedState"
         :machine-id="store.selectedMachineId"
         :machine-label="selectedLabel"

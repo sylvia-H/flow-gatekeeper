@@ -160,6 +160,9 @@ export function attachKeyboardShortcuts(options: UseKeyboardShortcutsOptions): (
     const key = event.key;
     // 說明層（aria-modal）開著時只處理 `?` 與 Escape：`/` 會把焦點移出對話框、`d` 會在底下觸發診斷。
     if (handlers.layers.help.isOpen() && !KEYS.toggleHelp.includes(key) && !KEYS.escape.includes(key)) {
+      // `/` 仍要吃掉瀏覽器預設：Firefox 的 `/` 是 Quick Find，會把焦點拉出對話框（合併門第 3 輪 #3）。
+      // 只吃 `/`：Tab／方向鍵等要留給說明層自己的焦點陷阱與捲動。
+      if (KEYS.focusSearch.includes(key) && !isTypingTarget(event)) event.preventDefault();
       return;
     }
     if (isTypingTarget(event)) return;
@@ -174,8 +177,13 @@ export function attachKeyboardShortcuts(options: UseKeyboardShortcutsOptions): (
       return;
     }
 
-    // modal sheet 的焦點陷阱內：`/` 不把焦點搬到 sheet 底下的搜尋框（比照說明層）。
-    if (KEYS.focusSearch.includes(key) && handlers.isCopilotSheetModal?.() === true) return;
+    // modal sheet 的焦點陷阱內：`/` 不把焦點搬到 sheet 底下的搜尋框（比照說明層），並吃掉瀏覽器預設
+    // （Firefox Quick Find 會把焦點拉出陷阱，合併門第 3 輪 #3）。
+    // TODO（合併門第 3 輪 #7，後續）：說明層、異常覆蓋層與這裡是三套 modal 守門，規則不一；改為 EscapeLayer.isModal 統一守門。
+    if (KEYS.focusSearch.includes(key) && handlers.isCopilotSheetModal?.() === true) {
+      event.preventDefault();
+      return;
+    }
 
     const direction = ARROW_DIRECTIONS[key];
     if (direction !== undefined && CARD_MOVE_KEYS.includes(key)) {

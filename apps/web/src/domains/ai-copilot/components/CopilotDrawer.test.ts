@@ -954,6 +954,48 @@ describe("CopilotDrawer 行動版 bottom sheet（dialog 語意與焦點陷阱）
     expect(root.element.contains(document.activeElement)).toBe(true);
   });
 
+  it("中止退回非 modal 後，從 sheet 內收合（收合鈕／Escape 後 sheet 隱藏）→ 焦點回到選取卡，不掉到 body（合併門第 3 輪 #1）", async () => {
+    const { show, hide } = stubMobile();
+    const card = fakeCard(MACHINE);
+    card.el.focus();
+    const w = mountDrawer({
+      state: { status: "active", machineId: MACHINE, jobId: "job-1", attempt: 1, progress: 20, streamText: "" } as CopilotJobState,
+    });
+    await flushPromises();
+    show();
+    await flushPromises();
+    (buttonExact(w, "中止診斷")!.element as HTMLButtonElement).focus();
+    await w.setProps({ state: { status: "idle", machineId: MACHINE } });
+    await flushPromises();
+    const root = w.get('[role="dialog"]');
+    expect(root.attributes("aria-modal")).toBe("false");
+
+    // 收合鈕：焦點在 sheet 內 → App 收合面板 → aside 隱藏
+    const close = w.get('button[aria-label="關閉／收合 AI 診斷面板"]');
+    (close.element as HTMLButtonElement).focus();
+    await close.trigger("click");
+    expect(w.emitted("close")).toHaveLength(1);
+    hide();
+    await flushPromises();
+    expect(document.activeElement).toBe(card.el);
+    expect(document.activeElement).not.toBe(document.body);
+
+    // 再開（非 modal 閒置）→ 焦點進 sheet 後遺失（Escape 交 App 層收合、aside 隱藏時瀏覽器丟回 body）→ 一樣回到選取卡
+    show();
+    await flushPromises();
+    (buttonExact(w, "診斷")!.element as HTMLButtonElement).focus();
+    await flushPromises();
+    await w.setProps({ state: { status: "active", machineId: MACHINE, jobId: "job-2", attempt: 1, progress: 20, streamText: "" } as CopilotJobState });
+    await flushPromises();
+    await w.setProps({ state: { status: "idle", machineId: MACHINE } });
+    await flushPromises();
+    expect(root.attributes("aria-modal")).toBe("false");
+    (document.activeElement as HTMLElement | null)?.blur();
+    hide();
+    await flushPromises();
+    expect(document.activeElement).toBe(card.el);
+  });
+
   it("中止後「診斷」停用（斷線中）→ 焦點落在 sheet 根節點而非 body，仍為非 modal", async () => {
     const { show } = stubMobile();
     const w = mountDrawer({

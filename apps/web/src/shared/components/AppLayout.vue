@@ -83,9 +83,12 @@ const PEEK_HEIGHT = 32;
  */
 const bottomReserve = ref(0);
 let sheetHeight = 0;
-/** 推擠式側欄門檻（Tailwind 自訂 `desk`，`DESK_QUERY`），與 `useModalSheet` 的 MOBILE_QUERY（`BELOW_DESK_QUERY`）互補；事件當下即時讀。 */
+/**
+ * 推擠式側欄門檻（Tailwind 自訂 `desk`，`DESK_QUERY`），與 `useModalSheet` 的 MOBILE_QUERY（`BELOW_DESK_QUERY`）互補。
+ * 讀下方 `deskViewport`（單一來源；合併門第 3 輪 #6：原本每次呼叫 `matchesMedia` 新建一個 MediaQueryList，與它是兩個來源）。
+ */
 function isDesktop(): boolean {
-  return matchesMedia(DESK_QUERY);
+  return deskViewport.value;
 }
 function syncBottomReserve(): void {
   let next: number;
@@ -113,6 +116,12 @@ onMounted(() => {
   sheetObserver = new ResizeObserver((entries) => {
     const entry = entries[entries.length - 1];
     if (!entry) return;
+    // desk+ 是推擠式側欄（高度約等於視窗高），不是 sheet：不記它的高度。否則縮到 < 1366 時 deskViewport 的 watch 先跑，
+    // 會先把側欄高度（約 800px）寫進留白、再由下一個 RO 回呼修回（合併門第 3 輪 #2）。
+    if (isDesktop()) {
+      sheetHeight = 0;
+      return;
+    }
     const box = entry.borderBoxSize?.[0];
     sheetHeight = Math.round(box ? box.blockSize : entry.target.getBoundingClientRect().height);
     syncBottomReserve();

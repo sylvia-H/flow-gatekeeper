@@ -113,6 +113,24 @@ describe("rate-series stale", () => {
     expect(s.samples.map((x) => x.msgsPerSec)).toEqual([10, 20]);
   });
 
+  it("翻回 fresh 時清掉斷線期間排下的無效筆數；標 stale 與冪等呼叫不動它（合併門第 3 輪 #4）", () => {
+    const s = createRateSeries();
+    pushSample(s, c(0, 0), 0);
+    markStale(s);
+    invalidateNext(s, 2); // 斷線中按「恢復」
+    markStale(s); // 冪等：不動
+    expect(s.invalidPushes).toBe(2);
+    markStale(s, false);
+    expect(s.invalidPushes).toBe(0);
+    pushSample(s, c(10, 1), 1_000); // 只取基準
+    pushSample(s, c(20, 2), 2_000);
+    expect(s.samples.at(-1)?.invalid).toBeUndefined();
+
+    invalidateNext(s, 1); // 已連線時排下的不受冪等呼叫影響
+    markStale(s, false);
+    expect(s.invalidPushes).toBe(1);
+  });
+
   it("clearSamples：清空樣本，stale 旗標與基準不動；視窗從頭累積", () => {
     const s = createRateSeries();
     pushSample(s, c(0, 0), 0);

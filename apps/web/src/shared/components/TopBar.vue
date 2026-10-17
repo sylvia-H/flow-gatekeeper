@@ -232,7 +232,8 @@ function onSearchInput(event: Event): void {
  *
  * 與 App 層 `useKeyboardShortcuts` 的分工：這裡是主處理者，命中時 **同步** `preventDefault()`（在任何 await 之前），
  * 事件冒泡到 App 層時 `defaultPrevented` 已為 true，App 層應略過，避免重複選取與重複移焦。
- * 選取同一台是冪等（`selectMachine` 只寫 id）。手機覆蓋式搜尋於選取時一併收回。
+ * `selectMachine` 每次呼叫都會通知選取（store 的 `notifySelection`），再選同一台也會依偏好展開 AI 診斷面板——刻意如此
+ * （Escape 收合後再選同一台要能重新展開）。手機覆蓋式搜尋於選取時一併收回。
  */
 async function onSearchEnter(event: KeyboardEvent): Promise<void> {
   // 長按 Enter 的重複事件不處理（App 層同樣略過 repeat）：首發已把焦點移到卡片。

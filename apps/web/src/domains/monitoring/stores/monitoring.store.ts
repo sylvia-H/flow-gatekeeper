@@ -387,13 +387,9 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     const series = rateSeries.value;
     const wasStale = series.stale;
     markStale(series, connectionStatus.value !== "connected");
-    if (wasStale && !series.stale) {
-      clearSamples(series);
-      // 斷線期間排下的無效筆數（例如斷線中按「恢復」排的 2 筆）不留到重連後：那時 pump 早已 flush 完，
-      // 留著會把重連後頭幾秒的正常樣本標成無效（合併門第 2 輪 #8）。`clearSamples` 在 shared/lib/rate-series.ts，
-      // 不改它的語意，在 store 側直接歸零；重連當下若仍暫停，下一行照常再排 1 筆。
-      series.invalidPushes = 0;
-    }
+    // 斷線期間排下的無效筆數由 `markStale` 翻回 fresh 時一併歸零（見 rate-series.ts `markStale`）；
+    // 重連當下若仍暫停，下一行照常再排 1 筆。
+    if (wasStale && !series.stale) clearSamples(series);
     if (paused.value) invalidateNext(series, 1);
     const pushed = pushSample(
       series,

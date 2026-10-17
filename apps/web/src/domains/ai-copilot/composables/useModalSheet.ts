@@ -53,6 +53,11 @@ export interface ModalSheetOptions {
    * 焦點遺失（activeElement 為 null）也只依這個選項：觸控 Safari 點按鈕不給焦點，不能把 body 當成「要搶」的訊號。
    */
   autoFocus?: () => boolean;
+  /**
+   * sheet 關閉時的焦點歸還後備（合併門第 3 輪 #1）：接手前的元素不在（`disengage` 後、或已脫離 DOM）時改聚焦它，
+   * drawer 給「選取卡，其次 peek 條」。回 null 就不動焦點。
+   */
+  restoreTarget?: () => FocusableLike | null;
 }
 
 export interface KeyEventLike {
@@ -107,6 +112,21 @@ export function createModalSheet(
     }
   }
 
+  /** 焦點是否在 sheet 根節點內；`null`（焦點遺失到 body）不算在內。 */
+  function focusInsideRoot(active: unknown): boolean {
+    return active !== null && getRoot()?.contains?.(active) === true;
+  }
+
+  /** 程式搬焦點：期間暫停 focusin 接手，避免一放進 sheet 就被當成「使用者自己進來」而再度進焦點陷阱。 */
+  function quietFocus(el: FocusableLike): void {
+    quiet = true;
+    try {
+      el.focus();
+    } finally {
+      quiet = false;
+    }
+  }
+
   function sync(): void {
     const next = isSheet.value && visible;
     if (next === open.value) return;
@@ -118,10 +138,17 @@ export function createModalSheet(
       if (options.autoFocus?.() ?? true) enter(true, null);
       return;
     }
-    // 關閉：只有曾接手焦點時才歸還；焦點一直留在外面（例如卡片）就不動它。
+    // 關閉時歸還焦點的條件：曾接手焦點，或 sheet 是被隱藏（不是跨斷點變成側欄）且關閉當下焦點仍在 sheet 內／已遺失——
+    // `disengage` 後焦點留在非 modal sheet 內，從 sheet 內收合或按 Escape，aside 隱藏後焦點會掉到 body（合併門第 3 輪 #1）。
+    // 焦點一直留在外面（例如卡片）就不動它。目標：接手前的元素，不在了就用 `restoreTarget`（選取卡，其次 peek 條）。
     const wasTrapped = trapActive.value;
     trapActive.value = false;
-    if (wasTrapped && restoreTo && restoreTo.isConnected !== false) restoreTo.focus();
+    const active = env.activeElement();
+    const focusWasInside = !visible && (active === null || focusInsideRoot(active));
+    if (wasTrapped || focusWasInside) {
+      const target = restoreTo && restoreTo.isConnected !== false ? restoreTo : (options.restoreTarget?.() ?? null);
+      if (target && target.isConnected !== false) target.focus();
+    }
     restoreTo = null;
   }
 
@@ -165,15 +192,8 @@ export function createModalSheet(
     env.defer(() => {
       if (!trapActive.value) return;
       const root = getRoot();
-      if (!root) return;
-      const active = env.activeElement();
-      if (active !== null && root.contains?.(active) === true) return;
-      quiet = true;
-      try {
-        root.focus();
-      } finally {
-        quiet = false;
-      }
+      if (!root || focusInsideRoot(env.activeElement())) return;
+      quietFocus(root);
     });
   }
 
@@ -182,7 +202,8 @@ export function createModalSheet(
    * 或搜尋 Enter 改選一台閒置機台。不呼叫的話 sheet 縮成閒置單列卻仍 `aria-modal="true"`、遮罩還在、點其他卡只會收合，
    * 中止鈕隨單列消失後焦點掉到 body、Tab 逃出陷阱。
    *
-   * 不歸還焦點到接手前的元素（那多半是很久以前的卡片，跳回去會讓使用者迷路）：`focusTarget` 有給、且延後到 DOM 更新後
+   * 不歸還焦點到接手前的元素（那多半是很久以前的卡片，跳回去會讓使用者迷路），也清掉它（搜尋 Enter 改選後它已不是選取卡）；
+   * 之後從 sheet 內收合時，`sync` 的關閉分支改用 `restoreTarget`（目前選取卡，其次 peek 條）歸還（合併門第 3 輪 #1）。`focusTarget` 有給、且延後到 DOM 更新後
    * 焦點仍在 sheet 內或已遺失（中止鈕被移除）時，改聚焦它（閒置單列的「診斷」鈕）；焦點已在外面（例如搜尋 Enter
    * 後移到卡片）就不動。搬焦點期間暫停 focusin，避免一放進 sheet 又被當成「使用者自己進來」而再度接手。
    */
@@ -194,15 +215,9 @@ export function createModalSheet(
     env.defer(() => {
       if (!open.value || trapActive.value) return;
       const active = env.activeElement();
-      if (active !== null && getRoot()?.contains?.(active) !== true) return;
+      if (active !== null && !focusInsideRoot(active)) return;
       const target = focusTarget();
-      if (!target) return;
-      quiet = true;
-      try {
-        target.focus();
-      } finally {
-        quiet = false;
-      }
+      if (target) quietFocus(target);
     });
   }
 
@@ -239,7 +254,7 @@ export function createModalSheet(
     }
   }
 
-  return { isSheet, open, trapActive, attach, detach, engage, disengage, onFocusIn, onKeydown };
+  return { isSheet, open, trapActive, attach, detach, engage, disengage, quietFocus, onFocusIn, onKeydown };
 }
 
 /**
@@ -301,6 +316,8 @@ export function useModalSheet(
     trapActive: sheet.trapActive,
     engage: sheet.engage,
     disengage: sheet.disengage,
+    /** 程式把焦點放進 sheet 但不接手（不轉 modal）；peek 條重開閒置 sheet 時用。 */
+    quietFocus: sheet.quietFocus,
     onKeydown: sheet.onKeydown,
   };
 }

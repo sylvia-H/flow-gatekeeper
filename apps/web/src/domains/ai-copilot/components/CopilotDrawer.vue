@@ -203,12 +203,16 @@ watch(
  */
 const root = ref<HTMLElement | null>(null);
 const titleId = useId();
-const { isSheet, open: sheetOpen, trapActive, engage, disengage, onKeydown } = useModalSheet(
+const { isSheet, open: sheetOpen, trapActive, engage, disengage, quietFocus, onKeydown } = useModalSheet(
   root,
   () => emit("dismiss"),
   {
     autoFocus: () => props.machineId === null || props.state.status !== "idle",
     focusScope: (el) => el.closest<HTMLElement>('[data-fg="copilot"]'),
+    // 關閉時歸還焦點的後備：目前選取卡，其次收合後出現的 peek 條（合併門第 3 輪 #1）。
+    restoreTarget: () =>
+      selectedCard() ??
+      (typeof document !== "undefined" ? document.querySelector<HTMLElement>('[data-fg="copilot-peek"]') : null),
   },
 );
 
@@ -231,6 +235,23 @@ function idleFocusTarget(): HTMLElement | null {
   const btn = compactDiagnoseBtn.value;
   return btn && !btn.disabled ? btn : root.value;
 }
+
+/**
+ * peek 條重開面板後的焦點落點（App 在 `open-panel` 後呼叫）：peek 條是使用者對面板本身的明確操作，但它隨面板展開被移除，
+ * 焦點會掉到 body。DOM 更新後只在「sheet 形態、閒置單列、焦點已遺失（body 或已移除的節點）」時把焦點放到單列「診斷」鈕
+ * （停用時落在 sheet 根節點）；以 `quietFocus` 放入，維持非 modal、不發 engaged。選台自動展開不走這裡，焦點照舊留在卡片。
+ * 非閒置態（進行中／完成／失敗）sheet 一出現就會自己接手焦點，不必處理；桌機推擠式側欄由 AppLayout 交接焦點。
+ */
+function focusAfterPeekOpen(): void {
+  void nextTick(() => {
+    if (!isSheet.value || !compactIdle.value || typeof document === "undefined") return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body && active.isConnected) return;
+    const target = idleFocusTarget();
+    if (target) quietFocus(target);
+  });
+}
+defineExpose({ focusAfterPeekOpen });
 
 /**
  * sheet 開著時依「有沒有可操作內容」切換 modal：開始診斷、切到已有結果的機台、取消選取（空狀態）→ 接手焦點；

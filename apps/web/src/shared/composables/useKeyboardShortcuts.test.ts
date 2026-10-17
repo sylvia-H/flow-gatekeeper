@@ -362,10 +362,12 @@ describe("說明層開著時只處理 ? 與 Escape", () => {
     state.latchVisible.add("a1");
 
     card("a1").focus();
-    for (const key of ["/", "d", "x", "ArrowRight"]) {
+    for (const key of ["d", "x", "ArrowRight"]) {
       const event = press(card("a1"), key);
       expect(event.defaultPrevented).toBe(false);
     }
+    // `/` 不聚焦搜尋，但吃掉瀏覽器預設（Firefox Quick Find，合併門第 3 輪 #3）
+    expect(press(card("a1"), "/").defaultPrevented).toBe(true);
     expect(document.activeElement).toBe(card("a1"));
     div.focus();
     press(div, "Enter");
@@ -453,13 +455,13 @@ describe("手機異常覆蓋層開著時只處理 Escape 與 /", () => {
 });
 
 describe("Copilot bottom-sheet 為 modal 時不處理 /（合併門第 2 輪 #2，比照說明層）", () => {
-  it("isCopilotSheetModal=true：/ 不呼叫 focusSearch、不 preventDefault；sheet 退回非 modal 後恢復", () => {
+  it("isCopilotSheetModal=true：/ 不呼叫 focusSearch，但 preventDefault（Firefox Quick Find，合併門第 3 輪 #3）；sheet 退回非 modal 後恢復", () => {
     let modal = true;
     handlers.isCopilotSheetModal = () => modal;
     attach();
     state.open = { ...allClosed(), "copilot-panel": true, selection: true };
     const blocked = press(document.body, "/");
-    expect(blocked.defaultPrevented).toBe(false);
+    expect(blocked.defaultPrevented).toBe(true);
     expect(handlers.focusSearch).not.toHaveBeenCalled();
 
     modal = false;

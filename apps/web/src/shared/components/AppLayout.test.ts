@@ -504,6 +504,72 @@ describe("1024–1365px 同樣走 bottom-sheet（T073 D，推擠門檻提到 des
     expect(dialog.attributes("aria-modal")).toBe("false");
   });
 
+  /** 連線就緒（clientId＋已訂閱），面板「診斷」鈕才可用。 */
+  function connectReady(): void {
+    const monitoring = useMonitoringStore();
+    monitoring.setConnectionStatus("connected");
+    monitoring.setClientId("11111111-1111-4111-8111-111111111111");
+    monitoring.setAuthorized(true);
+  }
+
+  /** 1024：選台展開閒置 sheet → 以收合鈕收合成 peek 條。 */
+  async function collapseToPeek(w: VueWrapper): Promise<void> {
+    await select("press-02");
+    showSheet();
+    await flushPromises();
+    await collapseButton(w).trigger("click");
+    await flushPromises();
+    expect(peek(w).exists()).toBe(true);
+  }
+
+  it("1024 寬：鍵盤在 peek 條按 Enter 重開閒置 sheet → peek 條被移除後焦點落在單列「診斷」鈕，仍為非 modal、無遮罩", async () => {
+    stubViewport(1024);
+    const w = mountApp();
+    connectReady();
+    await collapseToPeek(w);
+    const bar = peek(w);
+    (bar.element as HTMLButtonElement).focus();
+    // 原生按鈕的 Enter 由瀏覽器合成 click
+    await bar.trigger("keydown", { key: "Enter" });
+    await bar.trigger("click");
+    await flushPromises();
+    expect(isOpen(w)).toBe(true);
+    expect(peek(w).exists()).toBe(false);
+    const diagnose = w.findAll('[data-fg="copilot"] button').find((b) => b.text() === "診斷")!;
+    expect(diagnose.attributes("disabled")).toBeUndefined();
+    expect(document.activeElement).toBe(diagnose.element);
+    showSheet();
+    await flushPromises();
+    expect(w.get('[role="dialog"]').attributes("aria-modal")).toBe("false");
+    expect(w.find(".bg-scrim\\/50").exists()).toBe(false);
+  });
+
+  it("1024 寬：滑鼠點 peek 條（觸控不給焦點，焦點在 body）重開 → 「診斷」停用（斷線）時焦點落在 sheet 根節點，仍為非 modal；選台自動展開的路徑不搬焦點", async () => {
+    stubViewport(1024);
+    const w = mountApp();
+    await collapseToPeek(w);
+    (document.activeElement as HTMLElement | null)?.blur();
+    await peek(w).trigger("click");
+    await flushPromises();
+    const dialog = w.get('[role="dialog"]');
+    expect(document.activeElement).toBe(dialog.element);
+    showSheet();
+    await flushPromises();
+    expect(dialog.attributes("aria-modal")).toBe("false");
+    expect(w.find(".bg-scrim\\/50").exists()).toBe(false);
+
+    // 選台自動展開（不是 peek 條）：焦點留在原處，不被搬進 sheet
+    await collapseButton(w).trigger("click");
+    await flushPromises();
+    (document.activeElement as HTMLElement | null)?.blur();
+    useCopilotStore().openPanel(); // 清掉手動收合偏好
+    useCopilotStore().dismissPanel();
+    await flushPromises();
+    await select("oven-04");
+    expect(isOpen(w)).toBe(true);
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("1280、1365 寬仍是 sheet；1366 寬是常駐側欄（不掛 dialog 語意）", async () => {
     stubViewport(1280);
     const w = mountApp();
@@ -810,6 +876,21 @@ describe("AppLayout 外觀（純 props）", () => {
       expect(reserve(w)).toBe("0px");
       await setViewportWidth(TABLET);
       expect(reserve(w)).toBe("32px");
+      await setViewportWidth(DESKTOP);
+      expect(reserve(w)).toBe("0px");
+    });
+
+    it("desk+ 展開閒置單列（panelOpen、sheetCompact）縮到 1365：不先把側欄高度寫進留白，量到 sheet 後才採用（合併門第 3 輪 #2／#6）", async () => {
+      stubViewport(DESKTOP);
+      const w = mountLayout({ panelOpen: true, peekLabel: "壓製機 02", sheetCompact: true });
+      resizeSheet(800); // 推擠式側欄約等於視窗高
+      await flushPromises();
+      expect(reserve(w)).toBe("0px");
+      await setViewportWidth(1365); // deskViewport 的 change 先到、RO 後到
+      expect(reserve(w)).toBe("0px");
+      resizeSheet(51);
+      await flushPromises();
+      expect(reserve(w)).toBe("51px");
       await setViewportWidth(DESKTOP);
       expect(reserve(w)).toBe("0px");
     });

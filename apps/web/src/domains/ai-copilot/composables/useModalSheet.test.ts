@@ -32,7 +32,7 @@ interface FakeEl {
   isConnected: boolean;
 }
 
-function harness(opts: { mobile: boolean; autoFocus?: () => boolean }) {
+function harness(opts: { mobile: boolean; autoFocus?: () => boolean; restoreTarget?: () => FakeEl | null }) {
   let active: unknown = null;
   const focused: string[] = [];
   const mk = (name: string, rendered = true): FakeEl => ({
@@ -71,7 +71,7 @@ function harness(opts: { mobile: boolean; autoFocus?: () => boolean }) {
     IntersectionObserver: StubIO,
     activeElement: () => active,
     defer: (fn) => fn(),
-  }, { autoFocus: opts.autoFocus });
+  }, { autoFocus: opts.autoFocus, restoreTarget: opts.restoreTarget });
   sheet.attach();
   const key = (k: string, shiftKey = false) => {
     const e = { key: k, shiftKey, preventDefault: vi.fn(), stopPropagation: vi.fn() };
@@ -344,5 +344,55 @@ describe("createModalSheet.engage 已接手時：焦點遺失才拉回根節點�
     h.setActive("opener"); // contains 回 false（模擬已脫離 DOM 的節點）
     h.sheet.engage();
     expect(h.focused).toEqual(["root", "root"]);
+  });
+});
+
+describe("createModalSheet 關閉時的焦點歸還（合併門第 3 輪 #1）", () => {
+  /** card：sheet 外的選取卡（restoreTarget 的回傳值）。 */
+  function withCard(autoFocus = () => false) {
+    let card: FakeEl | null = null;
+    const h = harness({ mobile: true, autoFocus, restoreTarget: () => card });
+    card = h.el("opener");
+    return h;
+  }
+
+  it("disengage 後焦點留在 sheet 內，從 sheet 內收合（隱藏）→ 歸還到 restoreTarget（選取卡）", () => {
+    const h = withCard();
+    h.show(true);
+    h.sheet.engage();
+    h.sheet.disengage(() => h.el("diagnose"));
+    h.setActive("close"); // 焦點在 sheet 內的收合鈕
+    h.show(false);
+    expect(h.focused.at(-1)).toBe("opener");
+  });
+
+  it("disengage 後焦點已遺失（aside 隱藏時瀏覽器把焦點丟回 body）→ 同樣歸還", () => {
+    const h = withCard();
+    h.show(true);
+    h.sheet.engage();
+    h.sheet.disengage();
+    h.clearActive();
+    const before = h.focused.length;
+    h.show(false);
+    expect(h.focused.length).toBe(before + 1);
+    expect(h.focused.at(-1)).toBe("opener");
+  });
+
+  it("從未接手、焦點一直在外面（卡片）→ 隱藏時不搬動焦點", () => {
+    const h = withCard();
+    h.setActive("opener");
+    h.show(true);
+    const before = h.focused.length;
+    h.show(false);
+    expect(h.focused.length).toBe(before);
+  });
+
+  it("接手前的元素已脫離 DOM → 退用 restoreTarget", () => {
+    const h = withCard(() => true);
+    h.setActive("hidden");
+    h.el("hidden")!.isConnected = false;
+    h.show(true); // autoFocus：記下 hidden 為 restoreTo 並接手
+    h.show(false);
+    expect(h.focused.at(-1)).toBe("opener");
   });
 });
