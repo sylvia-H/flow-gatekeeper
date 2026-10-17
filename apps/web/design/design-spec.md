@@ -1,5 +1,8 @@
 ﻿# flow-gatekeeper Claude Design 規格 003
 
+> ⛔ **已退役（2026-10，feature 013），現況視覺真實來源見 [`apps/web/PRODUCT.md`](../PRODUCT.md) 與 [`apps/web/DESIGN.md`](../DESIGN.md)。**
+> 本檔保留全文作歷史與反面參考，不再更新；文中引用的 `refs/` 參考圖已自 repo 移除（見 git 歷史）。
+
 > 這份文件是 Claude Design 與 Spec Kit / Claude Code 之間的交接契約。  
 > 使用方式：Claude Design 負責產生視覺參考圖與 token；coding agent 只依本檔與 `refs/` 實作，不憑空發明色票、間距或元件狀態。
 

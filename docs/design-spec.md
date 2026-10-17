@@ -1,8 +1,11 @@
 ﻿# flow-gatekeeper Claude Design 規格 003
 
 > ⚠️ **已移轉，本檔為歷史起點，不再更新。** canonical 規格在
-> [`apps/web/design/design-spec.md`](../apps/web/design/design-spec.md)（含 v0.4 起的 token 回寫與 `refs/`；**現況版本見該檔的版本紀錄**，本檔不再追記版本號）。
-> 前端一切以該檔為準；本檔僅保留 v0.3 交接原貌供追溯。
+> [`apps/web/design/design-spec.md`](../apps/web/design/design-spec.md)（含 v0.4 起的 token 回寫；最終版本見該檔的版本紀錄，本檔不再追記版本號）。
+> 本檔僅保留 v0.3 交接原貌供追溯。
+>
+> ⛔ **整條 design-spec 線已退役（2026-10，feature 013）**：canonical 檔同樣標註退役並保留全文，`apps/web/design/refs/` 已自 repo 移除；
+> 現況視覺真實來源見 [`apps/web/PRODUCT.md`](../apps/web/PRODUCT.md) 與 [`apps/web/DESIGN.md`](../apps/web/DESIGN.md)。
 
 > 這份文件是 Claude Design 與 Spec Kit / Claude Code 之間的交接契約。  
 > 使用方式：Claude Design 負責產生視覺參考圖與 token；coding agent 只依本檔與 `refs/` 實作，不憑空發明色票、間距或元件狀態。

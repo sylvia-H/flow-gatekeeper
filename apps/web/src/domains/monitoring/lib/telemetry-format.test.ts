@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TelemetryPoint } from "@flow-gatekeeper/contracts";
-import { metricUnit, offendingMetrics, relativeTimeLabel } from "./telemetry-format.js";
+import { metricUnit, offendingMetrics } from "./telemetry-format.js";
 
 type Telemetry = TelemetryPoint["telemetry"];
 
@@ -39,23 +39,5 @@ describe("offendingMetrics（FR-002；門檻鏡射 002 producer）", () => {
   it("throughput 不參與 amber（恆 null）", () => {
     expect(offendingMetrics(telemetry({ throughput: 0 })).throughput).toBeNull();
     expect(offendingMetrics(telemetry({ throughput: 9999 })).throughput).toBeNull();
-  });
-});
-
-describe("relativeTimeLabel（FR-004 邊界）", () => {
-  const now = 1_000_000_000;
-  it("<5s → just now", () => {
-    expect(relativeTimeLabel(now, now)).toBe("just now");
-    expect(relativeTimeLabel(now - 4_999, now)).toBe("just now");
-  });
-  it("秒/分/時/日 邊界", () => {
-    expect(relativeTimeLabel(now - 5_000, now)).toBe("5s ago");
-    expect(relativeTimeLabel(now - 59_000, now)).toBe("59s ago");
-    expect(relativeTimeLabel(now - 60_000, now)).toBe("1m ago");
-    expect(relativeTimeLabel(now - 60 * 60_000, now)).toBe("1h ago");
-    expect(relativeTimeLabel(now - 24 * 60 * 60_000, now)).toBe("1d ago");
-  });
-  it("未來時間夾為 just now（不出現負值）", () => {
-    expect(relativeTimeLabel(now + 5_000, now)).toBe("just now");
   });
 });

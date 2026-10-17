@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { computed, reactive, ref, shallowRef, triggerRef } from "vue";
+import { readPreference, writePreference } from "../../../shared/composables/useLocalPreference.js";
 import { AiDoneSchema } from "@flow-gatekeeper/contracts";
 import {
   copilotReducer,
@@ -13,6 +14,19 @@ import {
   UNAUTHORIZED_DIAGNOSE_MESSAGE,
   postDiagnose,
 } from "../lib/diagnose-api.js";
+import {
+  cancelTiming,
+  settleTiming,
+  startTiming,
+  type DiagnosisTiming,
+} from "../lib/diagnosis-timing.js";
+
+import {
+  NO_DIAGNOSIS_BADGE,
+  diagnosisBadgeOf,
+  sameDiagnosisBadge,
+  type DiagnosisBadge,
+} from "../lib/diagnosis-badge.js";
 
 /** `diagnose`／`retry` 的選用參數。 */
 export interface DiagnoseOptions {
@@ -22,6 +36,22 @@ export interface DiagnoseOptions {
    * 「未授權」句，而不是「請等待重連」——未授權時重連不會自己好。以 getter 傳入，store 之間不互相匯入。
    */
   authError?: () => string | null;
+}
+
+/** Copilot 面板手動收合偏好的 localStorage key（ui-contract §2；只存 `{"manuallyCollapsed":boolean}`）。 */
+export const PANEL_PREFERENCE_KEY = "fg.copilot-panel";
+
+/** 解析面板偏好；格式不符就拋錯，讓 `readPreference` 退回預設。 */
+function parsePanelPreference(raw: string): boolean {
+  const value: unknown = JSON.parse(raw);
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    typeof (value as { manuallyCollapsed?: unknown }).manuallyCollapsed !== "boolean"
+  ) {
+    throw new Error("invalid copilot panel preference");
+  }
+  return (value as { manuallyCollapsed: boolean }).manuallyCollapsed;
 }
 
 /** 把 POST 失敗轉成使用者看得懂的句子。 */
@@ -72,11 +102,69 @@ export const useCopilotStore = defineStore("copilot", () => {
    * 往返期間即使使用者先按了中止（狀態回 idle），也不該再送出第二筆，否則同台會有兩個 job。
    */
   const inFlight = ref<Set<string>>(new Set());
+  /**
+   * 每台診斷耗時量測（data-model §8、research R7；session 內記憶）。轉移邏輯在純函式
+   * `diagnosis-timing.ts`，這裡只負責在 POST 前 start、任務收尾時 settle／cancel。
+   * 每次診斷才動一兩次（低頻），用 shallowRef 整份換 Map 內容後 `triggerRef` 一次即可。
+   */
+  const timings = shallowRef<Map<string, DiagnosisTiming>>(new Map());
+  /** 每台最近一次「active → 已完成」的時刻（epoch ms，`ai/done` 經 reducer 轉完成當下記錄），供完成 meta 的 `HH:mm:ss`。 */
+  const completedAt = shallowRef<Map<string, number>>(new Map());
+  /**
+   * Copilot 面板開關與手動收合偏好（data-model §2、FR-033）。載入時一律收合（`open = false`），
+   * `manuallyCollapsed` 從 `fg.copilot-panel` 讀回並跨重新載入保留；讀不到或格式不符時為 false。
+   * 只有面板上的收合鈕會把它寫成 true；Escape／遮罩收合只影響當次。
+   */
+  const panel = reactive({
+    open: false,
+    manuallyCollapsed: readPreference(PANEL_PREFERENCE_KEY, false, parsePanelPreference),
+  });
 
   // ── Getters ────────────────────────────────────────────────────────
+  /** Copilot 面板是否展開（所有寬度共用；AppLayout 與快捷鍵的面板層都讀這一份）。 */
+  const panelOpen = computed(() => panel.open);
+
   /** 取某台狀態（無則 idle）；drawer 依 selectedMachineId 呼叫。 */
   function stateFor(machineId: string): CopilotJobState {
     return jobs.value.get(machineId) ?? { status: "idle", machineId };
+  }
+
+  /** 取某台耗時量測（從未診斷過則 undefined）。 */
+  function timingFor(machineId: string): DiagnosisTiming | undefined {
+    return timings.value.get(machineId);
+  }
+
+  /** 取某台最近一次完成的時刻（epoch ms；從未完成過則 undefined）。 */
+  function completedAtFor(machineId: string): number | undefined {
+    return completedAt.value.get(machineId);
+  }
+
+  /**
+   * 每台診斷狀態 chip（data-model §7、FR-028），由 `jobs` 衍生。
+   *
+   * 串流期間每個 `ai/token` 都會寫一次 `jobs`，但 chip 只看 kind／progress／severity／cached：
+   * 以上一輪結果（computed 的 oldValue）比對，內容未變的台沿用舊物件；整份都沒變時回傳舊 Map，
+   * 依賴 chip 的元件（拓樸卡片）就不會因 token 而重算或重繪。
+   */
+  const badges = computed<ReadonlyMap<string, DiagnosisBadge>>((prev) => {
+    const next = new Map<string, DiagnosisBadge>();
+    let changed = prev === undefined || prev.size !== jobs.value.size;
+    for (const [machineId, state] of jobs.value) {
+      const fresh = diagnosisBadgeOf(state);
+      const old = prev?.get(machineId);
+      if (old !== undefined && sameDiagnosisBadge(old, fresh)) {
+        next.set(machineId, old);
+      } else {
+        next.set(machineId, fresh);
+        changed = true;
+      }
+    }
+    return changed || prev === undefined ? next : prev;
+  });
+
+  /** 取某台診斷狀態 chip（從未診斷或 idle 為 `{ kind: "none" }`）。 */
+  function badgeFor(machineId: string): DiagnosisBadge {
+    return badges.value.get(machineId) ?? NO_DIAGNOSIS_BADGE;
   }
 
   /** 送出前置條件（FR-008/FR-014）：有選台、有連線、該台非 active 且沒有送出中的請求（去重）。 */
@@ -87,6 +175,19 @@ export const useCopilotStore = defineStore("copilot", () => {
   }
 
   // ── Internal ───────────────────────────────────────────────────────
+  /** 寫回某台耗時量測；與原值相同（純函式原樣回傳）時不觸發更新。 */
+  function putTiming(machineId: string, next: DiagnosisTiming): void {
+    if (timings.value.get(machineId) === next) return;
+    timings.value.set(machineId, next);
+    triggerRef(timings);
+  }
+
+  /** 任務離開 active 但未完成（失敗／中止）：清掉進行中的量測，保留歷史耗時。 */
+  function dropPendingTiming(machineId: string): void {
+    const timing = timings.value.get(machineId);
+    if (timing) putTiming(machineId, cancelTiming(timing));
+  }
+
   /** ai/* 事件無 machineId：以 jobId 反查該台（O(台數)，5 台可忽略成本）。 */
   function findMachineByJobId(jobId: string): string | undefined {
     for (const [machineId, state] of jobs.value) {
@@ -113,7 +214,40 @@ export const useCopilotStore = defineStore("copilot", () => {
     };
   }
 
+  /** 寫回手動收合偏好；值沒變就不寫，避免每次展開都碰 storage。 */
+  function setManuallyCollapsed(next: boolean): void {
+    if (panel.manuallyCollapsed === next) return;
+    panel.manuallyCollapsed = next;
+    writePreference(PANEL_PREFERENCE_KEY, JSON.stringify({ manuallyCollapsed: next }));
+  }
+
   // ── Actions ────────────────────────────────────────────────────────
+  /**
+   * 選取機台變更（App 在選取改變、或再次選取同一台時呼叫）：取消選取（null）→ 收合；
+   * 選了某台 → 沒有手動收合偏好時展開，有偏好時維持原狀（不自動展開）。偏好本身不動。
+   */
+  function onMachineSelected(machineId: string | null): void {
+    if (machineId === null) panel.open = false;
+    else if (!panel.manuallyCollapsed) panel.open = true;
+  }
+
+  /** 展開面板並清除手動收合偏好：觸發診斷、桌機展開窄條、手機 peek 條都走這裡。 */
+  function openPanel(): void {
+    panel.open = true;
+    setManuallyCollapsed(false);
+  }
+
+  /** 面板上的收合鈕：收合並記下手動收合偏好（之後選台不再自動展開）。 */
+  function collapsePanel(): void {
+    panel.open = false;
+    setManuallyCollapsed(true);
+  }
+
+  /** Escape／手機遮罩：只收合這一次，不寫偏好（不算手動收合）。 */
+  function dismissPanel(): void {
+    panel.open = false;
+  }
+
   /**
    * 觸發診斷：前置檢查（去重／有連線）→ 前端產生 jobId 並**先**建該台 active（pending）→
    * POST /diagnoses。
@@ -125,17 +259,24 @@ export const useCopilotStore = defineStore("copilot", () => {
    * POST 失敗（400／409 失效／503 佇列不可用／逾時／網路）→ 仍是這筆任務才回滾為 failed，
    * 訊息由 `postDiagnose` 轉成可讀中文；若期間已被中止或事件已把它推進到 completed，
    * 就不覆寫使用者當下看到的狀態。
+   *
+   * 觸發診斷一律先展開面板並清除手動收合偏好（data-model §2），即使前置條件擋下也一樣：
+   * 卡片圖示在斷線時仍可點，面板展開才看得到停用原因。
    */
   async function diagnose(
     machineId: string,
     socketId: string | null,
     options?: DiagnoseOptions,
   ): Promise<void> {
+    openPanel();
     if (!canDiagnose(machineId, socketId !== null && socketId !== "")) return;
     const jobId = newJobId();
     jobs.value.set(machineId, startActiveState(machineId, jobId));
     touch(machineId);
     inFlight.value.add(machineId);
+    // 耗時自「送出請求」起算（FR-023）：jobId 由前端先產生，所以能在 POST 前就開始量測，
+    // 早於 HTTP 回應抵達的 cache 命中 `ai/done` 也對得上。
+    putTiming(machineId, startTiming(timings.value.get(machineId), jobId, performance.now()));
     try {
       await postDiagnose(jobId, machineId, socketId as string, options?.requestedBy);
     } catch (err) {
@@ -150,6 +291,7 @@ export const useCopilotStore = defineStore("copilot", () => {
           error: failureMessage(err, options),
         });
         lastActivityAt.value.delete(machineId);
+        dropPendingTiming(machineId);
       }
     } finally {
       inFlight.value.delete(machineId);
@@ -179,12 +321,23 @@ export const useCopilotStore = defineStore("copilot", () => {
       incoming.type === "job/status" ? incoming.machineId : findMachineByJobId(incoming.jobId);
     if (machineId === undefined) return;
     const event = guardDone(incoming);
-    const next = copilotReducer(stateFor(machineId), event);
+    const prev = stateFor(machineId);
+    const next = copilotReducer(prev, event);
     jobs.value.set(machineId, next);
     // watchdog 計時：只有「屬於當前 job 且仍 active」的事件才算有進展並重置逾時；
     // 離開 active（completed/failed）即清掉該台計時。
     if (next.status === "active" && event.jobId === next.jobId) touch(machineId);
     else if (next.status !== "active") lastActivityAt.value.delete(machineId);
+    // 耗時量測：只在這一則事件讓任務「離開 active」時收尾（reducer 對非 active 一律原樣回傳）。
+    if (prev.status !== "active") return;
+    if (next.status === "completed") {
+      const timing = timings.value.get(machineId);
+      if (timing) putTiming(machineId, settleTiming(timing, next.jobId, next.cached, performance.now()));
+      completedAt.value.set(machineId, Date.now());
+      triggerRef(completedAt);
+    } else if (next.status === "failed") {
+      dropPendingTiming(machineId);
+    }
   }
 
   /**
@@ -194,6 +347,7 @@ export const useCopilotStore = defineStore("copilot", () => {
   function cancel(machineId: string): void {
     jobs.value.set(machineId, { status: "idle", machineId });
     lastActivityAt.value.delete(machineId);
+    dropPendingTiming(machineId);
   }
 
   /**
@@ -214,6 +368,7 @@ export const useCopilotStore = defineStore("copilot", () => {
           error: "診斷逾時或無回應，請重試",
         });
         lastActivityAt.value.delete(machineId);
+        dropPendingTiming(machineId);
       }
     }
   }
@@ -236,14 +391,26 @@ export const useCopilotStore = defineStore("copilot", () => {
           error: "連線中斷，請重試",
         });
         lastActivityAt.value.delete(machineId);
+        dropPendingTiming(machineId);
       }
     }
   }
 
   return {
     jobs,
+    timings,
+    completedAt,
     lastClientId,
+    panel,
+    panelOpen,
+    onMachineSelected,
+    openPanel,
+    collapsePanel,
+    dismissPanel,
     stateFor,
+    timingFor,
+    completedAtFor,
+    badgeFor,
     canDiagnose,
     diagnose,
     retry,

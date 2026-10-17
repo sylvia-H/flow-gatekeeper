@@ -26,14 +26,12 @@ const SOCKET_IO_BAN = [
 export default tseslint.config(
   {
     // 各套件 lint script 為 `eslint .`（連設定檔一起 lint），產物與相依一律排除。
-    // apps/web/design/refs/_sources 是設計稿匯出的參考腳本（design-spec 真實來源的附件），不是產品程式碼。
     ignores: [
       "**/dist/**",
       "**/build/**",
       "**/coverage/**",
       "**/node_modules/**",
       "**/.vite/**",
-      "apps/web/design/refs/**",
     ],
   },
   eslint.configs.recommended,
@@ -136,6 +134,24 @@ export default tseslint.config(
     files: ["**/*.js", "**/*.cjs", "**/*.mjs"],
     languageOptions: {
       sourceType: "module",
+    },
+  },
+  {
+    // 各 app 的 Node CLI 腳本（CommonJS，如 apps/web/scripts/screenshots.cjs）：repo 未引入 `globals` 套件，手列 Node globals。
+    files: ["apps/*/scripts/**/*.cjs"],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: {
+        require: "readonly",
+        module: "writable",
+        __dirname: "readonly",
+        process: "readonly",
+        console: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+        URL: "readonly",
+        Buffer: "readonly",
+      },
     },
   },
 

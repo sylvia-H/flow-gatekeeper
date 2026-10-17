@@ -1,6 +1,34 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.5.0 → 1.6.0
+Rationale: feature 013（UI 全面改版，T068；spec FR-035／FR-036）把前端視覺真實來源由
+`apps/web/design/design-spec.md` 與 `apps/web/design/refs/*.png`（2026-10 退役：design-spec.md
+檔頭標註已退役並保留全文、refs/ 自 repo 移除）切換為 impeccable 工件 `apps/web/PRODUCT.md`
+與 `apps/web/DESIGN.md`。屬實質擴充指引（新來源同時規範雙主題 token、材質與無障礙門檻），
+依版本政策以 MINOR（1.6.0）處理。只修訂兩處引用，其餘條文不動。
+
+Modified principles:
+- II. 單一真實來源 — 「視覺」條目改為一律依 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`，
+  並明寫色值只存在 `apps/web/src/styles/theme.css`
+- 開發工作流程與品質門檻 — 「可重播驗收」條目中的產品視覺引用改為依 `apps/web/PRODUCT.md`
+  「第一屏就是工作台」
+
+Added sections: 無
+Removed sections: 無
+
+Templates requiring updates:
+- ✅ .specify/templates/plan-template.md（無 design-spec 引用，無需變更）
+- ✅ .specify/templates/spec-template.md（無 design-spec 引用，無需變更）
+- ✅ .specify/templates/tasks-template.md（無 design-spec 引用，無需變更）
+- ✅ .specify/templates/checklist-template.md（無 design-spec 引用，無需變更）
+- ✅ CLAUDE.md「真實來源」段的視覺條目由主 session 同步改指向 PRODUCT.md／DESIGN.md
+
+Follow-up TODOs:
+- ℹ️ specs/001–012 與 docs/*-research-review*.md 內的 design-spec 引用屬歷史工件，依「回補不重寫
+  歷史」豁免；README／指南的現況描述段由 013 T069／T071 改寫
+
+----- Prior amendment (1.4.1 → 1.5.0) -----
 Version change: 1.4.1 → 1.5.0
 Rationale: (1) Principle III 的「型別來源分層」已過時——自 fix/20260927-research-review 與
 upgrade/20260927-tech-stack 起，packages/contracts 的 12 則 WS message（machine/subscribe、
@@ -144,8 +172,10 @@ commit 訊息格式以 `CLAUDE.md` 為準。
 
 不得憑空發明。各面向 MUST 依其指定來源：
 
-- **視覺**：一律依 `apps/web/design/design-spec.md` 與 `apps/web/design/refs/*.png`。
-  顏色、圓角、陰影、間距 MUST 使用具名 token，MUST NOT 在元件內散落 hex。致敬
+- **視覺**：一律依 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`（impeccable 工件；
+  `apps/web/design/design-spec.md` 與 `refs/` 已於 2026-10 退役）。顏色、圓角、陰影、
+  間距 MUST 使用具名 token，色值 MUST 只存在 `apps/web/src/styles/theme.css`，MUST NOT
+  在元件內散落 hex。致敬
   Argo CD 的拓樸/狀態語言，但 MUST NOT 使用其官方 logo、商標，或直接照抄其官方
   UI layout 與品牌配色。
 - **通訊契約**：一律依 `packages/contracts` 與 `asyncapi.yaml`。
@@ -260,7 +290,7 @@ lock 等暫態用途。
   處理等操作細節見指南 §6.10。
 - **可重播驗收**：每個 feature MUST 保留可重播的 demo 或 seed/mock producer，讓驗收
   與展示可重現。（產品視覺層面，如「首屏為可操作監控台、不做 landing page」，依
-  `apps/web/design/design-spec.md`。）
+  `apps/web/PRODUCT.md`「第一屏就是工作台」。）
 - Plan 階段的 Constitution Check MUST 對照本憲章；任何違反 MUST 在 plan 的
   Complexity Tracking 中記錄理由，否則 MUST 改為合規方案。
 
@@ -286,4 +316,4 @@ lock 等暫態用途。
   的 `info.version` 並在 `CHANGELOG.md` 的契約小節記錄；release 前 MUST 通過此檢查。版本
   策略（產品版本與契約版本各自獨立）以 `CLAUDE.md` 為準。
 
-**Version**: 1.5.0 | **Ratified**: 2026-06-30 | **Last Amended**: 2026-09-27
+**Version**: 1.6.0 | **Ratified**: 2026-06-30 | **Last Amended**: 2026-10-16
