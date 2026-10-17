@@ -27,11 +27,12 @@
 
 ## [2.0.0] - 2026-10-17
 
-主版號升級：web 監控台整體換皮、介面文案改為繁體中文、1.0.0 的 demo 影片不再代表現況（使用者 2026-10-17 裁決）。後端與契約向後相容，
-`asyncapi.yaml` 的 `info.version` 維持 1.2.0。demo 影片 `docs/demo/flow-gatekeeper-demo.mp4` 同時為 2.0.0 GitHub Release 的資產（README 下載連結指向它）。本版包含：
+主版號升級：web 監控台整體換皮、介面文案改為繁體中文、1.0.0 的 demo 影片不再代表現況（使用者 2026-10-17 裁決）。WS／HTTP 契約與 api 行為向後相容（`asyncapi.yaml` 的 `info.version` 維持 1.2.0）；
+worker 預設模型與輸出上限的變更見下方不相容變更。demo 影片 `docs/demo/flow-gatekeeper-demo.mp4` 同時為 2.0.0 GitHub Release 的資產（README 下載連結指向它）。本版包含：
 
 - Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全面改版。013 只動前端呈現，**後端、契約與部署方式皆不變**；
   視覺方向為「實驗室玻璃與蝕刻刻度」，視覺真實來源由 `apps/web/design/design-spec.md` 改為 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`。
+- `docs/20260927-research-review03`（merge `3ad0e9b`，2026-10-15）：第三輪審查報告；其發現的缺陷本版**未修**，見下方相容性注意。
 - 維護分支 `fix/20261017-pause-toggle-label`：暫停鈕按下後換成「恢復」。
 - 維護分支 `upgrade/20261017-gemini-3.5-flash-lite`：worker 的預設 LLM 模型改為 `gemini-3.5-flash-lite`（契約不變）。
 - 維護分支 `docs/20261018-demo-video`：README demo 影片以新介面重錄，新增錄影劇本 `apps/web/scripts/record-demo.cjs`。
@@ -39,8 +40,8 @@
 ### 不相容變更
 
 - **介面文案全面改為繁體中文**：依英文標籤（`Diagnose`、`Connected`、`Cached`、`Retry`、stage 名稱等）寫的外部截圖說明、操作手冊或 UI 自動化腳本需改用中文標籤；machine id、job id、技術單位（含 px）、`Mock`／`AI`／`WS`、佇列名 `diagnosis`、產品名 flow-gatekeeper 與 AI 回覆內容維持原文。
-- **側欄機台清單與 stage 英文副標移除**：機台改由主區的三 stage 拓樸承載，側欄只留品牌列、機群健康、異常摘要列與主題切換；stage 標題只有中文。依側欄清單點選機台、或依英文 stage 名定位的說明與腳本需改。
-- **AI 診斷面板的斷點與互動模型改變**：視窗寬 ≥ 1366px 為寬 348px 的推擠式右側面板，< 1366px 一律改為底部 bottom-sheet；所有寬度預設收合，選取機台才自動展開（手動收合後不再自動展開）。1.1.0 Copilot Drawer 的展開方式與位置不再適用，細節見下方 Changed。
+- **側欄機台清單（含英文分組標題 `Prep`／`Forming & Baking`／`Fulfilment`）移除**：機台與分組改由主區的三 stage 拓樸承載，stage 標題只有中文（前處理／成型烘烤／包裝分揀）；側欄只留品牌列、機群健康、異常摘要列與主題切換。依側欄清單點選機台、或依英文分組名定位的說明與腳本需改。
+- **AI 診斷面板的斷點與互動模型改變**：視窗寬 ≥ 1366px 為寬 348px 的推擠式右側面板，< 1366px 一律改為底部 bottom-sheet；所有寬度預設收合，選取機台才自動展開（手動收合後不再自動展開）。1.1.0 在 ≥ 768px 為寬 400px 的常駐右欄、< 768px 為底部覆蓋層；2.0.0 在 768–1365px 也改為 bottom-sheet，細節見下方 Changed。
 - **背壓比值的口徑改變**：主要顯示的比值由「自頁面載入起的累計值」改為「最近 60 秒視窗」，與 1.1.0 TopBar 徽章的數字不可直接比較；累計值改放 tooltip。
 - **1.0.0 demo 影片作廢**：舊介面影片只留在 1.0.0 Release，README 下載連結改指 2.0.0 Release（1.1.0 未重錄）。
 - **預設模型改為 `gemini-3.5-flash-lite`、`AI_MAX_OUTPUT_TOKENS` 預設 2048 → 4096**（worker）：只影響 `GEMINI_MODEL`／`AI_MAX_OUTPUT_TOKENS` 留空的部署；
@@ -50,6 +51,8 @@
 
 ### 相容性注意（升級前必讀）
 
+- **第三輪審查發現的缺陷在 2.0.0 仍未修**：含一項 P1——api 端 BullMQ producer `Queue` 未掛 `error` listener，設了 `REDIS_PASSWORD` 而 Redis 認證失敗時，密碼會經 BullMQ 的 `console.error` 明文進 stderr（pino 路徑已遮蔽）。
+  部署時請留意 api 的 stderr 收集範圍；細節與其他未修項見 `docs/20260927-research-review03.md` 與 README「已宣告的取捨」。
 - **新增 localStorage key**：`fg.theme`（`"light"`｜`"dark"`，主題選擇）與 `fg.copilot-panel`（`{"manuallyCollapsed":boolean}`，AI 診斷面板的手動收合偏好）；
   讀寫失敗（私密視窗、封鎖儲存）時回到預設、不顯示錯誤。既有的 `flow-gatekeeper:sidebar-width`、`flow-gatekeeper:event-strip-height` 沿用、不改名，升級後原有尺寸保留。
 - **主題預設為淺色、不跟隨作業系統**：首次載入一律淺色，深色需手動切換一次，之後依 `fg.theme` 記憶。

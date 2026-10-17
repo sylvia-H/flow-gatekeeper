@@ -3187,7 +3187,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 ### 15.6 1.0.0 之後的現況摘要
 
-本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；表中第 1～5 列於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第 6～8 列與 SDD feature 013 於 2026-10-17 以產品版本 **2.0.0**（tag `2.0.0`）發布。變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
+本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；表中第 1～5 列（含 1.1.0 release 準備分支）於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第 6～9 列與 SDD feature 013 於 2026-10-17 以產品版本 **2.0.0**（tag `2.0.0`）發布。只改版號與文件的 release 準備分支、及直接 commit 以「—」列出、不編號。變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
 但改動了多處跨 feature 的行為；各章 reference code 保留，另以「已變更」註記指回本節。依 `develop` 的 merge 順序
 （`git log --oneline --first-parent --merges 3e94ac2..HEAD` 核對）：
 
@@ -3199,9 +3199,12 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 3 | `docs/20260927-research-review02` | `63b6f66` | 新增第二輪審查報告 `docs/20260927-research-review02.md` | — |
 | 4 | `fix/20260927-research-review02` | `898ccfc` | 第二輪審查 Batch A／B 修復 | 第二輪審查修復 |
 | 5 | `fix/20260927-review02-batch-cd` | `4c43d18` | 第二輪報告 Batch C（文件與 release 準備）、Batch D（測試基礎建設），外加 6 項 code-review findings | Batch C／D |
-| 6 | `fix/20261017-pause-toggle-label` | `b7f7780` | 暫停鈕按下後換成「恢復」（Play 圖示）、拿掉 `aria-pressed`、暫停橫幅 `role=status` | 013 UI 全面改版（「暫停」條） |
-| 7 | `upgrade/20261017-gemini-3.5-flash-lite` | `7d9f9d9` | 預設 LLM 模型改 `gemini-3.5-flash-lite`、3.x flash 送 `thinkingLevel: MEDIUM`、`AI_MAX_OUTPUT_TOKENS` 預設 4096 | Gemini 3.5 flash-lite 升級 |
-| 8 | `docs/20261018-demo-video` | `84feedd` | README demo 影片以 2.0.0 介面重錄、新增錄影劇本 `record-demo.cjs` | Demo 影片重錄 |
+| — | `docs/20260928-release-1.1.0` | `8ae83f4` | 1.1.0 release 準備（版號、CHANGELOG、文件版本註記） | — |
+| 6 | `docs/20260927-research-review03` | `3ad0e9b` | 新增第三輪審查報告 `docs/20260927-research-review03.md`（2026-10-15 併入；發現的缺陷含 P1，截至 2.0.0 未修） | — |
+| 7 | `fix/20261017-pause-toggle-label` | `b7f7780` | 暫停鈕按下後換成「恢復」（Play 圖示）、拿掉 `aria-pressed`、暫停橫幅 `role=status` | 013 UI 全面改版（「暫停」條） |
+| 8 | `upgrade/20261017-gemini-3.5-flash-lite` | `7d9f9d9` | 預設 LLM 模型改 `gemini-3.5-flash-lite`、3.x flash 送 `thinkingLevel: MEDIUM`、`AI_MAX_OUTPUT_TOKENS` 預設 4096 | Gemini 3.5 flash-lite 升級 |
+| 9 | `docs/20261018-demo-video` | `84feedd` |
+| — | `docs/20261017-release-2.0.0` | （以 `git log --first-parent --merges` 為準） | 2.0.0 release 準備（版號、CHANGELOG、文件版本註記） | — | README demo 影片以 2.0.0 介面重錄、新增錄影劇本 `record-demo.cjs` | Demo 影片重錄 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」），但不列入本表。
 
