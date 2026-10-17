@@ -29,6 +29,7 @@
 
 Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全面改版。013 只動前端呈現，**後端、契約與部署方式皆不變**；
 視覺方向為「實驗室玻璃與蝕刻刻度」，視覺真實來源由 `apps/web/design/design-spec.md` 改為 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`。
+預定版號 **2.0.0**（使用者 2026-10-17 裁決：整體換皮、文案改繁中、舊 demo 不再代表現況；release 時本節改為 `[2.0.0]`，並把 `docs/demo/flow-gatekeeper-demo.mp4` 上傳為 2.0.0 Release 資產，README 下載連結即指向它）。
 另含維護分支 `upgrade/20261017-gemini-3.5-flash-lite`：worker 的預設 LLM 模型改為 `gemini-3.5-flash-lite`（契約不變）。
 
 ### 相容性注意（升級前必讀）

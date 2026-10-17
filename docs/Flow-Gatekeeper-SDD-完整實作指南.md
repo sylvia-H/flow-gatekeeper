@@ -3376,8 +3376,9 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   README 下載連結改指 `releases/download/2.0.0/`，劇本表時間點改為實錄值。1.0.0 舊介面影片作廢、只留在 1.0.0 release。
 - **錄影劇本** `apps/web/scripts/record-demo.cjs`：CDP `Page.startScreencast` 逐格取 JPEG，以 node 端收到時刻為時間戳（CDP metadata 時間戳與排程時鐘實測差 2～3 秒），
   ffmpeg concat 轉 30fps H.264（limited range，避免 QuickTime 發灰）；Playwright 自帶 ffmpeg 只有 VP8，需另備含 libx264 的 ffmpeg。headless 與有頭模式的 recordVideo 都錄不到系統游標，
-  劇本以 `addInitScript` 注入假游標（頁面 CSP `style-src self` 擋 `<style>`，樣式走 CSSOM、動畫走 Web Animations）。開錄前量 `press-02` 尖峰週期（容器內實測約 13.1～13.3 秒，非名目 12 秒）對齊時間軸。
-  使用者裁決：mp4（免安裝 ffmpeg）、注入假游標、對 demo 容器錄。
+  劇本以 `addInitScript` 注入假游標（頁面 CSP `style-src self` 擋 `<style>`，樣式走 CSSOM、動畫走 Web Animations）。開錄前量 `press-02` 尖峰週期（容器內實測約 13.0～13.3 秒，非名目 12 秒）對齊時間軸。
+  輸出 BT.709／limited range 並標記色彩；先寫暫存目錄、全部成功才覆蓋 `docs/demo/`；Chromium 尋找與面板狀態對照抽成 `apps/web/scripts/lib/browser.cjs`，與截圖劇本共用。
+  使用者裁決：輸出 mp4（ffmpeg 用下載解壓即用的可攜版，不安裝到系統）、注入假游標、對 demo 容器錄。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[Unreleased]`）：
 
