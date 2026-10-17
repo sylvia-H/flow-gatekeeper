@@ -1,4 +1,4 @@
-import { ApiError } from "@google/genai";
+import { ApiError, ThinkingLevel } from "@google/genai";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildGenerateConfig,
@@ -18,6 +18,10 @@ describe("thinkingConfigFor", () => {
       expect(thinkingConfigFor(m)).toEqual({ thinkingBudget: 0 });
     },
   );
+
+  it.each(["gemini-3.5-flash-lite", "gemini-3-flash-preview", "models/gemini-3.1-flash"])("%s → thinkingLevel MEDIUM", (m) => {
+    expect(thinkingConfigFor(m)).toEqual({ thinkingLevel: ThinkingLevel.MEDIUM });
+  });
 
   it.each(["gemini-2.5-pro", "gemini-2.0-flash", "gemini-3-pro-preview", "gemini-2.5-flashy"])("%s → 不送", (m) => {
     expect(thinkingConfigFor(m)).toBeUndefined();
@@ -50,7 +54,7 @@ describe("buildGenerateConfig", () => {
     const c = buildGenerateConfig({ model: "gemini-2.5-pro", signal, ...DEFAULT_GENERATION_OPTIONS });
     expect(c.thinkingConfig).toBeUndefined();
     expect(c).not.toHaveProperty("responseJsonSchema");
-    expect(c.maxOutputTokens).toBe(2048);
+    expect(c.maxOutputTokens).toBe(4096);
     expect(c.temperature).toBe(0.2);
   });
 });

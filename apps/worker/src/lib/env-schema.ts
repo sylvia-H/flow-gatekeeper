@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { FAKE_DIAGNOSIS_TEXT_LENGTH } from "../ai/fake-provider.js";
-import { MIN_OUTPUT_TOKENS_WITH_THINKING, thinkingCapability } from "./model-capabilities.js";
+import {
+  MIN_OUTPUT_TOKENS_WITH_THINKING,
+  MIN_OUTPUT_TOKENS_WITH_THINKING_LEVEL,
+  THINKING_LEVEL,
+  thinkingCapability,
+} from "./model-capabilities.js";
 
 /**
  * worker 環境變數的單一來源（Zod，bootstrap 最前面 parse，失敗 fail-fast）。
@@ -25,7 +30,7 @@ import { MIN_OUTPUT_TOKENS_WITH_THINKING, thinkingCapability } from "./model-cap
 export const LOCK_TTL_MARGIN_MS = 5000;
 
 /** 生成參數預設值（單一來源：env 留空時的預設，也是 `GeminiProvider` 未帶選項時的預設）。 */
-export const DEFAULT_AI_MAX_OUTPUT_TOKENS = 2048;
+export const DEFAULT_AI_MAX_OUTPUT_TOKENS = 4096;
 export const DEFAULT_AI_TEMPERATURE = 0.2;
 
 /** fake provider 預設：20 段 × 500ms ≈ 10s 串流，足以在 e2e 中途 kill worker。 */
@@ -75,11 +80,12 @@ export const WorkerEnvSchema = RedisEnvSchema.extend({
   MONGO_URL: stringWithDefault("mongodb://127.0.0.1:27017/flow-gatekeeper"),
   MONGO_DB: stringWithDefault("flow-gatekeeper"),
   GEMINI_API_KEY: optionalString,
-  GEMINI_MODEL: stringWithDefault("gemini-2.5-flash"),
+  GEMINI_MODEL: stringWithDefault("gemini-3.5-flash-lite"),
   AI_TIMEOUT_MS: positiveInt(30_000),
   /**
-   * 單次輸出 token 上限（Gemini `maxOutputTokens`）。診斷 JSON 約數百 token，2048 足夠；設上限是為了
-   * JSON mode 偶發的重複迴圈能由供應商以 `max_tokens` 截斷收尾，而不是拖到 AI_TIMEOUT_MS 才被中止。
+   * 單次輸出 token 上限（Gemini `maxOutputTokens`）。診斷 JSON 約數百 token，但 thinking token 也計入：
+   * 預設模型 `gemini-3.5-flash-lite` 以 MEDIUM 思考，實測 thoughts 約 1000＋結果約 250，預設 4096 留約 3 倍餘裕。
+   * 設上限是為了 JSON mode 偶發的重複迴圈能由供應商以 `max_tokens` 截斷收尾，而不是拖到 AI_TIMEOUT_MS 才被中止。
    * 上限 65536 與 Gemini 2.5 系列的最大輸出一致。
    */
   AI_MAX_OUTPUT_TOKENS: z.preprocess(
@@ -158,16 +164,18 @@ export function parseWorkerEnv(raw: Record<string, string | undefined>): WorkerE
   }
   const { AI_PROVIDER, GEMINI_MODEL, AI_MAX_OUTPUT_TOKENS } = parsed.data;
   // fake provider 不呼叫 Gemini，GEMINI_MODEL 不作用；此時 warn 只會誤導。
-  if (
-    AI_PROVIDER === "gemini" &&
-    thinkingCapability(GEMINI_MODEL) === "always-on" &&
-    AI_MAX_OUTPUT_TOKENS < MIN_OUTPUT_TOKENS_WITH_THINKING
-  ) {
-    // thinking token 計入 maxOutputTokens：不能關 thinking 的模型配 2048 這類上限，常在 JSON 還沒
-    // 寫完就被 max_tokens 截斷，而 max_tokens 是不可重試的失敗——每筆診斷都失敗且不會自行恢復。
+  // thinking token 計入 maxOutputTokens：上限太低時常在 JSON 還沒寫完就被 max_tokens 截斷，
+  // 而 max_tokens 是不可重試的失敗——每筆診斷都失敗且不會自行恢復。
+  const capability = AI_PROVIDER === "gemini" ? thinkingCapability(GEMINI_MODEL) : "none";
+  if (capability === "always-on" && AI_MAX_OUTPUT_TOKENS < MIN_OUTPUT_TOKENS_WITH_THINKING) {
     warnings.push(
       `GEMINI_MODEL=${GEMINI_MODEL} 無法關閉 thinking，且 thinking token 計入 AI_MAX_OUTPUT_TOKENS（目前 ${AI_MAX_OUTPUT_TOKENS}）：` +
         `建議調高至 ≥ ${MIN_OUTPUT_TOKENS_WITH_THINKING}，否則診斷容易因 max_tokens 截斷而失敗（不重試）`,
+    );
+  } else if (capability === "leveled" && AI_MAX_OUTPUT_TOKENS < MIN_OUTPUT_TOKENS_WITH_THINKING_LEVEL) {
+    warnings.push(
+      `GEMINI_MODEL=${GEMINI_MODEL} 以 thinkingLevel ${THINKING_LEVEL} 思考，thinking token 計入 AI_MAX_OUTPUT_TOKENS（目前 ${AI_MAX_OUTPUT_TOKENS}）：` +
+        `建議調高至 ≥ ${MIN_OUTPUT_TOKENS_WITH_THINKING_LEVEL}，否則診斷容易因 max_tokens 截斷而失敗（不重試）`,
     );
   }
   return { ok: true, env: parsed.data, warnings };

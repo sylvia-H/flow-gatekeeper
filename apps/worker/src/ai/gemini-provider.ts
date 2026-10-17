@@ -1,7 +1,7 @@
-import { ApiError, FinishReason, GoogleGenAI } from "@google/genai";
+import { ApiError, FinishReason, GoogleGenAI, ThinkingLevel } from "@google/genai";
 import type { GenerateContentConfig, ThinkingConfig } from "@google/genai";
 import { DEFAULT_AI_MAX_OUTPUT_TOKENS, DEFAULT_AI_TEMPERATURE } from "../lib/env-schema.js";
-import { canDisableThinking } from "../lib/model-capabilities.js";
+import { THINKING_LEVEL, thinkingCapability } from "../lib/model-capabilities.js";
 import { AiProviderError } from "./provider.js";
 import type { AiFinishReason, AiProvider, AiStreamRequest, AiStreamResult, AiUsage } from "./provider.js";
 
@@ -30,7 +30,8 @@ export const MISSING_API_KEY_MESSAGE =
 export interface GeminiGenerationOptions {
   /**
    * 輸出 token 上限：JSON mode 偶發的重複迴圈由供應商以 `MAX_TOKENS` 截斷，不必拖到 AI_TIMEOUT_MS。
-   * 注意 thinking token 也計入此上限——`gemini-2.5-pro` 等不能關 thinking 的模型需調高。
+   * 注意 thinking token 也計入此上限——`gemini-2.5-pro` 等不能關 thinking 的模型需調高；
+   * 3.x flash 系列以 `THINKING_LEVEL` 思考，同樣會吃掉一部分上限。
    */
   maxOutputTokens: number;
   /** 取樣溫度：結構化診斷要穩定，偏低。 */
@@ -127,12 +128,21 @@ export function buildGenerateConfig(args: {
  * 並非所有模型都接受：
  * - `gemini-2.5-flash`、`gemini-2.5-flash-lite`（含其 preview 變體）：接受 0＝關閉 → 送。
  * - `gemini-2.5-pro`：thinking 不可關閉，送 0 會被拒 → 不送（沿用模型預設）。
- * - 2.0 以前的模型沒有 thinking；3.x 以後改用 `thinkingLevel` 語意 → 都不送，避免送出模型
- *   不認得的設定而整批 400。
+ * - 3.x 以後的 `flash`／`flash-lite`：改用 `thinkingLevel` 語意（送 `thinkingBudget: 0` 會 400）→ 送
+ *   `THINKING_LEVEL`（MEDIUM：保留少量推理，首 token 實測約 2 秒，仍在 5 秒目標內）。
+ * - 3.x 以後的其他變體（pro 等）各自支援的等級不一 → 不送；2.0 以前的模型沒有 thinking → 不送，
+ *   避免送出模型不認得的設定而整批 400。
  * 判準集中在 `lib/model-capabilities.ts`（env 啟動警告共用）；要調整新系列時改那裡。
  */
 export function thinkingConfigFor(model: string): ThinkingConfig | undefined {
-  return canDisableThinking(model) ? { thinkingBudget: 0 } : undefined;
+  switch (thinkingCapability(model)) {
+    case "disableable":
+      return { thinkingBudget: 0 };
+    case "leveled":
+      return { thinkingLevel: ThinkingLevel[THINKING_LEVEL] };
+    default:
+      return undefined;
+  }
 }
 
 function mapFinishReason(reason: FinishReason): AiFinishReason {

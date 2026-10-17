@@ -11,8 +11,8 @@ describe("parseWorkerEnv", () => {
     expect(r.env.AI_DEDUPE_LOCK_SECONDS).toBe(45);
     expect(r.env.REDIS_PORT).toBe(6379);
     expect(r.env.WORKER_CONCURRENCY).toBe(2);
-    expect(r.env.GEMINI_MODEL).toBe("gemini-2.5-flash");
-    expect(r.env.AI_MAX_OUTPUT_TOKENS).toBe(2048);
+    expect(r.env.GEMINI_MODEL).toBe("gemini-3.5-flash-lite");
+    expect(r.env.AI_MAX_OUTPUT_TOKENS).toBe(4096);
     expect(r.env.AI_TEMPERATURE).toBe(0.2);
     expect(r.warnings.some((w) => w.includes("GEMINI_API_KEY"))).toBe(true);
   });
@@ -108,6 +108,10 @@ describe("parseWorkerEnv", () => {
     expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.5-pro", AI_MAX_OUTPUT_TOKENS: "8192" })).toBe(false);
     expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.5-flash" })).toBe(false);
     expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.0-flash" })).toBe(false);
+    // 3.x flash 以 thinkingLevel 思考：門檻 4096（預設值即通過）
+    expect(hasThinkingWarning({})).toBe(false);
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-3.5-flash-lite", AI_MAX_OUTPUT_TOKENS: "2048" })).toBe(true);
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-3.5-flash-lite", AI_MAX_OUTPUT_TOKENS: "4096" })).toBe(false);
   });
 });
 

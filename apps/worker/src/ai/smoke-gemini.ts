@@ -12,7 +12,7 @@ import { GoogleGenAI } from "@google/genai";
  */
 async function main(): Promise<void> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
-  const model = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
+  const model = process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite";
   if (!apiKey) {
     console.error("[smoke:gemini] 缺少 GEMINI_API_KEY（請於 apps/worker/.env 設定）");
     process.exit(1);
