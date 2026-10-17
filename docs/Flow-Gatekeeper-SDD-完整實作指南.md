@@ -1845,7 +1845,7 @@ export class GeminiProvider implements AiProvider {
 
 > 未來要換 Claude，就新增 `claude-provider.ts implements AiProvider`，worker 只改一行 `const ai = new GeminiProvider(...)`。
 
-> **已變更，現況：介面形狀擴充、SDK 遷移至 `@google/genai`**（上面兩段為起草時的形狀）。`AiProvider` 現為 `{ readonly id; readonly model; streamDiagnosis({ prompt, signal, responseJsonSchema?, onToken }) → { text, finishReason, usage? } }`：`signal` 由核心以 `AbortSignal.timeout(AI_TIMEOUT_MS)` 建立、adapter MUST 交給 SDK 讓逾時真的中止 HTTP 串流；`finishReason` 正規化為 `stop｜max_tokens｜safety｜other`；錯誤一律丟 `AiProviderError{ retryable, code }`，`retryable=false`（金鑰缺失／無效、權限不足、請求格式錯）由核心轉 BullMQ `UnrecoverableError`。`GeminiProvider` 缺金鑰時直接丟不可重試的 `provider_error`；只對 `gemini-2.5-flash` 系列送 `thinkingBudget: 0`（`gemini-2.5-pro` 不可關 thinking、其他系列不送）。換 Claude 時需對應 system／user 分開、`max_tokens` 必填、`stop_reason` → `finishReason`、錯誤分類（`overloaded`／`rate_limit` 可重試）。見 `apps/worker/src/ai/provider.ts`、`gemini-provider.ts`。
+> **已變更，現況：介面形狀擴充、SDK 遷移至 `@google/genai`**（上面兩段為起草時的形狀）。`AiProvider` 現為 `{ readonly id; readonly model; streamDiagnosis({ prompt, signal, responseJsonSchema?, onToken }) → { text, finishReason, usage? } }`：`signal` 由核心以 `AbortSignal.timeout(AI_TIMEOUT_MS)` 建立、adapter MUST 交給 SDK 讓逾時真的中止 HTTP 串流；`finishReason` 正規化為 `stop｜max_tokens｜safety｜other`；錯誤一律丟 `AiProviderError{ retryable, code }`，`retryable=false`（金鑰缺失／無效、權限不足、請求格式錯）由核心轉 BullMQ `UnrecoverableError`。`GeminiProvider` 缺金鑰時直接丟不可重試的 `provider_error`；`gemini-2.5-flash` 系列送 `thinkingBudget: 0`；3.x 以後的 `flash`／`flash-lite` 送 `thinkingLevel: MEDIUM`（它們不接受 `thinkingBudget: 0`）；`gemini-2.5-pro`、3.x pro 等其他變體不送（見 §15.6「Gemini 3.5 flash-lite 升級」）。換 Claude 時需對應 system／user 分開、`max_tokens` 必填、`stop_reason` → `finishReason`、錯誤分類（`overloaded`／`rate_limit` 可重試）。見 `apps/worker/src/ai/provider.ts`、`gemini-provider.ts`。
 
 ### 8.10 Worker processor
 
@@ -3199,6 +3199,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 3 | `docs/20260927-research-review02` | `63b6f66` | 新增第二輪審查報告 `docs/20260927-research-review02.md` | — |
 | 4 | `fix/20260927-research-review02` | `898ccfc` | 第二輪審查 Batch A／B 修復 | 第二輪審查修復 |
 | 5 | `fix/20260927-review02-batch-cd` | `4c43d18` | 第二輪報告 Batch C（文件與 release 準備）、Batch D（測試基礎建設），外加 6 項 code-review findings | Batch C／D |
+| 6 | `upgrade/20261017-gemini-3.5-flash-lite` | （併入後補） | 預設 LLM 模型改 `gemini-3.5-flash-lite`、3.x flash 送 `thinkingLevel: MEDIUM`、`AI_MAX_OUTPUT_TOKENS` 預設 4096 | Gemini 3.5 flash-lite 升級 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」），但不列入本表。
 
@@ -3223,7 +3224,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - 去重：取鎖後 double-check cache、`randomUUID` 鎖值＋Lua compare-and-del；`AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`（5 秒餘裕） 啟動驗證。
   - 逾時：`AbortSignal.timeout(AI_TIMEOUT_MS)` 統一逾時並交給 SDK，殭屍串流不再送 token。
   - SDK：遷移至 **`@google/genai`**；`responseJsonSchema` 由 `DiagnosisResultSchema` 產生走原生 structured output；
-    僅 `gemini-2.5-flash` 系列送 `thinkingBudget: 0`。
+    僅 `gemini-2.5-flash` 系列送 `thinkingBudget: 0`（**已變更**：3.x `flash`／`flash-lite` 另送 `thinkingLevel: MEDIUM`，見下方「Gemini 3.5 flash-lite 升級」）。
   - `AiProvider` 新形狀：`id`／`model`／`signal`／`finishReason`／`usage`，錯誤為 `AiProviderError{retryable}`。
   - 重試：非最終嘗試不送 `ai/error`，所有事件帶 `attempt`，不可重試錯誤轉 `UnrecoverableError`。
   - 空脈絡短路：窗口內無 telemetry、`latestState` 為 `unknown`、無 errorlog、無維修紀錄時，送不可重試的
@@ -3310,7 +3311,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 - **web**：ping 後 5 秒未回 pong 即視為斷線、立即重連；Diagnose 只在連線就緒時可按（`system/connected` 且已 `machine/subscribed`、未斷線、未收到 `system/unauthorized`），卡片 icon 等所有入口共用同一閘門（未就緒時不送 POST）；退避改在 `machine/subscribed` 才歸零；`409` 顯示可讀訊息；
   `system/unauthorized` 以 TopBar「未授權」chip 呈現；內嵌面 token 改名 `bg-surface-inset`（design-spec v0.6；013 起 design-spec 已退役，現況 token 見 `apps/web/DESIGN.md`）。
 - **worker**：chaos 在 production 預設拒絕武裝，容器內演練需另設 `WORKER_CHAOS_ALLOW_IN_PRODUCTION=true`（§16.3 第 5 列）；
-  新增 `AI_MAX_OUTPUT_TOKENS`（2048，截斷視為不可重試的 `schema_invalid`）、`AI_TEMPERATURE`（0.2）；
+  新增 `AI_MAX_OUTPUT_TOKENS`（2048，截斷視為不可重試的 `schema_invalid`；**已變更**：預設改 4096，見下方「Gemini 3.5 flash-lite 升級」）、`AI_TEMPERATURE`（0.2）；
   鎖 TTL 條件改為 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`；致命 kind 補 `invalidConfig`／`bootstrap`。
 - **運維**：web 入口改 `${WEB_BIND:-127.0.0.1}:8080:8080`（對外示範設 `WEB_BIND=0.0.0.0`）；nginx 對 `/diagnoses`
   `limit_req` 10 r/m、burst 5、超限 `429`，`/ws` `limit_conn` 每來源 20 條（Docker Desktop 下來源皆為 gateway，兩者皆實為全體共用一桶）；redis／mongo
@@ -3348,6 +3349,25 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **未修、待決**：`AI_PROVIDER=fake` 在 production 只 warn、是否改為須 opt-in 旗標（需使用者決策）；`@vitest/coverage-v8` 釘死而 `vitest` 用 caret，下次升級相依時統一；兩項重構類建議。報告第二輪其餘未排程項已集中到 ADR-002 §6.5.1。
   - **收尾數字**（2026-09-28 實跑）：`pnpm test:coverage` 94 檔 982 測試通過，lines 81.52％、branches 76.56％；整合測試 27（worker 20＋api 7）；e2e 5 場景；契約 lint／typecheck／lint／`pnpm -r build` 全綠。
 - **e2e 實測發現（留給 012-lite）**：worker 被 `SIGKILL` 後，BullMQ 需等 job lock（30 s）過期、再經 stalled 檢查（每 30 s，先標記、下一輪才搬回 wait），重派的 `waiting`／第二次 `active` 約在 kill 後 **92 秒**才出現、`completed` 約 101 秒；這段期間前端**收不到任何事件**，已超過前端 45 秒無進展 watchdog。stalled 重派**不遞增** `attemptsMade`，重跑的 `ai/*` `attempt` 維持 1、`seq` 從 0 重播。這是審查報告 AR-1／AR-3（relay 未監聽 `stalled`、等待者無 keepalive）的實測佐證，處理排入 roadmap 012-lite（ADR-002 §6.5）。
+
+**Gemini 3.5 flash-lite 升級**（`upgrade/20261017-gemini-3.5-flash-lite`，2026-10-17；使用者裁決：2.5 系列已舊，改用另一專案每天穩定使用的 `gemini-3.5-flash-lite`）：
+
+- **預設模型**：worker `GEMINI_MODEL` 預設由 `gemini-2.5-flash` 改為 `gemini-3.5-flash-lite`（`env-schema.ts`、`smoke-gemini.ts`、`apps/worker/.env.example`）。
+  模型名進快取簽章，換模型後舊快取自然失效；契約不變。
+- **thinking 設定**：`lib/model-capabilities.ts` 新增 `leveled` 類——3.x 以後的 `flash`／`flash-lite`（含 preview 變體）不接受 `thinkingBudget: 0`
+  （實測 400），改送 `thinkingConfig.thinkingLevel: MEDIUM`（`THINKING_LEVEL` 常數）；3.x 的 pro 等其他變體維持 `always-on`、不送設定；2.5 flash 系列仍送 `thinkingBudget: 0`。
+  等級由使用者在實測後裁決（`gemini-3.5-flash-lite` 短 prompt：HIGH 首 token 約 2.5 s／thoughts 約 600；MEDIUM 約 2 s／450；LOW、MINIMAL 不到 1 s 但不思考）。
+- **輸出上限**：thinking token 計入 `maxOutputTokens`。真實診斷 prompt 實測 MEDIUM 的 thinking token 為 0～約 1150（模型動態決定，多數為 0）、
+  結果約 200～470 token，單次實測合計最多約 1460（兩個上界相加約 1620）；`AI_MAX_OUTPUT_TOKENS` 預設因此由 2048 改為 4096（2.5 倍以上餘裕）；`leveled` 模型低於 4096 時 worker 啟動會 warn，
+  `always-on` 模型的 8192 門檻不變。usage log 另記 `thoughtsTokens`，截斷時可判斷是 thinking 還是回覆吃掉上限。
+- **temperature 維持 0.2**：Google 的 Gemini 3 開發指南建議所有 Gemini 3 模型維持 1.0（低於 1.0 可能 looping 或品質下降）。合併門第 1 輪提出後，
+  以真實診斷 prompt 交替實測 0.2 與 1.0（各 10 次，其中 3 次撞 429 不計）：兩者皆 0 次截斷、全部通過 schema；0.2 嚴重度 8／9 一致、回中文 9／9，
+  1.0 為 6／8 與 6／8。使用者裁決維持 0.2；若日後 log 出現 `max_tokens` 截斷，先試 1.0。
+- **smoke 與預設值單一來源**：`smoke:gemini` 改送與 worker 相同的 `thinkingConfigFor(model)`（模型拒收 thinking 設定時 smoke 就會失敗）；預設模型名改由
+  `env-schema.ts` 的 `DEFAULT_GEMINI_MODEL` 單一來源。模型判定只依名稱：`gemini-flash-lite-latest` 這類不帶版本號的 `*-latest` 別名判不出系列（不送 thinking 設定、不檢查上限），啟動時 warn 建議寫完整模型名。
+- **回應性（003 SC-001「首 token ≤ 5 s」）**：真實 prompt 實測首 token 0.6～4.2 s、全程 1.4～4.6 s（不思考時約 1 s 內出首 token，思考約 1000 token 時約 3～4 s）。
+  仍在 5 s 內但**餘裕有限**：context 變長或思考變多時可能超標；這是保留 MEDIUM 推理的已知取捨，超標時先評估改 LOW／MINIMAL。
+- **實機**（一鍵 demo 容器，2026-10-17）：首次診斷全程約 4.5 s、快取命中約 200 ms，回覆為繁體中文（2.5 flash 時約四分之三回英文；prompt 未指定語言，屬模型行為、非保證）。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[Unreleased]`）：
 

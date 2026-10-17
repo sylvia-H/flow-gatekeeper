@@ -1,4 +1,4 @@
-import { ApiError } from "@google/genai";
+import { ApiError, ThinkingLevel } from "@google/genai";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildGenerateConfig,
@@ -18,6 +18,10 @@ describe("thinkingConfigFor", () => {
       expect(thinkingConfigFor(m)).toEqual({ thinkingBudget: 0 });
     },
   );
+
+  it.each(["gemini-3.5-flash-lite", "gemini-3-flash-preview", "models/gemini-3.1-flash"])("%s → thinkingLevel MEDIUM", (m) => {
+    expect(thinkingConfigFor(m)).toEqual({ thinkingLevel: ThinkingLevel.MEDIUM });
+  });
 
   it.each(["gemini-2.5-pro", "gemini-2.0-flash", "gemini-3-pro-preview", "gemini-2.5-flashy"])("%s → 不送", (m) => {
     expect(thinkingConfigFor(m)).toBeUndefined();
@@ -46,11 +50,17 @@ describe("buildGenerateConfig", () => {
     });
   });
 
+  it("3.x flash 系列（leveled）帶 thinkingLevel MEDIUM", () => {
+    const c = buildGenerateConfig({ model: "gemini-3.5-flash-lite", signal, ...DEFAULT_GENERATION_OPTIONS });
+    expect(c.thinkingConfig).toEqual({ thinkingLevel: ThinkingLevel.MEDIUM });
+    expect(c.maxOutputTokens).toBe(4096);
+  });
+
   it("不支援關 thinking 的模型不送 thinkingConfig；無 schema 不送 responseJsonSchema", () => {
     const c = buildGenerateConfig({ model: "gemini-2.5-pro", signal, ...DEFAULT_GENERATION_OPTIONS });
     expect(c.thinkingConfig).toBeUndefined();
     expect(c).not.toHaveProperty("responseJsonSchema");
-    expect(c.maxOutputTokens).toBe(2048);
+    expect(c.maxOutputTokens).toBe(4096);
     expect(c.temperature).toBe(0.2);
   });
 });
@@ -89,6 +99,41 @@ describe("classifyGeminiError", () => {
 
   it("未知錯誤 → 可重試", () => {
     expect(classifyGeminiError(new Error("ECONNRESET")).retryable).toBe(true);
+  });
+});
+
+describe("GeminiProvider 串流與 usage", () => {
+  it("逐段送 token，usage 帶入 thinking token（max_tokens 截斷時據此判斷是誰吃掉上限）", async () => {
+    const provider = new GeminiProvider("k", "gemini-3.5-flash-lite");
+    async function* chunks() {
+      yield { text: '{"summary":' };
+      yield {
+        text: '"ok"}',
+        candidates: [{ finishReason: "STOP" }],
+        usageMetadata: { promptTokenCount: 638, candidatesTokenCount: 232, thoughtsTokenCount: 1061, totalTokenCount: 1931 },
+      };
+    }
+    // 換掉延遲建立的 SDK client，不打真的 API。
+    const generateContentStream = vi.fn(() => Promise.resolve(chunks()));
+    Reflect.set(provider, "client", { models: { generateContentStream } });
+    const onToken = vi.fn();
+    const out = await provider.streamDiagnosis({ prompt: "p", signal: new AbortController().signal, onToken });
+    expect(onToken.mock.calls.map(([t]) => t)).toEqual(['{"summary":', '"ok"}']);
+    expect(out).toEqual({
+      text: '{"summary":"ok"}',
+      finishReason: "stop",
+      usage: { inputTokens: 638, outputTokens: 232, thoughtsTokens: 1061, totalTokens: 1931 },
+    });
+    // 接線：buildGenerateConfig 組出的 config 真的交給 SDK（client 欄位改名時這裡會因 stub 未被呼叫而明確失敗）。
+    expect(generateContentStream).toHaveBeenCalledWith({
+      model: "gemini-3.5-flash-lite",
+      contents: "p",
+      config: expect.objectContaining({
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
+        maxOutputTokens: 4096,
+        responseMimeType: "application/json",
+      }),
+    });
   });
 });
 
