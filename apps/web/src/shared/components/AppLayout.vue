@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ChevronUp, PanelRightOpen } from "lucide-vue-next";
 import { useResizeDrag } from "../composables/useResizeDrag.js";
+import { DESK_QUERY, hasMatchMedia, matchesMedia } from "../composables/useMediaQuery.js";
 
 /**
  * 監控台外殼：rail（sidebar slot）／工具列（topbar slot）／主區桌面（main slot）／
@@ -11,12 +12,12 @@ import { useResizeDrag } from "../composables/useResizeDrag.js";
  *   其上的面板一律用同一組玻璃 class（`bg-surface/72 border border-edge shadow-glass rounded-card`）。
  * - Copilot 面板只有一個開關 `panelOpen`（所有寬度共用；由 App 傳入 copilot store 的 `panelOpen`，
  *   預設收合與手動收合偏好都在 store，spec FR-033、data-model §2）：
- *   `desk+`（≥ 1366px，tailwind.config 自訂 screen）是主區右側 360px 的玻璃片，收合時把寬度還給主區、右緣留「展開 AI 診斷」窄條；
+ *   `desk+`（≥ 1366px，tailwind.config 自訂 screen）是主區右側 348px 的玻璃片，收合時把寬度還給主區、右緣留「展開 AI 診斷」窄條；
  *   `< desk` 是 bottom-sheet（抓取把手、`shadow-sheet`，接手焦點時才有遮罩——`sheetEngaged`；高度依內容、最高 85vh），任何收合
  *   （收合鈕、Escape 或遮罩）後若仍有選取機台（`peekLabel` 非 null）退為 32px peek 條，點擊即展開；
- *   無選取時完全不渲染。768–1365px 雖仍顯示 rail，面板也走 sheet：768–1023 時 rail 240 + 面板 360 並排會把
+ *   無選取時完全不渲染。768–1365px 雖仍顯示 rail，面板也走 sheet：768–1023 時 rail 240 + 面板 348 並排會把
  *   卡片欄擠到約 110px、文字全被截斷；1024–1365 時拓樸內容寬不足 708（1024 約 372、1280 約 622）堆成單欄
- *   （013 critique 第一輪 P1；T073 使用者裁決推擠門檻由 `lg`／1024 提到自訂 `desk`／1366——開面板後拓樸恰 708 可三欄）。斷點須與 `useModalSheet` 的 MOBILE_QUERY 一致
+ *   （013 critique 第一輪 P1；T073 使用者裁決推擠門檻由 `lg`／1024 提到自訂 `desk`／1366——開面板後拓樸約 720，含傳統捲軸 10px 仍 710 ≥ 708 可三欄；T077 面板由 360 縮為 348）。斷點須與 `useModalSheet` 的 MOBILE_QUERY 一致
  *   （sheet 形態才掛 dialog 語意與焦點陷阱）。
  * - drawer slot 只渲染一次，由外層 aside 以響應式 class 切換兩種形態，避免重複掛載
  *   CopilotDrawer 造成雙份副作用。
@@ -67,8 +68,6 @@ const peekAriaLabel = computed(() => {
 
 /** peek 條高度（`h-8`）。 */
 const PEEK_HEIGHT = 32;
-/** 推擠式側欄門檻（Tailwind 自訂 `desk`），與 `useModalSheet` 的 MOBILE_QUERY 互補。 */
-const DESKTOP_QUERY = "(min-width: 1366px)";
 
 /**
  * 主區與 rail 的底部留白（px，< desk 才生效；desk+ 由 `desk:pb-0` 蓋掉）：讓固定在底部的 peek 條／bottom-sheet
@@ -84,8 +83,9 @@ const DESKTOP_QUERY = "(min-width: 1366px)";
  */
 const bottomReserve = ref(0);
 let sheetHeight = 0;
+/** 推擠式側欄門檻（Tailwind 自訂 `desk`，`DESK_QUERY`），與 `useModalSheet` 的 MOBILE_QUERY（`BELOW_DESK_QUERY`）互補；事件當下即時讀。 */
 function isDesktop(): boolean {
-  return typeof window.matchMedia === "function" && window.matchMedia(DESKTOP_QUERY).matches;
+  return matchesMedia(DESK_QUERY);
 }
 function syncBottomReserve(): void {
   let next: number;
@@ -129,7 +129,7 @@ watch(
     const active = document.activeElement;
     const leaving = open ? expandRef.value : panelRef.value;
     if (!leaving || !(active instanceof Node) || !leaving.contains(active)) return;
-    if (typeof window.matchMedia === "function" && !window.matchMedia(DESKTOP_QUERY).matches) return;
+    if (hasMatchMedia() && !matchesMedia(DESK_QUERY)) return;
     void nextTick(() => (open ? panelRef.value : expandRef.value)?.focus());
   },
 );
@@ -203,7 +203,7 @@ const {
           @click="emit('dismiss-panel')"
         />
 
-        <!-- Copilot 面板：desk+ 為 360px 玻璃片；小於 desk 為 bottom-sheet（不透明以蓋住下方內容）。
+        <!-- Copilot 面板：desk+ 為 348px 玻璃片；小於 desk 為 bottom-sheet（不透明以蓋住下方內容）。
              sheet 高度依內容、最高 85vh：閒置（尚未診斷）只有把手＋一列（約 51px），不留大片空白；
              結果變長時由 drawer 內容區自行捲動 -->
         <aside
@@ -214,7 +214,7 @@ const {
           :class="[
             panelOpen ? 'flex' : 'hidden',
             'fixed inset-x-0 bottom-0 z-50 max-h-[85vh] flex-col overflow-hidden focus:outline-none rounded-t-card border-t border-edge bg-surface-strong shadow-sheet',
-            'desk:static desk:z-auto desk:my-3 desk:mr-3 desk:max-h-none desk:w-[360px] desk:shrink-0 desk:rounded-card desk:border desk:bg-surface/72 desk:shadow-glass',
+            'desk:static desk:z-auto desk:my-3 desk:mr-3 desk:max-h-none desk:w-[348px] desk:shrink-0 desk:rounded-card desk:border desk:bg-surface/72 desk:shadow-glass',
           ]"
           aria-label="AI 診斷"
         >

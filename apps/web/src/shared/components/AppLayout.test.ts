@@ -668,7 +668,7 @@ describe("AppLayout 外觀（純 props）", () => {
   it("推擠式側欄門檻為 desk（≥ 1366px）：面板、遮罩、展開窄條、peek 條都不再用 lg: 斷點", () => {
     const open = mountLayout({ panelOpen: true, peekLabel: "壓製機 02", sheetEngaged: true });
     expect(panel(open).classes()).toEqual(
-      expect.arrayContaining(["desk:static", "desk:w-[360px]", "desk:shrink-0", "desk:bg-surface/72", "desk:shadow-glass"]),
+      expect.arrayContaining(["desk:static", "desk:w-[348px]", "desk:shrink-0", "desk:bg-surface/72", "desk:shadow-glass"]),
     );
     expect(open.get(".bg-scrim\\/50").classes()).toContain("desk:hidden");
     open.unmount();

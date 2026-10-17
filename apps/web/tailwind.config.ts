@@ -19,8 +19,9 @@ export default {
   content: ['./index.html', './src/**/*.{vue,ts}'],
   theme: {
     extend: {
-      // 推擠式 Copilot 面板的門檻（T073 使用者裁決）：≥ 1366px 時 rail 240＋把手 6＋面板 360＋內距後，
-      // 拓樸內容寬恰 708px（3 × 220 卡片＋2 × 24 溝槽），開面板仍可三欄並排；低於此寬推擠會把拓樸擠成單欄
+      // 推擠式 Copilot 面板的門檻（T073 使用者裁決）：≥ 1366px 時 rail 240＋把手 6＋面板 348＋內距後，
+      // 拓樸內容寬約 720px，桌面 Chrome 傳統捲軸吃 10px 後仍 710 ≥ 三欄門檻 708（3 × 220 卡片＋2 × 24 溝槽；
+      // T077 面板由 360 縮為 348），開面板仍可三欄並排；低於此寬推擠會把拓樸擠成單欄
       // （1024 只剩約 372px、1280 約 622px），所以 < 1366 一律 bottom-sheet。須與 useModalSheet 的 MOBILE_QUERY 一致。
       screens: {
         desk: '1366px',
@@ -57,6 +58,8 @@ export default {
         glass: 'inset 0 1px 0 rgb(var(--c-highlight) / 0.9)',
         // 手機 bottom-sheet：往上的一層淡影，讓 sheet 與下方內容分層。
         sheet: '0 -8px 24px rgb(var(--c-ink) / 0.18)',
+        // 由上而下展開的覆蓋面板（快捷鍵說明、手機異常清單）：與 sheet 同強度、方向相反（往下投影）。
+        panel: '0 8px 24px rgb(var(--c-ink) / 0.18)',
       },
       // [字級, 行高]；xs／sm 與 Tailwind 內建相同（12/16、14/20），不重複定義。
       // 最小功能性字級為 text-xs（12px，FR-005）；舊的 10px／11px 字級已退役，不再提供。

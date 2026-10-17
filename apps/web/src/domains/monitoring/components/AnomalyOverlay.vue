@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { ref } from "vue";
 import { X } from "lucide-vue-next";
 import AnomalySummary from "./AnomalySummary.vue";
 import type { AnomalySummaryItem } from "../lib/anomaly-latch.js";
+import { useFocusTrap } from "../../../shared/composables/useFocusTrap.js";
 
 /**
  * 手機異常清單覆蓋層（spec FR-033a、FR-034a、tasks T061）。
@@ -44,57 +45,13 @@ const emit = defineEmits<{
   clear: [machineId: string];
 }>();
 
-const FOCUSABLE = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  '[tabindex]:not([tabindex="-1"])',
-].join(",");
-
 const panelRef = ref<HTMLElement | null>(null);
-let restoreTo: HTMLElement | null = null;
-
-function focusables(root: HTMLElement): HTMLElement[] {
-  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
-    (el) =>
-      !el.hidden &&
-      el.getAttribute("aria-hidden") !== "true" &&
-      (typeof el.checkVisibility === "function" ? el.checkVisibility() : true),
-  );
-}
-
 /**
- * 只在焦點仍在面板內、或已掉到 body／null 時才還焦點；使用者若已點了面板外的元素
- * （例如工具列），就不搶走他的焦點。
+ * 還原後備：iOS Safari 點按鈕不給焦點，開啟時 activeElement 停在 body、沒有可還的元素；
+ * 覆蓋層唯一的開啟入口是摘要條（FleetHealth compact），關閉後把焦點還給它（仍在 DOM 時）。
  */
-function restoreFocus(): void {
-  const target = restoreTo;
-  restoreTo = null;
-  if (!target || !target.isConnected) return;
-  const active = document.activeElement;
-  const panel = panelRef.value;
-  const focusInPanel = panel !== null && active !== null && panel.contains(active);
-  if (active === null || active === document.body || focusInPanel) target.focus();
-}
-
-watch(
-  () => props.open,
-  (open) => {
-    if (open) {
-      const active = typeof document !== "undefined" ? document.activeElement : null;
-      restoreTo = active instanceof HTMLElement && active !== document.body ? active : null;
-      void nextTick(() => panelRef.value?.focus());
-    } else {
-      restoreFocus();
-    }
-  },
-  { immediate: true },
-);
-
-onBeforeUnmount(() => {
-  if (props.open) restoreFocus();
+const trap = useFocusTrap(panelRef, () => props.open, {
+  fallback: () => document.querySelector<HTMLElement>('[data-fg="fleet-summary-bar"]'),
 });
 
 function onSelect(machineId: string): void {
@@ -109,31 +66,7 @@ function onKeydown(event: KeyboardEvent): void {
     emit("close");
     return;
   }
-  if (event.key !== "Tab") return;
-
-  const root = panelRef.value;
-  if (!root) return;
-  const items = focusables(root);
-  if (items.length === 0) {
-    event.preventDefault();
-    root.focus();
-    return;
-  }
-  const first = items[0] as HTMLElement;
-  const last = items[items.length - 1] as HTMLElement;
-  const active = document.activeElement as HTMLElement | null;
-  const index = active ? items.indexOf(active) : -1;
-
-  // 焦點在面板本身（或不在清單內）時拉回邊界；在頭尾時循環到另一端；其餘交給瀏覽器。
-  let target: HTMLElement | null = null;
-  if (index === -1) target = event.shiftKey ? last : first;
-  else if (event.shiftKey && index === 0) target = last;
-  else if (!event.shiftKey && index === items.length - 1) target = first;
-
-  if (target) {
-    event.preventDefault();
-    target.focus();
-  }
+  trap.onKeydown(event);
 }
 </script>
 
@@ -155,7 +88,7 @@ function onKeydown(event: KeyboardEvent): void {
       aria-modal="true"
       aria-label="異常清單"
       tabindex="-1"
-      class="absolute inset-x-3 top-16 flex max-h-[calc(100%-4.5rem)] flex-col overflow-hidden rounded-card border border-edge bg-surface-strong text-ink shadow-sheet focus:outline-none"
+      class="absolute inset-x-3 top-16 flex max-h-[calc(100%-4.5rem)] flex-col overflow-hidden rounded-card border border-edge bg-surface-strong text-ink shadow-panel focus:outline-none"
       @keydown="onKeydown"
     >
       <!--

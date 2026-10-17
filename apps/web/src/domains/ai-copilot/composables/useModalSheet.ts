@@ -1,19 +1,14 @@
 import { nextTick, onMounted, onUnmounted, ref, type Ref } from "vue";
+import { BELOW_DESK_QUERY, hasMatchMedia } from "../../../shared/composables/useMediaQuery.js";
+import { FOCUSABLE_SELECTOR, nextTrapTarget } from "../../../shared/composables/useFocusTrap.js";
+
+export { nextTrapTarget };
 
 /**
  * 與 Tailwind 自訂 `desk` 斷點（1366px，AppLayout 的推擠式側欄門檻）對齊：低於它時 drawer 是覆蓋畫面的 bottom sheet
  * （768–1023px 的推擠式面板會把卡片欄擠到無法閱讀；1024–1365px 會把拓樸擠成單欄，013 critique 第一輪 P1、T073 使用者裁決）。
  */
-export const MOBILE_QUERY = "(max-width: 1365.98px)";
-
-const FOCUSABLE = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  '[tabindex]:not([tabindex="-1"])',
-].join(",");
+export const MOBILE_QUERY = BELOW_DESK_QUERY;
 
 /** 焦點陷阱只需要的元素能力；以最小介面描述，測試不必有真 DOM。 */
 export interface FocusableLike {
@@ -27,25 +22,7 @@ export interface SheetRootLike extends FocusableLike {
 
 /** 取容器內可 Tab 到、且目前有渲染（非 display:none）的元素。 */
 export function focusableWithin(root: SheetRootLike): FocusableLike[] {
-  return Array.from(root.querySelectorAll(FOCUSABLE)).filter((el) => el.getClientRects().length > 0);
-}
-
-/**
- * 計算 Tab／Shift+Tab 在容器內循環時下一個要聚焦的元素；回傳 null 表示交給瀏覽器預設行為。
- */
-export function nextTrapTarget<T>(
-  items: readonly T[],
-  active: T | null,
-  backwards: boolean,
-): T | null {
-  if (items.length === 0) return null;
-  const first = items[0] as T;
-  const last = items[items.length - 1] as T;
-  const idx = active === null ? -1 : items.indexOf(active);
-  if (idx === -1) return backwards ? last : first; // 焦點不在清單內（例如容器本身）→ 拉回邊界
-  if (backwards && idx === 0) return last;
-  if (!backwards && idx === items.length - 1) return first;
-  return null;
+  return Array.from(root.querySelectorAll(FOCUSABLE_SELECTOR)).filter((el) => el.getClientRects().length > 0);
 }
 
 type IOCtor = new (cb: (entries: { isIntersecting: boolean }[]) => void) => {
@@ -231,7 +208,7 @@ export function useModalSheet(
     () => root.value,
     onClose,
     {
-      matchMedia: typeof window !== "undefined" && window.matchMedia ? (q) => window.matchMedia(q) : undefined,
+      matchMedia: hasMatchMedia() ? (q) => window.matchMedia(q) : undefined,
       IntersectionObserver:
         typeof IntersectionObserver !== "undefined" ? IntersectionObserver : undefined,
       activeElement: () => {

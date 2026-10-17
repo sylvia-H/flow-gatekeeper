@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch, type Ref } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from "vue";
 import { Search, Stethoscope, Gauge, Pause, ShieldAlert, Keyboard } from "lucide-vue-next";
 import MetricsPanel from "./MetricsPanel.vue";
 import ThemeToggle from "./ThemeToggle.vue";
 import { isImeComposing } from "../lib/shortcuts.js";
+import { BELOW_MD_QUERY, useMediaQuery } from "../composables/useMediaQuery.js";
 import {
   useMonitoringStore,
   type ConnectionStatus,
@@ -125,22 +126,7 @@ const labelClass = computed(() => (size.value === "full" ? "" : "sr-only"));
  * 以 **視窗** 斷點判斷而不是工具列段位——工具列在桌機也可能因 Copilot 面板展開而 < 640px，
  * 那時 rail 仍在、不可重複；反之 640–767px 視窗 rail 已隱藏、工具列卻仍是 `icons`，不可漏掉。
  */
-function useMediaQuery(query: string): Ref<boolean> {
-  const list =
-    typeof window !== "undefined" && typeof window.matchMedia === "function" ? window.matchMedia(query) : null;
-  const matches = ref(list?.matches ?? false);
-  const onChange = (event: MediaQueryListEvent): void => {
-    matches.value = event.matches;
-  };
-  onMounted(() => {
-    if (list && typeof list.addEventListener === "function") list.addEventListener("change", onChange);
-  });
-  onUnmounted(() => {
-    if (list && typeof list.removeEventListener === "function") list.removeEventListener("change", onChange);
-  });
-  return matches;
-}
-const railHidden = useMediaQuery("(max-width: 767.98px)");
+const railHidden = useMediaQuery(BELOW_MD_QUERY);
 
 /**
  * dev 指標面板只在桌機寬度（rail 在）且非 compact 時放進工具列：手機寬度時系統狀態組多了主題切換，

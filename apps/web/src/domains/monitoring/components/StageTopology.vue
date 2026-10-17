@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, type Ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useMonitoringStore, type MachineLive } from "../stores/monitoring.store.js";
 import { useDiagnoseTrigger } from "../../ai-copilot/composables/useDiagnoseTrigger.js";
 import { useCopilotStore } from "../../ai-copilot/stores/copilot.store.js";
@@ -12,6 +12,7 @@ import { isStale } from "../lib/stale.js";
 import MachineNodeCard from "./MachineNodeCard.vue";
 import StageColumn from "./StageColumn.vue";
 import FlowLink from "./FlowLink.vue";
+import { BELOW_MD_QUERY, REDUCED_MOTION_QUERY, useMediaQuery } from "../../../shared/composables/useMediaQuery.js";
 
 /**
  * 產線 stage 拓樸（research R5、FR-013～FR-017）：前處理 → 成型烘烤 → 包裝分揀 三欄，欄間是流向連線。
@@ -40,36 +41,16 @@ const copilot = useCopilotStore();
  * 220 是卡片數值列的下限，不能再縮：卡片內容寬＝欄寬 − 30（內距＋邊框），2×2 數值每格約 89px，
  * 5 位數值（嚴重時的溫度「108.0」、產能「1,180」）在 24px mono 下約 72px，加間距與刻度要 86px；
  * 縮到 200px 每格只剩約 81px，嚴重卡片最需要看清的溫度會被截斷。
- * 面板展開時：1366×768 主區容器內容寬恰為 708px → 三欄並排；1024×768 的面板是 bottom-sheet、不推擠主區
+ * 面板展開時：1366×768 主區容器內容寬約 720px（桌面 Chrome 傳統捲軸吃 10px 後 710，T077 把面板由 360 縮為 348 的理由）→ 三欄並排；1024×768 的面板是 bottom-sheet、不推擠主區
  * （T073 起推擠門檻為 desk／1366px），主區維持約 750px → 三欄並排。容器若窄到放不下（例如 rail 拉寬），
  * 三欄各約 106px 怎麼縮都放不下一張完整卡片，維持單欄堆疊（每段一欄滿寬，FR-031 不溢出優先）。
  */
 const MIN_ROW_WIDTH = 3 * 220 + 2 * 24;
 
-const hasMatchMedia = typeof window !== "undefined" && typeof window.matchMedia === "function";
-
-/**
- * 媒體查詢狀態：setup 當下同步讀一次，mounted 後掛 change 監聽、unmounted 解除。
- * 環境沒有 `matchMedia`（測試環境或舊瀏覽器）時固定為 false。
- */
-function useMediaQuery(query: string): Ref<boolean> {
-  const list = hasMatchMedia ? window.matchMedia(query) : null;
-  const matches = ref(list?.matches ?? false);
-  const onChange = (event: MediaQueryListEvent): void => {
-    matches.value = event.matches;
-  };
-  onMounted(() => {
-    if (list && typeof list.addEventListener === "function") list.addEventListener("change", onChange);
-  });
-  onUnmounted(() => {
-    if (list && typeof list.removeEventListener === "function") list.removeEventListener("change", onChange);
-  });
-  return matches;
-}
-
-const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
+/** 媒體查詢狀態見 `shared/composables/useMediaQuery`（環境沒有 `matchMedia` 時固定為 false）。 */
+const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
 /** 沒有 ResizeObserver 時的退路：以 Tailwind `md`（768px）以下視為堆疊。 */
-const narrowViewport = useMediaQuery("(max-width: 767.98px)");
+const narrowViewport = useMediaQuery(BELOW_MD_QUERY);
 
 /**
  * 捲動容器的內容寬（px）；null＝尚未量到（或環境沒有 ResizeObserver）。

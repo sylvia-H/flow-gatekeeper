@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { ref } from "vue";
 import { X } from "lucide-vue-next";
 import {
   SHORTCUTS,
@@ -7,6 +7,7 @@ import {
   SHORTCUT_HELP_TITLE,
   type ShortcutGroup,
 } from "../lib/shortcuts.js";
+import { useFocusTrap } from "../composables/useFocusTrap.js";
 
 /**
  * 鍵盤快捷鍵說明層（spec FR-034b、ui-contract §3–§4、data-model §11）。
@@ -30,58 +31,8 @@ const groups = GROUP_ORDER.map((name) => ({
 
 const TITLE_ID = "shortcut-help-title";
 
-const FOCUSABLE = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  '[tabindex]:not([tabindex="-1"])',
-].join(",");
-
 const panelRef = ref<HTMLElement | null>(null);
-let restoreTo: HTMLElement | null = null;
-
-function focusables(root: HTMLElement): HTMLElement[] {
-  return Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
-    (el) =>
-      !el.hidden &&
-      el.getAttribute("aria-hidden") !== "true" &&
-      (typeof el.checkVisibility === "function" ? el.checkVisibility() : true),
-  );
-}
-
-/**
- * 只在焦點仍在面板內、或已掉到 body／null 時才還焦點；使用者若已點了面板外的元素
- * （例如工具列），就不搶走他的焦點。
- */
-function restoreFocus(): void {
-  const target = restoreTo;
-  restoreTo = null;
-  if (!target || !target.isConnected) return;
-  const active = document.activeElement;
-  const panel = panelRef.value;
-  const focusInPanel = panel !== null && active !== null && panel.contains(active);
-  if (active === null || active === document.body || focusInPanel) target.focus();
-}
-
-watch(
-  () => props.open,
-  (open) => {
-    if (open) {
-      const active = typeof document !== "undefined" ? document.activeElement : null;
-      restoreTo = active instanceof HTMLElement && active !== document.body ? active : null;
-      void nextTick(() => panelRef.value?.focus());
-    } else {
-      restoreFocus();
-    }
-  },
-  { immediate: true },
-);
-
-onBeforeUnmount(() => {
-  if (props.open) restoreFocus();
-});
+const trap = useFocusTrap(panelRef, () => props.open);
 
 function onKeydown(event: KeyboardEvent): void {
   if (event.key === "Escape") {
@@ -90,31 +41,7 @@ function onKeydown(event: KeyboardEvent): void {
     emit("close");
     return;
   }
-  if (event.key !== "Tab") return;
-
-  const root = panelRef.value;
-  if (!root) return;
-  const items = focusables(root);
-  if (items.length === 0) {
-    event.preventDefault();
-    root.focus();
-    return;
-  }
-  const first = items[0] as HTMLElement;
-  const last = items[items.length - 1] as HTMLElement;
-  const active = document.activeElement as HTMLElement | null;
-  const index = active ? items.indexOf(active) : -1;
-
-  // 焦點在面板本身（或不在清單內）時拉回邊界；在頭尾時循環到另一端；其餘交給瀏覽器。
-  let target: HTMLElement | null = null;
-  if (index === -1) target = event.shiftKey ? last : first;
-  else if (event.shiftKey && index === 0) target = last;
-  else if (!event.shiftKey && index === items.length - 1) target = first;
-
-  if (target) {
-    event.preventDefault();
-    target.focus();
-  }
+  trap.onKeydown(event);
 }
 </script>
 
@@ -130,7 +57,7 @@ function onKeydown(event: KeyboardEvent): void {
       aria-modal="true"
       :aria-labelledby="TITLE_ID"
       tabindex="-1"
-      class="absolute inset-x-3 top-3 flex max-h-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-card border border-edge bg-surface-strong text-ink shadow-sheet focus:outline-none md:left-auto md:right-3 md:w-[420px]"
+      class="absolute inset-x-3 top-3 flex max-h-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-card border border-edge bg-surface-strong text-ink shadow-panel focus:outline-none md:left-auto md:right-3 md:w-[420px]"
       @keydown="onKeydown"
     >
       <div class="flex shrink-0 items-center justify-between gap-3 border-b border-edge py-2 pl-4 pr-2">

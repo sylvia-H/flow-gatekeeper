@@ -17,6 +17,7 @@ import { useCopilotStore } from "./domains/ai-copilot/stores/copilot.store.js";
 import { useHighFrequencyWs } from "./domains/monitoring/composables/useHighFrequencyWs.js";
 import { useResizeDrag } from "./shared/composables/useResizeDrag.js";
 import { useKeyboardShortcuts } from "./shared/composables/useKeyboardShortcuts.js";
+import { BELOW_MD_QUERY, useMediaQuery } from "./shared/composables/useMediaQuery.js";
 import { useDiagnoseTrigger } from "./domains/ai-copilot/composables/useDiagnoseTrigger.js";
 import {
   EVENT_STRIP_MAX,
@@ -138,24 +139,9 @@ const searchInput = (): HTMLInputElement | null => topBar.value?.searchInput ?? 
 
 /**
  * 手機寬度（< md，rail 隱藏；斷點同 AppLayout 的 `md:` 與 TopBar 的主題切換位置）。
- * mounted 後才掛 change 監聽；環境沒有 `matchMedia` 時視為桌機。
+ * mounted 後才掛 change 監聽；環境沒有 `matchMedia` 時視為桌機（見 `shared/composables/useMediaQuery`）。
  */
-const mobileQuery =
-  typeof window !== "undefined" && typeof window.matchMedia === "function"
-    ? window.matchMedia("(max-width: 767.98px)")
-    : null;
-const isMobile = ref(mobileQuery?.matches ?? false);
-function onMobileChange(event: MediaQueryListEvent): void {
-  isMobile.value = event.matches;
-}
-onMounted(() => {
-  if (typeof mobileQuery?.addEventListener === "function") mobileQuery.addEventListener("change", onMobileChange);
-});
-onUnmounted(() => {
-  if (typeof mobileQuery?.removeEventListener === "function") {
-    mobileQuery.removeEventListener("change", onMobileChange);
-  }
-});
+const isMobile = useMediaQuery(BELOW_MD_QUERY);
 
 /**
  * 手機異常清單覆蓋層（T061、FR-033a）：主區頂端的機群健康摘要條點擊開關。

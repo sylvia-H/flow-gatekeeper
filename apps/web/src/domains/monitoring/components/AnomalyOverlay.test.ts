@@ -161,6 +161,21 @@ describe("AnomalyOverlay 焦點", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it("iOS Safari 點摘要條不給焦點（開啟時焦點在 body）：關閉後焦點還給摘要條", async () => {
+    const bar = document.createElement("button");
+    bar.setAttribute("data-fg", "fleet-summary-bar");
+    document.body.appendChild(bar);
+    expect(document.activeElement).toBe(document.body);
+
+    const w = mountOverlay({ open: false });
+    await w.setProps({ open: true });
+    await nextTick();
+    expect(document.activeElement).toBe(dialog(w).element);
+
+    await w.setProps({ open: false });
+    expect(document.activeElement).toBe(bar);
+  });
+
   it("使用者已點了面板外的元素時，關閉不搶回焦點", async () => {
     const trigger = document.createElement("button");
     const outside = document.createElement("button");
