@@ -50,6 +50,12 @@ describe("buildGenerateConfig", () => {
     });
   });
 
+  it("3.x flash 系列（leveled）帶 thinkingLevel MEDIUM", () => {
+    const c = buildGenerateConfig({ model: "gemini-3.5-flash-lite", signal, ...DEFAULT_GENERATION_OPTIONS });
+    expect(c.thinkingConfig).toEqual({ thinkingLevel: ThinkingLevel.MEDIUM });
+    expect(c.maxOutputTokens).toBe(4096);
+  });
+
   it("不支援關 thinking 的模型不送 thinkingConfig；無 schema 不送 responseJsonSchema", () => {
     const c = buildGenerateConfig({ model: "gemini-2.5-pro", signal, ...DEFAULT_GENERATION_OPTIONS });
     expect(c.thinkingConfig).toBeUndefined();

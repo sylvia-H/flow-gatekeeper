@@ -1845,7 +1845,7 @@ export class GeminiProvider implements AiProvider {
 
 > 未來要換 Claude，就新增 `claude-provider.ts implements AiProvider`，worker 只改一行 `const ai = new GeminiProvider(...)`。
 
-> **已變更，現況：介面形狀擴充、SDK 遷移至 `@google/genai`**（上面兩段為起草時的形狀）。`AiProvider` 現為 `{ readonly id; readonly model; streamDiagnosis({ prompt, signal, responseJsonSchema?, onToken }) → { text, finishReason, usage? } }`：`signal` 由核心以 `AbortSignal.timeout(AI_TIMEOUT_MS)` 建立、adapter MUST 交給 SDK 讓逾時真的中止 HTTP 串流；`finishReason` 正規化為 `stop｜max_tokens｜safety｜other`；錯誤一律丟 `AiProviderError{ retryable, code }`，`retryable=false`（金鑰缺失／無效、權限不足、請求格式錯）由核心轉 BullMQ `UnrecoverableError`。`GeminiProvider` 缺金鑰時直接丟不可重試的 `provider_error`；只對 `gemini-2.5-flash` 系列送 `thinkingBudget: 0`（`gemini-2.5-pro` 不可關 thinking、其他系列不送）。換 Claude 時需對應 system／user 分開、`max_tokens` 必填、`stop_reason` → `finishReason`、錯誤分類（`overloaded`／`rate_limit` 可重試）。見 `apps/worker/src/ai/provider.ts`、`gemini-provider.ts`。
+> **已變更，現況：介面形狀擴充、SDK 遷移至 `@google/genai`**（上面兩段為起草時的形狀）。`AiProvider` 現為 `{ readonly id; readonly model; streamDiagnosis({ prompt, signal, responseJsonSchema?, onToken }) → { text, finishReason, usage? } }`：`signal` 由核心以 `AbortSignal.timeout(AI_TIMEOUT_MS)` 建立、adapter MUST 交給 SDK 讓逾時真的中止 HTTP 串流；`finishReason` 正規化為 `stop｜max_tokens｜safety｜other`；錯誤一律丟 `AiProviderError{ retryable, code }`，`retryable=false`（金鑰缺失／無效、權限不足、請求格式錯）由核心轉 BullMQ `UnrecoverableError`。`GeminiProvider` 缺金鑰時直接丟不可重試的 `provider_error`；`gemini-2.5-flash` 系列送 `thinkingBudget: 0`；3.x 以後的 `flash`／`flash-lite` 送 `thinkingLevel: MEDIUM`（它們不接受 `thinkingBudget: 0`）；`gemini-2.5-pro`、3.x pro 等其他變體不送（見 §15.6「Gemini 3.5 flash-lite 升級」）。換 Claude 時需對應 system／user 分開、`max_tokens` 必填、`stop_reason` → `finishReason`、錯誤分類（`overloaded`／`rate_limit` 可重試）。見 `apps/worker/src/ai/provider.ts`、`gemini-provider.ts`。
 
 ### 8.10 Worker processor
 
@@ -3311,7 +3311,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 - **web**：ping 後 5 秒未回 pong 即視為斷線、立即重連；Diagnose 只在連線就緒時可按（`system/connected` 且已 `machine/subscribed`、未斷線、未收到 `system/unauthorized`），卡片 icon 等所有入口共用同一閘門（未就緒時不送 POST）；退避改在 `machine/subscribed` 才歸零；`409` 顯示可讀訊息；
   `system/unauthorized` 以 TopBar「未授權」chip 呈現；內嵌面 token 改名 `bg-surface-inset`（design-spec v0.6；013 起 design-spec 已退役，現況 token 見 `apps/web/DESIGN.md`）。
 - **worker**：chaos 在 production 預設拒絕武裝，容器內演練需另設 `WORKER_CHAOS_ALLOW_IN_PRODUCTION=true`（§16.3 第 5 列）；
-  新增 `AI_MAX_OUTPUT_TOKENS`（2048，截斷視為不可重試的 `schema_invalid`）、`AI_TEMPERATURE`（0.2）；
+  新增 `AI_MAX_OUTPUT_TOKENS`（2048，截斷視為不可重試的 `schema_invalid`；**已變更**：預設改 4096，見下方「Gemini 3.5 flash-lite 升級」）、`AI_TEMPERATURE`（0.2）；
   鎖 TTL 條件改為 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`；致命 kind 補 `invalidConfig`／`bootstrap`。
 - **運維**：web 入口改 `${WEB_BIND:-127.0.0.1}:8080:8080`（對外示範設 `WEB_BIND=0.0.0.0`）；nginx 對 `/diagnoses`
   `limit_req` 10 r/m、burst 5、超限 `429`，`/ws` `limit_conn` 每來源 20 條（Docker Desktop 下來源皆為 gateway，兩者皆實為全體共用一桶）；redis／mongo

@@ -182,6 +182,10 @@ describe("AI_PROVIDER 與 fake provider 參數（review02 Batch D e2e）", () =>
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.warnings.some((w) => w.includes("thinking"))).toBe(false);
+    const leveled = parseWorkerEnv({ AI_PROVIDER: "fake", GEMINI_MODEL: "gemini-3.5-flash-lite", AI_MAX_OUTPUT_TOKENS: "2048" });
+    expect(leveled.ok).toBe(true);
+    if (!leveled.ok) return;
+    expect(leveled.warnings.some((w) => w.includes("thinking"))).toBe(false);
   });
 
   it("warn 的段數以假診斷 JSON 字元數為上限（FAKE_AI_TOKENS 過大不會誤報逾時）", () => {
