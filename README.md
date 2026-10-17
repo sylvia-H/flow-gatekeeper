@@ -690,6 +690,8 @@ node apps/web/scripts/screenshots.cjs --readme
 node apps/web/scripts/screenshots.cjs --help
 ```
 
+`--readme` 的注意事項：worker 需有效的 `GEMINI_API_KEY`（整輪只真正呼叫一次 LLM，其餘命中快取）；「斷線」與「失敗」兩張由劇本在自己的瀏覽器分頁內攔截 `/ws` 與 `POST /diagnoses` 重現，不必關掉 api，也不影響其他連線。拍不到的截圖（例如快取沒清、第一次診斷就命中）不寫檔、保留舊檔，結束時列出缺漏並以 exit 1 結束。量測期間避免同時修改 `apps/web/src`，Vite HMR 會讓 `--viewports` 的差值無法判讀。
+
 **demo 影片**（`apps/web/scripts/record-demo.cjs`）：依上方「[端到端操作 Demo](#端到端操作-demo實機錄影)」的劇本表一鏡到底錄 1440×900，輸出 `docs/demo/flow-gatekeeper-demo.mp4` 與海報（快取命中後的最後一格）。以 CDP 逐格擷取 JPEG、再用 ffmpeg 轉 30fps H.264（比 Playwright 內建錄影的即時 VP8 清楚）；headless 沒有游標，劇本只在錄影頁面注入假游標、不動產品程式碼。開錄前量 `press-02` 的尖峰週期，讓尖峰落在鏡頭第 2 秒、兩次診斷都在回到正常後送出（第二次才會命中快取）。Chromium 的尋找規則與截圖劇本相同（共用 `apps/web/scripts/lib/browser.cjs`）。需要含 **libx264** 的 ffmpeg（Playwright 自帶的只有 VP8），以 `--ffmpeg` 或環境變數 `FFMPEG` 指定，Windows 可下載 [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) 的 essentials 建置解壓即用。對齊失準（尖峰週期量不出來、第一格晚於鏡頭 0 秒）時在呼叫 LLM 之前中止；第一次診斷就命中快取、或第二次沒命中時也中止。影片與海報先寫在暫存目錄、全部成功才覆蓋 `docs/demo/`，失敗不留半截檔，也不自動重試（避免多打 LLM）。
 
 ```powershell
@@ -697,8 +699,6 @@ docker compose --profile demo up -d --build    # 對一鍵 demo 容器錄（預�
 ./scripts/demo-reset.ps1
 node apps/web/scripts/record-demo.cjs --ffmpeg C:\tools\ffmpeg\bin\ffmpeg.exe   # 約 1 分鐘（含 20 秒暖機與對齊尖峰），呼叫 LLM 一次
 ```
-
-`--readme` 的注意事項：worker 需有效的 `GEMINI_API_KEY`（整輪只真正呼叫一次 LLM，其餘命中快取）；「斷線」與「失敗」兩張由劇本在自己的瀏覽器分頁內攔截 `/ws` 與 `POST /diagnoses` 重現，不必關掉 api，也不影響其他連線。拍不到的截圖（例如快取沒清、第一次診斷就命中）不寫檔、保留舊檔，結束時列出缺漏並以 exit 1 結束。量測期間避免同時修改 `apps/web/src`，Vite HMR 會讓 `--viewports` 的差值無法判讀。
 
 ---
 
@@ -833,7 +833,7 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 
 | 項目 | 現況 |
 | --- | --- |
-| **產品版本** | **1.1.0**（2026-09-28；git tag `1.1.0`，指向 `develop` 併入 `main` 的 merge commit）。六份 `package.json` 的 `version` 與 tag 一致。產品 tag **不帶 `v` 前綴**——第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`（同一 commit `3e94ac2`），GitHub Release 與 demo 影片連結一併改指 `1.0.0` |
+| **產品版本** | **1.1.0**（2026-09-28；git tag `1.1.0`，指向 `develop` 併入 `main` 的 merge commit）。六份 `package.json` 的 `version` 與 tag 一致。產品 tag **不帶 `v` 前綴**——第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`（同一 commit `3e94ac2`），GitHub Release 與 demo 影片連結當時一併改指 `1.0.0`（2.0.0 起影片重錄、連結改指 `2.0.0`，見「端到端操作 Demo」版本註記） |
 | **契約版本** | `asyncapi.yaml` `info.version` **1.2.0**，獨立於產品版本演進；每版加嚴／新增欄位／新增消費端義務都記在 `CHANGELOG.md`「asyncapi 契約版本」小節 |
 | **變更紀錄** | [`CHANGELOG.md`](CHANGELOG.md)（Keep a Changelog 格式；升級前先讀「相容性注意」）；維護分支的現況摘要見指南 §15.6 |
 | **Release** | `main` 只接收發布：`develop` 以 `--no-ff` 併入 `main` → annotated tag → GitHub Release（流程見 `CLAUDE.md`「`main` 的 release 流程」）；日常開發與 feature merge 一律在 `develop` |
