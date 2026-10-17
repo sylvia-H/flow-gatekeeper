@@ -54,8 +54,8 @@
 //   面板：[data-fg="copilot"][data-open] → 否則找「展開 … Copilot 面板」按鈕
 
 // Node globals 由 root eslint.config.js 的 apps/*/scripts/**/*.cjs 區段提供；
-// document 只出現在 page.evaluate（瀏覽器端）回呼內。
-/* global document, window, requestAnimationFrame */
+// document、performance、MutationObserver 等只出現在 page.evaluate（瀏覽器端）回呼內。
+/* global document, window, requestAnimationFrame, performance, MutationObserver */
 
 "use strict";
 
@@ -123,6 +123,13 @@ const STALE_WAIT_MS = 25000; // 停滯門檻 10 秒，每秒 tick 重算
 const RATIO_WAIT_MS = 15000;
 const SKELETON_TARGET_FIELDS = 2; // 串流骨架拍到 2／5 欄已填入就停（摘要、嚴重度），建議動作仍在填、可能原因與證據為佔位
 const CLIP_PADDING_PX = 8;
+// 卡片狀態色的過渡（MachineNodeCard `transition-colors duration-150`）：data-state 一切換就判定為嚴重／警告，
+// 底色仍在從前一態（例如選取的深青水洗）過渡到 crit-bg／warn-bg；截圖前距最近一次狀態切換至少 150ms＋餘裕，避免拍到過渡中途幀。
+// 時間一律以頁面時鐘（performance.now）計：畫面上的嚴重態實測只有約 450ms，而 2 倍像素比的 page.screenshot 約要 300ms 才回來，
+// 用 Node 端輪詢加固定 sleep 會錯過整段尖峰。
+const CARD_SETTLE_MS = 250;
+// page.screenshot 送出後到實際擷取畫面的上限估計：這段時間內有卡片狀態切換就視為拍到過渡，重拍。
+const FRAME_GRACE_MS = 50;
 const WS_ROUTE = /\/ws$/;
 const SIMULATED_CLOSE = { code: 4000, reason: "screenshots: 模擬斷線" };
 
@@ -908,6 +915,41 @@ async function pollUntil(fn, timeoutMs, intervalMs = 200) {
   }
 }
 
+/**
+ * 等 want（[{ id, state }]，全部同時成立）「重新成立」：先等它不成立，再等它成立，在頁面內以 requestAnimationFrame 逐幀判定，
+ * 成立後再等 CARD_SETTLE_MS 讓卡片底色過渡完才回來。回傳成立當下的頁面時鐘（逾時回 null）。
+ * 條件一開始就成立時多半已近尾聲，從新的一次開頭拍才有餘裕。
+ */
+async function waitFresh(page, want, timeoutMs) {
+  return page.evaluate(
+    ({ want: w, timeoutMs: limit, settle }) =>
+      new Promise((resolve) => {
+        const holds = () =>
+          w.every(({ id, state }) => {
+            const el = document.querySelector(`.machine-card[data-machine="${id}"]`);
+            return el !== null && el.getAttribute("data-state") === state;
+          });
+        let armed = !holds();
+        const deadline = performance.now() + limit;
+        const tick = () => {
+          const now = performance.now();
+          if (!holds()) armed = true;
+          else if (armed) {
+            setTimeout(() => resolve(now), settle);
+            return;
+          }
+          if (now > deadline) {
+            resolve(null);
+            return;
+          }
+          requestAnimationFrame(tick);
+        };
+        tick();
+      }),
+    { want, timeoutMs, settle: CARD_SETTLE_MS },
+  );
+}
+
 const cardOf = (page, id) => page.locator(`.machine-card[data-machine="${id}"]`).first();
 const cardState = (page, id) => cardOf(page, id).getAttribute("data-state", { timeout: 2000 }).catch(() => null);
 
@@ -956,6 +998,7 @@ async function openReadmePage(browser, vp, opts, name, beforeGoto) {
   const loadedAt = Date.now();
   await page.goto(opts.url, { waitUntil: "networkidle" });
   await waitForCards(page);
+  await installStateRecorder(page);
   await sleep(opts.settle);
   await applyTheme(page, "light");
   return { context, page, loadedAt };
@@ -980,13 +1023,72 @@ async function cropShot(context, vp, buffer, clips) {
   }
 }
 
-/** 截圖前把滑鼠移開、焦點移走，避免 hover／focus 樣式入鏡。 */
-async function capture(page, options = {}) {
+/**
+ * 在頁面裝卡片狀態切換紀錄器：MutationObserver 記下每次 data-state 變化的頁面時鐘，截圖前後據此判斷畫面上有沒有過渡中的卡片。
+ */
+async function installStateRecorder(page) {
+  await page.evaluate(() => {
+    if (window.__fgStateLog) return;
+    const entries = [];
+    window.__fgStateLog = entries;
+    new MutationObserver((records) => {
+      const t = performance.now();
+      for (const r of records) {
+        if (r.target.classList && r.target.classList.contains("machine-card")) entries.push(t);
+      }
+    }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["data-state"] });
+  });
+}
+
+/** 頁面時鐘 from（不含）之後、to（含）之前有沒有卡片狀態切換。 */
+const stateChangedBetween = (page, from, to) =>
+  page.evaluate(({ a, b }) => (window.__fgStateLog || []).some((t) => t > a && t <= b), { a: from, b: to });
+
+/** 把滑鼠移開、焦點移走，避免 hover／focus 樣式入鏡。 */
+async function clearPointer(page) {
   await page.mouse.move(0, 0);
   await page.evaluate(() => {
     if (document.activeElement && typeof document.activeElement.blur === "function") document.activeElement.blur();
   });
-  return page.screenshot(options);
+}
+
+/**
+ * 截一張「沒有卡片在過渡」的圖：距最近一次卡片狀態切換不足 CARD_SETTLE_MS 就等到滿；
+ * 截圖送出後 FRAME_GRACE_MS 內又有切換（可能拍到過渡起點）就重拍，最多 3 次。
+ * 卡片狀態不受劇本控制（任何一張截圖當下都可能碰上尖峰開始或結束），所以每張都走這裡。
+ */
+async function capture(page, options = {}) {
+  await clearPointer(page);
+  let shot = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const since = await page.evaluate(() => {
+      const entries = window.__fgStateLog || [];
+      return entries.length > 0 ? performance.now() - entries[entries.length - 1] : Number.POSITIVE_INFINITY;
+    });
+    if (since < CARD_SETTLE_MS) await sleep(CARD_SETTLE_MS - since);
+    const t0 = await page.evaluate(() => performance.now());
+    shot = await page.screenshot(options);
+    if (!(await stateChangedBetween(page, t0, t0 + FRAME_GRACE_MS))) return shot;
+  }
+  log("警告：截圖期間卡片狀態持續變化，保留最後一張");
+  return shot;
+}
+
+/**
+ * 在 want 成立的那段尖峰內截圖：waitFresh 等到新的一次成立且底色過渡完，立刻截圖；
+ * 成立之後到截圖送出後 FRAME_GRACE_MS 之間有任何卡片切換（尖峰已結束或別台在過渡）就等下一次，最多 3 次。
+ */
+async function captureWhile(page, want, waitMs) {
+  await clearPointer(page);
+  let shot = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const enteredAt = await waitFresh(page, want, waitMs);
+    const t0 = await page.evaluate(() => performance.now());
+    shot = await page.screenshot();
+    if (enteredAt !== null && !(await stateChangedBetween(page, enteredAt, t0 + FRAME_GRACE_MS))) return { shot, ok: true };
+    log(`第 ${attempt} 次截圖時尖峰已結束或有卡片在過渡，等下一次`);
+  }
+  return { shot, ok: false };
 }
 
 /**
@@ -1143,21 +1245,21 @@ async function shootDesktop(browser, opts, shots) {
     });
 
     await scene(shots, ["monitoring-states", "fleet-health", "event-stream", "topology"], async () => {
-      const both = await pollUntil(
-        async () =>
-          (await cardState(page, README_MACHINE)) === "critical" &&
-          (await cardState(page, README_WARNING_MACHINE)) === "warning",
-        STATES_WAIT_MS,
-        100,
-      );
-      // 尖峰只有約 1.45 秒：先量好三個裁切範圍，拍一張全景，三張裁切都從這張全景切出，四張是同一瞬間。
+      // 尖峰只有約 1.45 秒：裁切範圍與狀態無關，先量好；拍一張全景，三張裁切都從這張全景切出，四張是同一瞬間。
       const clips = {
         "fleet-health": await visibleClip(page, ['section[aria-label="機群健康"]', '[data-fg="anomaly-summary"]']),
         "event-stream": await visibleClip(page, ['section[aria-label="事件流"]']),
         topology: await visibleClip(page, ['[data-fg="stage-topology"]']),
       };
-      const full = await capture(page);
-      shots.write("monitoring-states", full, both ? undefined : `${STATES_WAIT_MS}ms 內未等到嚴重與警告同屏`);
+      const { shot: full, ok: both } = await captureWhile(
+        page,
+        [
+          { id: README_MACHINE, state: "critical" },
+          { id: README_WARNING_MACHINE, state: "warning" },
+        ],
+        STATES_WAIT_MS,
+      );
+      shots.write("monitoring-states", full, both ? undefined : "未拍到嚴重與警告同屏");
       const crops = await cropShot(context, README_DESKTOP, full, clips);
       for (const [name, buffer] of Object.entries(crops)) shots.write(name, buffer, "自 monitoring-states 裁切");
     });
@@ -1180,8 +1282,8 @@ async function shootDesktop(browser, opts, shots) {
       await cardOf(page, README_MACHINE).click({ position: { x: 12, y: 12 } });
       await sleep(500);
       await ensureCopilotOpen(page, "1440x900");
-      const critical = await pollUntil(async () => (await cardState(page, README_MACHINE)) === "critical", SPIKE_WAIT_MS, 100);
-      await shoot("monitoring-selected", {}, critical ? undefined : `${README_MACHINE} 選取時不是嚴重`);
+      const { shot, ok } = await captureWhile(page, [{ id: README_MACHINE, state: "critical" }], SPIKE_WAIT_MS);
+      shots.write("monitoring-selected", shot, ok ? undefined : `${README_MACHINE} 選取時不是嚴重`);
     });
 
     await scene(shots, ["copilot-streaming", "copilot-completed"], async () => {
@@ -1273,7 +1375,8 @@ async function shootReconnecting(browser, opts, shots) {
   try {
     await scene(shots, ["monitoring-reconnecting-stale"], async () => {
       if (gate.open.length === 0) throw new Error("routeWebSocket 沒有攔到 /ws 連線");
-      const critical = await pollUntil(async () => (await cardState(page, README_MACHINE)) === "critical", SPIKE_WAIT_MS, 100);
+      // 斷線前讓嚴重底色過渡完，停格的就是完整的嚴重態
+      const critical = (await waitFresh(page, [{ id: README_MACHINE, state: "critical" }], SPIKE_WAIT_MS)) !== null;
       gate.blocked = true;
       for (const { ws, server } of gate.open.splice(0)) {
         await server.close(SIMULATED_CLOSE).catch(() => {});
