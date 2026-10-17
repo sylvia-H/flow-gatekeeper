@@ -92,7 +92,8 @@ Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全
 - **AI 模型**（worker）：預設 `GEMINI_MODEL` 由 `gemini-2.5-flash` 改為 `gemini-3.5-flash-lite`。3.x 以後的 `flash`／`flash-lite` 不接受
   `thinkingBudget: 0`（400），改送 `thinkingConfig.thinkingLevel: MEDIUM`；實測真實診斷 prompt 的 thinking token 為 0～約 1150（模型動態決定），
   首 token 0.6～4.2 秒、全程 1.4～4.6 秒（思考時較長；003 SC-001 的 5 秒首 token 目標仍達成但餘裕有限）。`AI_TEMPERATURE` 維持 0.2：Google 建議 Gemini 3 系列用 1.0，但實測 0.2／1.0 皆無截斷、0.2 結果較一致。3.x 的 pro 等其他變體維持不送 thinking 設定。3.x `flash`／`flash-lite` 配 `AI_MAX_OUTPUT_TOKENS` 低於 4096 時 worker 啟動會 warn
-  （2.5 pro 等不能關 thinking 的模型門檻維持 8192）。
+  （2.5 pro 等不能關 thinking 的模型門檻維持 8192）；`GEMINI_MODEL` 為不帶版本號的 `*-latest` 別名時啟動 warn（判不出 thinking 系列）。
+  worker `LLM stream finished` log 的 `usage` 另記 `thoughtsTokens`（thinking token，與只算回覆的 `outputTokens` 分開）。
 
 ### Removed
 

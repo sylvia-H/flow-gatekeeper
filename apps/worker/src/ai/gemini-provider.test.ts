@@ -114,7 +114,8 @@ describe("GeminiProvider 串流與 usage", () => {
       };
     }
     // 換掉延遲建立的 SDK client，不打真的 API。
-    Reflect.set(provider, "client", { models: { generateContentStream: () => Promise.resolve(chunks()) } });
+    const generateContentStream = vi.fn(() => Promise.resolve(chunks()));
+    Reflect.set(provider, "client", { models: { generateContentStream } });
     const onToken = vi.fn();
     const out = await provider.streamDiagnosis({ prompt: "p", signal: new AbortController().signal, onToken });
     expect(onToken.mock.calls.map(([t]) => t)).toEqual(['{"summary":', '"ok"}']);
@@ -122,6 +123,16 @@ describe("GeminiProvider 串流與 usage", () => {
       text: '{"summary":"ok"}',
       finishReason: "stop",
       usage: { inputTokens: 638, outputTokens: 232, thoughtsTokens: 1061, totalTokens: 1931 },
+    });
+    // 接線：buildGenerateConfig 組出的 config 真的交給 SDK（client 欄位改名時這裡會因 stub 未被呼叫而明確失敗）。
+    expect(generateContentStream).toHaveBeenCalledWith({
+      model: "gemini-3.5-flash-lite",
+      contents: "p",
+      config: expect.objectContaining({
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
+        maxOutputTokens: 4096,
+        responseMimeType: "application/json",
+      }),
     });
   });
 });

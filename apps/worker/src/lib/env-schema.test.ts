@@ -122,6 +122,9 @@ describe("parseWorkerEnv", () => {
     };
     expect(hasAliasWarning({ GEMINI_MODEL: "gemini-flash-lite-latest" })).toBe(true);
     expect(hasAliasWarning({ GEMINI_MODEL: "models/gemini-flash-latest" })).toBe(true);
+    expect(hasAliasWarning({ GEMINI_MODEL: "gemini-pro-latest" })).toBe(true);
+    expect(hasAliasWarning({ GEMINI_MODEL: "gemini-1.5-flash-latest" })).toBe(false);
+    expect(hasAliasWarning({ GEMINI_MODEL: "gemini-exp-latest-preview" })).toBe(false);
     expect(hasAliasWarning({ GEMINI_MODEL: "gemini-3.5-flash-lite" })).toBe(false);
     expect(hasAliasWarning({ GEMINI_MODEL: "my-custom-model" })).toBe(false);
     expect(hasAliasWarning({ AI_PROVIDER: "fake", GEMINI_MODEL: "gemini-flash-latest" })).toBe(false);

@@ -768,7 +768,7 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 | `WS_HEARTBEAT_MS` | api | `15000` | 伺服器端心跳探活間隔；下限 1000、上限 2147483647，超出即拒絕啟動 |
 | `MOCK_TELEMETRY_INTERVAL_MS` | api | `50` | 遙測產生節拍（拉到 5ms 可把吞吐放大 ~10×；單次量測示例：26 秒收近 1.9 萬筆而僅批次渲染約 1,600 次，實際數字隨機器與幀率而異）；下限 5、上限 2147483647，超出即拒絕啟動 |
 | `TELEMETRY_TTL_SECONDS` | api | `604800`（demo 範本 `.env.demo.example` 為 `86400`） | 時序遙測保存期（dev 7 天；demo 1 天，避免長跑撐大 `mongo-data` volume）；collection 已存在時以 `collMod` 更新，改值重啟即生效 |
-| `GEMINI_API_KEY` / `GEMINI_MODEL` | **worker** | *(空)* / `gemini-3.5-flash-lite` | LLM provider（包在 `AiProvider` 後）；**只有 worker 需要**。任何環境皆可留空——每筆診斷立即以 `provider_error` 失敗、不重試 |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | **worker** | *(空)* / `gemini-3.5-flash-lite` | LLM provider（包在 `AiProvider` 後）；**只有 worker 需要**。任何環境皆可留空——每筆診斷立即以 `provider_error` 失敗、不重試。模型請寫完整名稱：thinking 設定依名稱判定，`gemini-flash-lite-latest` 這類不帶版本號的 `*-latest` 別名判不出系列（不送 thinking 設定、不檢查輸出上限），啟動時 warn |
 | `AI_RPM` | worker | `8` | 每分鐘**實際 LLM 呼叫**上限（取鎖且 cache 未命中才計數的 Redis 固定窗 `ai-rpm:<分鐘>`；超過即延後到下一窗、不消耗重試次數） |
 | `WORKER_CONCURRENCY` | worker | `2` | 同時處理的 job 數（BullMQ concurrency） |
 | `WORKER_INSTANCE_ID` | worker | *(空＝hostname)* | 組成 `worker:heartbeat:<id>`／`metrics:worker:<id>`；只允許英數字與 `. _ -`（≤ 128），不合法即拒絕啟動。demo 容器由 compose 釘為空字串（一律 hostname），本值只對 host 直跑生效；同機直跑多個 worker 時才手動設不同值 |

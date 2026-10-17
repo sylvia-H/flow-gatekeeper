@@ -185,8 +185,13 @@ export function parseWorkerEnv(raw: Record<string, string | undefined>): WorkerE
       `GEMINI_MODEL=${GEMINI_MODEL} 以 thinkingLevel ${THINKING_LEVEL} 思考，thinking token 計入 AI_MAX_OUTPUT_TOKENS（目前 ${AI_MAX_OUTPUT_TOKENS}）：` +
         `建議調高至 ≥ ${MIN_OUTPUT_TOKENS_WITH_THINKING_LEVEL}，否則診斷容易因 max_tokens 截斷而失敗（不重試）`,
     );
-  } else if (capability === "none" && AI_PROVIDER === "gemini" && /^(?:models\/)?gemini-.*latest/.test(GEMINI_MODEL)) {
-    // `gemini-flash-lite-latest` 這類別名可能指向會思考的 3.x，但名稱判不出系列：不送 thinking 設定、上限檢查也跳過。
+  } else if (
+    capability === "none" &&
+    AI_PROVIDER === "gemini" &&
+    /^(?:models\/)?gemini-[a-z][a-z-]*-latest$/.test(GEMINI_MODEL)
+  ) {
+    // `gemini-flash-lite-latest` 這類不帶版本號的別名可能指向會思考的 3.x，但名稱判不出系列：不送 thinking 設定、上限檢查也跳過。
+    // 帶版本號的（如 `gemini-1.5-flash-latest`）系列判得出來、本就沒有 thinking，不 warn。
     warnings.push(
       `GEMINI_MODEL=${GEMINI_MODEL} 是別名，無法判定 thinking 系列：不送 thinking 設定、也不檢查 AI_MAX_OUTPUT_TOKENS；建議寫完整模型名`,
     );

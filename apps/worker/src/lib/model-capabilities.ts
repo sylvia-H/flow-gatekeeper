@@ -8,7 +8,7 @@
  * - `leveled`：有 thinking、以 `thinkingLevel` 指定等級（3.x 以後的 `flash`／`flash-lite` 與其 preview 變體）；
  *   送 `thinkingBudget: 0` 會 400，改送 `THINKING_LEVEL`。
  * - `always-on`：有 thinking 且不送任何設定（`gemini-2.5-pro`；3.x 以後的 pro 等其他變體，最低等級仍會思考）。
- * - `none`：沒有 thinking（2.0 以前）或無法辨識的名稱——不送任何 thinking 設定、也不警告。
+ * - `none`：沒有 thinking（2.0 以前）或無法辨識的名稱——不送任何 thinking 設定、不檢查輸出上限（不帶版本號的 `*-latest` 別名另由 env-schema 啟動 warn）。
  */
 export type ThinkingCapability = "disableable" | "leveled" | "always-on" | "none";
 
