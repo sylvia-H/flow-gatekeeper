@@ -43,6 +43,7 @@
 - `Sparkline.vue`：單一 `<svg viewBox="0 0 60 24" preserveAspectRatio="none">`，points 由 computed 產生字串；每秒更新一次、60 個點，成本可忽略。原設計為訊息／批次兩條 `<polyline>` 以 60 秒內最大值正規化；**T073 第三輪（2026-10-17）改為單秒合併比一條**，y 軸自 0 起、上限取穩健值（離群釘頂），無批次或暫停無效秒斷線。走勢線不共用比值刻度，旁標「近 60 秒」小字；reduced-motion 時無 transition（瞬間更新）。
 - `Graduation.vue`：靜態 SVG **比值刻度**（FR-009a：0–60、線性、1 格 = 1:1、每 10 格大格並標數字），只渲染一次；液位線是一條 `position:absolute` 的 2px 直線，left = `min(windowRatio, 60) / 60`（比值超過刻度上限時釘在右端並顯示 `>60`）。
 - 斷線時 series 停止推入並以 `stale` 標示；Pause 期間照常計數（計數不是畫面內容，與既有 onDrop 註解一致）。
+- 已變更（T073／T077 裁決，2026-10-17）：現況三個讀數（每秒訊息、每秒批次、合併比）同取近 60 秒視窗，標籤「合併比 · 訊息 ÷ 批次」並常駐一行白話說明；暫停期間與恢復後 2 筆樣本標 `invalid`（`RateSample.invalid`），排除於合併比、平均、最高水位與走勢線（丟棄數照計）；刻度以實心液柱呈現 0 到液位，另有視窗內最高水位短線與 1:1 錨點；走勢線只畫單秒合併比一條（y 自 0、離群釘頂、無效秒斷線）。細節見 data-model §3。
 
 **Rationale**：憲章 IV 禁止逐筆 reactive；1 Hz 差分不增加每幀工作；SVG polyline 無相依、可用 token 上色、reduced-motion 下天然靜態。
 
@@ -53,7 +54,7 @@
 **Decision**：
 - `StageTopology.vue`：`grid-template-columns: repeat(3, minmax(220px, 1fr))`，每欄 `StageColumn.vue`（中文標題、計數、卡片 `flex-col`；`role="region"` 加區域名稱）；欄間 24px 溝槽放 `FlowLink.vue`。機台分欄由純函式 `assignToStages(visibleIds, groups)`（`stage-layout.ts`）負責：空欄保留，未分組 id 歸入最後一欄並 `console.warn` 一次。
 - `FlowLink.vue`：一個絕對定位的 `<svg>` 畫一條水平線加箭頭；`stroke-width` 由 `flow-link.ts` 把**下游 stage 各機台 throughput 的總和**映射到 2–8px（五段）；流動以 `stroke-dasharray` + CSS `@keyframes` 位移，動畫時長由流速等級（慢／中／快三檔）決定，等級由 computed 每幀至多更新一次；`prefers-reduced-motion` 時 `animation: none`，只保留粗細；SVG 加 `aria-hidden="true"`（裝飾性，流向以 stage 標題順序傳達）。
-- 手機（< 768px）：grid 退為單欄、三段上下堆疊，FlowLink 改為垂直短箭頭，speed 強制 `none`（FR-016 無流動）。
+- 手機（< 768px）：grid 退為單欄、三段上下堆疊，FlowLink 改為垂直短箭頭，speed 強制 `none`（FR-016 無流動）。已變更（Phase 5／T077）：現況以拓樸**容器寬 < 708px** 切堆疊（ResizeObserver 量測，非視窗寬 < 768px），故 < 1366px 開 sheet 或窄視窗時亦可能堆疊。
 - 搜尋過濾使某欄為空：欄保留、顯示空狀態文案，連線不變。
 
 **Rationale**：specify 階段裁決 FR-014 選定 C（粗細加流動）；用 CSS 動畫而非 JS 逐幀改屬性，符合 IV；等級化（而非連續值）避免每批次都改動畫時長造成重啟閃動。
@@ -87,19 +88,20 @@
 - `anomaly-latch.ts`：`AnomalyLatch = { level: "warning"|"critical", enteredAt, recoveredAt: number | null, clearedBy: "user" | null }`（與 data-model §5 一致）；時間一律用客端收到批次的 `receivedAt`（不用 payload 時戳，避免時鐘偏差）。`applyTransition(latch, prev, next, receivedAt)`：無 latch 或已回復時進入 warning／critical → 以最新異常重建（等級、時間、確認狀態全部重置）；仍在異常中 warning→critical 升級並重置確認狀態（已劃線者恢復未確認）、critical→warning 維持；回到 healthy → 記 `recoveredAt`。`isLatchVisible(latch, staleNow)` = 仍異常 或 `staleNow - recoveredAt < 30_000`（以 `staleNow` 判定：Pause 期間凍結顯示，恢復後依實際經過時間判定，Pause 期間計入、可能立即消失）；相對時間錨點：進行中為 `enteredAt`、回復後為 `recoveredAt`（data-model §6）；`clearLatch()` 設 `clearedBy = "user"`，可見期內以劃線呈現、期滿消失（呼應 direction contract「清除以劃線作廢可追溯」）。store 於 `applyTelemetryBatch` 既有的 `prevState → point.state` 判斷處一併更新（同一處、不新增逐筆 reactive：latch Map 為 `shallowRef`，批次結束 `triggerRef` 一次）。
 - `events.ts`：`mergeEvent(list, event, windowMs = 10_000, max = 50)`：在清單中找同 machineId、同 severity 的**最近一筆**（不限頂端），若 `event.ts - 該筆.ts ≤ 10 s`（閉區間）→ 更新該筆的 `count` 與 `ts` 並移到頂端，否則新增於頂端；訊息改為中文（`壓製機 02 進入嚴重`）；新增「回復正常」事件（severity `recovered`）供摘要列與 latch 對照，同樣計入上限 50，且不阻斷 warning／recovered 交錯時的同類合併。
 - 異常摘要列 `AnomalySummary.vue`（側欄與手機覆蓋層共用）讀 `store.anomalySummary`（由 latch Map 衍生、依最近異常時間排序），點擊 `selectMachine`，清除鈕呼叫 `clearLatch`。
+- 已變更（T073／T077 裁決，2026-10-17）：現況事件合併改為自該列首筆 `firstTs` 起算的 60 秒**固定窗**（閉區間），列上顯示「HH:mm:ss–HH:mm:ss · ×N」、滿窗另起新列（原 ≤ 10 秒滑動窗只留最後時間，反覆跳動會被壓成沒有起點的計數）；詞彙由「清除」改「確認」、圖示 X 改 Check，卡片異常 pill 不可互動，確認入口為側欄異常列「確認」鈕、鍵盤 `x`、手機覆蓋層三處，讀寫同一份 latch；標記文字為「曾嚴重 · N 秒前回復」（回復後）／「嚴重 · 進入 N 秒前」（進行中）。
 
 **Rationale**：clarify Q4 要求兩處清除同一份狀態；掛在既有轉換點不增加路徑；30 s 以既有 1 秒 tick 的 `staleNow` 判定，不需額外計時器。
 
 ## R9 鍵盤操作：單一 composable + 依視覺位置移焦的純函式
 
-**Decision**：`useKeyboardShortcuts.ts`（留在 `shared/composables/`）在 App 層掛一個 `keydown` listener，**只收注入的 callbacks**（`focusSearch`、`selectMachine`、`diagnose`、`clearLatch`、`togglePanel`、`clearSelection`、`toggleHelp`），不 import 任何 `domains/` 模組，使既有 `shared/layering.test.ts` 維持綠；App.vue 負責接線，`diagnose` callback 由 `useDiagnoseTrigger` 提供（前置條件與去重同診斷按鈕）。輸入欄（`input`、`textarea`、contenteditable）或 IME 組字中（`event.isComposing`／`keyCode 229`）時忽略字母與符號快捷鍵。對照表（見 data-model §11）：`/` 聚焦搜尋、Enter（搜尋框內、結果恰一台）選取並把焦點移到該台卡片（手機覆蓋式搜尋同時收回）、方向鍵（焦點在卡片上）移焦、Enter 選取、`d` 診斷選取機台、`x` 清除聚焦卡片的異常標記、Escape 每次只關最上層一項（說明層 → 搜尋覆蓋 → 手機異常覆蓋層 → Copilot 面板（手機即 bottom-sheet；只關當次、不寫手動收合偏好）→ 取消選取）、`?` 開關說明層。`focus-grid.ts`：給定卡片的 `DOMRect[]` 與目前索引，依方向取最近鄰（先同列／同欄，再歐氏距離），純函式可測。卡片只保留一個 tab 停駐點（卡片本體），診斷 icon 與 latch 清除鈕改為 `tabindex=-1`、以 `d`／`x` 或滑鼠觸發。resize 把手加 `tabindex=0` 與方向鍵 ±16px（側欄 ArrowRight 加寬／ArrowLeft 減寬、事件流 ArrowUp 增高／ArrowDown 減少；範圍沿用既有：側欄 200–420、事件流 100–360），`useResizeDrag` 的 localStorage 讀寫改經 `useLocalPreference`（try/catch），key 沿用既有 `flow-gatekeeper:*`。
+**Decision**：`useKeyboardShortcuts.ts`（留在 `shared/composables/`）在 App 層掛一個 `keydown` listener，**只收注入的 callbacks**（`focusSearch`、`selectMachine`、`diagnose`、`clearLatch`、`togglePanel`、`clearSelection`、`toggleHelp`），不 import 任何 `domains/` 模組，使既有 `shared/layering.test.ts` 維持綠；App.vue 負責接線，`diagnose` callback 由 `useDiagnoseTrigger` 提供（前置條件與去重同診斷按鈕）。輸入欄（`input`、`textarea`、contenteditable）或 IME 組字中（`event.isComposing`／`keyCode 229`）時忽略字母與符號快捷鍵。對照表（見 data-model §11）：`/` 聚焦搜尋、Enter（搜尋框內、結果恰一台）選取並把焦點移到該台卡片（手機覆蓋式搜尋同時收回）、方向鍵（焦點在卡片上）移焦、Enter 選取、`d` 診斷選取機台、`x` 清除聚焦卡片的異常標記、Escape 每次只關最上層一項（說明層 → 搜尋覆蓋 → 手機異常覆蓋層 → Copilot 面板（手機即 bottom-sheet；只關當次、不寫手動收合偏好）→ 取消選取）、`?` 開關說明層。`focus-grid.ts`：給定卡片的 `DOMRect[]` 與目前索引，依方向取最近鄰（先同列／同欄，再歐氏距離），純函式可測。卡片只保留一個 tab 停駐點（卡片本體），診斷 icon 與 latch 清除鈕改為 `tabindex=-1`、以 `d`／`x` 或滑鼠觸發。resize 把手加 `tabindex=0` 與方向鍵 ±16px（側欄 ArrowRight 加寬／ArrowLeft 減寬、事件流 ArrowUp 增高／ArrowDown 減少；範圍沿用既有：側欄 200–420、事件流 100–360），`useResizeDrag` 的 localStorage 讀寫改經 `useLocalPreference`（try/catch），key 沿用既有 `flow-gatekeeper:*`。已變更（T073／T077 裁決，2026-10-17）：現況 `x` 為「確認」聚焦卡片的異常標記（非清除）；卡片上不再有 latch 清除鈕，異常 pill 為不可互動的顯示元件；Escape 序列中的 Copilot 面板在 < 1366px 即 bottom-sheet（非僅手機）；工具列另有快捷鍵說明鈕可開說明層。
 
 **Rationale**：clarify Q3 選定最小完整集；集中於一個 composable 便於說明層同源產生列表；純函式讓移焦邏輯可在 happy-dom 以假 rect 測試。
 
 ## R10 響應式策略：面板預設收合、搜尋收合為圖示、手機機群健康摘要條
 
 **Decision**：
-- Copilot 面板所有寬度預設收合（clarify Q2），`fg.copilot-panel` 記錄手動收合並跨重新載入保留；無偏好時選台即展開，有偏好時選台不展開，只有觸發診斷或點展開把手才展開並清除偏好（data-model §2）；手機 bottom-sheet 任何收合（收合鈕或 Escape）只要仍有選取機台即退為 32px peek 條（選取機台名稱與診斷狀態 chip），點擊等同展開把手；取消選取才完全隱藏。
+- Copilot 面板所有寬度預設收合（clarify Q2），`fg.copilot-panel` 記錄手動收合並跨重新載入保留；無偏好時選台即展開，有偏好時選台不展開，只有觸發診斷或點展開把手才展開並清除偏好（data-model §2）；手機 bottom-sheet 任何收合（收合鈕或 Escape）只要仍有選取機台即退為 32px peek 條（選取機台名稱與診斷狀態 chip），點擊等同展開把手；取消選取才完全隱藏。已變更（T073／T077 裁決，2026-10-17）：現況推擠式面板只在視窗寬 ≥ 1366px（自訂 screen `desk`）出現、寬 348px（原 360px，1366 有捲軸時會翻成單欄）；< 1366px 一律 bottom-sheet——閒置態單列約 51px、非 modal（`aria-modal="false"`、無遮罩、焦點留卡片），主區與 rail 依 sheet 高度留白（`--fg-bottom-reserve`，sheet 接手焦點後凍結），進行中／完成／失敗才轉 modal；peek 條仍為 32px。
 - 工具列以既有 container query 改為三段：≥ 820px 全部；640–819px 隱藏文字只留 icon；< 640px 搜尋收成圖示按鈕，點擊展開為覆蓋式輸入框（Escape 收回），Mock 頻率與 Metrics 隱藏。
 - 手機（< 768px）：rail 隱藏，主畫面頂端 `FleetHealth` 以 `compact` 模式呈現為「機群健康摘要條」（比例條＋四計數），點擊展開 `AnomalySummary`（異常摘要列）覆蓋層；主題切換進工具列。
 - 五個驗收 viewport（1366×768、1440×900、1024×768、768×1024、390×844）× 兩主題的截圖由 R11 劇本產出並人工逐項檢查 SC-004；layout shift 由劇本量測 `.machine-card` 在 hover／選取／脈動前後的 bounding rect。
@@ -137,7 +139,7 @@
 | Prep / Forming & Baking / Fulfilment | 前處理 / 成型烘烤 / 包裝分揀 | stage 標題只用中文、不附英文副標（FR-038、SC-013） |
 | mixer-01 … sorter-05 | 攪拌機 01 / 壓製機 02 / 包裝機 03 / 烤爐 04 / 分揀機 05 | id 維持原文 |
 | Temp / Vibration / Throughput / Errors | 溫度 / 振動 / 產能 / 錯誤率 | 單位 °C、mm/s、u/min、% 原文 |
-| AI Copilot / Idle / Active / Completed / Failed | AI 診斷 / 未診斷 / 進行中 / 已完成 / 失敗 | 文件中稱「Copilot 面板」（手機形態為 bottom-sheet），UI 標籤為「AI 診斷」 |
+| AI Copilot / Idle / Active / Completed / Failed | AI 診斷 / 未診斷 / 進行中 / 已完成 / 失敗 | 文件中稱「Copilot 面板」（手機形態為 bottom-sheet；已變更（T073）：< 1366px 皆為 bottom-sheet），UI 標籤為「AI 診斷」 |
 | Diagnosis severity ok / warning / critical | 正常 / 警告 / 嚴重 | `DiagnosisResult.severity` 的 `ok` 譯「正常」。T073 第四輪（2026-10-17）：卡片 chip 與手機 peek 條的可見文字加「AI：」前綴（「AI：嚴重」、快取「AI：嚴重 · 快取」、失敗「AI 失敗」），與狀態徽章、異常標記區分；面板內嚴重度不加前綴 |
 | Summary / Likely causes / Evidence / Suggested actions | 摘要 / 可能原因 / 證據 / 建議動作 | |
 | Cached / Retry / 中止診斷 | 快取 / 重試 / 中止診斷 | |

@@ -26,7 +26,9 @@
   - 手動收合（只限面板上的收合鈕）→ `open = false`、`manuallyCollapsed = true`。
   - Escape 收合 → 只設當次 `open = false`，`manuallyCollapsed` 不變（不算手動收合）。
   - 取消選取 → `open = false`（`manuallyCollapsed` 不變）。
-  - 手機（< 768px）：`open === false` 且仍有選取機台時（不論由收合鈕或 Escape 收合），bottom-sheet 退為 32px peek 條（`data-fg="copilot-peek"`，顯示選取機台名稱與診斷狀態 chip）；點擊 peek 條等同點展開把手 → `open = true`、`manuallyCollapsed = false`；無選取機台時完全隱藏。Escape 收合仍不寫 `manuallyCollapsed`。
+  - 形態：視窗寬 ≥ 1366px（自訂 screen `desk`）為主區右側寬 348px 的推擠式面板；< 1366px 一律為 bottom-sheet。
+  - < 1366px：`open === false` 且仍有選取機台時（不論由收合鈕或 Escape 收合），bottom-sheet 退為 32px peek 條（`data-fg="copilot-peek"`，顯示選取機台名稱與診斷狀態 chip）；點擊 peek 條等同點展開把手 → `open = true`、`manuallyCollapsed = false`；無選取機台時完全隱藏。Escape 收合仍不寫 `manuallyCollapsed`。
+  - < 1366px 的 engaged 轉移（`sheetEngaged`）：`open === true` 且該台診斷為 idle（未診斷）時 sheet 為閒置單列（約 51px）、**非 modal**（`aria-modal="false"`、無遮罩、焦點留在卡片），`sheetEngaged = false`；診斷進入 active／completed／failed（或未選機台的空狀態）→ `sheetEngaged = true`（`aria-modal="true"`、焦點陷阱、渲染遮罩、sheet 接手焦點）；收合 → `sheetEngaged = false`。主區與 rail 以 `--fg-bottom-reserve` 留白：收合時為 peek 條 32px（無 peek 為 0），閒置單列且未接手焦點時為 sheet 實際高度；其餘展開情形（含 `sheetEngaged === true`）凍結於前值，避免串流讓 sheet 長高時把底下版面一起推動；≥ 1366px 恆為 0。
 
 ## 3. RateSeries（背壓速率序列）
 
@@ -37,14 +39,19 @@
 | `RateSample.msgsPerSec` | `number` | `receivedMessages` 差分 |
 | `RateSample.batchesPerSec` | `number` | `renderedBatches` 差分 |
 | `RateSample.droppedPerSec` | `number` | `droppedMessages` 差分 |
+| `RateSample.invalid` | `true?` | 暫停期間與恢復後 2 筆樣本為 `true`（樣本照存、丟棄數照計，但排除於合併比相關計算） |
+| `invalidPushes` | `number` | 接下來還要標 `invalid` 的推入筆數；`invalidateNext(series, n)` 設定、每推入一筆減一（暫停中每 tick 設 1，恢復時設 2） |
 | `stale` | `boolean` | 斷線時為 true，停止推入 |
 
 - 不變量：`samples.length ≤ 60`；推入只在 1 Hz tick，不在 rAF 幀。
 - 衍生：
-  - `windowRatio`（主顯示，FR-009）= 視窗內 `Σ msgsPerSec ÷ Σ batchesPerSec`；批次總和為 0 時為 `null`（顯示「—」）。
+  - `validSamples(samples)`：排除 `invalid` 的有效樣本；下列合併比相關衍生一律只用有效樣本，`droppedInWindow` 例外（計入全部樣本）。
+  - `windowRatio`（主顯示，FR-009）= 視窗內有效樣本 `Σ msgsPerSec ÷ Σ batchesPerSec`；批次總和為 0 時為 `null`（顯示「—」）。`averageOf` 的每秒訊息、每秒批次兩個平均取同一組有效樣本，三者相除對得上。
+  - 單秒合併比（走勢線，FR-010）= 每筆有效樣本的 `msgsPerSec ÷ batchesPerSec`；批次為 0 或 `invalid` 的秒斷線；y 軸自 0 起、上限取穩健值，離群值釘頂（由 `Sparkline.vue` 衍生）。
+  - `peakRatio`（最高水位短線）= 有效樣本單秒合併比的最大值，且不低於 `windowRatio`；無批次時為 `null`（不畫）。
   - `cumulativeRatio`（tooltip）= 既有 `backpressure.ts` 的累計比值。
   - `maxMsgs`（60 秒內最大值；T073 第三輪走勢線改畫合併比後僅供 tooltip／測試，不再作正規化）、`droppedInWindow`（`Σ droppedPerSec`，FR-011）。
-- 呈現對應（FR-009a）：液位線位置 = `min(windowRatio, 60) / 60`（比值刻度 0–60，線性）；`windowRatio > 60` 時釘右端並標「>60」。走勢線不共用比值刻度。
+- 呈現對應（FR-009a）：液位線位置 = `min(windowRatio, 60) / 60`（比值刻度 0–60，線性），0 到液位為實心液柱，刻度另有 1:1 錨點與 `peakRatio` 最高水位短線；`windowRatio > 60` 時釘右端並標「>60」。走勢線不共用比值刻度。
 
 ## 4. Stage 與 FlowLink
 
@@ -54,7 +61,7 @@
 | `FlowLink` | `from: Stage`、`to: Stage`、`throughputSum: number`、`widthPx: 2–8`、`speed: "slow"\|"mid"\|"fast"\|"none"` | `throughputSum` = 下游 stage 各機台最新 throughput 總和（stale 機台計 0；**以完整分組 `MACHINE_GROUPS[i].machineIds` 計，不用搜尋過濾後的 `Stage.machineIds`**，R5「搜尋清空某欄時連線不變」）；`widthPx` 與 `speed` 由 `flow-link.ts` 分段映射（`widthPx` 可為小數） |
 
 - 更新節奏：由 `machines` 的 computed 衍生，每幀至多一次；`speed` 為等級，避免連續值重啟動畫。
-- reduced-motion 或手機垂直模式（< 768px）：`speed` 一律 `"none"`，`widthPx` 照常。
+- reduced-motion 或堆疊垂直模式（拓樸容器寬 < 708px，ResizeObserver 量測；量測前退回視窗寬判斷）：`speed` 一律 `"none"`，`widthPx` 照常。
 
 ## 5. AnomalyLatch（每台一份）
 
@@ -84,7 +91,7 @@
 | `level` | `"warning" \| "critical"` | latch 等級 |
 | `active` | `boolean` | 目前仍處於異常 |
 | `struck` | `boolean` | 已由操作者確認（劃線） |
-| `since` | `number` | 相對時間錨點：仍異常時為 `enteredAt`（顯示「進入 N 秒前」），已回復時為 `recoveredAt`（顯示「已回復 N 秒前」） |
+| `since` | `number` | 相對時間錨點：仍異常時為 `enteredAt`（顯示「進入 N 秒前」），已回復時為 `recoveredAt`（顯示「曾嚴重 · N 秒前回復」，warning 為「曾警告 · …」）；文案由 `latchText` 產生 |
 
 - 來源：對 `AnomalyLatch` Map 過濾 `isLatchVisible`，依 `active` 優先、再依 `enteredAt` 降冪排序。
 - 全部正常時為空陣列，UI 顯示空狀態。
@@ -150,7 +157,7 @@
 | `Enter`（卡片） | 選取 | |
 | `d` | 診斷**選取**機台（不作用於僅聚焦的卡片；卡片診斷圖示的鍵盤替代為 Enter 選取後按 `d`） | 同診斷按鈕前置條件（由 `useDiagnoseTrigger` 提供） |
 | `x` | 確認聚焦卡片的異常標記（劃線保留至回復後 30 秒） | 焦點在卡片且標記可見 |
-| `Escape` | 每次只關閉最上層一項：說明層 → 搜尋覆蓋 → 手機異常覆蓋層 → Copilot 面板（手機即 bottom-sheet；只設當次 `open = false`，不寫手動收合偏好）→ 取消選取 | 依序 |
+| `Escape` | 每次只關閉最上層一項：說明層 → 搜尋覆蓋 → 手機異常覆蓋層 → Copilot 面板（< 1366px 即 bottom-sheet；只設當次 `open = false`，不寫手動收合偏好）→ 取消選取 | 依序 |
 | `?` | 開關說明層 | 焦點不在輸入欄 |
 | `ArrowRight`／`ArrowLeft`（側欄把手） | 側欄寬度 +16px／−16px（200–420px） | 焦點在側欄把手 |
 | `ArrowUp`／`ArrowDown`（事件流把手） | 事件流高度 +16px／−16px（100–360px） | 焦點在事件流把手 |

@@ -61,7 +61,7 @@
     ],
     "breakpoints": [
       { "name": "md", "value": "768px", "purpose": "rail 顯示；背壓帶完整版；主題切換回到 rail。" },
-      { "name": "desk", "value": "1366px", "purpose": "Copilot 面板改為 360px 推擠式玻璃片；以下為 bottom-sheet（T073 由 1024 提高；1280 仍會讓拓樸單欄，故取 1366）。閒置 sheet 非 modal、主區與 rail 以 --fg-bottom-reserve 讓出其高度。" },
+      { "name": "desk", "value": "1366px", "purpose": "Copilot 面板改為 348px 推擠式玻璃片；以下為 bottom-sheet（T073 由 1024 提高；1280 仍會讓拓樸單欄，故取 1366）。閒置 sheet 非 modal、主區與 rail 以 --fg-bottom-reserve 讓出其高度。" },
       { "name": "toolbar-full", "value": "820px（工具列可用寬）", "purpose": "≥ 820 全部顯示；640–819 只留圖示；< 640 搜尋收成圖示鈕、Mock 頻率與指標面板隱藏。" },
       { "name": "strip-arrow", "value": "36rem（背壓帶容器寬）", "purpose": "以下拿掉讀數間箭頭。" },
       { "name": "strip-stack", "value": "32rem（背壓帶容器寬）", "purpose": "以下走勢區換到讀數下一列。" },

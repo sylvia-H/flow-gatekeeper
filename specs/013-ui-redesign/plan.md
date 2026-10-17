@@ -109,10 +109,10 @@ apps/web/
 │   ├── main.ts                             # 啟動前套用保存的主題（避免閃爍）
 │   ├── shared/
 │   │   ├── components/
-│   │   │   ├── AppLayout.vue               # rail／工具列／面板預設收合／手機 bottom-sheet 把手與 peek 條
+│   │   │   ├── AppLayout.vue               # rail／工具列／面板預設收合／手機 bottom-sheet 把手與 peek 條（已變更（T073／T077）：≥ 1366px 推擠式 348px、< 1366px bottom-sheet，閒置單列非 modal）
 │   │   │   ├── TopBar.vue                  # 語意分組、搜尋收合、主題切換（手機）
 │   │   │   ├── BackpressureStrip.vue       # 新：量筒 strip（取代 BackpressureBadge）
-│   │   │   ├── Sparkline.vue               # 新：60 秒兩線走勢（SVG）
+│   │   │   ├── Sparkline.vue               # 新：60 秒兩線走勢（SVG）（已變更（T073 第三輪）：單秒合併比一條，y 自 0、離群釘頂、無效秒斷線）
 │   │   │   ├── Graduation.vue              # 新：蝕刻刻度（SVG，靜態）
 │   │   │   ├── ThemeToggle.vue             # 新
 │   │   │   ├── ShortcutHelp.vue            # 新：「?」說明層
@@ -136,11 +136,11 @@ apps/web/
 │   │   │   ├── FlowLink.vue                # 新：粗細＋流動（reduced-motion 退回）
 │   │   │   ├── MachineNodeCard.vue         # 重做：刻度、latch 標記、診斷狀態 chip
 │   │   │   ├── FleetHealth.vue             # 重皮；手機「機群健康摘要條」compact 模式
-│   │   │   ├── AnomalySummary.vue          # 新：異常摘要列（側欄與手機覆蓋層共用；可點、可清除）
+│   │   │   ├── AnomalySummary.vue          # 新：異常摘要列（側欄與手機覆蓋層共用；可點、可清除）（已變更（T073）：詞彙改「確認」、Check 鈕）
 │   │   │   └── EventStrip.vue              # 可點擊、合併計數、蝕刻短線、24h 時間
 │   │   ├── lib/
-│   │   │   ├── anomaly-latch.ts            # 新：latch 狀態機（30s、重置、清除）
-│   │   │   ├── events.ts                   # 加合併（10s 視窗、次數）與中文訊息
+│   │   │   ├── anomaly-latch.ts            # 新：latch 狀態機（30s、重置、清除）（已變更（T073）：清除改稱確認，劃線保留至回復後 30 秒）
+│   │   │   ├── events.ts                   # 加合併（10s 視窗、次數）與中文訊息（已變更（T073）：自 `firstTs` 起算 60 秒固定窗、列顯示起訖）
 │   │   │   ├── flow-link.ts                # 新：throughput → 粗細／流速等級
 │   │   │   ├── rate-series.ts              # 新：1 Hz 差分環狀緩衝＋60 秒視窗比值
 │   │   │   ├── stage-layout.ts             # 新：assignToStages（空欄保留、未分組歸最後一欄）
