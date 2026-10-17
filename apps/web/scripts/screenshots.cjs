@@ -35,7 +35,7 @@
 //      另比對基準 → critical 的 rect（狀態變化不得改尺寸），記錄實際觀察到的狀態轉換；基準已是 critical 時標
 //      「未涵蓋狀態變化」。等不到 critical 記 skipped。
 //   4. hover：逐張卡片捲入視野、滑鼠移開取 rect → 移到卡片中心取 rect；中心點被面板遮住的卡片
-//      （768 sheet 遮罩、390 bottom-sheet）改用 CDP CSS.forcePseudoState 強制 :hover。
+//      （768／1024 sheet 遮罩、390 bottom-sheet）改用 CDP CSS.forcePseudoState 強制 :hover。
 //   5. selected：點另一張卡片（面板已展開，不應有版面變化）取 rect，量完點回原卡片；面板收合且展開不了時記 skipped。
 //   總表欄位依執行順序：overflow、search、pulse、hover、selected。
 //   rect 一律在雙 requestAnimationFrame 後取（避開 transition 中途），比較 x／y／width／height，容差 0.5px；
@@ -403,7 +403,7 @@ async function applyTheme(page, theme) {
   if ((await current()) !== theme) {
     const target = page.locator('[data-fg="theme-toggle"] button[aria-pressed="false"]:visible');
     if ((await target.count()) > 0) {
-      // 用 dispatchEvent 而非 click()：768–1023 寬度下 sheet 展開時，rail 上的切換鈕被遮罩（z-40）蓋住，
+      // 用 dispatchEvent 而非 click()：768–1365 寬度下 sheet 展開時，rail 上的切換鈕被遮罩（z-40）蓋住，
       // click() 會等不到可點狀態而逾時；force click 則會點到遮罩、把 sheet 收合。
       await target.first().dispatchEvent("click");
       await sleep(300);
@@ -593,7 +593,7 @@ async function clearSearch(page, input, via) {
  * 工具列段位依「工具列自身寬度」決定（TopBar.vue）：< 640 為 compact，搜尋收成圖示鈕
  * `[data-fg="search-toggle"]`，點開後是覆蓋整條工具列的絕對定位輸入框（不推擠版面）。
  * 768×1024 面板展開時工具列也在 compact，所以一般輸入框看不到時改走覆蓋式搜尋；兩者都找不到才記 skipped。
- * 點擊一律用 dispatchEvent：768–1023 sheet 展開時遮罩會蓋住工具列（同 applyTheme）。
+ * 點擊一律用 dispatchEvent：768–1365 sheet 展開時遮罩會蓋住工具列（同 applyTheme）。
  * 有差值一律 fail；沒有差值但查詢沒構成 FR-015 情境（命中 0 台或全部、沒有任何一欄被清空）時記 skipped。
  */
 async function measureSearch(page, query) {
@@ -705,7 +705,7 @@ async function measurePulse(page, baseline, waitMs) {
 
 /**
  * 用 CDP `CSS.forcePseudoState` 強制卡片進入 :hover。
- * 給「中心點被面板遮住」的卡片用：768×1024 的 sheet 遮罩、390×844 的 bottom-sheet 會蓋住主區，
+ * 給「中心點被面板遮住」的卡片用：768×1024 與 1024×768 的 sheet 遮罩、390×844 的 bottom-sheet 會蓋住主區，
  * 真實滑鼠移過去只會 hover 到遮罩。真實 hover 會讓整條祖先鏈都 :hover（卡片外層的 `.group` 靠它觸發
  * group-hover 的診斷鈕），所以卡片與其祖先（到 body 為止）一起強制。強制狀態綁在該 CDP session，detach 即清除。
  */
@@ -1060,7 +1060,8 @@ async function panelSnapshot(page) {
     if (!panel) return null;
     const header = panel.querySelector("header");
     const chips = header ? Array.from(header.querySelectorAll("span")).map((el) => el.textContent.trim()) : [];
-    const status = { 閒置: "idle", 進行中: "active", 已完成: "completed", 失敗: "failed" };
+    // T073 起閒置 chip 為「未診斷」（sheet 閒置單列不顯示 chip，此時 status 為 null）；「閒置」保留給舊文案。
+    const status = { 未診斷: "idle", 閒置: "idle", 進行中: "active", 已完成: "completed", 失敗: "failed" };
     const chip = chips.find((text) => text in status);
     const job = header ? header.querySelector(".font-mono") : null;
     const timing = panel.querySelector('[data-fg="timing"]');
@@ -1078,7 +1079,11 @@ async function panelSnapshot(page) {
   });
 }
 
-/** 觸發診斷：面板內有「診斷」主按鈕（閒置）就按它，否則按工具列「主要動作」的診斷鈕（完成態面板內沒有診斷鈕）。 */
+/**
+ * 觸發診斷：面板內有文字恰為「診斷」的主按鈕（閒置態）就按它，否則按工具列「主要動作」的診斷鈕。
+ * 完成態面板另有次要鈕「再次診斷」（T073），精確比對「診斷」刻意不命中它，劇本在完成態一律走工具列鈕
+ * （快取截圖 copilot-cached 的流程以工具列鈕為準，行為不變）。
+ */
 async function clickDiagnose(page) {
   const inPanel = page.locator('[data-fg="copilot"] button:visible', { hasText: /^\s*診斷\s*$/ }).first();
   const toolbar = page.locator('button[aria-label="診斷"]:visible').first();
