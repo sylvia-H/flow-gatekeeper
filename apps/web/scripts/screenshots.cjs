@@ -63,7 +63,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
 const https = require("node:https");
-const { COPILOT_STATUS_CHIPS, UserError, findChromium } = require("./lib/browser.cjs");
+const { COPILOT_STATUS_CHIPS, UserError, cardOf, findChromium } = require("./lib/browser.cjs");
 
 const VIEWPORTS = [
   { width: 1366, height: 768 },
@@ -873,7 +873,6 @@ async function waitFresh(page, want, timeoutMs) {
   );
 }
 
-const cardOf = (page, id) => page.locator(`.machine-card[data-machine="${id}"]`).first();
 const cardState = (page, id) => cardOf(page, id).getAttribute("data-state", { timeout: 2000 }).catch(() => null);
 
 /** 截圖紀錄：拍到才寫檔（拍不到時保留舊檔），結束時依 README_SHOTS 順序列總表。 */

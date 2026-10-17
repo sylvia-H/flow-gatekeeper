@@ -89,4 +89,7 @@ function findChromium() {
  */
 const COPILOT_STATUS_CHIPS = Object.freeze({ 未診斷: "idle", 閒置: "idle", 進行中: "active", 已完成: "completed", 失敗: "failed" });
 
-module.exports = { COPILOT_STATUS_CHIPS, INSTALL_HINT, UserError, findChromium, msPlaywrightDirs };
+/** 某台機台的卡片（`.machine-card[data-machine]`）。 */
+const cardOf = (page, id) => page.locator(`.machine-card[data-machine="${id}"]`).first();
+
+module.exports = { COPILOT_STATUS_CHIPS, INSTALL_HINT, UserError, cardOf, findChromium, msPlaywrightDirs };

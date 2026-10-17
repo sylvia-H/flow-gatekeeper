@@ -27,7 +27,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
-const { COPILOT_STATUS_CHIPS, UserError, findChromium } = require("./lib/browser.cjs");
+const { COPILOT_STATUS_CHIPS, UserError, cardOf, findChromium } = require("./lib/browser.cjs");
 
 const DEFAULT_URL = "http://localhost:8080/";
 const DEFAULT_OUT = path.resolve(__dirname, "..", "..", "..", "docs", "demo");
@@ -57,9 +57,10 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const value = () => {
-      if (i + 1 >= argv.length) throw new UserError(`${arg} 缺少參數值`);
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("--")) throw new UserError(`${arg} 需要一個值`);
       i += 1;
-      return argv[i];
+      return next;
     };
     if (arg === "--url") opts.url = value();
     else if (arg === "--out") opts.out = path.resolve(value());
@@ -164,8 +165,8 @@ function installFakeCursor() {
   else mount();
 }
 
-function createPointer(page, start) {
-  const pos = { ...start };
+function createPointer(page, initial) {
+  const pos = { ...initial };
   const ease = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
   return {
     async glide(x, y, ms = 650) {
@@ -202,12 +203,18 @@ function createPointer(page, start) {
 async function startScreencast(page, dir) {
   const cdp = await page.context().newCDPSession(page);
   const frames = [];
+  let writeError = null;
   // 時間戳用 node 端收到該格的時刻：CDP metadata.timestamp 與劇本排程的時鐘實測差 2～3 秒，影片會與排程錯開。
+  // 寫檔失敗（磁碟滿）不在事件分派裡拋出（會成為未捕捉例外、跳過清理），記下第一個錯誤、停錄後再拋。
   cdp.on("Page.screencastFrame", ({ data, sessionId }) => {
     const wall = Date.now();
     const name = `f${String(frames.length).padStart(6, "0")}.jpg`;
-    fs.writeFileSync(path.join(dir, name), Buffer.from(data, "base64"));
-    frames.push({ name, wall });
+    try {
+      fs.writeFileSync(path.join(dir, name), Buffer.from(data, "base64"));
+      frames.push({ name, wall });
+    } catch (err) {
+      writeError ??= err;
+    }
     cdp.send("Page.screencastFrameAck", { sessionId }).catch(() => {});
   });
   await cdp.send("Page.startScreencast", {
@@ -222,6 +229,10 @@ async function startScreencast(page, dir) {
     async stop() {
       await cdp.send("Page.stopScreencast").catch(() => {});
       await cdp.detach().catch(() => {});
+    },
+    /** 擷取期間第一個寫檔錯誤（沒有則不拋）。 */
+    throwIfFailed() {
+      if (writeError) throw new Error(`逐格寫檔失敗：${writeError.message}`);
     },
   };
 }
@@ -249,9 +260,11 @@ function encode(ffmpeg, frames, t0, end, dir, outFile) {
       "-y", "-hide_banner", "-loglevel", "error",
       "-f", "concat", "-i", list,
       // JPEG 是 full range、BT.601 矩陣；轉成 limited range 與 BT.709 並標記，播放器才不會發灰或偏色。
-      "-vf", `fps=${FPS},scale=in_range=full:out_range=limited:in_color_matrix=bt601:out_color_matrix=bt709,format=yuv420p`,
-      "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-      "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-tune", "stillimage",
+      // ffmpeg 7 起編碼器的 primaries／trc 取自 frame（JPEG 為未指定），CLI 的 -color_primaries／-color_trc 會被蓋掉，須以 setparams 寫進 frame。
+      "-vf",
+      `fps=${FPS},scale=in_range=full:out_range=limited:in_color_matrix=bt601:out_color_matrix=bt709,format=yuv420p,` +
+        "setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv",
+      "-c:v", "libx264", "-preset", "slow", "-crf", "18",
       "-movflags", "+faststart",
       outFile,
     ],
@@ -260,8 +273,6 @@ function encode(ffmpeg, frames, t0, end, dir, outFile) {
 }
 
 // ---------- 劇本 ----------
-
-const cardOf = (page, id) => page.locator(`.machine-card[data-machine="${id}"]`).first();
 
 /** 記錄每台機器最近一次 data-state 變化的頁面時鐘。 */
 async function installStateClock(page) {
@@ -473,14 +484,24 @@ async function record(opts, framesDir) {
       await cast.stop();
       end = Date.now();
     }
+    cast.throwIfFailed();
     log(`擷取 ${cast.frames.length} 格，長度約 ${((end - t0) / 1000).toFixed(1)} 秒；編碼中…`);
-    // 先輸出到暫存目錄，影片與海報都成功才複製到 out：中途失敗不會把已追蹤的檔案換成半截檔。
+    // 先輸出到暫存目錄，影片與海報都成功才放進 out：兩檔先複製成 .tmp（任一失敗則都不動），再依序 rename 覆蓋，
+    // 不會把已追蹤的檔案換成半截檔，也不會只換掉其中一個。
     const video = path.join(framesDir, VIDEO_NAME);
     encode(opts.ffmpeg, cast.frames, t0, end, framesDir, video);
     const poster = path.join(framesDir, cast.frames[cast.frames.length - 1].name);
     fs.mkdirSync(opts.out, { recursive: true });
-    fs.copyFileSync(video, path.join(opts.out, VIDEO_NAME));
-    fs.copyFileSync(poster, path.join(opts.out, POSTER_NAME));
+    const outputs = [
+      [video, path.join(opts.out, VIDEO_NAME)],
+      [poster, path.join(opts.out, POSTER_NAME)],
+    ];
+    try {
+      for (const [from, to] of outputs) fs.copyFileSync(from, `${to}.tmp`);
+      for (const [, to] of outputs) fs.renameSync(`${to}.tmp`, to);
+    } finally {
+      for (const [, to] of outputs) fs.rmSync(`${to}.tmp`, { force: true });
+    }
     log(`寫入 ${path.join(opts.out, VIDEO_NAME)} 與海報`);
   } finally {
     await browser.close().catch(() => {});
@@ -492,8 +513,16 @@ async function main() {
   checkFfmpeg(opts.ffmpeg);
   const framesDir = fs.mkdtempSync(path.join(os.tmpdir(), "fg-demo-frames-"));
   const cleanup = () => {
-    if (opts.keepFrames) log(`保留逐格：${framesDir}`);
-    else fs.rmSync(framesDir, { recursive: true, force: true });
+    if (opts.keepFrames) {
+      log(`保留逐格：${framesDir}`);
+      return;
+    }
+    // Windows 上剛寫完的 jpg 可能暫時被防毒或索引服務佔用；清不掉只警告，不蓋掉錄影本身的成敗。
+    try {
+      fs.rmSync(framesDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+    } catch (err) {
+      log(`警告：逐格暫存未能清除（${err.message}），請手動刪除：${framesDir}`);
+    }
   };
   // Ctrl+C 時也清掉逐格暫存（一輪可達數百 MB）。
   process.once("SIGINT", () => {
