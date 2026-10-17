@@ -278,7 +278,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 
 ### ✅ 6. Schema 驗證的 AI 輸出 + LLM provider 抽象
 
-- LLM 包在 `AiProvider` interface 後面（憲章硬規則 #4）：主邏輯只依賴 interface，換 provider 只改 adapter（目前為 Gemini `gemini-2.5-flash`，SDK 為 `@google/genai`）。介面帶 `id`／`model`（進快取簽章）、`signal`（取消）、回傳 `finishReason`／`usage`，錯誤一律包成 `AiProviderError{retryable}`，不可重試者轉 BullMQ `UnrecoverableError`；僅 `gemini-2.5-flash` 系列送 `thinkingBudget: 0`。
+- LLM 包在 `AiProvider` interface 後面（憲章硬規則 #4）：主邏輯只依賴 interface，換 provider 只改 adapter（目前預設為 Gemini `gemini-3.5-flash-lite`，SDK 為 `@google/genai`）。介面帶 `id`／`model`（進快取簽章）、`signal`（取消）、回傳 `finishReason`／`usage`，錯誤一律包成 `AiProviderError{retryable}`，不可重試者轉 BullMQ `UnrecoverableError`；thinking 依模型系列設定：`gemini-2.5-flash` 系列送 `thinkingBudget: 0`（關閉），3.x 以後的 `flash`／`flash-lite` 送 `thinkingLevel: MEDIUM`（它們不接受 `thinkingBudget: 0`），其餘不送。
 - AI 回傳**必經** `DiagnosisResultSchema.parse()`（憲章硬規則 #6）；失敗走 `ai/error`，絕不把未驗證物件當結果。
 - 診斷結果的結構、即時事件的型別，全部以 `packages/contracts` 的 **Zod schema 為單一來源**，型別由 `z.infer` 推導——不讓「驗證」與「型別」各寫一份而分歧。
 
@@ -768,14 +768,14 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 | `WS_HEARTBEAT_MS` | api | `15000` | 伺服器端心跳探活間隔；下限 1000、上限 2147483647，超出即拒絕啟動 |
 | `MOCK_TELEMETRY_INTERVAL_MS` | api | `50` | 遙測產生節拍（拉到 5ms 可把吞吐放大 ~10×；單次量測示例：26 秒收近 1.9 萬筆而僅批次渲染約 1,600 次，實際數字隨機器與幀率而異）；下限 5、上限 2147483647，超出即拒絕啟動 |
 | `TELEMETRY_TTL_SECONDS` | api | `604800`（demo 範本 `.env.demo.example` 為 `86400`） | 時序遙測保存期（dev 7 天；demo 1 天，避免長跑撐大 `mongo-data` volume）；collection 已存在時以 `collMod` 更新，改值重啟即生效 |
-| `GEMINI_API_KEY` / `GEMINI_MODEL` | **worker** | *(空)* / `gemini-2.5-flash` | LLM provider（包在 `AiProvider` 後）；**只有 worker 需要**。任何環境皆可留空——每筆診斷立即以 `provider_error` 失敗、不重試 |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | **worker** | *(空)* / `gemini-3.5-flash-lite` | LLM provider（包在 `AiProvider` 後）；**只有 worker 需要**。任何環境皆可留空——每筆診斷立即以 `provider_error` 失敗、不重試 |
 | `AI_RPM` | worker | `8` | 每分鐘**實際 LLM 呼叫**上限（取鎖且 cache 未命中才計數的 Redis 固定窗 `ai-rpm:<分鐘>`；超過即延後到下一窗、不消耗重試次數） |
 | `WORKER_CONCURRENCY` | worker | `2` | 同時處理的 job 數（BullMQ concurrency） |
 | `WORKER_INSTANCE_ID` | worker | *(空＝hostname)* | 組成 `worker:heartbeat:<id>`／`metrics:worker:<id>`；只允許英數字與 `. _ -`（≤ 128），不合法即拒絕啟動。demo 容器由 compose 釘為空字串（一律 hostname），本值只對 host 直跑生效；同機直跑多個 worker 時才手動設不同值 |
 | `AI_CACHE_TTL_SECONDS` | worker | `600` | 診斷快取有效期 |
 | `AI_DEDUPE_LOCK_SECONDS` | worker | `45` | 同簽章去重鎖有效期；必須 `× 1000 ≥ AI_TIMEOUT_MS + 5000`（5 秒餘裕涵蓋結果寫入與收尾），否則 worker 拒絕啟動 |
 | `AI_TIMEOUT_MS` | worker | `30000` | 單次 AI streaming 逾時；以 `AbortSignal` 真正中止底層串流。**MUST 小於前端 45 秒無進展 watchdog** 並預留等待鎖／首 token 前的時間，否則後端仍在跑時前端已判定逾時（見「已知限制」的重派靜默）；調高時 worker `stop_grace_period`（45s）與 `AI_DEDUPE_LOCK_SECONDS` 須一併調整 |
-| `AI_MAX_OUTPUT_TOKENS` | worker | `2048` | Gemini `maxOutputTokens`；正整數、≤ 65536。thinking token 也計入此上限；輸出被截斷視為**不可重試**的 `schema_invalid`（重試同一 prompt 只會再被截斷）。不能關 thinking 的模型（`gemini-2.5-pro`、3.x）建議 ≥ 8192，低於此值 worker 啟動會 warn；本值與 `AI_TEMPERATURE` 都不進快取簽章 |
+| `AI_MAX_OUTPUT_TOKENS` | worker | `4096` | Gemini `maxOutputTokens`；正整數、≤ 65536。thinking token 也計入此上限；輸出被截斷視為**不可重試**的 `schema_invalid`（重試同一 prompt 只會再被截斷）。預設模型以 `thinkingLevel: MEDIUM` 思考（真實診斷 prompt 實測約 1000 個 thinking token），3.x `flash`／`flash-lite` 低於 4096、不能關 thinking 的模型（`gemini-2.5-pro`、3.x pro）低於 8192 時 worker 啟動會 warn；本值與 `AI_TEMPERATURE` 都不進快取簽章 |
 | `AI_TEMPERATURE` | worker | `0.2` | Gemini 取樣溫度，範圍 0–2 |
 | `AI_PROVIDER` | worker | `gemini` | AI provider 選擇：`gemini`（正式唯一 provider）／`fake`（**測試替身**：不呼叫 LLM、不需金鑰，輸出固定假診斷並逐段串流；仍經 `DiagnosisResultSchema` 驗證、照常進 cache 與 Pub/Sub）。**`fake` 僅供跨 process e2e 與演練**——`NODE_ENV=production` 下仍允許但啟動時記一則 warn；非法值（如 `openai`）拒絕啟動 |
 | `FAKE_AI_TOKENS` | worker | `20` | fake provider 把診斷 JSON 切成幾段送出（1–1000）；`AI_PROVIDER=gemini` 時不作用 |

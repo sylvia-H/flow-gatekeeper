@@ -29,8 +29,14 @@
 
 Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全面改版。只動前端呈現，**後端、契約與部署方式皆不變**；
 視覺方向為「實驗室玻璃與蝕刻刻度」，視覺真實來源由 `apps/web/design/design-spec.md` 改為 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`。
+另含維護分支 `upgrade/20261017-gemini-3.5-flash-lite`：worker 的預設 LLM 模型改為 `gemini-3.5-flash-lite`（契約不變）。
 
 ### 相容性注意（升級前必讀）
+
+- **預設模型改為 `gemini-3.5-flash-lite`、`AI_MAX_OUTPUT_TOKENS` 預設 2048 → 4096**（worker）：只影響 `GEMINI_MODEL`／`AI_MAX_OUTPUT_TOKENS` 留空的部署；
+  `apps/worker/.env` 明寫 `GEMINI_MODEL=gemini-2.5-flash` 者維持舊模型，要換請改值或清空。3.x flash 系列以 `thinkingLevel: MEDIUM` 思考，
+  thinking token 計入輸出上限：`AI_MAX_OUTPUT_TOKENS` 明寫 2048 的部署換到新模型時，worker 啟動會 warn，建議改為 ≥ 4096（或清空走預設）。
+  模型名進快取簽章，換模型後舊快取自然不再命中（第一次診斷會重新呼叫 LLM）。
 
 - **新增 localStorage key**：`fg.theme`（`"light"`｜`"dark"`，主題選擇）與 `fg.copilot-panel`（`{"manuallyCollapsed":boolean}`，AI 診斷面板的手動收合偏好）；
   讀寫失敗（私密視窗、封鎖儲存）時回到預設、不顯示錯誤。既有的 `flow-gatekeeper:sidebar-width`、`flow-gatekeeper:event-strip-height` 沿用、不改名，升級後原有尺寸保留。
@@ -83,6 +89,10 @@ Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全
 - **全部 UI 文案改為繁體中文**（stage 標題不附英文副標）；時間格式統一為 24 小時制 `HH:mm:ss`、相對時間「剛剛／N 秒前／N 分鐘前」、耗時 `N ms`／`N.N s`。
 - **最小功能性字級 12px**：徽章、單位、計數、時間戳等小字不再小於 12px，兩套主題下文字對比皆 ≥ 4.5:1。
 - **README 截圖**：「功能逐項展示」的截圖隨本版以新介面重拍（含深色主題與拓樸），圖說與 demo 劇本改用中文術語。
+- **AI 模型**（worker）：預設 `GEMINI_MODEL` 由 `gemini-2.5-flash` 改為 `gemini-3.5-flash-lite`。3.x 以後的 `flash`／`flash-lite` 不接受
+  `thinkingBudget: 0`（400），改送 `thinkingConfig.thinkingLevel: MEDIUM`；實測真實診斷 prompt 約 1000 個 thinking token、首 token 約 2 秒、
+  全程約 4.5 秒。3.x 的 pro 等其他變體維持不送 thinking 設定。`leveled` 模型的 `AI_MAX_OUTPUT_TOKENS` 低於 4096 時 worker 啟動會 warn
+  （2.5 pro 等不能關 thinking 的模型門檻維持 8192）。
 
 ### Removed
 
@@ -92,8 +102,8 @@ Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全
 
 ### 契約
 
-- **無變更**：`asyncapi.yaml` 的 `info.version` 維持 1.2.0；12 則 WS 訊息與 `POST /diagnoses` 的請求與回應皆未修改，api 與 worker 無行為變更。
-  新呈現（背壓 strip、拓樸連線、異常標記、診斷耗時）全部由既有訊息在前端衍生。
+- **無變更**：`asyncapi.yaml` 的 `info.version` 維持 1.2.0；12 則 WS 訊息與 `POST /diagnoses` 的請求與回應皆未修改，api 無行為變更，
+  worker 只換預設模型與 thinking 設定（見上方 Changed「AI 模型」）。新呈現（背壓 strip、拓樸連線、異常標記、診斷耗時）全部由既有訊息在前端衍生。
 
 ## [1.1.0] - 2026-09-28
 
