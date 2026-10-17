@@ -7,7 +7,8 @@ import { diagnosisBadgeText, type DiagnosisBadge } from "../../ai-copilot/lib/di
 import { machineLabel } from "../lib/machine-labels.js";
 import { metricUnit, offendingMetrics, type MetricKey } from "../lib/telemetry-format.js";
 import { formatClock, formatRelative } from "../../../shared/lib/format.js";
-import { STATE_STYLE } from "../../../shared/lib/state-style.js";
+import StateBadge from "../../../shared/components/StateBadge.vue";
+import StalePill from "../../../shared/components/StalePill.vue";
 import StatusLight from "../../../shared/components/StatusLight.vue";
 import { CARD_ROOT_CLASS, CARD_STALE_CLASS, cardStateClass } from "../lib/card-style.js";
 
@@ -93,7 +94,7 @@ const chipView = computed(() => {
 
 /**
  * 狀態 → 卡片外觀 token；對照、hover 與選取態的做法見 `card-style.ts`。
- * 狀態文字徽章與 `StatusLight` 同取自共用 `STATE_STYLE`（顏色＋中文文字＋可讀名稱，FR-004）。
+ * 狀態文字徽章（`StateBadge`）與 `StatusLight` 同取自共用 `STATE_STYLE`（顏色＋中文文字＋可讀名稱，FR-004）。
  * 徽章固定字級／行高／內距，狀態切換不改盒模型（FR-031）。
  */
 const stateClass = computed(() => cardStateClass(props.machine ? props.machine.state : null));
@@ -219,15 +220,7 @@ const showRelative = computed(() => {
           <div class="min-w-0 truncate text-md font-semibold text-ink">{{ label }}</div>
           <div class="flex shrink-0 items-center gap-1.5 pt-0.5">
             <!-- 1px 邊框 + py-px 維持 20px 高；嚴重卡片底色接近 crit-bg，徽章需 border-crit 才分得出來 -->
-            <span
-              v-if="machine"
-              class="rounded-pill border px-2 py-px text-xs font-semibold leading-4"
-              :class="[
-                STATE_STYLE[machine.state].badgeText,
-                STATE_STYLE[machine.state].badgeSurface,
-                machine.state === 'critical' ? 'border-crit' : 'border-transparent',
-              ]"
-            >{{ STATE_STYLE[machine.state].label }}</span>
+            <StateBadge v-if="machine" :state="machine.state" />
             <!-- 狀態燈不另脈動：整張嚴重卡片的底色已在脈動，燈再閃會在半週期與 crit-bg 底同色而消失 -->
             <StatusLight v-if="machine" :state="machine.state" />
             <span v-else class="inline-flex h-3 w-3 items-center justify-center" aria-hidden="true">
@@ -245,12 +238,7 @@ const showRelative = computed(() => {
             :class="showRelative ? 'min-w-0 shrink-[999] truncate text-xs text-ink-3' : 'sr-only'"
             :title="absoluteTime"
           ><span v-if="showRelative" class="mr-1" aria-hidden="true">·</span><span class="sr-only">更新 </span>{{ relativeTime }}</span>
-          <span
-            v-if="stale"
-            class="inline-flex shrink-0 items-center gap-1 rounded-pill border border-stale bg-surface-strong px-2 py-px text-xs font-semibold leading-4 text-ink-2"
-          >
-            <span class="h-1.5 w-1.5 rounded-pill bg-stale" aria-hidden="true" />停滯
-          </span>
+          <StalePill v-if="stale" />
           <!-- 診斷狀態 chip（非互動）：「AI：嚴重度」方角 tag（不帶圖示：「AI：」前綴已交代來源，T073 第四輪把 16px 還給 id）；在卡片主按鈕內，文字已含於按鈕的可讀名稱，以「診斷：」前綴區分。
                sr-only 前綴是絕對定位、不佔 flex 間距 -->
           <span

@@ -9,6 +9,7 @@ import {
   REDUCED_MOTION_QUERY,
   hasMatchMedia,
   matchesMedia,
+  onMediaChange,
   useMediaQuery,
 } from "./useMediaQuery.js";
 
@@ -133,5 +134,36 @@ describe("useMediaQuery", () => {
     const { wrapper, state } = mountProbe(BELOW_MD_QUERY);
     expect(state()).toBe(true);
     expect(() => wrapper.unmount()).not.toThrow();
+  });
+});
+
+describe("onMediaChange：共用的 change 監聽（合併門第 2 輪 #11，useMediaQuery 與 useModalSheet 共用）", () => {
+  it("新版 API：以 addEventListener('change') 掛，回傳的解除函式以同一個 listener 解除", () => {
+    const fake = fakeList(false);
+    const cb = vi.fn();
+    const stop = onMediaChange(fake.list, cb);
+    expect(fake.add).toHaveBeenCalledWith("change", cb);
+    fake.emit(true);
+    expect(cb).toHaveBeenCalledWith({ matches: true });
+    stop();
+    expect(fake.remove).toHaveBeenCalledWith("change", cb);
+    expect(fake.size()).toBe(0);
+  });
+
+  it("舊 Safari：退回 addListener／removeListener", () => {
+    const fake = fakeList(false, true);
+    const cb = vi.fn();
+    const stop = onMediaChange(fake.list, cb);
+    expect(fake.add).toHaveBeenCalledWith(cb);
+    fake.emit(true);
+    expect(cb).toHaveBeenCalledTimes(1);
+    stop();
+    expect(fake.remove).toHaveBeenCalledWith(cb);
+    expect(fake.size()).toBe(0);
+  });
+
+  it("兩種 API 都沒有：不掛、解除函式為 no-op 且不拋錯", () => {
+    const stop = onMediaChange({ matches: false }, vi.fn());
+    expect(() => stop()).not.toThrow();
   });
 });

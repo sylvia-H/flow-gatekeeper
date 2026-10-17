@@ -16,9 +16,10 @@ export const DESK_QUERY = "(min-width: 1366px)";
 export const BELOW_DESK_QUERY = "(max-width: 1365.98px)";
 export const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
-/** 舊版 Safari（< 14）的 MediaQueryList 只有 `addListener`／`removeListener`。 */
-type ChangeListener = (event: { matches: boolean }) => void;
-interface MediaQueryListLike {
+/** 媒體查詢 change 監聽的最小事件形狀（只讀 `matches`）。 */
+export type ChangeListener = (event: { matches: boolean }) => void;
+/** MediaQueryList 的最小介面；舊版 Safari（< 14）只有 `addListener`／`removeListener`，故四個方法皆可選。 */
+export interface MediaQueryListLike {
   readonly matches: boolean;
   addEventListener?: (type: "change", listener: ChangeListener) => void;
   removeEventListener?: (type: "change", listener: ChangeListener) => void;
@@ -41,25 +42,39 @@ export function matchesMedia(query: string): boolean {
 }
 
 /**
- * reactive 的媒體查詢狀態：setup 當下同步讀一次，mounted 後掛 change 監聽、unmounted 解除。
- * 監聽優先用 `addEventListener("change")`，沒有時退回舊 Safari 的 `addListener`。
+ * 掛 change 監聽並回傳解除函式：優先用 `addEventListener("change")`，沒有時退回舊 Safari 的 `addListener`；
+ * 兩者都沒有時不掛，回傳的解除函式為 no-op。`useMediaQuery` 與 copilot 的 `useModalSheet` 共用這一份
+ * （合併門第 2 輪 #11：後者原本直接呼叫 `addEventListener`，舊 Safari 上 sheet 斷點切換不會更新）。
+ */
+export function onMediaChange(list: MediaQueryListLike, cb: ChangeListener): () => void {
+  if (typeof list.addEventListener === "function") {
+    list.addEventListener("change", cb);
+    return () => list.removeEventListener?.("change", cb);
+  }
+  if (typeof list.addListener === "function") {
+    list.addListener(cb);
+    return () => list.removeListener?.(cb);
+  }
+  return () => {};
+}
+
+/**
+ * reactive 的媒體查詢狀態：setup 當下同步讀一次，mounted 後以 `onMediaChange` 掛 change 監聽、unmounted 解除。
  * MUST 在元件 setup 內呼叫（依賴 onMounted／onUnmounted）。
  */
 export function useMediaQuery(query: string): Readonly<Ref<boolean>> {
   const list = mediaQueryList(query);
   const matches = ref(list?.matches ?? false);
-  const onChange: ChangeListener = (event) => {
-    matches.value = event.matches;
-  };
+  let stop: (() => void) | null = null;
   onMounted(() => {
     if (!list) return;
-    if (typeof list.addEventListener === "function") list.addEventListener("change", onChange);
-    else if (typeof list.addListener === "function") list.addListener(onChange);
+    stop = onMediaChange(list, (event) => {
+      matches.value = event.matches;
+    });
   });
   onUnmounted(() => {
-    if (!list) return;
-    if (typeof list.removeEventListener === "function") list.removeEventListener("change", onChange);
-    else if (typeof list.removeListener === "function") list.removeListener(onChange);
+    stop?.();
+    stop = null;
   });
   return matches;
 }

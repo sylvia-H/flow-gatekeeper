@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, type VueWrapper } from "@vue/test-utils";
 import BackpressureStrip from "./BackpressureStrip.vue";
-import type { RateSample } from "../../domains/monitoring/lib/rate-series.js";
+import type { RateSample } from "../lib/rate-series.js";
 
 /**
  * 背壓 strip（spec FR-009／FR-009a／FR-010／FR-011、US2；tasks T037）。
@@ -375,8 +375,9 @@ describe("BackpressureStrip", () => {
   });
 
   it("走勢線：只畫單秒合併比一條（深青實線），文字摘要與「近 60 秒」標示", () => {
-    // 單秒合併比 4、5；視窗 90 ÷ 20 = 4.5 → 上限 = max(4.5 × 2, 次高 4) × 1.25 = 11.25；scale = 22 / 11.25
-    const w = mountStrip({ samples: [sample(40, 10), sample(50, 10)] });
+    // 單秒合併比 4、5；視窗 90 ÷ 20 = 4.5（strip 的 windowRatio 傳給走勢線）→ 上限 = max(4.5 × 2, 次高 4) × 1.25 = 11.25；
+    // scale = 22 / 11.25
+    const w = mountStrip({ samples: [sample(40, 10), sample(50, 10)], windowRatio: 4.5 });
     const spark = w.get('svg[role="img"][aria-label^="近 60 秒走勢"]');
     expect(spark.attributes("aria-label")).toBe("近 60 秒走勢，最近 1 秒合併比 5.0 比 1，區間 4.0 至 5.0 比 1");
     expect(spark.attributes("preserveAspectRatio")).toBe("none");
@@ -391,12 +392,15 @@ describe("BackpressureStrip", () => {
 
   it("走勢線：無效樣本（暫停期間、恢復當下）處斷線，不計入摘要區間與 y 軸上限", () => {
     const resume: RateSample = { t: 0, msgsPerSec: 300, batchesPerSec: 1, droppedPerSec: 0, invalid: true };
-    const w = mountStrip({ samples: [sample(40, 10), sample(50, 10), resume, sample(60, 10)] });
+    const w = mountStrip({ samples: [sample(40, 10), sample(50, 10), resume, sample(60, 10)], windowRatio: 5 });
     const spark = w.get('svg[role="img"][aria-label^="近 60 秒走勢"]');
-    const lines = spark.findAll("polyline");
+    const lines = spark.findAll("polyline").map((l) => l.attributes("points")!.split(" "));
     expect(lines).toHaveLength(2);
-    expect(lines[0]!.attributes("points")?.split(" ")).toHaveLength(2);
-    expect(lines[1]!.attributes("points")?.split(" ")).toHaveLength(1);
+    expect(lines[0]![0]).not.toBe(lines[0]![1]);
+    // 無效樣本後只剩一秒的段：兩個相同座標畫成圓點（合併門第 2 輪 low），x = 最新一格 59
+    expect(lines[1]![0]).toBe(lines[1]![1]);
+    expect(lines[1]![0]!.startsWith("59,")).toBe(true);
+    expect(spark.find("circle").exists()).toBe(false);
     expect(spark.attributes("aria-label")).toBe("近 60 秒走勢，最近 1 秒合併比 6.0 比 1，區間 4.0 至 6.0 比 1");
     // 讀數與 tooltip 也只算有效的三秒
     expect(w.get(".bp-msgs").text()).toContain("50");
@@ -416,12 +420,14 @@ describe("BackpressureStrip", () => {
   });
 
   it("走勢線：該秒無批次時線斷開（不補 0），無任何批次時摘要說明尚無資料", async () => {
-    const w = mountStrip({ samples: [sample(40, 10), sample(30, 0), sample(50, 10), sample(60, 10)] });
+    const w = mountStrip({ samples: [sample(40, 10), sample(30, 0), sample(50, 10), sample(60, 10)], windowRatio: 4.5 });
     const spark = () => w.get('svg[role="img"][aria-label^="近 60 秒走勢"]');
-    const lines = spark().findAll("polyline");
+    const lines = spark().findAll("polyline").map((l) => l.attributes("points")!.split(" "));
     expect(lines).toHaveLength(2);
-    expect(lines[0]!.attributes("points")?.split(" ")).toHaveLength(1);
-    expect(lines[1]!.attributes("points")?.split(" ")).toHaveLength(2);
+    // 斷開前的單點段：兩個相同座標畫成圓點（x = 56），不消失
+    expect(lines[0]![0]).toBe(lines[0]![1]);
+    expect(lines[0]![0]!.startsWith("56,")).toBe(true);
+    expect(lines[1]![0]).not.toBe(lines[1]![1]);
     await w.setProps({ samples: [sample(10, 0)], windowRatio: null });
     expect(spark().findAll("polyline")).toHaveLength(0);
     expect(spark().attributes("aria-label")).toBe("近 60 秒走勢，尚無合併比資料");

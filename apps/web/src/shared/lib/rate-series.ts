@@ -163,6 +163,15 @@ export function totalOf(samples: readonly RateSample[], key: RateKey): number {
 }
 
 /**
+ * 單一 tick 的合併比（訊息 ÷ 批次）：該 tick 批次為 0（除以 0 無意義）或樣本無效時為 null。
+ * `peakRatio` 與走勢線（`Sparkline`）共用，單秒比值的定義只有這一份。
+ */
+export function sampleRatio(sample: RateSample): number | null {
+  if (sample.invalid === true || sample.batchesPerSec === 0) return null;
+  return sample.msgsPerSec / sample.batchesPerSec;
+}
+
+/**
  * 近 60 秒最高水位（比值刻度上的 high-water mark）：視窗內單一 tick 比值（訊息 ÷ 批次）的最大值，
  * 且不低於整個視窗的比值；視窗內沒有任何批次時為 null（不畫）。
  *
@@ -179,9 +188,8 @@ export function peakRatio(samples: readonly RateSample[]): number | null {
     if (sample.invalid === true) continue;
     msgs += sample.msgsPerSec;
     batches += sample.batchesPerSec;
-    if (sample.batchesPerSec === 0) continue;
-    const r = sample.msgsPerSec / sample.batchesPerSec;
-    if (peak === null || r > peak) peak = r;
+    const r = sampleRatio(sample);
+    if (r !== null && (peak === null || r > peak)) peak = r;
   }
   if (batches === 0) return null;
   return Math.max(peak ?? 0, msgs / batches);

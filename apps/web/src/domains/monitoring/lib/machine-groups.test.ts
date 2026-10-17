@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
-import { MACHINE_GROUPS, machineGroup } from "./machine-groups.js";
+import { MACHINE_GROUPS } from "./machine-groups.js";
+
+const groupOf = (id: string): string | undefined => MACHINE_GROUPS.find((g) => g.machineIds.includes(id))?.name;
 
 describe("machine-groups（FR-017）", () => {
   it("三組對照，成員如 clarify 決議", () => {
     expect(MACHINE_GROUPS.map((g) => g.name)).toEqual(["Prep", "Forming & Baking", "Fulfilment"]);
-    expect(machineGroup("mixer-01")).toBe("Prep");
-    expect(machineGroup("press-02")).toBe("Forming & Baking");
-    expect(machineGroup("oven-04")).toBe("Forming & Baking");
-    expect(machineGroup("pack-03")).toBe("Fulfilment");
-    expect(machineGroup("sorter-05")).toBe("Fulfilment");
+    expect(groupOf("mixer-01")).toBe("Prep");
+    expect(groupOf("press-02")).toBe("Forming & Baking");
+    expect(groupOf("oven-04")).toBe("Forming & Baking");
+    expect(groupOf("pack-03")).toBe("Fulfilment");
+    expect(groupOf("sorter-05")).toBe("Fulfilment");
   });
 
   it("stage 繁中名與 data-stage key 依序對應（013 T021、ui-contract §3）", () => {
@@ -21,9 +23,5 @@ describe("machine-groups（FR-017）", () => {
     const assigned = MACHINE_GROUPS.flatMap((g) => g.machineIds);
     expect([...assigned].sort()).toEqual([...MACHINE_IDS].sort());
     expect(new Set(assigned).size).toBe(assigned.length);
-  });
-
-  it("缺項落 fallback Ungrouped", () => {
-    expect(machineGroup("unknown-99")).toBe("Ungrouped");
   });
 });

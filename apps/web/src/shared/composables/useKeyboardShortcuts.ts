@@ -31,6 +31,8 @@ import {
  *    （full／icons／compact 覆蓋式）共用同一個 input，App 層不再保留第二份（合併門第 1 輪 low）。
  * 4. 帶 Ctrl／Meta／Alt 的組合鍵 → 不處理（不搶瀏覽器與系統快捷鍵，例如 Ctrl+D）。
  * 5. 手機異常覆蓋層（aria-modal）開著 → 只處理 Escape 與 `/`（說明層開著時另於最前面只放行 `?` 與 Escape）。
+ * 6. Copilot bottom-sheet 為 modal（接手焦點、焦點陷阱）→ 不處理 `/`：比照說明層，`/` 會把焦點搬出 modal sheet
+ *    到底下的搜尋框（合併門第 2 輪 #2）。sheet 內的 Escape 由 drawer 自己攔下，不會到這裡。
  */
 
 export interface EscapeLayer {
@@ -60,6 +62,11 @@ export interface KeyboardShortcutHandlers {
    * `copilot-panel.close` 是「只關當次」的 dismiss（不寫手動收合偏好）；`selection.close` 即取消選取。
    */
   layers: Record<EscapeLayerId, EscapeLayer>;
+  /**
+   * Copilot bottom-sheet（< 1366px）此刻是否為 modal（drawer `update:engaged`）；為真時不處理 `/`。
+   * 不是 Escape 層（sheet 內的 Escape 由 drawer 處理），只是守門判斷；未提供視為 false。
+   */
+  isCopilotSheetModal?(): boolean;
 }
 
 export interface UseKeyboardShortcutsOptions {
@@ -166,6 +173,9 @@ export function attachKeyboardShortcuts(options: UseKeyboardShortcutsOptions): (
     ) {
       return;
     }
+
+    // modal sheet 的焦點陷阱內：`/` 不把焦點搬到 sheet 底下的搜尋框（比照說明層）。
+    if (KEYS.focusSearch.includes(key) && handlers.isCopilotSheetModal?.() === true) return;
 
     const direction = ARROW_DIRECTIONS[key];
     if (direction !== undefined && CARD_MOVE_KEYS.includes(key)) {

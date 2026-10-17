@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { effectScope, watchEffect } from "vue";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { AUTH_ERROR_MESSAGE, useMonitoringStore } from "./monitoring.store.js";
-import { averageOf, peakRatio } from "../lib/rate-series.js";
+import { averageOf, peakRatio } from "../../../shared/lib/rate-series.js";
 
 function point(machineId: string, state: MachineState): TelemetryPoint {
   return {
@@ -923,5 +923,94 @@ describe("monitoring store — 背壓速率序列（013 T032、FR-009／FR-011�
     expect(runs).toBeLessThanOrEqual(3);
     expect(store.rateSamples).not.toBe(before); // 新參照：子元件 prop 比對才看得到變化
     scope.stop();
+  });
+});
+
+describe("monitoring store — 斷線期間排下的無效筆數不留到重連後（合併門第 2 輪 #8）", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-17T00:00:00.000Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("斷線中暫停再恢復（排 2 筆無效）→ 重連清空樣本時一併歸零，重連後的正常樣本不被標無效", () => {
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.setClientId("c1");
+    store.tickNow();
+
+    store.setConnectionStatus("reconnecting");
+    vi.advanceTimersByTime(1000);
+    store.tickNow(); // 標 stale
+    store.togglePause();
+    store.togglePause(); // 恢復：排下 RESUME_INVALID_SAMPLES 筆
+    expect(store.rateSeries.invalidPushes).toBeGreaterThan(0);
+
+    store.setConnectionStatus("connected");
+    vi.advanceTimersByTime(1000);
+    store.tickNow(); // 重連：清空樣本、只取基準
+    expect(store.rateSeries.invalidPushes).toBe(0);
+
+    for (let s = 0; s < 3; s++) {
+      store.applyTelemetryBatch(makeBatch(4));
+      vi.advanceTimersByTime(1000);
+      store.tickNow();
+    }
+    expect(store.rateSamples.map((x) => x.invalid === true)).toEqual([false, false, false]);
+    expect(store.windowRatio).toBeCloseTo(4);
+  });
+
+  it("重連當下仍在暫停：照常再排 1 筆無效（暫停中的樣本仍是離群值）", () => {
+    const store = useMonitoringStore();
+    store.setConnectionStatus("connected");
+    store.setClientId("c1");
+    store.tickNow();
+    store.setConnectionStatus("reconnecting");
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+    store.togglePause(); // 斷線中按暫停，未恢復
+
+    store.setConnectionStatus("connected");
+    vi.advanceTimersByTime(1000);
+    store.tickNow(); // 歸零後因仍暫停再排 1 筆；本次只取基準、不消耗
+    expect(store.rateSeries.invalidPushes).toBe(1);
+  });
+});
+
+describe("monitoring store — 選取 action 與選取通知（合併門第 2 輪 #16）", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+  });
+
+  it("selectMachine 每次呼叫都通知（含再選同一台）；clearSelection 有選取時才清空並通知", () => {
+    const store = useMonitoringStore();
+    const seen: (string | null)[] = [];
+    store.onSelectionChange((id) => seen.push(id));
+
+    store.selectMachine("press-02");
+    store.selectMachine("press-02"); // 再選同一台：Escape 收合後再點同一張卡要能依偏好展開
+    store.selectMachine("mixer-01");
+    store.clearSelection();
+    store.clearSelection(); // 已無選取：不動作、不通知
+    expect(seen).toEqual(["press-02", "press-02", "mixer-01", null]);
+    expect(store.selectedMachineId).toBeNull();
+  });
+
+  it("批次提交、連線狀態等其他 action 不觸發選取通知；解除訂閱後不再通知", () => {
+    const store = useMonitoringStore();
+    const listener = vi.fn();
+    const stop = store.onSelectionChange(listener);
+    store.applyTelemetryBatch(makeBatch(5));
+    store.setConnectionStatus("connected");
+    store.tickNow();
+    expect(listener).not.toHaveBeenCalled();
+
+    stop();
+    store.selectMachine("press-02");
+    expect(listener).not.toHaveBeenCalled();
+    expect(store.selectedMachineId).toBe("press-02");
   });
 });

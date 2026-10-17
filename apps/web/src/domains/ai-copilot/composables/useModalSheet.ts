@@ -1,5 +1,10 @@
 import { nextTick, onMounted, onUnmounted, ref, type Ref } from "vue";
-import { BELOW_DESK_QUERY, hasMatchMedia } from "../../../shared/composables/useMediaQuery.js";
+import {
+  BELOW_DESK_QUERY,
+  hasMatchMedia,
+  onMediaChange,
+  type MediaQueryListLike,
+} from "../../../shared/composables/useMediaQuery.js";
 import { FOCUSABLE_SELECTOR, nextTrapTarget } from "../../../shared/composables/useFocusTrap.js";
 
 export { nextTrapTarget };
@@ -18,6 +23,8 @@ export interface FocusableLike {
 }
 export interface SheetRootLike extends FocusableLike {
   querySelectorAll(selector: string): ArrayLike<FocusableLike>;
+  /** 判斷焦點是否仍在 sheet 內（`disengage` 用）；未提供時視為不在內。 */
+  contains?(other: unknown): boolean;
 }
 
 /** 取容器內可 Tab 到、且目前有渲染（非 display:none）的元素。 */
@@ -30,14 +37,8 @@ type IOCtor = new (cb: (entries: { isIntersecting: boolean }[]) => void) => {
   disconnect(): void;
 };
 
-interface MediaQueryLike {
-  matches: boolean;
-  addEventListener(type: "change", cb: (e: { matches: boolean }) => void): void;
-  removeEventListener(type: "change", cb: (e: { matches: boolean }) => void): void;
-}
-
 export interface ModalSheetEnv {
-  matchMedia?: (query: string) => MediaQueryLike;
+  matchMedia?: (query: string) => MediaQueryListLike;
   IntersectionObserver?: IOCtor;
   /** 目前焦點；焦點落在 body（例如開啟鈕隨 sheet 展開而被移除）時回 null，視同「焦點遺失」。 */
   activeElement: () => unknown;
@@ -86,7 +87,9 @@ export function createModalSheet(
 
   let visible = false;
   let restoreTo: FocusableLike | null = null;
-  let mql: MediaQueryLike | null = null;
+  let stopMedia: (() => void) | null = null;
+  /** 程式搬移焦點期間（`disengage`）暫停 focusin 接手，否則把焦點放進 sheet 會立刻又進焦點陷阱。 */
+  let quiet = false;
   let observer: InstanceType<IOCtor> | null = null;
 
   /**
@@ -122,15 +125,15 @@ export function createModalSheet(
     restoreTo = null;
   }
 
-  function onMediaChange(e: { matches: boolean }): void {
+  function onBreakpoint(e: { matches: boolean }): void {
     isSheet.value = e.matches;
     sync();
   }
 
   function attach(): void {
-    mql = env.matchMedia?.(MOBILE_QUERY) ?? null;
+    const mql = env.matchMedia?.(MOBILE_QUERY) ?? null;
     isSheet.value = mql?.matches ?? false;
-    mql?.addEventListener("change", onMediaChange);
+    stopMedia = mql ? onMediaChange(mql, onBreakpoint) : null;
     const root = getRoot();
     if (root && env.IntersectionObserver) {
       observer = new env.IntersectionObserver((entries) => {
@@ -142,17 +145,73 @@ export function createModalSheet(
   }
 
   function detach(): void {
-    mql?.removeEventListener("change", onMediaChange);
+    stopMedia?.();
+    stopMedia = null;
     observer?.disconnect();
   }
 
-  /** sheet 已開、焦點仍在外面時改由程式接手（例如開始診斷後有可操作內容）；未開或已接手時無作用。 */
+  /**
+   * sheet 已開、焦點仍在外面時改由程式接手（例如開始診斷後有可操作內容）；未開時無作用。
+   *
+   * 已接手時改為「焦點遺失才拉回」：滑鼠點閒置單列的「診斷」會先經 focusin 接手，接著該鈕隨單列切成完整標頭而被移除，
+   * 焦點掉到 body——掛在根節點的 keydown 收不到 Tab，焦點會逃出 sheet（合併門第 2 輪實測追加）。DOM 更新後焦點若不在
+   * sheet 內（body 或已移除的節點），就移到根節點（tabindex=-1，不進 Tab 順序、無焦點環）；焦點仍在 sheet 內則不動。
+   */
   function engage(): void {
-    enter(true, null);
+    if (!trapActive.value) {
+      enter(true, null);
+      return;
+    }
+    env.defer(() => {
+      if (!trapActive.value) return;
+      const root = getRoot();
+      if (!root) return;
+      const active = env.activeElement();
+      if (active !== null && root.contains?.(active) === true) return;
+      quiet = true;
+      try {
+        root.focus();
+      } finally {
+        quiet = false;
+      }
+    });
   }
 
-  /** 掛在 sheet 外框的 focusin：使用者自己 Tab／點進 sheet 時進焦點陷阱，關閉時把焦點還給它離開的元素。 */
-  function onFocusIn(event: { relatedTarget: unknown }): void {
+  /**
+   * 退出焦點陷阱、回到非 modal（合併門第 2 輪 #1）：modal sheet 回到「已選台、閒置」時呼叫——按「中止診斷」、
+   * 或搜尋 Enter 改選一台閒置機台。不呼叫的話 sheet 縮成閒置單列卻仍 `aria-modal="true"`、遮罩還在、點其他卡只會收合，
+   * 中止鈕隨單列消失後焦點掉到 body、Tab 逃出陷阱。
+   *
+   * 不歸還焦點到接手前的元素（那多半是很久以前的卡片，跳回去會讓使用者迷路）：`focusTarget` 有給、且延後到 DOM 更新後
+   * 焦點仍在 sheet 內或已遺失（中止鈕被移除）時，改聚焦它（閒置單列的「診斷」鈕）；焦點已在外面（例如搜尋 Enter
+   * 後移到卡片）就不動。搬焦點期間暫停 focusin，避免一放進 sheet 又被當成「使用者自己進來」而再度接手。
+   */
+  function disengage(focusTarget?: () => FocusableLike | null): void {
+    if (!trapActive.value) return;
+    trapActive.value = false;
+    restoreTo = null;
+    if (!focusTarget) return;
+    env.defer(() => {
+      if (!open.value || trapActive.value) return;
+      const active = env.activeElement();
+      if (active !== null && getRoot()?.contains?.(active) !== true) return;
+      const target = focusTarget();
+      if (!target) return;
+      quiet = true;
+      try {
+        target.focus();
+      } finally {
+        quiet = false;
+      }
+    });
+  }
+
+  /**
+   * 掛在 sheet 外框的 focusin：使用者自己 Tab／點進 sheet 時進焦點陷阱，關閉時把焦點還給它離開的元素。
+   * 焦點在 sheet 內部移動（`fromInside`，例如 `disengage` 後從「診斷」Tab 到收合鈕）不算「進來」，不接手。
+   */
+  function onFocusIn(event: { relatedTarget: unknown; fromInside?: boolean }): void {
+    if (quiet || event.fromInside === true) return;
     enter(false, asFocusable(event.relatedTarget));
   }
 
@@ -180,7 +239,7 @@ export function createModalSheet(
     }
   }
 
-  return { isSheet, open, trapActive, attach, detach, engage, onFocusIn, onKeydown };
+  return { isSheet, open, trapActive, attach, detach, engage, disengage, onFocusIn, onKeydown };
 }
 
 /**
@@ -221,7 +280,11 @@ export function useModalSheet(
     options,
   );
   let scope: HTMLElement | null = null;
-  const onFocusIn = (e: FocusEvent): void => sheet.onFocusIn({ relatedTarget: e.relatedTarget });
+  const onFocusIn = (e: FocusEvent): void =>
+    sheet.onFocusIn({
+      relatedTarget: e.relatedTarget,
+      fromInside: e.relatedTarget instanceof Node && scope?.contains(e.relatedTarget) === true,
+    });
   onMounted(() => {
     sheet.attach();
     const el = root.value;
@@ -237,6 +300,7 @@ export function useModalSheet(
     open: sheet.open,
     trapActive: sheet.trapActive,
     engage: sheet.engage,
+    disengage: sheet.disengage,
     onKeydown: sheet.onKeydown,
   };
 }

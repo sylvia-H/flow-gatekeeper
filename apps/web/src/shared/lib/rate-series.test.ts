@@ -8,6 +8,7 @@ import {
   markStale,
   peakRatio,
   pushSample,
+  sampleRatio,
   totalOf,
   windowRatio,
   type RateCounters,
@@ -238,6 +239,16 @@ describe("rate-series 視窗平均與最高水位（critique 2026-10-16 P1）", 
     expect(peakRatio([])).toBeNull();
     expect(peakRatio([smp(40, 10), smp(150, 10), smp(50, 10)])).toBe(15);
     expect(peakRatio([smp(40, 10), smp(0, 0)])).toBe(4);
+  });
+
+  it("sampleRatio：單秒訊息 ÷ 批次；批次為 0 或無效樣本為 null（合併門第 2 輪：peakRatio 與走勢線共用）", () => {
+    expect(sampleRatio(smp(50, 10))).toBe(5);
+    expect(sampleRatio(smp(7, 2))).toBe(3.5);
+    expect(sampleRatio(smp(0, 0))).toBeNull();
+    expect(sampleRatio(smp(30, 0))).toBeNull();
+    expect(sampleRatio({ ...smp(600, 1), invalid: true })).toBeNull();
+    // peakRatio 跳過無效樣本的單格比值
+    expect(peakRatio([smp(40, 10), { ...smp(600, 1), invalid: true }])).toBe(4);
   });
 
   it("peakRatio：視窗內完全沒有批次時為 null", () => {

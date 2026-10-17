@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TelemetryPoint } from "@flow-gatekeeper/contracts";
-import { metricUnit, offendingMetrics, relativeTimeLabel } from "./telemetry-format.js";
+import { metricUnit, offendingMetrics } from "./telemetry-format.js";
 
 type Telemetry = TelemetryPoint["telemetry"];
 
@@ -39,22 +39,5 @@ describe("offendingMetrics（FR-002；門檻鏡射 002 producer）", () => {
   it("throughput 不參與 amber（恆 null）", () => {
     expect(offendingMetrics(telemetry({ throughput: 0 })).throughput).toBeNull();
     expect(offendingMetrics(telemetry({ throughput: 9999 })).throughput).toBeNull();
-  });
-});
-
-describe("relativeTimeLabel（委派 formatRelative，FR-022 邊界）", () => {
-  const now = 1_000_000_000;
-  it("≤ 2s（閉區間）→ 剛剛", () => {
-    expect(relativeTimeLabel(now, now)).toBe("剛剛");
-    expect(relativeTimeLabel(now - 2_000, now)).toBe("剛剛");
-  });
-  it("秒／分邊界", () => {
-    expect(relativeTimeLabel(now - 2_001, now)).toBe("2 秒前");
-    expect(relativeTimeLabel(now - 59_000, now)).toBe("59 秒前");
-    expect(relativeTimeLabel(now - 60_000, now)).toBe("1 分鐘前");
-    expect(relativeTimeLabel(now - 60 * 60_000, now)).toBe("60 分鐘前");
-  });
-  it("未來時間夾為剛剛（不出現負值）", () => {
-    expect(relativeTimeLabel(now + 5_000, now)).toBe("剛剛");
   });
 });

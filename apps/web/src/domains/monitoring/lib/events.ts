@@ -77,21 +77,11 @@ export function deriveTransitionEvent(
   };
 }
 
-/**
- * 新事件 unshift 到頂端，超過 `max` 筆時裁掉最舊者（FR-011）。就地修改並回傳同一陣列。
- * 013 起事件列改走 `mergeEvent`（store 已於 T049 改接，不再呼叫本函式）；此函式保留匯出與單測。
- */
-export function pushCapped(list: DerivedEvent[], event: DerivedEvent, max = 50): DerivedEvent[] {
-  list.unshift(event);
-  if (list.length > max) list.length = max;
-  return list;
-}
-
 /** 事件合併的固定窗長（ms）：同一列的起訖跨度上限（data-model §10，T073 由 10 秒滑動窗改為 60 秒固定窗）。 */
 export const EVENT_MERGE_WINDOW_MS = 60_000;
 
 /**
- * 事件合併（data-model §10、FR-012）。就地修改並回傳同一陣列（比照 `pushCapped`）：
+ * 事件合併（data-model §10、FR-012）。就地修改並回傳同一陣列：
  * - 在清單中找**同機台、同嚴重度的最近一筆**（自頂端往下第一筆相符者，不限頂端）；
  * - **固定窗**：併入後該列的起訖跨度 `max(該筆.ts, event.ts) − min(該筆.firstTs, event.ts)` 仍 ≤ `windowMs`
  *   （閉區間，含 60 000 ms 邊界）→ 該筆 `count + 1`、`firstTs`／`ts` 擴成新的起訖並移到頂端（以新物件替換，id 沿用）；

@@ -231,7 +231,7 @@ WebSocket.onmessage ──▶ 只 push 進 buffer（不碰 reactive state）
 - `useHighFrequencyWs` 的 `onmessage` **只**把訊息推進 buffer，絕不直接寫 reactive state（憲章硬規則 #1）。
 - 每一幀（rAF）才把累積的 buffer 一次性提交：一幀內不論收到幾則 WS 訊息都只提交一次，渲染次數以幀率為上限、不隨訊息速率線性成長。
 - buffer 設**上限**，避免分頁切到背景時逐幀暫停、記憶體無限成長。溢位時不再單純截斷最舊，而是**合併**：每台保留「第一筆＋每個 state 轉換點＋最新一筆」，丟掉中間同態的重複值——事件流因此不會漏掉背景期間的 warning／critical（此規則最初記於 `apps/web/design/design-spec.md` v0.5，該檔已於 013 退役）。
-- store 維護 `receivedMessages`（以遙測資料點計，**含** `droppedMessages` 與格式不符的丟棄筆數）與 `renderedBatches` 兩個計數，自載入起的累計比值由 `shared/lib/backpressure.ts` 的 `backpressureRatio` 單一實作（013 起只放在背壓 strip 的 tooltip）；畫面主顯示是背壓 strip 的**最近 60 秒視窗比值**（`domains/monitoring/lib/rate-series.ts`，store 每秒取樣），**把背壓從抽象說法變成畫面上看得見的比值**——這是整個決策最直接的證據。比值隨節拍與機台數而異，不宣稱固定值：預設節拍（50ms、一 tick 一批含全部已訂閱機台）下一幀通常只落一個 tick，比值**約等於機台數**，主要反映伺服器端的逐 tick 批次，rAF 合併只貢獻約 1 倍；rAF 的效果要在一幀內湧入多個 tick（節拍調快、主執行緒忙、分頁回前景時）才明顯。
+- store 維護 `receivedMessages`（以遙測資料點計，**含** `droppedMessages` 與格式不符的丟棄筆數）與 `renderedBatches` 兩個計數，自載入起的累計比值由 `shared/lib/backpressure.ts` 的 `backpressureRatio` 單一實作（013 起只放在背壓 strip 的 tooltip）；畫面主顯示是背壓 strip 的**最近 60 秒視窗比值**（`shared/lib/rate-series.ts`，store 每秒取樣），**把背壓從抽象說法變成畫面上看得見的比值**——這是整個決策最直接的證據。比值隨節拍與機台數而異，不宣稱固定值：預設節拍（50ms、一 tick 一批含全部已訂閱機台）下一幀通常只落一個 tick，比值**約等於機台數**，主要反映伺服器端的逐 tick 批次，rAF 合併只貢獻約 1 倍；rAF 的效果要在一幀內湧入多個 tick（節拍調快、主執行緒忙、分頁回前景時）才明顯。
 - Pause 且連線中時凍結 stale 判定；重連退避在收到 `machine/subscribed`（訂閱成功）才歸零——token 錯誤被 `1008` 關閉的連線也會收到 `system/connected`，若在那時歸零會以約 1 秒週期無限重連；瀏覽器 `online` 事件會立即重連。
 
 ### 🔌 2. 即時通道統一用原生 WebSocket

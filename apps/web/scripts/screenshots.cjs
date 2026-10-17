@@ -1542,9 +1542,24 @@ async function runReadme(opts) {
   const browser = await chromium.launch({ executablePath, headless: true });
   try {
     // 順序有依賴：手機劇本排最後，才能命中桌機劇本留下的快取、不多打一次 LLM。
-    await shootDesktop(browser, opts, shots);
-    await shootReconnecting(browser, opts, shots);
-    await shootMobile(browser, opts, shots);
+    // 每段各自包進 scene（合併門第 2 輪 low）：openReadmePage 在各段的 try 之外，一段載入失敗（goto 逾時、
+    // 卡片沒出現）時只把該段負責的截圖記為缺漏，續跑下一段，最後照樣印缺漏總表。
+    const solo = ["monitoring-reconnecting-stale", "responsive-mobile"];
+    const segments = [
+      { label: "1440x900", run: shootDesktop, names: README_SHOTS.filter((name) => !solo.includes(name)) },
+      { label: "reconnecting", run: shootReconnecting, names: ["monitoring-reconnecting-stale"] },
+      { label: "390x844", run: shootMobile, names: ["responsive-mobile"] },
+    ];
+    for (const segment of segments) {
+      await scene(shots, segment.names, async () => {
+        try {
+          await segment.run(browser, opts, shots);
+        } catch (err) {
+          // scene 只取訊息第一行，這裡只加上段名
+          throw new Error(`${segment.label} 劇本中止：${err && err.message ? err.message : String(err)}`);
+        }
+      });
+    }
   } finally {
     await browser.close();
   }

@@ -1,19 +1,21 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from "vue";
-import { Stethoscope, X, ChevronDown, RotateCcw, Ban } from "lucide-vue-next";
+import { Stethoscope, X, RotateCcw, Ban } from "lucide-vue-next";
 import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
 import { useMonitoringStore, type MachineLive } from "../../monitoring/stores/monitoring.store.js";
 import { isStale } from "../../monitoring/lib/stale.js";
 import { CARD_ROOT_CLASS } from "../../monitoring/lib/card-style.js";
+import { machineLabel as labelOf } from "../../monitoring/lib/machine-labels.js";
 import { progressLabel, type CopilotJobState } from "../lib/copilot-reducer.js";
 import { jobSteps, type StepStatus } from "../lib/job-steps.js";
 import { parsePartialDiagnosis } from "../lib/partial-json.js";
 import { compareBars, compareLabel } from "../lib/diagnosis-timing.js";
 import { nearestScrollParent, revealAboveSheet } from "../lib/reveal-above-sheet.js";
 import { useCopilotStore } from "../stores/copilot.store.js";
-import { STATE_STYLE } from "../../../shared/lib/state-style.js";
 import ProgressBar from "../../../shared/components/ProgressBar.vue";
-import StreamingPanel from "./StreamingPanel.vue";
+import StateBadge from "../../../shared/components/StateBadge.vue";
+import StalePill from "../../../shared/components/StalePill.vue";
+import StreamDisclosure from "./StreamDisclosure.vue";
 import DiagnosisResultView from "./DiagnosisResultView.vue";
 import ResultSkeleton from "./ResultSkeleton.vue";
 import { useModalSheet } from "../composables/useModalSheet.js";
@@ -89,6 +91,8 @@ const currentStep = computed(() => steps.value.find((s) => s.status === "active"
 /**
  * 串流漸進解析（research R6）：只在 active 對 `streamText` 計算，token 每秒數十次、O(n) 於幾 KB，
  * computed 即可。PartialResult 只拿來畫骨架；完成態改用 `ai/done` 驗證過的 `result`（工程硬規則 6）。
+ * 每個 token 都從頭重解析，整段串流累計是 O(n²)：已接受的取捨（合併門第 2 輪 #15）——診斷輸出只有數 KB、
+ * 單次解析在毫秒以下，改寫成增量解析器的複雜度不值得。
  */
 const partial = computed(() =>
   props.state.status === "active" ? parsePartialDiagnosis(props.state.streamText) : null,
@@ -160,14 +164,12 @@ const CLOSE_BTN =
 /** 次要動作（進行中的「中止診斷」、完成態的「再次診斷」）：精簡的 Tool 樣式鈕。 */
 const SECONDARY_BTN =
   "flex shrink-0 items-center justify-center gap-1.5 rounded-control border border-edge bg-surface/72 px-2.5 py-1 text-sm font-medium text-ink shadow-glass hover:bg-rim/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus disabled:cursor-not-allowed disabled:bg-rim disabled:text-ink-3 disabled:shadow-none";
-/** 原始串流的展開鈕。 */
-const DISCLOSURE_BTN =
-  "flex w-full items-center justify-between rounded-control text-sm font-semibold text-ink-2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-focus";
 
 /**
  * 螢幕閱讀器公告：串流區不逐 token 朗讀（太吵），只在同一個任務「active → 完成／失敗」時
  * 以 polite live region 公告一句摘要。切換機台造成的狀態變化不算轉移，不公告，
- * 否則點到一台早已完成的機台也會被念「診斷完成」。
+ * 否則點到一台早已完成的機台也會被念「診斷完成」。機台名稱以事件本身的 `machineId` 換成繁中名，
+ * 不讀 `machineLabel` prop：watch 觸發時 prop 可能已換成別台（合併門第 2 輪 #4）。
  */
 const announcement = ref("");
 watch(
@@ -182,9 +184,9 @@ watch(
     }
     if (prev.status !== "active") return;
     if (next.status === "completed") {
-      announcement.value = `${next.machineId} 診斷完成${next.cached ? "（快取）" : ""}：${next.result.summary}`;
+      announcement.value = `${labelOf(next.machineId)} 診斷完成${next.cached ? "（快取）" : ""}：${next.result.summary}`;
     } else if (next.status === "failed") {
-      announcement.value = `${next.machineId} 診斷失敗：${next.error}`;
+      announcement.value = `${labelOf(next.machineId)} 診斷失敗：${next.error}`;
     }
   },
 );
@@ -201,7 +203,7 @@ watch(
  */
 const root = ref<HTMLElement | null>(null);
 const titleId = useId();
-const { isSheet, open: sheetOpen, trapActive, engage, onKeydown } = useModalSheet(
+const { isSheet, open: sheetOpen, trapActive, engage, disengage, onKeydown } = useModalSheet(
   root,
   () => emit("dismiss"),
   {
@@ -220,13 +222,30 @@ const compactIdle = computed(
   () => isSheet.value && props.machineId !== null && props.state.status === "idle",
 );
 
-/** sheet 開著時有了可操作內容（開始診斷、切到已有結果的機台）→ 接手焦點；`engage` 在未開或已接手時無作用。 */
-watch(
-  () => [props.state.status, props.machineId] as const,
-  ([status, id]) => {
-    if (sheetOpen.value && (id === null || status !== "idle")) engage();
-  },
-);
+/**
+ * 閒置單列的「診斷」鈕：modal sheet 回到閒置（中止診斷、改選閒置機台）時的焦點落點。
+ * 停用時（斷線、訂閱中）不能接焦點，改落在 sheet 根節點（tabindex=-1，不進 Tab 順序；下一個 Tab 進收合鈕）。
+ */
+const compactDiagnoseBtn = ref<HTMLButtonElement | null>(null);
+function idleFocusTarget(): HTMLElement | null {
+  const btn = compactDiagnoseBtn.value;
+  return btn && !btn.disabled ? btn : root.value;
+}
+
+/**
+ * sheet 開著時依「有沒有可操作內容」切換 modal：開始診斷、切到已有結果的機台、取消選取（空狀態）→ 接手焦點；
+ * 回到「已選台、閒置」（按「中止診斷」、搜尋 Enter 改選一台閒置機台）→ `disengage` 退回非 modal，
+ * 焦點仍在 sheet 內或已遺失時移到閒置單列的「診斷」鈕（合併門第 2 輪 #1：原本沒有退出路徑，單列仍 aria-modal、
+ * 遮罩還在、點其他卡只會收合、焦點掉到 body）。
+ * 多來源 watch 只在 status 或 machineId 真的變化時觸發；原本回傳新陣列的 getter 在每個 token（state 換新物件）
+ * 都會觸發一次 `engage()`（合併門第 2 輪 #15）。
+ * 已接手時 `engage` 只在焦點遺失時把焦點拉回根節點（例如點閒置單列「診斷」後該鈕隨標頭切換被移除）。`engage`／`disengage` 在未開或已是該狀態時無作用。
+ */
+watch([() => props.state.status, () => props.machineId], ([status, id]) => {
+  if (!sheetOpen.value) return;
+  if (id === null || status !== "idle") engage();
+  else disengage(idleFocusTarget);
+});
 
 /** 接手焦點狀態對外（`update:engaged`）：trapActive 只在 sheet 形態且開著時為真，桌機恆 false；值變化才發。 */
 watch(
@@ -234,9 +253,12 @@ watch(
   (engaged) => emit("update:engaged", engaged),
 );
 
-/** 非 modal 開啟時的公告（視覺隱藏）；關閉時清空，下次開啟同一句才會重念。 */
+/**
+ * 非 modal 開啟時的公告（視覺隱藏）；關閉時清空，下次開啟同一句才會重念。
+ * 來源含 `machineId`：非 modal sheet 開著時改選另一台，公告要換成新機台名（合併門第 2 輪 #9）。
+ */
 const sheetHint = ref("");
-watch([sheetOpen, trapActive], ([isOpen, trapped]) => {
+watch([sheetOpen, trapActive, () => props.machineId], ([isOpen, trapped]) => {
   sheetHint.value =
     isOpen && !trapped && props.machineId !== null
       ? `已開啟 ${props.machineLabel} 的 AI 診斷面板：按 d 開始診斷，按 Escape 收合。`
@@ -277,8 +299,6 @@ onUnmounted(() => document.removeEventListener("focusin", onDocumentFocusIn));
  * 讓中斷前的推理直接可見（FR-024）。每次狀態或任務切換都回到該態的預設。
  */
 const showStream = ref(false);
-/** 原始串流面板的 id，供展開鈕的 aria-controls（收合時面板不在 DOM，就不指向它）。 */
-const streamPanelId = useId();
 watch(
   () => ("jobId" in props.state ? `${props.state.status}:${props.state.jobId}` : props.state.status),
   () => {
@@ -313,23 +333,11 @@ watch(
           <span class="shrink-0 text-xs font-semibold text-ink-3">AI 診斷</span> <span class="min-w-0 truncate text-sm font-semibold text-ink">{{ machineLabel }}</span><span class="sr-only">（{{ machineId }}）</span>
         </h2>
         <!-- 狀態徽章：與卡片同款（文字＋底色，嚴重加 border-crit）；狀態不只靠顏色 -->
-        <span
-          v-if="summary"
-          class="shrink-0 rounded-pill border px-2 py-px text-xs font-semibold leading-4"
-          :class="[
-            STATE_STYLE[summary.state].badgeText,
-            STATE_STYLE[summary.state].badgeSurface,
-            summary.state === 'critical' ? 'border-crit' : 'border-transparent',
-          ]"
-        ><span class="sr-only">狀態：</span>{{ STATE_STYLE[summary.state].label }}</span>
+        <StateBadge v-if="summary" class="shrink-0" :state="summary.state" sr-prefix />
         <span v-else class="min-w-0 truncate text-xs text-ink-3">尚未收到遙測</span>
-        <span
-          v-if="summaryStale"
-          class="inline-flex shrink-0 items-center gap-1 rounded-pill border border-stale bg-surface-strong px-2 py-px text-xs font-semibold leading-4 text-ink-2"
-        >
-          <span class="h-1.5 w-1.5 rounded-pill bg-stale" aria-hidden="true" />停滯
-        </span>
+        <StalePill v-if="summaryStale" />
         <button
+          ref="compactDiagnoseBtn"
           type="button"
           :class="PRIMARY_BTN_COMPACT"
           :disabled="!canDiagnose"
@@ -392,22 +400,9 @@ watch(
           <div class="flex min-w-0 items-center gap-2">
             <h3 class="min-w-0 truncate text-md font-semibold text-ink">{{ machineLabel }}</h3>
             <!-- 狀態徽章：與卡片同款（文字＋底色，嚴重加 border-crit）；狀態不只靠顏色 -->
-            <span
-              v-if="summary"
-              class="shrink-0 rounded-pill border px-2 py-px text-xs font-semibold leading-4"
-              :class="[
-                STATE_STYLE[summary.state].badgeText,
-                STATE_STYLE[summary.state].badgeSurface,
-                summary.state === 'critical' ? 'border-crit' : 'border-transparent',
-              ]"
-            ><span class="sr-only">狀態：</span>{{ STATE_STYLE[summary.state].label }}</span>
+            <StateBadge v-if="summary" class="shrink-0" :state="summary.state" sr-prefix />
             <span v-else class="shrink-0 text-xs text-ink-3">尚未收到遙測</span>
-            <span
-              v-if="summaryStale"
-              class="inline-flex shrink-0 items-center gap-1 rounded-pill border border-stale bg-surface-strong px-2 py-px text-xs font-semibold leading-4 text-ink-2"
-            >
-              <span class="h-1.5 w-1.5 rounded-pill bg-stale" aria-hidden="true" />停滯
-            </span>
+            <StalePill v-if="summaryStale" />
             <button
               type="button"
               :class="PRIMARY_BTN_INLINE"
@@ -456,23 +451,7 @@ watch(
           <ResultSkeleton v-if="partial" :partial="partial" />
 
           <!-- 原始串流：逐字文字仍可展開查看（FR-019），預設收合 -->
-          <div class="border-t border-edge pt-3">
-            <button
-              type="button"
-              :class="DISCLOSURE_BTN"
-              :aria-expanded="showStream"
-              :aria-controls="showStream ? streamPanelId : undefined"
-              @click="showStream = !showStream"
-            >
-              <span>原始串流</span>
-              <ChevronDown
-                class="h-4 w-4 transition-transform"
-                :class="showStream ? 'rotate-180' : ''"
-                aria-hidden="true"
-              />
-            </button>
-            <StreamingPanel v-if="showStream" :id="streamPanelId" class="mt-2" :text="state.streamText" :streaming="true" />
-          </div>
+          <StreamDisclosure v-model:expanded="showStream" label="原始串流" :text="state.streamText" :streaming="true" />
 
           <!-- US7 處理步驟清單（衍生自進度里程碑 0/20/40/60/80/100）；目前步驟另摘要在進度列下 -->
           <ol class="space-y-1.5" aria-label="診斷處理步驟">
@@ -517,23 +496,13 @@ watch(
               </button>
             </template>
           </DiagnosisResultView>
-          <div v-if="state.streamText" class="border-t border-edge pt-3">
-            <button
-              type="button"
-              :class="DISCLOSURE_BTN"
-              :aria-expanded="showStream"
-              :aria-controls="showStream ? streamPanelId : undefined"
-              @click="showStream = !showStream"
-            >
-              <span>原始串流</span>
-              <ChevronDown
-                class="h-4 w-4 transition-transform"
-                :class="showStream ? 'rotate-180' : ''"
-                aria-hidden="true"
-              />
-            </button>
-            <StreamingPanel v-if="showStream" :id="streamPanelId" class="mt-2" :text="state.streamText" :streaming="false" />
-          </div>
+          <StreamDisclosure
+            v-if="state.streamText"
+            v-model:expanded="showStream"
+            label="原始串流"
+            :text="state.streamText"
+            :streaming="false"
+          />
         </div>
 
         <!-- 失敗：可讀分類錯誤 + 重試（FR-007／FR-024）；中斷前推理以原始串流預設展開保留，不顯示骨架 -->
@@ -553,23 +522,13 @@ watch(
             <RotateCcw class="h-4 w-4" aria-hidden="true" />
             重試
           </button>
-          <div v-if="state.streamText" class="border-t border-edge pt-3">
-            <button
-              type="button"
-              :class="DISCLOSURE_BTN"
-              :aria-expanded="showStream"
-              :aria-controls="showStream ? streamPanelId : undefined"
-              @click="showStream = !showStream"
-            >
-              <span>原始串流（中斷前）</span>
-              <ChevronDown
-                class="h-4 w-4 transition-transform"
-                :class="showStream ? 'rotate-180' : ''"
-                aria-hidden="true"
-              />
-            </button>
-            <StreamingPanel v-if="showStream" :id="streamPanelId" class="mt-2" :text="state.streamText" :streaming="false" />
-          </div>
+          <StreamDisclosure
+            v-if="state.streamText"
+            v-model:expanded="showStream"
+            label="原始串流（中斷前）"
+            :text="state.streamText"
+            :streaming="false"
+          />
         </div>
       </div>
     </div>

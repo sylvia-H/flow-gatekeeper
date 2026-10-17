@@ -9,7 +9,7 @@ import {
   totalOf,
   validSamples,
   type RateSample,
-} from "../../domains/monitoring/lib/rate-series.js";
+} from "../lib/rate-series.js";
 
 /**
  * 背壓 strip（spec FR-009／FR-009a／FR-010／FR-011、US2）：主區頂端常駐的一片玻璃，
@@ -253,7 +253,7 @@ const ratioTitle = computed(() => {
         >
           <span class="truncate tabular-nums">{{ plainText }}</span>
         </p>
-        <Sparkline class="flex min-w-16 flex-1 flex-col" :samples="samples" />
+        <Sparkline class="flex min-w-16 flex-1 flex-col" :samples="samples" :window-ratio="windowRatio" />
 
         <div
           v-if="stale || paused || dropped > 0"

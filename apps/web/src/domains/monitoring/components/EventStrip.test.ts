@@ -13,7 +13,7 @@ vi.mock("../../../shared/lib/format.js", async (importOriginal) => {
 
 /**
  * EventStrip（013 T028 視覺層、T052 可點擊選台）：標題、24 小時制時間、嚴重度中文、合併次數 `×N`、
- * 空狀態；每列為 `button[data-fg="event"]`，點擊 emit `select(machineId)`，選取中的機台列標 `aria-current`。
+ * 空狀態；每列為 `button[data-fg="event"]`，點擊 emit `select(machineId)`，選取中機台的最新一列標 `aria-current`（其餘選取列附視覺隱藏「（選取中）」）。
  */
 
 /** 本地時間 21:05:09——下午時段才驗得出是否為 24 小時制（不是 9:05:09 PM）。 */
@@ -190,7 +190,7 @@ describe("EventStrip 可點擊選台（T052）", () => {
     expect(msg(1).classes().filter((c) => c.startsWith("font-"))).toEqual(msg(0).classes().filter((c) => c.startsWith("font-")));
   });
 
-  it("同一台多筆事件時，每一列都標 aria-current", () => {
+  it("同一台多筆事件時，只有該台最新一列（頂端第一筆）標 aria-current，其餘列以視覺隱藏文字「（選取中）」說明（合併門第 2 輪 low）", () => {
     const w = mountStrip(
       [
         event({ id: "a", severity: "critical" }),
@@ -199,8 +199,13 @@ describe("EventStrip 可點擊選台（T052）", () => {
       ],
       "press-02",
     );
-    const current = w.findAll('[data-fg="event"]').map((r) => r.attributes("aria-current"));
-    expect(current).toEqual(["true", undefined, "true"]);
+    const rows = w.findAll('[data-fg="event"]');
+    expect(rows.map((r) => r.attributes("aria-current"))).toEqual(["true", undefined, undefined]);
+    // 視覺標示不變：該台每一列都有選取底色與內框
+    expect(rows.map((r) => r.classes().includes("bg-accent-wash"))).toEqual([true, false, true]);
+    // 讀屏：最新列靠 aria-current，其餘選取列附「（選取中）」，非選取列沒有
+    const srNote = rows.map((r) => r.findAll(".sr-only").some((s) => s.text() === "（選取中）"));
+    expect(srNote).toEqual([false, false, true]);
   });
 
   it("分隔線畫在按鈕上（最後一列不畫），li 不帶邊框，列高不因邊框超過 32px", () => {

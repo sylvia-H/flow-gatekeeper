@@ -452,6 +452,29 @@ describe("手機異常覆蓋層開著時只處理 Escape 與 /", () => {
   });
 });
 
+describe("Copilot bottom-sheet 為 modal 時不處理 /（合併門第 2 輪 #2，比照說明層）", () => {
+  it("isCopilotSheetModal=true：/ 不呼叫 focusSearch、不 preventDefault；sheet 退回非 modal 後恢復", () => {
+    let modal = true;
+    handlers.isCopilotSheetModal = () => modal;
+    attach();
+    state.open = { ...allClosed(), "copilot-panel": true, selection: true };
+    const blocked = press(document.body, "/");
+    expect(blocked.defaultPrevented).toBe(false);
+    expect(handlers.focusSearch).not.toHaveBeenCalled();
+
+    modal = false;
+    const passed = press(document.body, "/");
+    expect(passed.defaultPrevented).toBe(true);
+    expect(handlers.focusSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("未提供 isCopilotSheetModal 時視為 false（/ 照常聚焦搜尋）", () => {
+    attach();
+    press(document.body, "/");
+    expect(handlers.focusSearch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("方向鍵依視覺位置移焦（3 × 2）", () => {
   it.each([
     ["a2", "ArrowRight", "a3"],

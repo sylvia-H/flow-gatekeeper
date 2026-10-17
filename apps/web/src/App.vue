@@ -64,19 +64,15 @@ const {
 
 /**
  * Copilot 面板開關與手動收合偏好都在 copilot store（T059、data-model §2、FR-033），這裡只接線：
- * - 選取改變 → `onMachineSelected`（取消選取收合；選台時無偏好才展開）。再次選取同一台不會觸發
- *   watch，另以 `$onAction` 補上：Escape 收合後再點同一張卡片，與選了別台一樣依偏好展開。
+ * - 選台／取消選台一律走 monitoring store 的 `selectMachine`／`clearSelection` action，store 以 `onSelectionChange`
+ *   通知 → `onMachineSelected`（取消選取收合；選台時無偏好才展開）。再選同一台也會通知：Escape 收合後再點同一張卡片，
+ *   與選了別台一樣依偏好展開。只有這一條路徑（合併門第 2 輪 #16：原本 watch＋`$onAction` 兩路，後者攔到每幀的批次提交）。
  * - 事件分流：drawer 收合鈕 `close` → `collapsePanel`（寫偏好）；drawer `dismiss`（手機 sheet 內 Escape）、
  *   AppLayout `dismiss-panel`（遮罩）與快捷鍵的面板層（桌機 Escape）→ `dismissPanel`（不寫偏好）；
  *   展開窄條／peek 條 `open-panel` → `openPanel`（展開並清除偏好）。觸發診斷由 store 的 `diagnose` 自行展開。
  */
-watch(
-  () => store.selectedMachineId,
-  (id) => copilot.onMachineSelected(id),
-);
-store.$onAction(({ name, args }) => {
-  if (name === "selectMachine" && args[0] === store.selectedMachineId) copilot.onMachineSelected(args[0]);
-});
+const stopSelectionSync = store.onSelectionChange(copilot.onMachineSelected);
+onUnmounted(stopSelectionSync);
 
 /**
  * sheet 是否接手焦點（drawer `update:engaged`；< desk 的 sheet 為 modal 時 true，閒置非 modal 與桌機推擠式為 false）。
@@ -122,11 +118,6 @@ function onCancel(): void {
   }
 }
 
-/** 取消選取（Escape 最後一層）：store 沒有專屬 action，直接寫回 null；面板隨上方 watch 收合（偏好不變）。 */
-function clearSelection(): void {
-  store.selectedMachineId = null;
-}
-
 /** 鍵盤快捷鍵說明層（`?` 與工具列說明鈕共用同一個開關；FR-034b、T073 C）。 */
 const helpOpen = ref(false);
 function toggleHelp(): void {
@@ -167,12 +158,14 @@ useKeyboardShortcuts({
       topBar.value?.focusSearch();
     },
     selectMachine: store.selectMachine,
-    clearSelection,
+    clearSelection: store.clearSelection,
     diagnose: onDiagnose,
     clearLatch: store.clearLatch,
     isLatchVisible: store.latchVisible,
     toggleHelp,
     getSelectedId: () => store.selectedMachineId,
+    // sheet 為 modal（焦點陷阱）時 `/` 不把焦點搬出 sheet（合併門第 2 輪 #2）。
+    isCopilotSheetModal: () => sheetEngaged.value,
     layers: {
       help: {
         isOpen: () => helpOpen.value,
@@ -194,7 +187,8 @@ useKeyboardShortcuts({
       },
       // 只關當次，不寫手動收合偏好（Escape 不算手動收合，FR-034a）。
       "copilot-panel": { isOpen: () => copilot.panelOpen, close: copilot.dismissPanel },
-      selection: { isOpen: () => store.selectedMachineId !== null, close: clearSelection },
+      // 取消選取：面板隨 store 的選取通知收合（偏好不變）。
+      selection: { isOpen: () => store.selectedMachineId !== null, close: store.clearSelection },
     },
   },
 });

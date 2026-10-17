@@ -16,6 +16,8 @@ import { STATE_STYLE } from "../../../shared/lib/state-style.js";
  * 面板容器 `overflow-hidden`，焦點環用 `ring-inset` 畫在列內，避免被裁切。分隔線畫在按鈕上（border-box），列高維持 32px。
  * 選取中的列另加 1px 內框 `ring-1 ring-inset ring-accent` 並把訊息文字加深為 `text-ink`：深色主題下 accent-wash
  * 與玻璃亮度相近，靠內框與文字辨識；內框是 box-shadow 不改尺寸，鍵盤聚焦時由 `focus-visible:ring-2 ring-focus` 覆蓋。
+ * `aria-current` 只標選取機台**最新的一列**（清單最新在頂端，即該台第一列）——同一台每列都標會讓讀屏念出多個「目前項目」；
+ * 該台其餘列仍有同樣的視覺標示，另附視覺隱藏文字「（選取中）」，讀屏與畫面一致（合併門第 2 輪 low）。
  */
 const props = withDefaults(defineProps<{ events: DerivedEvent[]; height: number; selectedId?: string | null }>(), {
   selectedId: null,
@@ -36,6 +38,11 @@ function clockRange(event: DerivedEvent): { start: string | null; end: string; f
  * `events` 只在事件衍生時（批次點）換新，這裡每列只算一次。
  */
 const rows = computed(() => props.events.map((event) => ({ event, time: clockRange(event) })));
+
+/** 選取機台最新一列的事件 id（標 `aria-current`）；未選或該台無事件為 null。 */
+const currentEventId = computed(() =>
+  props.selectedId === null ? null : (props.events.find((e) => e.machineId === props.selectedId)?.id ?? null),
+);
 
 // 顏色 token 取自共用 STATE_STYLE；回復事件用中性的蝕刻色，不借用任一狀態色。
 const SEVERITY: Record<DerivedEvent["severity"], { label: string; text: string; tick: string }> = {
@@ -74,7 +81,7 @@ const SEVERITY: Record<DerivedEvent["severity"], { label: string; text: string; 
           :data-machine="event.machineId"
           :data-severity="event.severity"
           :data-count="event.count"
-          :aria-current="event.machineId === selectedId ? 'true' : undefined"
+          :aria-current="event.id === currentEventId ? 'true' : undefined"
           class="flex min-h-8 w-full items-center gap-3 border-b border-edge/60 px-3.5 py-1 text-left group-last:border-b-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus"
           :class="event.machineId === selectedId ? 'bg-accent-wash ring-1 ring-inset ring-accent' : 'hover:bg-surface'"
           @click="emit('select', event.machineId)"
@@ -95,6 +102,7 @@ const SEVERITY: Record<DerivedEvent["severity"], { label: string; text: string; 
             :class="event.machineId === selectedId ? 'text-ink' : 'text-ink-2'"
           >
             {{ event.message }}
+            <span v-if="event.machineId === selectedId && event.id !== currentEventId" class="sr-only">（選取中）</span>
           </span>
           <span v-if="event.count > 1" class="shrink-0 font-mono text-xs text-ink-3">
             <span aria-hidden="true">×{{ event.count }}</span>

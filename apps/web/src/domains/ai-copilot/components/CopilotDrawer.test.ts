@@ -90,8 +90,8 @@ function mountDrawer(over: Partial<DrawerProps> = {}): VueWrapper {
   return w;
 }
 
-/** 以真 store 驅動 drawer 的最小 host。 */
-function mountWithStore(): VueWrapper {
+/** 以真 store 驅動 drawer 的最小 host；`label` 可覆寫傳入的 machineLabel prop（驗公告不讀 prop）。 */
+function mountWithStore(label: string = LABEL): VueWrapper {
   const Host = defineComponent({
     setup() {
       const copilot = useCopilotStore();
@@ -99,7 +99,7 @@ function mountWithStore(): VueWrapper {
         h(CopilotDrawer, {
           state: copilot.stateFor(MACHINE),
           machineId: MACHINE,
-          machineLabel: LABEL,
+          machineLabel: label,
           summary: null,
           canDiagnose: copilot.canDiagnose(MACHINE, true),
           connectionBlockedReason: null,
@@ -395,7 +395,18 @@ describe("CopilotDrawer 終態", () => {
     expect(w.text()).toContain("無建議動作。"); // 空陣列以空狀態文字呈現、不崩潰
     expect(timing.text()).toMatch(/^結果來自快取 · /); // 視覺隱藏前綴＋可見「快取 · N ms」
     expect(w.text()).not.toMatch(LEGACY_EN_LABEL);
-    expect(w.get('[aria-live="polite"]').text()).toBe(`${MACHINE} 診斷完成（快取）：${RESULT.summary}`);
+    expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷完成（快取）：${RESULT.summary}`);
+  });
+
+  it("完成公告的機台名取自事件的 machineId（繁中名），不讀 machineLabel prop（合併門第 2 輪 #4：watch 觸發時 prop 可能已換台）", async () => {
+    const w = mountWithStore("（別台的名稱）");
+    const jobId = await startJob();
+    useCopilotStore().applyEvent({ type: "ai/done", jobId, attempt: 1, cached: false, result: RESULT });
+    await flushPromises();
+    const live = w.get('[aria-live="polite"]').text();
+    expect(live).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
+    expect(live).not.toContain(MACHINE);
+    expect(live).not.toContain("別台");
   });
 
   it("ai/error → 失敗、可讀錯誤與重試；重試走 store 重回進行中；不可診斷時重試停用並說明原因", async () => {
@@ -407,7 +418,7 @@ describe("CopilotDrawer 終態", () => {
     expect(headerText(w)).toContain("失敗");
     expect(w.text()).not.toMatch(LEGACY_EN_LABEL);
     expect(w.text()).toContain("AI 診斷逾時，請重試。");
-    expect(w.get('[aria-live="polite"]').text()).toBe(`${MACHINE} 診斷失敗：AI 診斷逾時，請重試。`);
+    expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷失敗：AI 診斷逾時，請重試。`);
     const retry = buttonExact(w, "重試")!;
     expect(retry.attributes("disabled")).toBeUndefined();
     await retry.trigger("click");
@@ -878,6 +889,127 @@ describe("CopilotDrawer 行動版 bottom sheet（dialog 語意與焦點陷阱）
     await w.setProps({ machineId: "mixer-01", state: { status: "idle", machineId: "mixer-01" } });
     await flushPromises();
     expect(other.scrolls).toHaveLength(2);
+  });
+
+  it("modal sheet 按「中止診斷」回到閒置 → 退回非 modal：aria-modal=false、發 engaged=false、焦點落在單列「診斷」鈕、Tab 到收合鈕不再接手（合併門第 2 輪 #1）", async () => {
+    const { show } = stubMobile();
+    const card = fakeCard(MACHINE);
+    card.el.focus();
+    const w = mountDrawer();
+    await flushPromises();
+    show();
+    await flushPromises();
+    await w.setProps({ state: { status: "active", machineId: MACHINE, jobId: "job-1", attempt: 1, progress: 20, streamText: "" } as CopilotJobState });
+    await flushPromises();
+    const root = w.get('[role="dialog"]');
+    expect(root.attributes("aria-modal")).toBe("true");
+    (buttonExact(w, "中止診斷")!.element as HTMLButtonElement).focus();
+
+    // App 的 cancel → copilot.cancel → 該台 idle
+    await w.setProps({ state: { status: "idle", machineId: MACHINE } });
+    await flushPromises();
+    expect(root.attributes("aria-modal")).toBe("false");
+    expect(w.emitted("update:engaged")).toEqual([[true], [false]]);
+    const diagnose = buttonExact(w, "診斷")!.element;
+    expect(document.activeElement).toBe(diagnose);
+    // 非 modal：Escape 交 App 層，不由 drawer 攔
+    await root.trigger("keydown", { key: "Escape" });
+    expect(w.emitted("dismiss")).toBeUndefined();
+    // 在 sheet 內移動焦點（診斷 → 收合）不算「使用者自己進來」，維持非 modal
+    (w.get('button[aria-label="關閉／收合 AI 診斷面板"]').element as HTMLButtonElement).focus();
+    await flushPromises();
+    expect(root.attributes("aria-modal")).toBe("false");
+    expect(w.emitted("update:engaged")).toEqual([[true], [false]]);
+    // 從外面（卡片）再進來才接手
+    card.el.focus();
+    (buttonExact(w, "診斷")!.element as HTMLButtonElement).focus();
+    await flushPromises();
+    expect(root.attributes("aria-modal")).toBe("true");
+  });
+
+  it("滑鼠點閒置單列「診斷」→ 轉 modal、被點的鈕隨標頭切換移除後焦點不掉到 body（落在 sheet 根節點），Tab 留在 sheet 內", async () => {
+    const { show } = stubMobile();
+    const card = fakeCard(MACHINE);
+    card.el.focus();
+    const w = mountDrawer();
+    await flushPromises();
+    show();
+    await flushPromises();
+    const root = w.get('[role="dialog"]');
+    // 點擊：瀏覽器先把焦點給按鈕（focusin 接手），再 click → App 開始診斷
+    const diagnose = buttonExact(w, "診斷")!.element as HTMLButtonElement;
+    diagnose.focus();
+    await flushPromises();
+    expect(root.attributes("aria-modal")).toBe("true");
+    await w.setProps({ state: { status: "active", machineId: MACHINE, jobId: "job-1", attempt: 1, progress: null, streamText: "" } as CopilotJobState });
+    await flushPromises();
+    expect(diagnose.isConnected).toBe(false);
+    expect(document.activeElement).toBe(root.element);
+    expect(root.element.contains(document.activeElement)).toBe(true);
+    // Tab 由根節點的焦點陷阱處理，留在 sheet 內
+    await root.trigger("keydown", { key: "Tab" });
+    expect(root.element.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).not.toBe(document.body);
+    await root.trigger("keydown", { key: "Tab", shiftKey: true });
+    expect(root.element.contains(document.activeElement)).toBe(true);
+  });
+
+  it("中止後「診斷」停用（斷線中）→ 焦點落在 sheet 根節點而非 body，仍為非 modal", async () => {
+    const { show } = stubMobile();
+    const w = mountDrawer({
+      canDiagnose: false,
+      connectionBlockedReason: "連線未就緒",
+      state: { status: "active", machineId: MACHINE, jobId: "job-1", attempt: 1, progress: 20, streamText: "" } as CopilotJobState,
+    });
+    await flushPromises();
+    show();
+    await flushPromises();
+    const root = w.get('[role="dialog"]');
+    expect(root.attributes("aria-modal")).toBe("true");
+    (buttonExact(w, "中止診斷")!.element as HTMLButtonElement).focus();
+    await w.setProps({ state: { status: "idle", machineId: MACHINE } });
+    await flushPromises();
+    expect(root.attributes("aria-modal")).toBe("false");
+    expect(document.activeElement).toBe(root.element);
+  });
+
+  it("modal sheet 時改選一台閒置機台（搜尋 Enter，焦點已移到卡片）→ 退回非 modal，焦點留在卡片不被搶走", async () => {
+    const { show } = stubMobile();
+    const card = fakeCard(MACHINE);
+    const other = fakeCard("mixer-01");
+    const w = mountDrawer({
+      state: { status: "completed", machineId: MACHINE, jobId: "job-1", cached: false, result: RESULT, streamText: "" } as CopilotJobState,
+    });
+    await flushPromises();
+    show();
+    await flushPromises();
+    const root = w.get('[role="dialog"]');
+    expect(root.attributes("aria-modal")).toBe("true");
+    expect(card.el).toBeTruthy();
+
+    other.el.focus();
+    await w.setProps({ machineId: "mixer-01", machineLabel: machineLabel("mixer-01"), state: { status: "idle", machineId: "mixer-01" } });
+    await flushPromises();
+    expect(root.attributes("aria-modal")).toBe("false");
+    expect(document.activeElement).toBe(other.el);
+    expect(w.emitted("update:engaged")).toEqual([[true], [false]]);
+  });
+
+  it("非 modal sheet 開著時改選另一台：開啟公告換成新機台名（合併門第 2 輪 #9）", async () => {
+    const { show } = stubMobile();
+    const card = fakeCard(MACHINE);
+    card.el.focus();
+    const w = mountDrawer();
+    await flushPromises();
+    show();
+    await flushPromises();
+    expect(w.text()).toContain(`已開啟 ${LABEL} 的 AI 診斷面板`);
+
+    const otherLabel = machineLabel("mixer-01");
+    await w.setProps({ machineId: "mixer-01", machineLabel: otherLabel, state: { status: "idle", machineId: "mixer-01" } });
+    await flushPromises();
+    expect(w.text()).toContain(`已開啟 ${otherLabel} 的 AI 診斷面板：按 d 開始診斷，按 Escape 收合。`);
+    expect(w.text()).not.toContain(`已開啟 ${LABEL} `);
   });
 
   it("桌機寬度：常駐側欄不掛 dialog 屬性，Esc 不被攔截", async () => {

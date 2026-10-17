@@ -1,11 +1,10 @@
 import type { TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { METRIC_THRESHOLDS } from "@flow-gatekeeper/shared";
-import { formatRelative } from "../../../shared/lib/format.js";
 
 /**
  * US1 卡片呈現純函式（telemetry 的呈現投影，不改 store 型別、不動契約）。
- * 三支：`metricUnit`（單位）、`offendingMetrics`（越界判定，供 amber/crit 染色）、
- * `relativeTimeLabel`（相對時間，委派 `shared/lib/format.ts`）。皆為決定性純函式，便於單元測試（研究 R1/R2/R3）。
+ * 兩支：`metricUnit`（單位）、`offendingMetrics`（越界判定，供 amber/crit 染色）。皆為決定性純函式，便於單元測試
+ * （研究 R1/R2）。相對時間由 `shared/lib/format.ts` 的 `formatRelative` 直接提供（原 `relativeTimeLabel` 包裝已刪）。
  */
 export type MetricKey = "temperature" | "vibration" | "throughput" | "errorRate";
 
@@ -47,12 +46,4 @@ export function offendingMetrics(t: TelemetryPoint["telemetry"]): Record<MetricK
     errorRate: classify(t.errorRate, METRIC_THRESHOLDS.errorRate.warn, METRIC_THRESHOLDS.errorRate.crit),
     throughput: null,
   };
-}
-
-/**
- * 相對時間（FR-004；格式依 013 FR-022 統一由 `formatRelative` 提供：≤ 2 秒「剛剛」、「N 秒前」、「N 分鐘前」）。
- * 讀既有 `store.staleNow`（每秒 tick；Pause 且連線中時凍結）即可更新，不另開計時器。
- */
-export function relativeTimeLabel(lastUpdated: number, now: number): string {
-  return formatRelative(lastUpdated, now);
 }

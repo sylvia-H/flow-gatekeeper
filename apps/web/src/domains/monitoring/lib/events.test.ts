@@ -3,7 +3,6 @@ import {
   EVENT_MERGE_WINDOW_MS,
   deriveTransitionEvent,
   mergeEvent,
-  pushCapped,
   type DerivedEvent,
   type Severity,
 } from "./events.js";
@@ -71,24 +70,6 @@ describe("deriveTransitionEvent（FR-010 去重）", () => {
 function ev(ts: number, machineId = "m", severity: Severity = "warning"): DerivedEvent {
   return { id: `${ts}-${machineId}-${severity}`, ts, firstTs: ts, machineId, severity, message: "x", count: 1 };
 }
-
-describe("pushCapped（FR-011 上限）", () => {
-  it("最新在頂端", () => {
-    const list: DerivedEvent[] = [];
-    pushCapped(list, ev(1));
-    pushCapped(list, ev(2));
-    expect(list[0]?.ts).toBe(2);
-    expect(list[1]?.ts).toBe(1);
-  });
-
-  it("超過 50 淘汰最舊、長度不超過 50", () => {
-    const list: DerivedEvent[] = [];
-    for (let i = 0; i < 60; i += 1) pushCapped(list, ev(i));
-    expect(list.length).toBe(50);
-    expect(list[0]?.ts).toBe(59); // 最新
-    expect(list[49]?.ts).toBe(10); // 最舊保留者（0..9 已淘汰）
-  });
-});
 
 describe("mergeEvent（data-model §10 合併視窗）", () => {
   it("回傳同一陣列（就地修改）", () => {

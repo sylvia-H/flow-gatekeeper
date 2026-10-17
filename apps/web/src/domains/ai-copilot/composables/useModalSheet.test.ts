@@ -47,7 +47,8 @@ function harness(opts: { mobile: boolean; autoFocus?: () => boolean }) {
   const els: FakeEl[] = [];
   const el = (name: string) => els.find((e) => e.name === name) ?? null;
   const opener = mk("opener");
-  const root = { ...mk("root"), querySelectorAll: () => children };
+  // sheet 內＝opener 以外的元素（opener 代表 sheet 外的卡片）。
+  const root = { ...mk("root"), querySelectorAll: () => children, contains: (other: unknown) => other !== null && other !== el("opener") };
   const children = [mk("close"), mk("hidden", false), mk("diagnose")];
   els.push(opener, root, ...children);
 
@@ -225,5 +226,123 @@ describe("bottom sheet 斷點（T073 D：推擠式側欄門檻 lg→desk／1366�
     expect(matchMedia).toHaveBeenCalledWith(MOBILE_QUERY);
     expect(sheet.isSheet.value).toBe(true);
     sheet.detach();
+  });
+});
+
+describe("createModalSheet.disengage：modal 退回非 modal（合併門第 2 輪 #1）", () => {
+  it("焦點仍在 sheet 內（中止鈕）→ 解除焦點陷阱、焦點移到指定目標，搬焦點時的 focusin 不再接手；之後關閉不歸還焦點", () => {
+    const h = harness({ mobile: true, autoFocus: () => false });
+    h.setActive("opener");
+    h.show(true);
+    h.sheet.engage();
+    expect(h.sheet.trapActive.value).toBe(true);
+    h.setActive("close"); // 模擬焦點在 sheet 內的按鈕
+
+    const target = {
+      focus: () => {
+        h.setActive("diagnose");
+        // 真瀏覽器裡 focus() 會同步派發 focusin；搬焦點期間不得被當成「使用者自己進來」
+        h.sheet.onFocusIn({ relatedTarget: null });
+      },
+      getClientRects: () => ({ length: 1 }),
+    };
+    h.sheet.disengage(() => target);
+    expect(h.sheet.trapActive.value).toBe(false);
+    expect(h.sheet.open.value).toBe(true);
+    // 非 modal：Escape 不由 sheet 攔
+    const e = h.key("Escape");
+    expect(h.onClose).not.toHaveBeenCalled();
+    expect(e.stopPropagation).not.toHaveBeenCalled();
+
+    h.show(false);
+    expect(h.focused.at(-1)).not.toBe("opener");
+  });
+
+  it("焦點遺失（中止鈕隨單列切換被移除，activeElement＝null）→ 同樣移到目標", () => {
+    const h = harness({ mobile: true });
+    h.show(true);
+    h.clearActive();
+    const focus = vi.fn();
+    h.sheet.disengage(() => ({ focus, getClientRects: () => ({ length: 1 }) }));
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(h.sheet.trapActive.value).toBe(false);
+  });
+
+  it("焦點已在 sheet 外（搜尋 Enter 後移到卡片）→ 不搬動焦點", () => {
+    const h = harness({ mobile: true });
+    h.show(true);
+    h.setActive("opener");
+    const focus = vi.fn();
+    h.sheet.disengage(() => ({ focus, getClientRects: () => ({ length: 1 }) }));
+    expect(focus).not.toHaveBeenCalled();
+    expect(h.sheet.trapActive.value).toBe(false);
+  });
+
+  it("未接手時無作用（不搬焦點）", () => {
+    const h = harness({ mobile: true, autoFocus: () => false });
+    h.show(true);
+    const focus = vi.fn();
+    h.sheet.disengage(() => ({ focus, getClientRects: () => ({ length: 1 }) }));
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("onFocusIn：焦點在 sheet 內部移動（fromInside）不接手；從外面進來才接手", () => {
+    const h = harness({ mobile: true, autoFocus: () => false });
+    h.show(true);
+    h.sheet.onFocusIn({ relatedTarget: h.el("diagnose"), fromInside: true });
+    expect(h.sheet.trapActive.value).toBe(false);
+    h.sheet.onFocusIn({ relatedTarget: h.el("opener"), fromInside: false });
+    expect(h.sheet.trapActive.value).toBe(true);
+  });
+});
+
+describe("createModalSheet 斷點監聽走共用 onMediaChange（合併門第 2 輪 #11）", () => {
+  it("舊 Safari 只有 addListener：仍能隨斷點切換 sheet 形態，detach 時解除", () => {
+    const listeners = new Set<(e: { matches: boolean }) => void>();
+    const list = {
+      matches: false,
+      addListener: vi.fn((cb: (e: { matches: boolean }) => void) => void listeners.add(cb)),
+      removeListener: vi.fn((cb: (e: { matches: boolean }) => void) => void listeners.delete(cb)),
+    };
+    const sheet = createModalSheet(() => null, vi.fn(), {
+      matchMedia: () => list,
+      activeElement: () => null,
+      defer: (fn) => fn(),
+    });
+    sheet.attach();
+    expect(sheet.isSheet.value).toBe(false);
+    expect(list.addListener).toHaveBeenCalledTimes(1);
+    listeners.forEach((cb) => cb({ matches: true }));
+    expect(sheet.isSheet.value).toBe(true);
+    sheet.detach();
+    expect(list.removeListener).toHaveBeenCalledTimes(1);
+    expect(listeners.size).toBe(0);
+  });
+});
+
+describe("createModalSheet.engage 已接手時：焦點遺失才拉回根節點（合併門第 2 輪實測追加）", () => {
+  it("已接手、焦點掉到 body（被點的「診斷」鈕隨標頭切換被移除）→ 移到根節點", () => {
+    const h = harness({ mobile: true, autoFocus: () => false });
+    h.setActive("opener");
+    h.show(true);
+    h.setActive("diagnose");
+    h.sheet.onFocusIn({ relatedTarget: h.el("opener") }); // 點「診斷」：focusin 接手
+    expect(h.sheet.trapActive.value).toBe(true);
+    h.clearActive(); // 該鈕被移除
+    h.sheet.engage();
+    expect(h.focused.at(-1)).toBe("root");
+    expect(h.sheet.trapActive.value).toBe(true);
+  });
+
+  it("已接手、焦點仍在 sheet 內 → 不動；焦點在已移除（sheet 外）的節點 → 拉回根節點", () => {
+    const h = harness({ mobile: true });
+    h.show(true);
+    expect(h.focused).toEqual(["root"]);
+    h.setActive("close");
+    h.sheet.engage();
+    expect(h.focused).toEqual(["root"]);
+    h.setActive("opener"); // contains 回 false（模擬已脫離 DOM 的節點）
+    h.sheet.engage();
+    expect(h.focused).toEqual(["root", "root"]);
   });
 });

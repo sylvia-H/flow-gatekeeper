@@ -30,6 +30,14 @@ describe("filterMachineIds（FR-015、SC-006）", () => {
     expect(filterMachineIds(MACHINE_IDS, "press 03")).toEqual([]);
   });
 
+  it("繁中名少打或多打空白也命中（合併門第 2 輪 low）", () => {
+    expect(filterMachineIds(MACHINE_IDS, "壓製機02")).toEqual(["press-02"]);
+    expect(filterMachineIds(MACHINE_IDS, "壓製機  02")).toEqual(["press-02"]);
+    expect(filterMachineIds(MACHINE_IDS, " 壓製機 0 2 ")).toEqual(["press-02"]);
+    // 去掉空白後仍不相符的不誤中
+    expect(filterMachineIds(MACHINE_IDS, "壓製機03")).toEqual([]);
+  });
+
   it("查無相符回空陣列", () => {
     expect(filterMachineIds(MACHINE_IDS, "zzz")).toEqual([]);
   });

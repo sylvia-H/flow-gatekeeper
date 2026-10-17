@@ -30,7 +30,7 @@ import {
   windowRatio as windowRatioOf,
   type RateSample,
   type RateSeries,
-} from "../lib/rate-series.js";
+} from "../../../shared/lib/rate-series.js";
 import { backpressureRatio } from "../../../shared/lib/backpressure.js";
 
 /** US3 事件保留上限（FR-011）。 */
@@ -295,8 +295,36 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     receivedMessages.value += overflow + invalid;
   }
 
+  /**
+   * 選取變更的訂閱者（非 reactive）：copilot 面板依它展開／收合（App 以 `onSelectionChange` 接線）。
+   * 合併門第 2 輪 #16：原本 App 以 `watch(selectedMachineId)` 加 `$onAction`（補「再選同一台」）兩路通知，
+   * `$onAction` 會攔到每一幀的 `applyTelemetryBatch`；改由選取 action 本身在每次呼叫時通知，一條路徑。
+   */
+  const selectionListeners = new Set<(machineId: string | null) => void>();
+
+  /** 訂閱選取變更：每次 `selectMachine`（含再選同一台）與實際生效的 `clearSelection` 都會呼叫；回傳解除函式。 */
+  function onSelectionChange(listener: (machineId: string | null) => void): () => void {
+    selectionListeners.add(listener);
+    return () => {
+      selectionListeners.delete(listener);
+    };
+  }
+
+  function notifySelection(machineId: string | null): void {
+    for (const listener of selectionListeners) listener(machineId);
+  }
+
+  /** 選台（卡片、事件列、異常摘要、搜尋 Enter、快捷鍵共用）。再選同一台也通知：Escape 收合後再點同一張卡依偏好展開。 */
   function selectMachine(machineId: string): void {
     selectedMachineId.value = machineId;
+    notifySelection(machineId);
+  }
+
+  /** 取消選取（Escape 最後一層）；本來就沒有選取時不動作、不通知。 */
+  function clearSelection(): void {
+    if (selectedMachineId.value === null) return;
+    selectedMachineId.value = null;
+    notifySelection(null);
   }
 
   /**
@@ -359,7 +387,13 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     const series = rateSeries.value;
     const wasStale = series.stale;
     markStale(series, connectionStatus.value !== "connected");
-    if (wasStale && !series.stale) clearSamples(series);
+    if (wasStale && !series.stale) {
+      clearSamples(series);
+      // 斷線期間排下的無效筆數（例如斷線中按「恢復」排的 2 筆）不留到重連後：那時 pump 早已 flush 完，
+      // 留著會把重連後頭幾秒的正常樣本標成無效（合併門第 2 輪 #8）。`clearSamples` 在 shared/lib/rate-series.ts，
+      // 不改它的語意，在 store 側直接歸零；重連當下若仍暫停，下一行照常再排 1 筆。
+      series.invalidPushes = 0;
+    }
     if (paused.value) invalidateNext(series, 1);
     const pushed = pushSample(
       series,
@@ -439,6 +473,8 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     applyTelemetryBatch,
     recordDropped,
     selectMachine,
+    clearSelection,
+    onSelectionChange,
     clearLatch,
     setConnectionStatus,
     setClientId,

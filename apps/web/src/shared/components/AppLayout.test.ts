@@ -12,7 +12,7 @@ import { startActiveState } from "../../domains/ai-copilot/lib/copilot-reducer.j
  * Copilot 面板開關與手動收合偏好（T059／T062／T064、data-model §2、FR-033、FR-034a）。
  *
  * 行為測試掛真的 App（AppLayout＋CopilotDrawer 原樣，其餘重元件 stub 掉、WebSocket 換成不會連線的假物件），
- * 驗的是 App 實際的接線：選取 watch、事件分流（收合鈕 `close`／Escape `dismiss`／遮罩 `dismiss-panel`）、
+ * 驗的是 App 實際的接線：store 的選取通知（`onSelectionChange`）、事件分流（收合鈕 `close`／Escape `dismiss`／遮罩 `dismiss-panel`）、
  * 快捷鍵面板層，以及 copilot store 的偏好讀寫；手機摘要條、異常清單覆蓋層與工具列覆蓋式搜尋的接線
  * 與 Escape 分層（T061／T060）則換成真元件驗。另以純 props 掛 AppLayout 驗 peek 條與 sheet 外觀。
  */
@@ -194,7 +194,8 @@ const storedPreference = (): unknown => {
 
 async function select(machineId: string | null): Promise<void> {
   const monitoring = useMonitoringStore();
-  if (machineId === null) monitoring.selectedMachineId = null;
+  // 選台／取消選台都走 store action（App 只從 store 的選取通知同步面板，合併門第 2 輪 #16）
+  if (machineId === null) monitoring.clearSelection();
   else monitoring.selectMachine(machineId);
   await flushPromises();
 }
@@ -471,6 +472,36 @@ describe("1024–1365px 同樣走 bottom-sheet（T073 D，推擠門檻提到 des
     expect(storedPreference()).toBeUndefined();
     expect(useMonitoringStore().selectedMachineId).toBe("press-02");
     expect(peek(w).exists()).toBe(true);
+  });
+
+  it("1024 寬：modal sheet 按「中止診斷」→ 退回非 modal 單列（aria-modal=false、遮罩消失、焦點在「診斷」鈕），可直接點其他卡改選（合併門第 2 輪 #1）", async () => {
+    stubViewport(1024);
+    const w = mountApp();
+    await select("press-02");
+    showSheet();
+    await flushPromises();
+    useCopilotStore().jobs.set("press-02", startActiveState("press-02", "job-1"));
+    await flushPromises();
+    const dialog = w.get('[role="dialog"]');
+    expect(dialog.attributes("aria-modal")).toBe("true");
+    expect(w.find(".bg-scrim\\/50").exists()).toBe(true);
+
+    const cancel = w.findAll("button").find((b) => b.text() === "中止診斷")!;
+    (cancel.element as HTMLButtonElement).focus();
+    await cancel.trigger("click");
+    await flushPromises();
+    expect(useCopilotStore().stateFor("press-02").status).toBe("idle");
+    expect(dialog.attributes("aria-modal")).toBe("false");
+    expect(w.find(".bg-scrim\\/50").exists()).toBe(false);
+    // 焦點不掉到 body：測試環境連不上 WS，「診斷」停用、不能接焦點，落在 sheet 根節點（連線時落在「診斷」，見 CopilotDrawer.test）
+    expect(document.activeElement).toBe(dialog.element);
+    expect(isOpen(w)).toBe(true);
+
+    // 沒有遮罩攔截：改選另一台，sheet 跟著換機台、維持展開
+    await select("oven-04");
+    expect(useMonitoringStore().selectedMachineId).toBe("oven-04");
+    expect(isOpen(w)).toBe(true);
+    expect(dialog.attributes("aria-modal")).toBe("false");
   });
 
   it("1280、1365 寬仍是 sheet；1366 寬是常駐側欄（不掛 dialog 語意）", async () => {
