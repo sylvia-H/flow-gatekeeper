@@ -1,4 +1,6 @@
 import type { MachineState } from "@flow-gatekeeper/contracts";
+import { formatRelative } from "../../../shared/lib/format.js";
+import { STATE_STYLE } from "../../../shared/lib/state-style.js";
 
 /**
  * 異常標記（data-model §5–§6、FR-005/006、SC-009）。每台一份，記住「這次異常」直到回復後 30 秒。
@@ -31,7 +33,7 @@ export interface AnomalySummaryItem {
   active: boolean;
   /** 已由操作者確認（劃線）。 */
   struck: boolean;
-  /** 相對時間錨點：仍異常為 `enteredAt`（「進入 N 秒前」），已回復為 `recoveredAt`（「已回復 N 秒前」）。 */
+  /** 相對時間錨點：仍異常為 `enteredAt`（「進入 N 秒前」），已回復為 `recoveredAt`（「N 秒前回復」）。 */
   since: number;
 }
 
@@ -122,4 +124,20 @@ export function summarize(
     struck: isLatchStruck(latch),
     since: latch.recoveredAt ?? latch.enteredAt,
   }));
+}
+
+/**
+ * 異常標記的可見文案（卡片底列 pill、「最近異常」摘要列與手機異常清單共用；research R13 時態註記，T073 第四輪）。
+ * 同一張卡上「正常／警告／嚴重」只留給狀態徽章當現在式；標記若已回復一律以「曾」起頭寫成過去式，
+ * 診斷 chip 另以「AI：」起頭（`diagnosisBadgeText`），三者不再同字同形：
+ * - 仍異常（錨 `enteredAt`）：「嚴重 · 進入 N 秒前」——它就是現在式，與徽章一致；
+ * - 已回復（錨 `recoveredAt`）：「曾嚴重 · N 秒前回復」。
+ * `formatRelative` 在 2 秒內回「剛剛」，此時寫成「嚴重 · 剛進入」／「曾嚴重 · 剛回復」，避免「進入 剛剛」的語序。
+ * 確認（劃線）不改文案，只由呈現端加劃線與 sr-only「已確認」。
+ */
+export function latchText(mark: { level: LatchLevel; active: boolean; since: number }, now: number): string {
+  const label = STATE_STYLE[mark.level].label;
+  const rel = formatRelative(mark.since, now);
+  if (mark.active) return `${label} · ${rel === "剛剛" ? "剛進入" : `進入 ${rel}`}`;
+  return `曾${label} · ${rel === "剛剛" ? "剛回復" : `${rel}回復`}`;
 }

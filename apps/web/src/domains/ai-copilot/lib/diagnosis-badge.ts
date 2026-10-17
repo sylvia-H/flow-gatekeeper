@@ -43,17 +43,21 @@ export function sameDiagnosisBadge(a: DiagnosisBadge, b: DiagnosisBadge): boolea
 }
 
 /**
- * chip 的可見文案：「診斷中 60%」（尚無進度為「診斷中」）／「結果 · 嚴重」／「快取 · 正常」／「失敗」；
- * 無診斷回 null（不渲染）。嚴重度譯名取自 `severityLabel`。可讀名稱前綴「診斷：」由呈現端自行加上。
+ * chip 的可見文案：「診斷中 60%」（尚無進度為「診斷中」）／「AI：嚴重」（完成）／「AI：正常 · 快取」（快取命中）／「AI 失敗」；
+ * 無診斷回 null（不渲染）。嚴重度譯名取自 `severityLabel`。
+ * 「AI：」前綴（T073 第四輪）：同一張卡上狀態徽章（現在）、異常標記（過去，已回復者以「曾」起頭）與本 chip（AI 判定）
+ * 原本同為「正常／警告／嚴重」同字同形；前綴兩字就交代「這是 AI 的判定」，220px 卡寬的 id 列仍放得下
+ * （第三輪拿掉的「結果 ·」前綴比它長）。快取標記放在嚴重度之後：空間不足時先讀到的仍是判定本身。
+ * 可讀名稱前綴「診斷：」由呈現端加上。
  */
 export function diagnosisBadgeText(badge: DiagnosisBadge): string | null {
   switch (badge.kind) {
     case "active":
       return badge.progress === null ? "診斷中" : `診斷中 ${badge.progress}%`;
     case "completed":
-      return `${badge.cached ? "快取" : "結果"} · ${severityLabel(badge.severity)}`;
+      return badge.cached ? `AI：${severityLabel(badge.severity)} · 快取` : `AI：${severityLabel(badge.severity)}`;
     case "failed":
-      return "失敗";
+      return "AI 失敗";
     default:
       return null;
   }

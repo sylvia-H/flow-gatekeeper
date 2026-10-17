@@ -60,10 +60,11 @@ describe("diagnosisBadgeText（FR-028）", () => {
     [{ kind: "none" }, null],
     [{ kind: "active", progress: 60 }, "診斷中 60%"],
     [{ kind: "active", progress: null }, "診斷中"],
-    [{ kind: "completed", severity: "critical", cached: false }, "結果 · 嚴重"],
-    [{ kind: "completed", severity: "warning", cached: false }, "結果 · 警告"],
-    [{ kind: "completed", severity: "ok", cached: true }, "快取 · 正常"],
-    [{ kind: "failed" }, "失敗"],
+    [{ kind: "completed", severity: "critical", cached: false }, "AI：嚴重"],
+    [{ kind: "completed", severity: "warning", cached: false }, "AI：警告"],
+    [{ kind: "completed", severity: "ok", cached: true }, "AI：正常 · 快取"],
+    [{ kind: "completed", severity: "warning", cached: true }, "AI：警告 · 快取"],
+    [{ kind: "failed" }, "AI 失敗"],
   ];
   it.each(CASES)("%o → %s", (badge, text) => {
     expect(diagnosisBadgeText(badge)).toBe(text);

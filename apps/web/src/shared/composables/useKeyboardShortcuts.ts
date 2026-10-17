@@ -49,7 +49,7 @@ export interface KeyboardShortcutHandlers {
   clearSelection(): void;
   /** `d`：診斷選取機台；由 `useDiagnoseTrigger` 提供，內含「可診斷」前置條件與去重。 */
   diagnose(): void;
-  /** `x`：清除（確認）該台的異常標記。 */
+  /** `x`：確認該台的異常標記（劃線保留至期滿）。 */
   clearLatch(machineId: string): void;
   /** `?`：開關快捷鍵說明層。 */
   toggleHelp(): void;
@@ -57,7 +57,7 @@ export interface KeyboardShortcutHandlers {
   getSelectedId(): string | null;
   /** 搜尋框 Enter：恰一台才選取。 */
   getSearchResultIds(): readonly string[];
-  /** `x` 守門：該台標記可見才清除。 */
+  /** `x` 守門：該台標記可見才確認。 */
   isLatchVisible(machineId: string): boolean;
   /**
    * Escape 各層，依 `ESCAPE_LAYERS` 順序關第一個開著的層。

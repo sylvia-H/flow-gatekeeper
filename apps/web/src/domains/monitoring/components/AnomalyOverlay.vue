@@ -18,7 +18,7 @@ import type { AnomalySummaryItem } from "../lib/anomaly-latch.js";
  *
  * 行為：
  * - 選一台：轉發 `select` 後再 emit `close`，呼叫端選台並收合覆蓋層。
- * - 清除標記：只轉發 `clear`，覆蓋層維持開著。
+ * - 確認標記：只轉發 `clear`，覆蓋層維持開著。
  * - Escape：攔下冒泡與預設行為後 emit `close`，App 層的 Escape 不會再關下一層；
  *   焦點不在面板內時，由 App 的快捷鍵層（`layers["anomaly-overlay"]`）關閉。
  * - 點遮罩 emit `close`。
@@ -159,9 +159,9 @@ function onKeydown(event: KeyboardEvent): void {
       @keydown="onKeydown"
     >
       <!--
-        標題列不捲動：清單捲動時列不會滑到關閉鈕底下，清除鈕不會被誤觸成關閉。
+        標題列不捲動：清單捲動時列不會滑到關閉鈕底下，確認鈕不會被誤觸成關閉。
         可見標題只作視覺（aria-hidden），讀屏仍由 AnomalySummary 的 h2（轉為 sr-only）命名清單。
-        關閉鈕在 DOM 最前（Tab 第一站），與每列清除鈕同一欄。
+        關閉鈕在 DOM 最前（Tab 第一站），與每列確認鈕同一欄。
       -->
       <div class="flex h-10 shrink-0 items-center justify-between gap-3 pl-3.5 pr-3">
         <span class="text-sm font-semibold text-ink-2" aria-hidden="true">最近異常</span>

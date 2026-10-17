@@ -6,6 +6,8 @@ import TopBar from "./TopBar.vue";
 import { useMonitoringStore } from "../../domains/monitoring/stores/monitoring.store.js";
 import { CONNECTION_NOT_READY_MESSAGE } from "../../domains/ai-copilot/composables/useDiagnoseTrigger.js";
 import { resetThemeStateForTest } from "../composables/useTheme.js";
+import { useCopilotStore } from "../../domains/ai-copilot/stores/copilot.store.js";
+import { startActiveState } from "../../domains/ai-copilot/lib/copilot-reducer.js";
 
 /**
  * TopBar 分組與文案（spec FR-034、FR-038、research R13）。
@@ -70,8 +72,8 @@ describe("TopBar 語意分組（FR-034）", () => {
     const counts = Object.fromEntries(
       w.findAll('[role="group"]').map((g) => [g.attributes("aria-label"), g.findAll(OPTION_SELECTOR).length]),
     );
-    // 系統狀態：指標面板觸發鈕、連線 chip、未授權 chip（背壓計量已於 T036 移出工具列，改為主區背壓 strip）
-    expect(counts).toEqual({ 導航: 1, 播放控制: 2, 系統狀態: 3, 主要動作: 1 });
+    // 系統狀態：指標面板觸發鈕、連線 chip、未授權 chip、快捷鍵說明鈕（背壓計量已於 T036 移出工具列，改為主區背壓 strip）
+    expect(counts).toEqual({ 導航: 1, 播放控制: 2, 系統狀態: 4, 主要動作: 1 });
     for (const g of w.findAll('[role="group"]')) {
       expect(g.element.children.length, g.attributes("aria-label")).toBeLessThanOrEqual(4);
     }
@@ -88,16 +90,38 @@ describe("TopBar 語意分組（FR-034）", () => {
     expect(store.searchQuery).toBe("烤爐");
   });
 
-  it("播放控制：暫停／恢復文案隨狀態切換，Mock 頻率維持 disabled", async () => {
+  it("播放控制：暫停是切換鈕——名稱恆為「暫停」、以 aria-pressed 與墨色實底表達按下，Mock 頻率維持 disabled", async () => {
     const store = useMonitoringStore();
     const w = mountBar();
     const [pause, mock] = group(w, "播放控制").findAll("button");
     expect(text(pause!.element)).toBe("暫停");
+    expect(pause!.attributes("aria-label")).toBe("暫停");
+    expect(pause!.attributes("aria-pressed")).toBe("false");
+    expect(pause!.classes()).not.toContain("bg-ink");
+
     await pause!.trigger("click");
     expect(store.paused).toBe(true);
-    expect(text(pause!.element)).toBe("恢復");
+    // 按下態：名稱不變（避免「恢復，已按下」的矛盾朗讀），外觀比照 segmented 選中段，圖示實心
+    expect(text(pause!.element)).toBe("暫停");
+    expect(pause!.attributes("aria-label")).toBe("暫停");
+    expect(pause!.attributes("aria-pressed")).toBe("true");
+    expect(pause!.classes()).toEqual(expect.arrayContaining(["bg-ink", "text-surface-strong", "font-semibold"]));
+    expect(pause!.get("svg").classes()).toContain("fill-current");
+    expect(pause!.attributes("title")).toContain("再按一次恢復");
+
+    await pause!.trigger("click");
+    expect(store.paused).toBe(false);
+    expect(pause!.attributes("aria-pressed")).toBe("false");
     expect(text(mock!.element)).toBe("Mock 頻率");
     expect(mock!.attributes("disabled")).toBeDefined();
+  });
+
+  it("expose focusPauseToggle：把焦點交回暫停鈕（暫停橫幅的「恢復」按下後橫幅消失，焦點不掉到 body）", () => {
+    const w = mountBar();
+    const pause = w.get('[data-fg="pause-toggle"]');
+    expect(document.activeElement).not.toBe(pause.element);
+    (w.vm as unknown as { focusPauseToggle: () => void }).focusPauseToggle();
+    expect(document.activeElement).toBe(pause.element);
   });
 });
 
@@ -216,6 +240,31 @@ describe("搜尋框 Enter 選取唯一結果（T056、FR-034a）", () => {
   });
 });
 
+describe("快捷鍵說明鈕（T073 C：可見入口）", () => {
+  const helpButton = (w: VueWrapper) => w.get('[data-fg="shortcut-help-toggle"]');
+
+  it("圖示鈕在系統狀態分組：可讀名稱「快捷鍵說明」、title 帶快捷鍵、宣告開啟對話框", () => {
+    const w = mountBar();
+    const button = group(w, "系統狀態").get('[data-fg="shortcut-help-toggle"]');
+    expect(button.element.tagName).toBe("BUTTON");
+    expect(button.attributes("type")).toBe("button");
+    expect(button.attributes("aria-label")).toBe("快捷鍵說明");
+    expect(button.attributes("title")).toBe("快捷鍵說明（?）");
+    expect(button.attributes("aria-haspopup")).toBe("dialog");
+    expect(button.attributes("aria-keyshortcuts")).toBe("?");
+    expect(button.attributes("aria-expanded")).toBe("false");
+  });
+
+  it("點擊 emit toggle-help（開關由 App 持有，不另立狀態）；aria-expanded 跟隨 helpOpen prop", async () => {
+    const w = mountBar();
+    await helpButton(w).trigger("click");
+    await helpButton(w).trigger("click");
+    expect(w.emitted("toggle-help")).toHaveLength(2);
+    await w.setProps({ helpOpen: true });
+    expect(helpButton(w).attributes("aria-expanded")).toBe("true");
+  });
+});
+
 describe("主要動作「診斷」", () => {
   it("文案為「診斷」、深青實心；未選台時 disabled", () => {
     const w = mountBar();
@@ -242,6 +291,30 @@ describe("主要動作「診斷」", () => {
     const button = diagnoseButton(w);
     expect(button.attributes("disabled")).toBeDefined();
     expect(button.attributes("title")).toBe(CONNECTION_NOT_READY_MESSAGE);
+  });
+
+  it("已選台、連線正常但該台診斷進行中（去重）→ disabled，title 與 describedby 為「該機台診斷進行中」", async () => {
+    goLive().selectMachine("press-02");
+    const copilot = useCopilotStore();
+    copilot.jobs.set("press-02", startActiveState("press-02", "job-1"));
+    const w = mountBar();
+    await w.vm.$nextTick();
+    const button = diagnoseButton(w);
+    expect(button.attributes("disabled")).toBeDefined();
+    expect(button.attributes("title")).toBe("該機台診斷進行中");
+    expect(document.getElementById(button.attributes("aria-describedby")!)?.textContent).toBe("該機台診斷進行中");
+  });
+
+  it("停用原因（與可用時的動作說明）經 aria-describedby 給輔助技術，不只在 title", async () => {
+    const store = useMonitoringStore();
+    const w = mountBar();
+    const describedBy = () => document.getElementById(diagnoseButton(w).attributes("aria-describedby")!);
+    expect(describedBy()?.textContent).toBe("先選取機台");
+    expect(describedBy()?.classList.contains("sr-only")).toBe(true);
+    store.setConnectionStatus("disconnected");
+    store.selectMachine("press-02");
+    await w.vm.$nextTick();
+    expect(describedBy()?.textContent).toBe(CONNECTION_NOT_READY_MESSAGE);
   });
 });
 
@@ -399,7 +472,7 @@ describe("工具列三段收合（T060、FR-032、research R10）", () => {
     for (const button of [pause!, mock!, diagnoseButton(w)]) {
       expect(button.get("span").classes()).not.toContain("sr-only");
     }
-    expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 2, 系統狀態: 3, 主要動作: 1 });
+    expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 2, 系統狀態: 4, 主要動作: 1 });
   });
 
   it("icons：暫停／Mock 頻率／診斷的文字改為 sr-only，可讀名稱保留；搜尋框與指標面板仍在", async () => {
@@ -418,7 +491,11 @@ describe("工具列三段收合（T060、FR-032、research R10）", () => {
     }
     await pause!.trigger("click");
     expect(store.paused).toBe(true);
-    expect(pause!.attributes("aria-label")).toBe("恢復");
+    // 只剩圖示的段位也有按下態：aria-pressed、墨色實底、實心圖示；名稱不變
+    expect(pause!.attributes("aria-label")).toBe("暫停");
+    expect(pause!.attributes("aria-pressed")).toBe("true");
+    expect(pause!.classes()).toContain("bg-ink");
+    expect(pause!.get("svg").classes()).toContain("fill-current");
     expect(group(w, "導航").find('input[type="search"]').exists()).toBe(true);
     expect(group(w, "系統狀態").find('button[aria-label="指標面板"]').exists()).toBe(true);
     expect(w.find('[data-fg="search-toggle"]').exists()).toBe(false);
@@ -448,9 +525,10 @@ describe("工具列三段收合（T060、FR-032、research R10）", () => {
     expect(auth.attributes("aria-label")).toBe(store.authError);
     expect(auth.get("span:not([aria-hidden])").classes()).toContain("sr-only");
 
-    // 桌機（rail 在）時工具列即使 < 640px 也不放主題切換，避免與 rail 重複
+    // 桌機（rail 在）時工具列即使 < 640px 也不放主題切換，避免與 rail 重複；快捷鍵說明鈕 ≥ md 恆常駐
     expect(w.find('[data-fg="theme-toggle"]').exists()).toBe(false);
-    expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 1, 系統狀態: 2, 主要動作: 1 });
+    expect(group(w, "系統狀態").find('[data-fg="shortcut-help-toggle"]').exists()).toBe(true);
+    expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 1, 系統狀態: 3, 主要動作: 1 });
   });
 
   it("手機寬度（rail 隱藏）：主題切換以單一圖示鈕移入系統狀態分組，各組 ≤ 4", async () => {
@@ -488,6 +566,8 @@ describe("工具列三段收合（T060、FR-032、research R10）", () => {
     expect(status.get('[data-fg="auth-chip"]').attributes("role")).toBe("alert");
     expect(status.get('[data-fg="theme-toggle"]').element.tagName).toBe("BUTTON");
     expect(status.find('button[aria-label="指標面板"]').exists()).toBe(false);
+    // 390 compact＋未授權：餘裕不足，快捷鍵說明鈕讓位（`?` 仍可用）
+    expect(status.find('[data-fg="shortcut-help-toggle"]').exists()).toBe(false);
     expect(diagnoseButton(w).attributes("aria-label")).toBe("診斷");
     expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 1, 系統狀態: 3, 主要動作: 1 });
   });
@@ -502,12 +582,23 @@ describe("工具列三段收合（T060、FR-032、research R10）", () => {
     expect(group(w, "系統狀態").find('[data-fg="theme-toggle"]').exists()).toBe(true);
     expect(group(w, "系統狀態").find('button[aria-label="指標面板"]').exists()).toBe(false);
     expect(group(w, "導航").find('input[type="search"]').exists()).toBe(true);
-    expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 2, 系統狀態: 3, 主要動作: 1 });
+    // 非 compact 有餘裕：快捷鍵說明鈕照常渲染（連線 chip、未授權 chip、主題切換、說明鈕）
+    expect(group(w, "系統狀態").find('[data-fg="shortcut-help-toggle"]').exists()).toBe(true);
+    expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 2, 系統狀態: 4, 主要動作: 1 });
   });
 
   it("桌機寬度（rail 在）的 full：工具列不放主題切換", async () => {
     const w = await mountAt(1000);
     expect(w.find('[data-fg="theme-toggle"]').exists()).toBe(false);
+  });
+
+  it("手機寬度 compact、無未授權 chip：快捷鍵說明鈕在系統狀態分組（連線 chip、主題切換、說明鈕）", async () => {
+    narrow = true;
+    goLive();
+    const w = await mountAt(366);
+    expect(exposed(w).size).toBe("compact");
+    expect(group(w, "系統狀態").find('[data-fg="shortcut-help-toggle"]').exists()).toBe(true);
+    expect(optionCounts(w)).toEqual({ 導航: 1, 播放控制: 1, 系統狀態: 3, 主要動作: 1 });
   });
 });
 

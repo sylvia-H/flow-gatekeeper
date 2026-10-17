@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch, type Ref } from "vue";
-import { Search, Stethoscope, Gauge, Pause, Play, ShieldAlert } from "lucide-vue-next";
+import { Search, Stethoscope, Gauge, Pause, ShieldAlert, Keyboard } from "lucide-vue-next";
 import MetricsPanel from "./MetricsPanel.vue";
 import ThemeToggle from "./ThemeToggle.vue";
 import { isImeComposing } from "../lib/shortcuts.js";
@@ -12,17 +12,27 @@ import { useDiagnoseTrigger } from "../../domains/ai-copilot/composables/useDiag
 
 /**
  * 工具列（spec FR-034）：四個語意分組，各組可見選項 ≤ 4——
- * 導航（搜尋）／播放控制（暫停・恢復、Mock 頻率）／系統狀態（連線 chip、未授權 chip、
- * dev 指標面板、手機時的主題切換）／主要動作（診斷）。背壓計量已移出工具列，改為主區頂端常駐的背壓 strip（US2）。
+ * 導航（搜尋）／播放控制（暫停切換鈕、Mock 頻率）／系統狀態（連線 chip、未授權 chip、
+ * dev 指標面板、手機時的主題切換、快捷鍵說明鈕）／主要動作（診斷）。背壓計量已移出工具列，改為主區頂端常駐的背壓 strip（US2）。
  * 連線 chip 讀 **store.connectionStatus 單一來源**；診斷可用性集中在 `useDiagnoseTrigger`。
  *
  * 三段收合（FR-032、research R10）依「工具列自身的實際寬度」決定（＝中間欄可用空間，隨 rail 寬度、
  * Copilot 面板開合與視窗寬度變化），比視窗斷點準：
  * - `full`（≥ 820px）：全部控制項帶文字。
- * - `icons`（640–819px）：暫停／恢復、Mock 頻率、指標、診斷只留圖示（文字留給螢幕閱讀器）。
+ * - `icons`（640–819px）：暫停、Mock 頻率、指標、診斷只留圖示（文字留給螢幕閱讀器）。
  * - `compact`（< 640px）：搜尋收成圖示鈕，點擊或 `/` 展開為覆蓋式輸入框；Mock 頻率與指標面板不渲染。
  */
 const store = useMonitoringStore();
+
+const props = withDefaults(defineProps<{ /** 快捷鍵說明層是否開著（說明鈕的 `aria-expanded`）。 */ helpOpen?: boolean }>(), {
+  helpOpen: false,
+});
+
+/**
+ * 快捷鍵說明鈕（T073 C：critique H6／H10「快捷鍵沒有可見入口」）：點擊 emit `toggle-help`，
+ * 由 App 以與 `?` 快捷鍵同一個開關（`helpOpen`）切換說明層，不另立狀態。
+ */
+const emit = defineEmits<{ (e: "toggle-help"): void }>();
 
 /** 診斷可用性：有選台、有連線、該台非進行中（去重）——判斷集中在共用入口。 */
 const { connectionBlockedReason, canDiagnoseSelected: canDiagnose, diagnose } = useDiagnoseTrigger();
@@ -32,11 +42,15 @@ function onDiagnose(): void {
   diagnose(store.selectedMachineId);
 }
 
-const diagnoseHint = computed(() =>
-  store.selectedMachineId === null
-    ? "先選取機台"
-    : (connectionBlockedReason.value ?? "對選取機台執行 AI 診斷"),
-);
+/** 診斷鈕說明的 id：停用原因（或可用時的動作說明）經 `aria-describedby` 給輔助技術，不只在 `title`。 */
+const diagnoseHintId = useId();
+
+/** 停用原因依序：未選台 → 連線未就緒 → 該台診斷進行中（去重）；可用時為動作說明。`title` 與 describedby 共用。 */
+const diagnoseHint = computed(() => {
+  if (store.selectedMachineId === null) return "先選取機台";
+  if (connectionBlockedReason.value !== null) return connectionBlockedReason.value;
+  return canDiagnose.value ? "對選取機台執行 AI 診斷" : "該機台診斷進行中";
+});
 
 const CONNECTION_LABEL: Record<ConnectionStatus, string> = {
   connected: "已連線",
@@ -133,6 +147,13 @@ const railHidden = useMediaQuery("(max-width: 767.98px)");
  * 再加指標鈕會把搜尋框擠到只剩約 58px、截斷 placeholder。
  */
 const showMetricsInBar = computed(() => showMetricsPanel && !compact.value && !railHidden.value);
+
+/**
+ * 快捷鍵說明鈕：≥ md（rail 在）恆常駐。手機寬度（< md）的 compact 工具列另有主題切換，390px 寬時約剩 78px
+ * 餘裕（「重新連線中」再吃 28px 仍放得下 38px 鈕＋8px 間距）；未授權 chip 出現時只剩約 36px 放不下，
+ * 故只有「compact＋rail 隱藏＋未授權」這個組合不渲染（`?` 快捷鍵恆可用；觸控裝置本就少有實體鍵盤）。
+ */
+const showHelpButton = computed(() => !(compact.value && railHidden.value && store.authError !== null));
 
 onUnmounted(() => {
   observer?.disconnect();
@@ -241,6 +262,15 @@ async function onSearchEnter(event: KeyboardEvent): Promise<void> {
   document.querySelector<HTMLElement>(`.machine-card[data-machine="${id}"]`)?.focus();
 }
 
+/**
+ * 暫停切換鈕：主區暫停橫幅的「恢復」按下後橫幅消失，App 把焦點交回這顆鈕（焦點不掉到 body，
+ * 鍵盤使用者原地就能再暫停）。
+ */
+const pauseToggle = ref<HTMLButtonElement | null>(null);
+function focusPauseToggle(): void {
+  pauseToggle.value?.focus();
+}
+
 defineExpose({
   searchInput,
   size,
@@ -248,11 +278,18 @@ defineExpose({
   openSearchOverlay,
   closeSearchOverlay,
   focusSearch,
+  focusPauseToggle,
 });
 
 /** 工具列次要按鈕的共用外觀：桌邊上的玻璃小鈕。 */
 const TOOL_BUTTON =
   "flex h-9 items-center gap-1.5 rounded-control border border-edge bg-surface/72 px-2.5 text-sm text-ink-2 shadow-glass focus:outline-none focus-visible:ring-2 focus-visible:ring-focus";
+
+/** 暫停鈕兩態：未按下同一般工具鈕；按下比照 segmented 選中段（`bg-ink text-surface-strong font-semibold`）。 */
+const PAUSE_BASE =
+  "flex h-9 items-center gap-1.5 rounded-control border px-2.5 text-sm transition-colors duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-rim";
+const PAUSE_IDLE = `${PAUSE_BASE} border-edge bg-surface/72 text-ink-2 shadow-glass hover:bg-surface hover:text-ink`;
+const PAUSE_PRESSED = `${PAUSE_BASE} border-ink bg-ink font-semibold text-surface-strong`;
 </script>
 
 <template>
@@ -328,17 +365,22 @@ const TOOL_BUTTON =
       </div>
     </div>
 
-    <!-- 播放控制：暫停期間續收 buffer、恢復跳到最新 -->
+    <!-- 播放控制：暫停期間續收 buffer、恢復跳到最新。暫停鈕是切換鈕：名稱恆為「暫停」、按下態以
+         aria-pressed 與 segmented 選中段同款的墨色實底表達（只剩圖示的段位也看得出按下）；
+         恢復可再按一次，或用主區暫停橫幅內的「恢復」 -->
     <div role="group" aria-label="播放控制" class="flex shrink-0 items-center gap-2">
       <button
+        ref="pauseToggle"
         type="button"
-        :class="[TOOL_BUTTON, 'transition-colors duration-150 hover:bg-surface hover:text-ink']"
-        :aria-label="store.paused ? '恢復' : '暫停'"
-        :title="store.paused ? '恢復畫面更新' : '暫停畫面更新（續收資料）'"
+        data-fg="pause-toggle"
+        :class="store.paused ? PAUSE_PRESSED : PAUSE_IDLE"
+        aria-label="暫停"
+        :aria-pressed="store.paused ? 'true' : 'false'"
+        :title="store.paused ? '已暫停畫面更新（續收資料）；再按一次恢復' : '暫停畫面更新（續收資料）'"
         @click="store.togglePause()"
       >
-        <component :is="store.paused ? Play : Pause" class="h-4 w-4 shrink-0" aria-hidden="true" />
-        <span :class="labelClass">{{ store.paused ? "恢復" : "暫停" }}</span>
+        <Pause class="h-4 w-4 shrink-0" :class="store.paused ? 'fill-current' : ''" aria-hidden="true" />
+        <span :class="labelClass">暫停</span>
       </button>
 
       <!-- Mock 頻率（disabled 佔位，FR-027）：compact 不渲染 -->
@@ -393,6 +435,22 @@ const TOOL_BUTTON =
 
       <!-- 手機寬度（rail 隱藏）時主題切換移到這裡（FR-033a）；工具列內一律用單一圖示鈕（rail 仍是兩段式） -->
       <ThemeToggle v-if="railHidden" variant="icon" />
+
+      <!-- 快捷鍵說明（與 `?` 同一個開關）：所有段位都只留圖示，可讀名稱在 aria-label、快捷鍵在 title -->
+      <button
+        v-if="showHelpButton"
+        type="button"
+        data-fg="shortcut-help-toggle"
+        aria-label="快捷鍵說明"
+        title="快捷鍵說明（?）"
+        aria-haspopup="dialog"
+        aria-keyshortcuts="?"
+        :aria-expanded="props.helpOpen ? 'true' : 'false'"
+        :class="[TOOL_BUTTON, 'transition-colors duration-150 hover:bg-surface hover:text-ink']"
+        @click="emit('toggle-help')"
+      >
+        <Keyboard class="h-4 w-4 shrink-0" aria-hidden="true" />
+      </button>
     </div>
 
     <!-- 主要動作：作用於選取機台；無選取／無連線／該台進行中時 disabled -->
@@ -402,6 +460,7 @@ const TOOL_BUTTON =
         :disabled="!canDiagnose"
         aria-label="診斷"
         :title="diagnoseHint"
+        :aria-describedby="diagnoseHintId"
         class="flex h-9 shrink-0 items-center gap-1.5 rounded-control border border-accent-strong bg-accent text-sm font-semibold text-surface-strong transition-colors duration-150 hover:bg-accent-strong focus:outline-none focus-visible:ring-2 focus-visible:ring-focus focus-visible:ring-offset-2 focus-visible:ring-offset-rim disabled:cursor-not-allowed disabled:border-edge disabled:bg-surface/72 disabled:text-ink-3"
         :class="size === 'full' ? 'px-4' : 'px-2.5'"
         @click="onDiagnose"
@@ -409,6 +468,8 @@ const TOOL_BUTTON =
         <Stethoscope class="h-4 w-4 shrink-0" aria-hidden="true" />
         <span :class="labelClass">診斷</span>
       </button>
+      <!-- 停用原因／動作說明：鍵盤與螢幕閱讀器可讀（不改視覺） -->
+      <span :id="diagnoseHintId" class="sr-only">{{ diagnoseHint }}</span>
     </div>
   </div>
 </template>

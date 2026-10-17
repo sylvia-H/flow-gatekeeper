@@ -103,6 +103,7 @@ function mountWithStore(): VueWrapper {
           summary: null,
           canDiagnose: copilot.canDiagnose(MACHINE, true),
           connectionBlockedReason: null,
+          onDiagnose: () => void copilot.diagnose(MACHINE, SOCKET),
           onCancel: () => copilot.cancel(MACHINE),
           onRetry: () => void copilot.retry(MACHINE, SOCKET),
         });
@@ -151,17 +152,31 @@ function metaValue(w: VueWrapper, label: string): string | undefined {
     .text();
 }
 
+/**
+ * 推擠式側欄（≥ 1366px）：matchMedia 不命中 sheet 斷點。happy-dom 預設視窗 1024 寬會命中 `MOBILE_QUERY`，
+ * 以標頭＋內容兩區斷言的測試要明確釘在桌機形態（sheet 閒置改為單列，見行動版 describe）。
+ */
+function stubDesktop(): void {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({ matches: false, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  );
+}
+
 describe("CopilotDrawer 空狀態與 idle", () => {
+  beforeEach(stubDesktop);
+
   it("未選機台 → 顯示選台提示，不出現診斷鈕", () => {
     const w = mountDrawer({ machineId: null });
     expect(w.text()).toContain("選取機台後按「診斷」，開始 AI 診斷。");
     expect(buttonExact(w, "診斷")).toBeUndefined();
   });
 
-  it("閒置：標頭顯示「AI 診斷」與「閒置」；連線未就緒時診斷鈕停用並以 title 說明原因；就緒時點擊送出 diagnose", async () => {
+  it("閒置：標頭顯示「AI 診斷」與「未診斷」；連線未就緒時診斷鈕停用並以 title 說明原因；就緒時點擊送出 diagnose", async () => {
     const blocked = mountDrawer({ canDiagnose: false, connectionBlockedReason: "連線未就緒" });
     expect(headerText(blocked)).toContain("AI 診斷");
-    expect(headerText(blocked)).toContain("閒置");
+    expect(headerText(blocked)).toContain("未診斷");
+    expect(headerText(blocked)).not.toContain("閒置");
     const btn = buttonExact(blocked, "診斷")!;
     expect(btn.attributes("disabled")).toBeDefined();
     expect(btn.attributes("title")).toBe("連線未就緒");
@@ -174,23 +189,50 @@ describe("CopilotDrawer 空狀態與 idle", () => {
     expect(ready.emitted("diagnose")).toHaveLength(1);
   });
 
-  it("閒置帶遙測：機台中文名、狀態中文名、溫度／振動／錯誤率標籤與單位，且無舊英文標籤", () => {
+  it("閒置帶遙測：只有一列「機台中文名 · 狀態徽章」＋診斷鈕，不重複卡片的 2×2 遙測，且無舊英文標籤（critique 第二輪 P1）", () => {
     const summary: MachineLive = {
       machineId: MACHINE,
       state: "warning",
       telemetry: { temperature: 81.26, vibration: 2.4, throughput: 120, errorRate: 0.034 },
-      lastUpdated: 0,
+      lastUpdated: Date.now(),
     };
     const w = mountDrawer({ summary });
-    expect(w.get("h3").text()).toBe(LABEL);
-    const dl = w.get("dl");
-    const field = (dt: string) =>
-      dl.findAll("div").find((d) => d.find("dt").exists() && d.get("dt").text() === dt)?.get("dd").text();
-    expect(field("狀態")).toBe("警告");
-    expect(field("溫度")).toBe("81.3°C");
-    expect(field("振動")).toBe("2.40mm/s");
-    expect(field("錯誤率")).toBe("3.4%");
+    const h3 = w.get("h3");
+    expect(h3.text()).toBe(LABEL);
+    // 機台名、徽章、診斷鈕同一列
+    const row = h3.element.parentElement!;
+    expect(row.textContent).toContain("狀態：警告");
+    expect(row.querySelector("button")?.textContent?.trim()).toBe("診斷");
+    // 遙測四格不再出現（數值與標籤都不在面板內）
+    expect(w.find("dl").exists()).toBe(false);
+    expect(w.find("[data-metric]").exists()).toBe(false);
+    for (const label of ["溫度", "振動", "產能", "錯誤率", "81.3", "2.40"]) expect(w.text()).not.toContain(label);
+    // 遙測新鮮：沒有停滯徽章
+    expect(w.text()).not.toContain("停滯");
     expect(w.text()).not.toMatch(LEGACY_EN_LABEL);
+  });
+
+  it("閒置：遙測逾 10 秒未更新 → 狀態徽章旁加「停滯」徽章（與卡片同一判定）；尚無遙測 → 「尚未收到遙測」", () => {
+    const stale: MachineLive = {
+      machineId: MACHINE,
+      state: "critical",
+      telemetry: { temperature: 81.26, vibration: 2.4, throughput: 120, errorRate: 0.034 },
+      lastUpdated: Date.now() - 60_000,
+    };
+    const w = mountDrawer({ summary: stale });
+    const row = w.get("h3").element.parentElement!;
+    expect(row.textContent).toContain("狀態：嚴重");
+    expect(row.textContent).toContain("停滯");
+
+    const empty = mountDrawer({ summary: null });
+    expect(empty.get("h3").element.parentElement!.textContent).toContain("尚未收到遙測");
+    expect(buttonExact(empty, "診斷")).toBeDefined();
+  });
+
+  it("內容區與標頭內層以 max-w-xl 置中（1024 寬的 sheet 不拉到 1000px）", () => {
+    const w = mountDrawer();
+    expect(w.findAll(".max-w-xl.mx-auto")).toHaveLength(2);
+    expect(w.get("header").get(".max-w-xl").text()).toContain("AI 診斷");
   });
 });
 
@@ -208,6 +250,14 @@ describe("CopilotDrawer active：進度、Attempt、串流", () => {
     expect(steps).toContain("彙整診斷資料");
     expect(steps).toContain("收到首段串流");
     expect(steps).not.toMatch(/context|token/);
+    // 步驟列（critique 第二輪 Minor）：目前步驟、佇列、嘗試在進度條正下方、骨架之前，骨架填滿也不被擠出畫面
+    const html = w.html();
+    const stepLine = w.get('[role="progressbar"]').element.nextElementSibling as HTMLElement;
+    expect(stepLine.textContent).toContain("任務啟動");
+    expect(stepLine.textContent).toContain("佇列diagnosis");
+    expect(stepLine.textContent).toContain("嘗試1 / 3");
+    expect(stepLine.className).toContain("text-xs");
+    expect(html.indexOf("佇列")).toBeLessThan(html.indexOf('data-fg="result-skeleton"'));
     // 尚無 token：骨架四區段全是佔位（不顯示錯誤、不空白）
     const fields = w.findAll('[data-fg="result-skeleton"] [data-field]');
     expect(fields.map((f) => f.attributes("data-field-state"))).toEqual([
@@ -305,11 +355,12 @@ describe("CopilotDrawer active：進度、Attempt、串流", () => {
   });
 
   it("中止診斷 → store.cancel 讓畫面回到閒置（診斷鈕可再按）", async () => {
+    stubDesktop();
     const w = mountWithStore();
     await startJob();
     await buttonByText(w, "中止診斷")!.trigger("click");
     expect(useCopilotStore().stateFor(MACHINE).status).toBe("idle");
-    expect(headerText(w)).toContain("閒置");
+    expect(headerText(w)).toContain("未診斷");
     const run = buttonExact(w, "診斷");
     expect(run).toBeDefined();
     expect(run!.attributes("disabled")).toBeUndefined();
@@ -324,6 +375,10 @@ describe("CopilotDrawer 終態", () => {
     await flushPromises();
 
     expect(headerText(w)).toContain("已完成");
+    // 「已完成」chip 為中性底：結果為警告時不再出現綠色 ok 底與之衝突（critique 第二輪 Minor）
+    const chip = w.get("header").findAll("span").find((s) => s.text() === "已完成")!;
+    expect(chip.classes()).toEqual(expect.arrayContaining(["bg-surface-strong", "border-edge", "text-ink-2"]));
+    expect(chip.classes().join(" ")).not.toMatch(/\bbg-ok|text-ok/);
     expect(w.findAll("h3").map((x) => x.text())).toEqual(["摘要", "建議動作", "可能原因", "證據"]);
     expect(w.find('[data-fg="result-skeleton"]').exists()).toBe(false); // 完成態只用驗證過的 result
     expect(w.find('[role="progressbar"]').exists()).toBe(false); // 不以滿版進度條表達完成（FR-022）
@@ -331,6 +386,7 @@ describe("CopilotDrawer 終態", () => {
     expect(timing.attributes("data-cached")).toBe("true");
     expect(timing.text()).toContain("快取 ·");
     expect(timing.text()).not.toContain("上一次"); // 無非快取紀錄時只顯示本次
+    expect(timing.find('[data-fg="timing-bars"]').exists()).toBe(false); // 單獨一條沒有比較對象，不畫橫條
     expect(w.text()).toContain("警告"); // severity warning → 中文徽章（SeverityBadge）
     expect(w.text()).toContain("遙測"); // evidence source telemetry → 中文標籤
     expect(w.text()).toContain(RESULT.summary);
@@ -421,11 +477,62 @@ describe("CopilotDrawer 完成 meta 與快取耗時對比（FR-022／FR-023）",
     const big = timing.get(".text-ratio");
     expect(big.text()).toBe("結果來自快取 · 14 ms");
     expect(big.classes()).toContain("font-mono");
-    expect(timing.text()).toContain("上一次 8.2 s");
+    const rows = timing.findAll('[data-fg="timing-bars"] li');
+    expect(rows.map((r) => r.text())).toEqual(["快取：14 ms", "上一次：8.2 s"]);
+    expect(rows[1]!.get(".bg-ink-3").attributes("style")).toContain("width: 100.00%");
     // 整塊結果直接在 DOM 上（沒有骨架、沒有逐字游標）
     expect(w.text()).toContain(RESULT.summary);
     expect(w.find('[data-fg="result-skeleton"]').exists()).toBe(false);
     expect(w.find(".animate-stream-caret").exists()).toBe(false);
+  });
+});
+
+describe("CopilotDrawer 完成態「再次診斷」（critique 第一輪 B）", () => {
+  const DONE: CopilotJobState = {
+    status: "completed",
+    machineId: MACHINE,
+    jobId: "33333333-3333-4333-8333-333333333333",
+    cached: false,
+    streamText: "",
+    result: RESULT,
+  };
+
+  it("完成態在 meta 列下、摘要之前有次要鈕「再次診斷」；面板內沒有精確文字「診斷」的鈕（截圖劇本不誤配）", () => {
+    const w = mountDrawer({ state: DONE });
+    const again = buttonExact(w, "再次診斷")!;
+    expect(again).toBeDefined();
+    expect(again.attributes("aria-label")).toBeUndefined();
+    expect(again.classes()).toContain("border-edge"); // 次要（Tool）樣式，不是主要的 bg-accent
+    expect(again.classes()).not.toContain("bg-accent");
+    expect(buttonExact(w, "診斷")).toBeUndefined();
+    const html = w.html();
+    expect(html.indexOf("再次診斷")).toBeLessThan(html.indexOf('data-section="summary"'));
+  });
+
+  it("連線未就緒：再次診斷停用並以 title 說明原因；就緒時點擊送出 diagnose", async () => {
+    const blocked = mountDrawer({ state: DONE, canDiagnose: false, connectionBlockedReason: "連線未就緒" });
+    const btn = buttonExact(blocked, "再次診斷")!;
+    expect(btn.attributes("disabled")).toBeDefined();
+    expect(btn.attributes("title")).toBe("連線未就緒");
+
+    const ready = mountDrawer({ state: DONE });
+    await buttonExact(ready, "再次診斷")!.trigger("click");
+    expect(ready.emitted("diagnose")).toHaveLength(1);
+  });
+
+  it("走同一條 store.diagnose：完成 → 再次診斷 → 新任務進行中（新 jobId）", async () => {
+    const w = mountWithStore();
+    const first = await startJob();
+    const copilot = useCopilotStore();
+    copilot.applyEvent({ type: "ai/done", jobId: first, attempt: 1, cached: false, result: RESULT });
+    await flushPromises();
+    await buttonExact(w, "再次診斷")!.trigger("click");
+    await flushPromises();
+    const next = copilot.stateFor(MACHINE);
+    expect(next.status).toBe("active");
+    expect("jobId" in next && next.jobId).not.toBe(first);
+    expect(headerText(w)).toContain("進行中");
+    expect(buttonExact(w, "再次診斷")).toBeUndefined();
   });
 });
 
@@ -488,7 +595,7 @@ describe("CopilotDrawer 建議動作與原始串流（013 視覺層）", () => {
 
 describe("CopilotDrawer 行動版 bottom sheet（dialog 語意與焦點陷阱）", () => {
   /** matchMedia 命中行動版斷點，並提供可手動觸發「sheet 出現」的 IntersectionObserver。 */
-  function stubMobile(): { show: () => void } {
+  function stubMobile(): { show: () => void; hide: () => void } {
     let fire: ((entries: { isIntersecting: boolean }[]) => void) | undefined;
     vi.stubGlobal(
       "matchMedia",
@@ -511,7 +618,7 @@ describe("CopilotDrawer 行動版 bottom sheet（dialog 語意與焦點陷阱）
     );
     // happy-dom 不做 layout：讓可聚焦元素被視為「有渲染」，focusableWithin 才不會全數濾掉。
     vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
-    return { show: () => fire?.([{ isIntersecting: true }]) };
+    return { show: () => fire?.([{ isIntersecting: true }]), hide: () => fire?.([{ isIntersecting: false }]) };
   }
 
   it("手機寬度：根節點為 role=dialog + aria-modal、由標題命名；開啟時焦點移入、Tab 於邊界循環、Esc 送出 dismiss", async () => {
@@ -519,13 +626,14 @@ describe("CopilotDrawer 行動版 bottom sheet（dialog 語意與焦點陷阱）
     const w = mountDrawer({ machineId: null });
     await flushPromises();
     const root = w.get('[role="dialog"]');
-    expect(root.attributes("aria-modal")).toBe("true");
     const title = document.getElementById(root.attributes("aria-labelledby")!);
     expect(title?.textContent).toBe("AI 診斷");
 
+    // 未選機台的空狀態：一出現就接手焦點（modal）
     show();
     await flushPromises();
     expect(document.activeElement).toBe(root.element);
+    expect(root.attributes("aria-modal")).toBe("true");
 
     // 空狀態下唯一可聚焦的是關閉鈕：Tab 與 Shift+Tab 都應留在 sheet 內
     const close = w.get('button[aria-label="關閉／收合 AI 診斷面板"]').element;
@@ -555,14 +663,243 @@ describe("CopilotDrawer 行動版 bottom sheet（dialog 語意與焦點陷阱）
     expect(w.emitted("close")).toHaveLength(1);
   });
 
+  /** 一張假卡片（與 MachineNodeCard 同 class 與 data-machine），焦點與捲動都記錄下來。 */
+  function fakeCard(id: string): { el: HTMLButtonElement; scrolls: { margin: string; opts: ScrollIntoViewOptions }[] } {
+    const el = document.createElement("button");
+    el.className = "machine-card";
+    el.dataset.machine = id;
+    const scrolls: { margin: string; opts: ScrollIntoViewOptions }[] = [];
+    el.scrollIntoView = ((opts: ScrollIntoViewOptions) => {
+      scrolls.push({ margin: el.style.scrollMarginBottom, opts });
+    });
+    document.body.appendChild(el);
+    return { el, scrolls };
+  }
+
+  it("閒置選台：sheet 不搶焦點（焦點留在卡片、aria-modal=false）、公告可用按鍵；開始診斷後才接手焦點並轉 modal", async () => {
+    const { show } = stubMobile();
+    const card = fakeCard(MACHINE);
+    card.el.focus();
+    const w = mountDrawer();
+    await flushPromises();
+    show();
+    await flushPromises();
+
+    const root = w.get('[role="dialog"]');
+    expect(document.activeElement).toBe(card.el);
+    expect(root.attributes("aria-modal")).toBe("false");
+    expect(w.text()).toContain(`已開啟 ${LABEL} 的 AI 診斷面板：按 d 開始診斷，按 Escape 收合。`);
+    // 焦點不在 sheet 內：Escape 不由 drawer 攔（交 App 層面板層），也不冒出 dismiss
+    await root.trigger("keydown", { key: "Escape" });
+    expect(w.emitted("dismiss")).toBeUndefined();
+
+    // 開始診斷（例如在卡片上按 d）→ 有可操作內容 → 焦點搬進 sheet、modal＋焦點陷阱
+    await w.setProps({ state: { status: "active", machineId: MACHINE, jobId: "job-1", attempt: 1, progress: null, streamText: "" } as CopilotJobState });
+    await flushPromises();
+    expect(document.activeElement).toBe(root.element);
+    expect(root.attributes("aria-modal")).toBe("true");
+    expect(w.text()).not.toContain("已開啟");
+    await root.trigger("keydown", { key: "Escape" });
+    expect(w.emitted("dismiss")).toHaveLength(1);
+  });
+
+  it("update:engaged：只在接手焦點狀態變化時各發一次——閒置非 modal 不發、接手 true、關閉 false", async () => {
+    const { show, hide } = stubMobile();
+    const card = fakeCard(MACHINE);
+    card.el.focus();
+    const w = mountDrawer();
+    await flushPromises();
+    show();
+    await flushPromises();
+    // 閒置選台（非 modal）：維持 false，不發事件
+    expect(w.emitted("update:engaged")).toBeUndefined();
+
+    await w.setProps({ state: { status: "active", machineId: MACHINE, jobId: "job-1", attempt: 1, progress: null, streamText: "" } as CopilotJobState });
+    await flushPromises();
+    expect(w.emitted("update:engaged")).toEqual([[true]]);
+    // 同一態內的 token／進度更新不重發
+    await w.setProps({ state: { status: "active", machineId: MACHINE, jobId: "job-1", attempt: 1, progress: 40, streamText: '{"summary":"' } as CopilotJobState });
+    await flushPromises();
+    expect(w.emitted("update:engaged")).toEqual([[true]]);
+
+    hide();
+    await flushPromises();
+    expect(w.emitted("update:engaged")).toEqual([[true], [false]]);
+  });
+
+  it("觸控 Safari：點卡片不給焦點（activeElement＝body）＋閒置＋有選取 → 不接手、不發 engaged、aria-modal=false（第三輪交叉審查 medium）", async () => {
+    const { show } = stubMobile();
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).toBe(document.body);
+    const w = mountDrawer();
+    await flushPromises();
+    show();
+    await flushPromises();
+    const root = w.get('[role="dialog"]');
+    expect(root.attributes("aria-modal")).toBe("false");
+    expect(document.activeElement).toBe(document.body);
+    expect(w.emitted("update:engaged")).toBeUndefined();
+  });
+
+  it("焦點在 body 但未選機台（空狀態）→ 仍接手焦點並發 engaged", async () => {
+    const { show } = stubMobile();
+    (document.activeElement as HTMLElement | null)?.blur();
+    const w = mountDrawer({ machineId: null });
+    await flushPromises();
+    show();
+    await flushPromises();
+    expect(w.get('[role="dialog"]').attributes("aria-modal")).toBe("true");
+    expect(w.emitted("update:engaged")).toEqual([[true]]);
+  });
+
+  it("update:engaged：使用者點進閒置 sheet（focusin）→ true", async () => {
+    const { show } = stubMobile();
+    const card = fakeCard(MACHINE);
+    card.el.focus();
+    const w = mountDrawer();
+    await flushPromises();
+    show();
+    await flushPromises();
+    expect(w.emitted("update:engaged")).toBeUndefined();
+    (buttonExact(w, "診斷")!.element as HTMLButtonElement).focus();
+    await flushPromises();
+    expect(w.emitted("update:engaged")).toEqual([[true]]);
+  });
+
+  it("閒置選台：使用者自己 Tab／點進 sheet（focusin）→ 進焦點陷阱並轉 modal", async () => {
+    const { show } = stubMobile();
+    const card = fakeCard(MACHINE);
+    card.el.focus();
+    const w = mountDrawer();
+    await flushPromises();
+    show();
+    await flushPromises();
+    const root = w.get('[role="dialog"]');
+    expect(root.attributes("aria-modal")).toBe("false");
+
+    const diagnose = buttonExact(w, "診斷")!.element as HTMLButtonElement;
+    diagnose.focus();
+    await flushPromises();
+    expect(root.attributes("aria-modal")).toBe("true");
+    // 焦點陷阱生效（閒置單列：診斷鈕在前、收合鈕在後）：第一個（診斷鈕）Shift+Tab → 繞到最後一個（收合鈕），再 Tab → 回到診斷鈕
+    const close = w.get('button[aria-label="關閉／收合 AI 診斷面板"]').element;
+    await root.trigger("keydown", { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(close);
+    await root.trigger("keydown", { key: "Tab" });
+    expect(document.activeElement).toBe(diagnose);
+  });
+
+  it("閒置選台的 sheet 只一列（critique 第三輪 P1）：「AI 診斷」前綴＋機台名、狀態徽章、行內「診斷」、收合；無標頭、無「未診斷」chip、無內容區；dialog 名稱含機台 id", async () => {
+    stubMobile();
+    const summary: MachineLive = {
+      machineId: MACHINE,
+      state: "critical",
+      telemetry: { temperature: 98.7, vibration: 2.4, throughput: 120, errorRate: 0.034 },
+      lastUpdated: Date.now() - 60_000,
+    };
+    const w = mountDrawer({ summary });
+    await flushPromises();
+    expect(w.find("header").exists()).toBe(false);
+    expect(w.text()).not.toContain("未診斷");
+    expect(w.find(".overflow-auto").exists()).toBe(false);
+    expect(w.text()).not.toContain("AI 會讀取這台機台的近期資料");
+
+    const root = w.get('[role="dialog"]');
+    const title = document.getElementById(root.attributes("aria-labelledby")!)!;
+    expect(title.tagName).toBe("H2");
+    expect(title.textContent).toBe(`AI 診斷 ${LABEL}（${MACHINE}）`);
+    const prefix = title.querySelector("span")!;
+    expect(prefix.textContent).toBe("AI 診斷");
+    expect(prefix.className).toContain("text-xs");
+    expect(prefix.className).toContain("text-ink-3");
+
+    // 全部在同一列：標題、徽章（含停滯）、診斷鈕、收合鈕
+    const row = title.parentElement!;
+    expect(row.classList.contains("h-8")).toBe(true);
+    expect(row.textContent).toContain("狀態：嚴重");
+    expect(row.textContent).toContain("停滯");
+    const buttons = Array.from(row.querySelectorAll(":scope > button"));
+    expect(buttons.map((b) => b.textContent?.trim())).toEqual(["診斷", ""]);
+    expect(buttons[1]!.getAttribute("aria-label")).toBe("關閉／收合 AI 診斷面板");
+
+    await buttonExact(w, "診斷")!.trigger("click");
+    expect(w.emitted("diagnose")).toHaveLength(1);
+    await w.get('button[aria-label="關閉／收合 AI 診斷面板"]').trigger("click");
+    expect(w.emitted("close")).toHaveLength(1);
+  });
+
+  it("sheet 閒置單列 → 開始診斷後回到原標頭（進行中 chip、id · 任務短碼）與內容區", async () => {
+    stubMobile();
+    const w = mountDrawer();
+    await flushPromises();
+    expect(w.find("header").exists()).toBe(false);
+    await w.setProps({ state: { status: "active", machineId: MACHINE, jobId: "abcdef1234", attempt: 1, progress: null, streamText: "" } as CopilotJobState });
+    await flushPromises();
+    expect(headerText(w)).toContain("進行中");
+    expect(headerText(w)).toContain(`${MACHINE} · abcdef12`);
+    expect(w.find(".overflow-auto").exists()).toBe(true);
+  });
+
+  it("已有結果的機台：sheet 一出現就接手焦點（完成態有可操作內容）", async () => {
+    const { show } = stubMobile();
+    const card = fakeCard(MACHINE);
+    card.el.focus();
+    const w = mountDrawer({
+      state: { status: "completed", machineId: MACHINE, jobId: "job-1", cached: false, result: RESULT, streamText: "" } as CopilotJobState,
+    });
+    await flushPromises();
+    show();
+    await flushPromises();
+    const root = w.get('[role="dialog"]');
+    expect(document.activeElement).toBe(root.element);
+    expect(root.attributes("aria-modal")).toBe("true");
+  });
+
+  it("sheet 出現、換機台、方向鍵把焦點移到其他卡片時，以 scroll-margin-bottom＝sheet 遮擋高度捲到 sheet 上緣之上，捲完還原", async () => {
+    const { show } = stubMobile();
+    const selected = fakeCard(MACHINE);
+    const other = fakeCard("mixer-01");
+    selected.el.focus();
+    const w = mountDrawer();
+    await flushPromises();
+    expect(selected.scrolls).toHaveLength(0); // sheet 未出現前不捲
+
+    show();
+    await flushPromises();
+    // happy-dom 無 layout：卡片與 sheet 上緣皆 0、無捲動祖先（容器＝視窗）→ 遮擋＝min(容器下緣, innerHeight) − 0 ＋ 8px 間距
+    expect(selected.scrolls).toEqual([{ margin: `${window.innerHeight + 8}px`, opts: { block: "nearest" } }]);
+    expect(selected.el.style.scrollMarginBottom).toBe("");
+
+    // 方向鍵移焦到另一張卡片（focusin）→ 同樣捲出 sheet 之外
+    other.el.focus();
+    expect(other.scrolls).toHaveLength(1);
+
+    // 換機台（Enter 選了另一台）→ 捲新的選取卡
+    await w.setProps({ machineId: "mixer-01", state: { status: "idle", machineId: "mixer-01" } });
+    await flushPromises();
+    expect(other.scrolls).toHaveLength(2);
+  });
+
   it("桌機寬度：常駐側欄不掛 dialog 屬性，Esc 不被攔截", async () => {
     vi.stubGlobal(
       "matchMedia",
       vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
     );
+    const card = fakeCard(MACHINE);
     const w = mountDrawer();
     await flushPromises();
     expect(w.find('[role="dialog"]').exists()).toBe(false);
+    expect(w.find("[aria-modal]").exists()).toBe(false);
+    // 推擠式側欄：卡片就在旁邊，不捲動；閒置態多一行用途說明（sheet 形態改為單列、不顯示）
+    expect(card.scrolls).toHaveLength(0);
+    expect(w.text()).toContain("AI 會讀取這台機台的近期資料");
+    // 推擠式側欄恆不接手焦點：即使焦點進入面板也不發 update:engaged（維持 false）
+    (buttonExact(w, "診斷")!.element as HTMLButtonElement).focus();
+    await w.setProps({ state: { status: "active", machineId: MACHINE, jobId: "job-1", attempt: 1, progress: null, streamText: "" } as CopilotJobState });
+    await flushPromises();
+    expect(w.emitted("update:engaged")).toBeUndefined();
+    await w.setProps({ state: { status: "idle", machineId: MACHINE } });
+    await flushPromises();
     await w.get('[tabindex="-1"]').trigger("keydown", { key: "Escape" });
     expect(w.emitted("close")).toBeUndefined();
     expect(w.emitted("dismiss")).toBeUndefined();

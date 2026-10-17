@@ -4,7 +4,7 @@ import type { DiagnosisResult } from "@flow-gatekeeper/contracts";
 import SeverityBadge from "../../../shared/components/SeverityBadge.vue";
 import { formatClock } from "../../../shared/lib/format.js";
 import { mergeEvidence, splitPreview } from "../lib/evidence-merge.js";
-import type { TimingLabel } from "../lib/diagnosis-timing.js";
+import type { CompareBar, TimingLabel } from "../lib/diagnosis-timing.js";
 import SuggestedActionList from "./SuggestedActionList.vue";
 import EvidenceRows from "./EvidenceRows.vue";
 
@@ -12,8 +12,8 @@ import EvidenceRows from "./EvidenceRows.vue";
  * 結構化診斷結果（FR-006、FR-020～FR-023；013 視覺層與繁中文案，research R13）。欄位對齊契約
  * `DiagnosisResult`（單一來源，後端已 `DiagnosisResultSchema.parse()`；前端不放寬）。
  *
- * 版面由上而下：嚴重度色條（頂部 2px，語意色只用在邊框類元素）→ 完成 meta 一行 →
- * 四個區段，順序「先看該做什麼」：摘要＋嚴重度 → 建議動作 → 可能原因 → 證據（FR-020）。
+ * 版面由上而下：嚴重度色條（頂部 2px，語意色只用在邊框類元素）→ 完成 meta（快取態另畫同刻度的
+ * 耗時對比橫條）→ `actions` slot（再次診斷）→ 四個區段，順序「先看該做什麼」：摘要＋嚴重度 → 建議動作 → 可能原因 → 證據（FR-020）。
  * 證據以 `mergeEvidence` 合併相同來源與摘錄者（`×N`、不顯示時間），預設只列前 2 筆（FR-021）。
  *
  * 這裡直接信任契約型別、不逐欄位防禦：畸形 `ai/done.result` 在 WS 入口（safeParse）與
@@ -29,8 +29,14 @@ const props = defineProps<{
    * - `cached`：結果是否來自快取（取自 `ai/done.cached`，是快取標記的唯一依據）。
    * - `completedAt`：完成時刻（epoch ms），顯示為 `HH:mm:ss`。
    * - `elapsed`：`compareLabel()` 的耗時標籤；尚無量測紀錄時為 null。
+   * - `bars`：`compareBars()` 的快取對比橫條（僅快取態有值）；省略或 null 則不畫橫條。
    */
-  meta?: { cached: boolean; completedAt: number | null; elapsed: TimingLabel | null };
+  meta?: { cached: boolean; completedAt: number | null; elapsed: TimingLabel | null; bars?: CompareBar[] | null };
+}>();
+
+defineSlots<{
+  /** meta 列下方、結果區段之前的動作列（CopilotDrawer 放「再次診斷」）。 */
+  actions?: () => unknown;
 }>();
 
 /** 區段標題：與內文拉開層級，但不用全大寫或字距（中文不適用）。 */
@@ -55,9 +61,19 @@ const clock = computed(() =>
 const cachedPrimary = computed(() =>
   props.meta?.elapsed?.cached ? props.meta.elapsed.primary : "快取",
 );
-const cachedSecondary = computed(() =>
-  props.meta?.elapsed?.cached ? props.meta.elapsed.secondary : null,
-);
+/**
+ * 快取對比橫條（`compareBars()`）；未提供、非快取或不足兩條時不畫——單獨一條滿格的條沒有比較對象，
+ * 看起來像「很慢」，此時只留大字耗時與快取標記。
+ */
+const bars = computed(() => {
+  const list = props.meta?.cached ? props.meta.bars : null;
+  return list && list.length >= 2 ? list : null;
+});
+/** 條色：快取用深青（主角），上一次用 ink-3；底線一律 etch（非文字裝飾）。 */
+const BAR_FILL: Record<CompareBar["kind"], string> = {
+  cached: "bg-accent",
+  previous: "bg-ink-3",
+};
 /** 非快取的耗時（`N.N s`）；量測缺漏時只顯示完成時刻。 */
 const uncachedElapsed = computed(() =>
   props.meta?.elapsed && !props.meta.elapsed.cached ? props.meta.elapsed.primary : null,
@@ -107,10 +123,28 @@ const MORE_BTN =
       :data-cached="meta.cached ? 'true' : 'false'"
     >
       <template v-if="meta.cached">
-        <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <span class="font-mono text-ratio font-semibold tabular-nums text-ink"><span class="sr-only">結果來自</span>{{ cachedPrimary }}</span>
-          <span v-if="cachedSecondary" class="font-mono text-sm tabular-nums text-ink-3">{{ cachedSecondary }}</span>
-        </div>
+        <span class="block font-mono text-ratio font-semibold tabular-nums text-ink"><span class="sr-only">結果來自</span>{{ cachedPrimary }}</span>
+        <!-- 耗時對比：同一刻度的蝕刻橫條（etch 底線＋快取 accent／上一次 ink-3 條），把差距畫出來。
+             每列固定 20px 高、數值欄固定寬，出現時不推擠下方內容以外的版面；不走出現動畫。 -->
+        <ul v-if="bars" class="mt-2 space-y-1" aria-label="耗時對比" data-fg="timing-bars">
+          <li
+            v-for="bar in bars"
+            :key="bar.kind"
+            class="grid h-5 grid-cols-[3rem_minmax(0,1fr)_4.5rem] items-center gap-2.5"
+            :data-bar="bar.kind"
+          >
+            <span class="text-xs text-ink-3">{{ bar.label }}</span>
+            <span class="relative h-2" aria-hidden="true">
+              <span class="absolute inset-x-0 bottom-0 h-px bg-etch" />
+              <span
+                class="absolute bottom-0 left-0 h-1.5 min-w-0.5"
+                :class="BAR_FILL[bar.kind]"
+                :style="{ width: `${(bar.ratio * 100).toFixed(2)}%` }"
+              />
+            </span>
+            <span class="text-right font-mono text-sm tabular-nums text-ink-2"><span class="sr-only">：</span>{{ bar.value }}</span>
+          </li>
+        </ul>
         <p v-if="clock" class="mt-1 text-xs text-ink-3">
           完成 <span class="font-mono tabular-nums">{{ clock }}</span>
         </p>
@@ -118,6 +152,11 @@ const MORE_BTN =
       <p v-else class="text-sm text-ink-2">
         <template v-if="clock">完成 <span class="font-mono tabular-nums">{{ clock }}</span></template><span v-if="clock && uncachedElapsed"> · </span><span v-if="uncachedElapsed" class="font-mono tabular-nums">{{ uncachedElapsed }}</span>
       </p>
+    </div>
+
+    <!-- meta 列下方的動作（CopilotDrawer 放「再次診斷」）；不論 meta 是否畫出都在結果區段之前 -->
+    <div v-if="$slots.actions" class="mb-3.5">
+      <slot name="actions" />
     </div>
 
     <div class="divide-y divide-edge">

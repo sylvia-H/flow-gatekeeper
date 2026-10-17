@@ -21,8 +21,6 @@ export interface DiagnosisTiming {
 export interface TimingLabel {
   /** 主字：快取為 `快取 · N ms`，非快取為 `N.N s`。 */
   primary: string;
-  /** 並列的對比：僅「最近一次是快取且有非快取紀錄」時為 `上一次 N.N s`，否則 `null`。 */
-  secondary: string | null;
   cached: boolean;
 }
 
@@ -68,12 +66,40 @@ export function compareLabel(timing: DiagnosisTiming | undefined): TimingLabel |
   if (timing.lastKind === "cached" && timing.lastCachedMs !== null) {
     return {
       primary: `快取 · ${formatDuration(timing.lastCachedMs)}`,
-      secondary: timing.lastUncachedMs !== null ? `上一次 ${formatDuration(timing.lastUncachedMs)}` : null,
       cached: true,
     };
   }
   if (timing.lastKind === "uncached" && timing.lastUncachedMs !== null) {
-    return { primary: formatDuration(timing.lastUncachedMs), secondary: null, cached: false };
+    return { primary: formatDuration(timing.lastUncachedMs), cached: false };
   }
   return null;
+}
+
+/** 快取對比橫條的一列：`ratio` 為相對兩者最大值的長度比例（0–1，同一刻度）。 */
+export interface CompareBar {
+  kind: "cached" | "previous";
+  /** 列標籤：「快取」／「上一次」。 */
+  label: string;
+  /** 耗時文字（`N ms`／`N.N s`）。 */
+  value: string;
+  ratio: number;
+}
+
+/**
+ * 快取態的耗時對比橫條（critique 第一輪 B）：僅「最近一次是快取」時回傳，兩條共用同一刻度
+ * （以兩者較大值為滿格），把差距畫出來。沒有非快取紀錄時回 `null`——單獨一條滿格的「快取」條沒有比較對象，
+ * 反而像「很慢」（重新載入後第一次就命中後端快取是常見情況）；此時只留大字耗時與快取標記。
+ */
+export function compareBars(timing: DiagnosisTiming | undefined): CompareBar[] | null {
+  if (!timing || timing.lastKind !== "cached" || timing.lastCachedMs === null || timing.lastUncachedMs === null) {
+    return null;
+  }
+  const cachedMs = timing.lastCachedMs;
+  const previousMs = timing.lastUncachedMs;
+  const scale = Math.max(cachedMs, previousMs);
+  const ratioOf = (ms: number): number => (scale > 0 ? ms / scale : 1);
+  return [
+    { kind: "cached", label: "快取", value: formatDuration(cachedMs), ratio: ratioOf(cachedMs) },
+    { kind: "previous", label: "上一次", value: formatDuration(previousMs), ratio: ratioOf(previousMs) },
+  ];
 }

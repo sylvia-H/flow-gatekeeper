@@ -22,12 +22,12 @@ import FlowLink from "./FlowLink.vue";
  *   的 computed 衍生——`machines` 每個 rAF 批次至多 trigger 一次、`staleNow` 每秒一次，
  *   所以每幀至多重算一次，不在任何 handler 裡逐筆寫 reactive。
  * - 版面：容器放得下三欄（3 × 220px + 2 × 24px 溝槽）時為五欄 grid，否則單欄堆疊、連線改為朝下短箭頭
- *   且不流動（FR-016）。以**容器寬度**而非 viewport 判斷：1024px 寬且 Copilot 面板展開時主區只剩約 400px，
- *   用 `md:` 斷點會出現橫向捲動（FR-031）。手機（< 768px）的容器必然窄於門檻，同樣走堆疊。
+ *   且不流動（FR-016）。以**容器寬度**而非 viewport 判斷：主區寬隨 rail 寬度與推擠式 Copilot 面板（≥ 1366px）
+ *   開合而變，用 `md:` 斷點會出現橫向捲動（FR-031）。手機（< 768px）的容器必然窄於門檻，同樣走堆疊。
  * - prefers-reduced-motion 時只保留粗細、不流動（FR-014）。
  * - 卡片的選台與診斷接線同既有作法：`store.selectMachine`、`useDiagnoseTrigger().diagnose`。
  * - 卡片底列（US5）：異常標記只在可見期內傳入（`store.latchVisible`，以 `staleNow` 判定 30 秒期滿），
- *   清除走 `store.clearLatch`（與異常摘要列同一份狀態）；診斷狀態 chip 取 `copilot.badgeFor`。
+ *   標記在卡片上不可點（T073 第三輪），確認只走異常摘要列、鍵盤 `x` 與手機覆蓋層（同一份 `store.clearLatch` 狀態）；診斷狀態 chip 取 `copilot.badgeFor`。
  *   卡片只讀 props、不直接讀 store。
  */
 const store = useMonitoringStore();
@@ -40,7 +40,8 @@ const copilot = useCopilotStore();
  * 220 是卡片數值列的下限，不能再縮：卡片內容寬＝欄寬 − 30（內距＋邊框），2×2 數值每格約 89px，
  * 5 位數值（嚴重時的溫度「108.0」、產能「1,180」）在 24px mono 下約 72px，加間距與刻度要 86px；
  * 縮到 200px 每格只剩約 81px，嚴重卡片最需要看清的溫度會被截斷。
- * 面板展開時：1366×768 主區容器內容寬恰為 708px → 三欄並排；1024×768 只剩約 366px，
+ * 面板展開時：1366×768 主區容器內容寬恰為 708px → 三欄並排；1024×768 的面板是 bottom-sheet、不推擠主區
+ * （T073 起推擠門檻為 desk／1366px），主區維持約 750px → 三欄並排。容器若窄到放不下（例如 rail 拉寬），
  * 三欄各約 106px 怎麼縮都放不下一張完整卡片，維持單欄堆疊（每段一欄滿寬，FR-031 不溢出優先）。
  */
 const MIN_ROW_WIDTH = 3 * 220 + 2 * 24;
@@ -162,11 +163,6 @@ function onSelect(machineId: string): void {
 function onDiagnose(machineId: string): void {
   trigger.diagnose(machineId);
 }
-
-/** 卡片異常標記的清除鈕：確認（劃線），期滿才消失（FR-026）。 */
-function onClearLatch(machineId: string): void {
-  store.clearLatch(machineId);
-}
 </script>
 
 <template>
@@ -193,7 +189,6 @@ function onClearLatch(machineId: string): void {
             :badge="card.badge"
             @select="onSelect"
             @diagnose="onDiagnose"
-            @clear-latch="onClearLatch"
           />
         </StageColumn>
         <!-- 溝槽：並排時為欄間 24px、箭頭垂直置中；堆疊時為兩段之間 24px 高的朝下短箭頭 -->

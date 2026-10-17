@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { effectScope, watchEffect } from "vue";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { AUTH_ERROR_MESSAGE, useMonitoringStore } from "./monitoring.store.js";
+import { averageOf, peakRatio } from "../lib/rate-series.js";
 
 function point(machineId: string, state: MachineState): TelemetryPoint {
   return {
@@ -205,7 +206,7 @@ describe("monitoring store — events 衍生（FR-009/010/011）", () => {
 
   it("超過 50 上限：淘汰最舊、長度恆 <= 50（60 台各轉入一次，不觸發合併）", () => {
     const store = useMonitoringStore();
-    // 013 起同機台同嚴重度 10 秒內會合併，故改用 60 台不同機台各記一筆，量的是上限本身。
+    // 013 起同機台同嚴重度 60 秒固定窗內會合併，故改用 60 台不同機台各記一筆，量的是上限本身。
     for (let i = 0; i < 60; i += 1) {
       store.applyTelemetryBatch([point(`m-${i}`, "warning")]);
     }
@@ -239,15 +240,16 @@ describe("monitoring store — 事件合併（013 T049、data-model §10、FR-02
     vi.useRealTimers();
   });
 
-  it("10 秒內同台同嚴重度合併為一筆（count 累加、移到頂端、id 沿用）；回復事件不阻斷合併", () => {
+  it("60 秒窗內同台同嚴重度合併為一筆（count 累加、起訖擴展、移到頂端、id 沿用）；回復事件不阻斷合併", () => {
     const store = useMonitoringStore();
+    const start = Date.now();
     store.applyTelemetryBatch([point("press-02", "warning")]);
     const firstId = store.events[0]?.id;
-    vi.advanceTimersByTime(3_000);
+    vi.advanceTimersByTime(20_000);
     store.applyTelemetryBatch([point("press-02", "healthy")]); // recovered
-    vi.advanceTimersByTime(3_000);
+    vi.advanceTimersByTime(20_000);
     store.applyTelemetryBatch([point("mixer-01", "critical")]); // 別台插在中間
-    vi.advanceTimersByTime(4_000); // 與第一筆 warning 相距恰 10 秒（閉區間）
+    vi.advanceTimersByTime(20_000); // 與第一筆 warning 相距恰 60 秒（閉區間）
     store.applyTelemetryBatch([point("press-02", "warning")]);
 
     expect(store.events.map((e) => [e.machineId, e.severity, e.count])).toEqual([
@@ -256,16 +258,17 @@ describe("monitoring store — 事件合併（013 T049、data-model §10、FR-02
       ["press-02", "recovered", 1],
     ]);
     expect(store.events[0]?.id).toBe(firstId);
-    expect(store.events[0]?.ts).toBe(Date.now()); // 時間更新為最近一次發生
+    expect(store.events[0]?.ts).toBe(Date.now()); // 訖點更新為最近一次發生
+    expect(store.events[0]?.firstTs).toBe(start); // 起點保留第一次發生
     expect(store.events[0]?.message).toBe("壓製機 02 進入警告");
   });
 
-  it("相距超過 10 秒另立一筆", () => {
+  it("距起點超過 60 秒另立一筆", () => {
     const store = useMonitoringStore();
     store.applyTelemetryBatch([point("press-02", "warning")]);
-    vi.advanceTimersByTime(5_000);
+    vi.advanceTimersByTime(30_000);
     store.applyTelemetryBatch([point("press-02", "healthy")]);
-    vi.advanceTimersByTime(5_001); // 與第一筆 warning 相距 10 001 ms
+    vi.advanceTimersByTime(30_001); // 與第一筆 warning 相距 60 001 ms
     store.applyTelemetryBatch([point("press-02", "warning")]);
     expect(store.events.map((e) => [e.severity, e.count])).toEqual([
       ["warning", 1],
@@ -274,14 +277,31 @@ describe("monitoring store — 事件合併（013 T049、data-model §10、FR-02
     ]);
   });
 
-  it("同一台交替 warning／critical 且每次間隔 11 秒：不合併，上限 50", () => {
+  it("同一台交替 warning／critical 且每次間隔 31 秒（同嚴重度相距 62 秒）：不合併，上限 50", () => {
     const store = useMonitoringStore();
     for (let i = 0; i < 60; i += 1) {
       store.applyTelemetryBatch([point("press-02", i % 2 === 0 ? "warning" : "critical")]);
-      vi.advanceTimersByTime(11_000);
+      vi.advanceTimersByTime(31_000);
     }
     expect(store.events.length).toBe(50);
     expect(store.events.every((e) => e.count === 1)).toBe(true);
+  });
+
+  it("反覆跳動不停（每 5 秒轉入一次警告、跑 125 秒）：每 60 秒滿窗另起一列，起點不被吞掉", () => {
+    const store = useMonitoringStore();
+    const start = Date.now();
+    for (let i = 0; i <= 25; i += 1) {
+      store.applyTelemetryBatch([point("press-02", "warning")]);
+      vi.advanceTimersByTime(2_500);
+      store.applyTelemetryBatch([point("press-02", "healthy")]);
+      vi.advanceTimersByTime(2_500);
+    }
+    const warnings = store.events.filter((e) => e.severity === "warning");
+    // 0–60 s（13 次）、65–125 s（13 次）：兩列、各自的起點分別是 0 與 65 秒
+    expect(warnings.map((e) => [e.firstTs - start, e.ts - start, e.count])).toEqual([
+      [65_000, 125_000, 13],
+      [0, 60_000, 13],
+    ]);
   });
 });
 
@@ -751,8 +771,31 @@ describe("monitoring store — 背壓速率序列（013 T032、FR-009／FR-011�
     ]);
     expect(store.latestRate).toMatchObject({ msgsPerSec: 20, batchesPerSec: 2 });
     expect(store.windowRatio).toBeCloseTo(32 / 5); // 視窗 Σ訊息 ÷ Σ批次，不是逐秒比值的平均
-    expect(store.ratePeak).toBe(20);
     expect(store.cumulativeRatio).toBe(Math.round(32 / 5)); // 累計比值（tooltip）沿用 backpressureRatio
+  });
+
+  it("暫停一秒再恢復：暫停期間與恢復當下的樣本標無效，視窗比值、平均、最高水位都不受影響（第三輪交叉審查）", () => {
+    const store = connectedStore();
+    const second = (batches: number, perBatch: number): void => {
+      for (let i = 0; i < batches; i++) store.applyTelemetryBatch(makeBatch(perBatch));
+      vi.advanceTimersByTime(1000);
+      store.tickNow();
+    };
+    second(10, 5); // 5:1
+    second(10, 6); // 6:1
+
+    store.togglePause();
+    second(0, 0); // 暫停中：pump 不 flush
+    store.togglePause();
+    second(1, 120); // 恢復那一幀：整個 buffer 當 1 批（120:1 離群）
+    second(10, 5); // 恢復後第二筆：保險起見也標無效（tick 落在恢復與 flush 之間時離群批會落在這格）
+    second(10, 6); // 之後恢復正常
+
+    expect(store.rateSamples.map((s) => s.invalid === true)).toEqual([false, false, true, true, true, false]);
+    // 只算有效的三秒：(50 + 60 + 60) ÷ 30
+    expect(store.windowRatio).toBeCloseTo(170 / 30);
+    expect(averageOf(store.rateSamples, "msgsPerSec")).toBeCloseTo(170 / 3);
+    expect(peakRatio(store.rateSamples)).toBe(6);
   });
 
   it("溢位丟棄計入視窗丟棄數；超出 60 秒視窗後歸零", () => {
@@ -835,7 +878,6 @@ describe("monitoring store — 背壓速率序列（013 T032、FR-009／FR-011�
           void store.rateSeries;
           void store.rateSamples;
           void store.latestRate;
-          void store.ratePeak;
           void store.windowRatio;
           void store.droppedInWindow;
           void store.rateStale;

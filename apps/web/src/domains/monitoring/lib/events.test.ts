@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  EVENT_MERGE_WINDOW_MS,
   deriveTransitionEvent,
   mergeEvent,
   pushCapped,
@@ -16,6 +17,7 @@ describe("deriveTransitionEvent（FR-010 去重）", () => {
     expect(e?.message).toBe("壓製機 02 進入警告");
     expect(e?.id).toBe("100-press-02#7");
     expect(e?.count).toBe(1);
+    expect(e?.firstTs).toBe(100); // 單筆：起點即自身時間
   });
 
   it("warning → critical 記一筆 critical", () => {
@@ -67,7 +69,7 @@ describe("deriveTransitionEvent（FR-010 去重）", () => {
 });
 
 function ev(ts: number, machineId = "m", severity: Severity = "warning"): DerivedEvent {
-  return { id: `${ts}-${machineId}-${severity}`, ts, machineId, severity, message: "x", count: 1 };
+  return { id: `${ts}-${machineId}-${severity}`, ts, firstTs: ts, machineId, severity, message: "x", count: 1 };
 }
 
 describe("pushCapped（FR-011 上限）", () => {
@@ -94,48 +96,63 @@ describe("mergeEvent（data-model §10 合併視窗）", () => {
     expect(mergeEvent(list, ev(0))).toBe(list);
   });
 
-  it("同機台同嚴重度、相距恰 10 000 ms（閉區間）→ 合併、count+1、ts 更新、id 沿用", () => {
+  it("預設窗長為 60 秒", () => {
+    expect(EVENT_MERGE_WINDOW_MS).toBe(60_000);
+  });
+
+  it("同機台同嚴重度、距起點恰 60 000 ms（閉區間）→ 合併、count+1、訖點更新、起點保留、id 沿用", () => {
     const list: DerivedEvent[] = [];
     mergeEvent(list, ev(1_000, "press-02"));
-    mergeEvent(list, ev(11_000, "press-02"));
+    mergeEvent(list, ev(61_000, "press-02"));
     expect(list.length).toBe(1);
     expect(list[0]?.count).toBe(2);
-    expect(list[0]?.ts).toBe(11_000);
+    expect(list[0]?.ts).toBe(61_000);
+    expect(list[0]?.firstTs).toBe(1_000);
     expect(list[0]?.id).toBe("1000-press-02-warning");
   });
 
-  it("相距 10 001 ms → 不合併，新事件放頂端", () => {
+  it("距起點 60 001 ms → 不合併，新事件放頂端（起點即自身時間）", () => {
     const list: DerivedEvent[] = [];
     mergeEvent(list, ev(1_000, "press-02"));
-    mergeEvent(list, ev(11_001, "press-02"));
+    mergeEvent(list, ev(61_001, "press-02"));
     expect(list.length).toBe(2);
-    expect(list.map((e) => [e.ts, e.count])).toEqual([
-      [11_001, 1],
-      [1_000, 1],
+    expect(list.map((e) => [e.firstTs, e.ts, e.count])).toEqual([
+      [61_001, 61_001, 1],
+      [1_000, 1_000, 1],
     ]);
   });
 
-  it("亂序事件：早於既有事件但在視窗內 → 合併且 ts 不倒退；早超過視窗 → 不合併", () => {
+  it("固定窗以 firstTs 起算、不隨合併滑動：每次相距 9 秒仍在第 63 秒滿窗另起一列", () => {
+    const list: DerivedEvent[] = [];
+    for (let t = 0; t <= 72_000; t += 9_000) mergeEvent(list, ev(t, "press-02"));
+    // 0、9…54 s（7 次）同一列；63 s 距起點 63 s > 60 s → 另起；72 s 併入新列
+    expect(list.map((e) => [e.firstTs, e.ts, e.count])).toEqual([
+      [63_000, 72_000, 2],
+      [0, 54_000, 7],
+    ]);
+  });
+
+  it("亂序事件：早於起點但跨度仍在窗內 → 合併、起點往前擴、訖點不倒退；擴出窗外 → 另立一筆", () => {
     const list: DerivedEvent[] = [];
     mergeEvent(list, ev(50_000, "press-02"));
-    mergeEvent(list, ev(45_000, "press-02")); // 早 5 s：合併
+    mergeEvent(list, ev(80_000, "press-02"));
+    mergeEvent(list, ev(45_000, "press-02")); // 跨度 45–80 s＝35 s：合併
     expect(list.length).toBe(1);
-    expect(list[0]?.count).toBe(2);
-    expect(list[0]?.ts).toBe(50_000);
-    mergeEvent(list, ev(39_999, "press-02")); // 早 10 001 ms：不合併
+    expect(list[0]?.count).toBe(3);
+    expect(list[0]?.firstTs).toBe(45_000);
+    expect(list[0]?.ts).toBe(80_000);
+    mergeEvent(list, ev(19_999, "press-02")); // 跨度 19.999–80 s＝60 001 ms：不合併
     expect(list.length).toBe(2);
-    expect(list[0]?.ts).toBe(39_999);
+    expect(list[0]?.ts).toBe(19_999);
+    expect(list[0]?.firstTs).toBe(19_999);
     expect(list[0]?.count).toBe(1);
   });
 
-  it("視窗以最近一次發生時間滑動：每次合併後以新 ts 為基準", () => {
+  it("可傳入自訂窗長", () => {
     const list: DerivedEvent[] = [];
-    mergeEvent(list, ev(0, "press-02"));
-    mergeEvent(list, ev(9_000, "press-02"));
-    mergeEvent(list, ev(18_000, "press-02")); // 距首筆 18 s，但距上一次 9 s → 仍合併
-    expect(list.length).toBe(1);
-    expect(list[0]?.count).toBe(3);
-    expect(list[0]?.ts).toBe(18_000);
+    mergeEvent(list, ev(0, "press-02"), 10_000);
+    mergeEvent(list, ev(10_001, "press-02"), 10_000);
+    expect(list.length).toBe(2);
   });
 
   it("合併的那筆不在頂端時移到頂端", () => {
@@ -173,10 +190,11 @@ describe("mergeEvent（data-model §10 合併視窗）", () => {
     ]);
   });
 
-  it("新事件 count 固定從 1 起算", () => {
+  it("新事件 count 固定從 1 起算、firstTs 取自身 ts（不沿用傳入的 firstTs）", () => {
     const list: DerivedEvent[] = [];
-    mergeEvent(list, { ...ev(0), count: 7 });
+    mergeEvent(list, { ...ev(5_000), count: 7, firstTs: 0 });
     expect(list[0]?.count).toBe(1);
+    expect(list[0]?.firstTs).toBe(5_000);
   });
 
   it("上限 50（recovered 同樣計入）：超過裁最舊", () => {

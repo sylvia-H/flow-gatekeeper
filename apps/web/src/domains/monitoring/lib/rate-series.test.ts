@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  averageOf,
   clearSamples,
   createRateSeries,
   droppedInWindow,
+  invalidateNext,
   markStale,
-  maxOf,
+  peakRatio,
   pushSample,
+  totalOf,
   windowRatio,
   type RateCounters,
+  type RateSample,
 } from "./rate-series.js";
 
 function c(receivedMessages: number, renderedBatches: number, droppedMessages = 0): RateCounters {
@@ -139,18 +143,6 @@ describe("rate-series 衍生值", () => {
     expect(windowRatio(s)).toBeNull();
   });
 
-  it("maxOf 取視窗內各欄最大值，無樣本為 0", () => {
-    const s = createRateSeries();
-    expect(maxOf(s, "msgsPerSec")).toBe(0);
-    pushSample(s, c(0, 0, 0), 0);
-    pushSample(s, c(50, 5, 1), 1_000);
-    pushSample(s, c(250, 7, 1), 2_000);
-    pushSample(s, c(260, 17, 4), 3_000);
-    expect(maxOf(s, "msgsPerSec")).toBe(200);
-    expect(maxOf(s, "batchesPerSec")).toBe(10);
-    expect(maxOf(s, "droppedPerSec")).toBe(3);
-  });
-
   it("droppedInWindow = Σ droppedPerSec，滑出視窗者不計", () => {
     const s = createRateSeries(2);
     pushSample(s, c(0, 0, 0), 0);
@@ -159,5 +151,92 @@ describe("rate-series 衍生值", () => {
     expect(droppedInWindow(s)).toBe(6);
     pushSample(s, c(0, 0, 9), 3_000); // 第一格（5）滑出
     expect(droppedInWindow(s)).toBe(4);
+  });
+});
+
+describe("rate-series 無效樣本（暫停期間與恢復當下，013 第三輪交叉審查）", () => {
+  it("invalidateNext(n)：接下來 n 筆推入的樣本標 invalid；只取基準的 tick 不消耗", () => {
+    const s = createRateSeries();
+    invalidateNext(s, 2);
+    pushSample(s, c(0, 0), 0); // 只取基準：不消耗
+    pushSample(s, c(10, 2), 1_000);
+    pushSample(s, c(20, 4), 2_000);
+    pushSample(s, c(30, 6), 3_000);
+    expect(s.samples.map((x) => x.invalid === true)).toEqual([true, true, false]);
+    expect(s.invalidPushes).toBe(0);
+  });
+
+  it("invalidateNext 取較大者，不縮短已排定的筆數", () => {
+    const s = createRateSeries();
+    invalidateNext(s, 2);
+    invalidateNext(s, 1);
+    expect(s.invalidPushes).toBe(2);
+  });
+
+  it("windowRatio／averageOf／totalOf／peakRatio 排除無效樣本；droppedInWindow 仍計入", () => {
+    const s = createRateSeries();
+    pushSample(s, c(0, 0, 0), 0);
+    pushSample(s, c(50, 10, 0), 1_000); // 5:1
+    invalidateNext(s, 1);
+    pushSample(s, c(350, 11, 7), 2_000); // 恢復那一幀：300 則 1 批（離群）、暫停期間丟 7
+    pushSample(s, c(410, 21, 7), 3_000); // 6:1
+    expect(windowRatio(s)).toBeCloseTo((50 + 60) / (10 + 10));
+    expect(averageOf(s.samples, "msgsPerSec")).toBe(55);
+    expect(totalOf(s.samples, "msgsPerSec")).toBe(110);
+    expect(peakRatio(s.samples)).toBe(6);
+    expect(droppedInWindow(s)).toBe(7);
+  });
+
+  it("視窗內只剩無效樣本時：比值 null、平均 null、最高水位不畫", () => {
+    const s = createRateSeries();
+    pushSample(s, c(0, 0), 0);
+    invalidateNext(s, 1);
+    pushSample(s, c(300, 1), 1_000);
+    expect(windowRatio(s)).toBeNull();
+    expect(averageOf(s.samples, "msgsPerSec")).toBeNull();
+    expect(peakRatio(s.samples)).toBeNull();
+  });
+});
+
+const smp = (msgsPerSec: number, batchesPerSec: number): RateSample => ({
+  t: 0,
+  msgsPerSec,
+  batchesPerSec,
+  droppedPerSec: 0,
+});
+
+describe("rate-series 視窗平均與最高水位（critique 2026-10-16 P1）", () => {
+  it("averageOf：無樣本為 null；平均訊息 ÷ 平均批次 = 視窗比值", () => {
+    expect(averageOf([], "msgsPerSec")).toBeNull();
+    const s = createRateSeries();
+    pushSample(s, c(0, 0), 0);
+    pushSample(s, c(330, 50), 1_000);
+    pushSample(s, c(660, 99), 2_000);
+    pushSample(s, c(1_000, 150), 3_000);
+    const avgM = averageOf(s.samples, "msgsPerSec")!;
+    const avgB = averageOf(s.samples, "batchesPerSec")!;
+    expect(avgM).toBeCloseTo(1_000 / 3);
+    expect(avgB).toBe(50);
+    expect(avgM / avgB).toBeCloseTo(windowRatio(s)!);
+  });
+
+  it("totalOf：視窗總和；無樣本為 0", () => {
+    expect(totalOf([], "batchesPerSec")).toBe(0);
+    expect(totalOf([smp(3, 1), smp(5, 2)], "msgsPerSec")).toBe(8);
+  });
+
+  it("peakRatio：單秒比值的最大值；批次為 0 的格子不算單格比值", () => {
+    expect(peakRatio([])).toBeNull();
+    expect(peakRatio([smp(40, 10), smp(150, 10), smp(50, 10)])).toBe(15);
+    expect(peakRatio([smp(40, 10), smp(0, 0)])).toBe(4);
+  });
+
+  it("peakRatio：視窗內完全沒有批次時為 null", () => {
+    expect(peakRatio([smp(100, 0), smp(5, 0)])).toBeNull();
+  });
+
+  it("peakRatio 不低於視窗比值（無批次格子的訊息拉高視窗比值時，最高水位不畫在液位線左邊）", () => {
+    // 單格比值 5、5；另一格 300 則訊息 0 批 → 視窗比值 (50+50+300)/20 = 20
+    expect(peakRatio([smp(50, 10), smp(50, 10), smp(300, 0)])).toBe(20);
   });
 });

@@ -84,10 +84,11 @@ describe("ShortcutHelp 內容由 SHORTCUTS 渲染", () => {
     }
   });
 
-  it("含 x（清除異常標記）與 ? 兩項", () => {
+  it("含 x（確認異常標記）與 ? 兩項", () => {
     const w = mountHelp();
     const clear = dialog(w).get('[data-shortcut="clear-latch"]');
     expect(clear.get("kbd").text()).toBe("x");
+    expect(clear.text()).toContain("確認聚焦卡片的異常（劃線保留至回復後 30 秒）");
     const toggle = dialog(w).get('[data-shortcut="toggle-help"]');
     expect(toggle.get("kbd").text()).toBe("?");
   });

@@ -1,19 +1,19 @@
 <script setup lang="ts">
 import { useId } from "vue";
-import { X } from "lucide-vue-next";
+import { Check } from "lucide-vue-next";
 import StatusLight from "../../../shared/components/StatusLight.vue";
-import { STATE_STYLE } from "../../../shared/lib/state-style.js";
-import { formatRelative } from "../../../shared/lib/format.js";
-import type { AnomalySummaryItem } from "../lib/anomaly-latch.js";
+import { latchText, type AnomalySummaryItem } from "../lib/anomaly-latch.js";
 
 /**
  * 側欄「最近異常」摘要（spec FR-026、FR-027）。純呈現：只收 props、只 emit，不碰 store——
  * 側欄與手機覆蓋層共用同一元件，由呼叫端接 `store.anomalySummary`／`selectMachine`／`clearLatch`。
  *
  * - 列序即 `items` 的順序（排序由 store 的 `summarize` 負責：進行中優先、進入時間新到舊）。
- * - 相對時間：進行中錨定進入時間「進入 N 秒前」，回復後錨定回復時間「已回復 N 秒前」；
- *   2 秒內 `formatRelative` 回「剛剛」，改寫成「剛進入」／「剛回復」以免出現「進入 剛剛」。
- * - 已確認（struck）：名稱與時間劃線並轉淡，清除鈕移除（同尺寸佔位保留，列高不變），保留到期滿由 store 移出清單。
+ * - 文案取自 `latchText`（與卡片底列標記同一套）：進行中錨定進入時間「嚴重 · 進入 N 秒前」（現在式），
+ *   回復後錨定回復時間、以「曾」起頭寫成過去式「曾嚴重 · N 秒前回復」；2 秒內寫成「剛進入」／「剛回復」。
+ * - 確認鈕（T073 第三輪起用「確認」語意：lucide `Check`、可讀名稱「確認 … 的異常標記」）：警報系統的通用語彙是「確認」，
+ *   結果是劃線保留、不是刪除，舊的 X／「清除」會被讀成「移除這筆」。卡片上的標記不可點，確認只走這裡、鍵盤 `x` 與手機覆蓋層。
+ * - 已確認（struck）：名稱與時間劃線並轉淡，確認鈕移除（同尺寸佔位保留，列高不變），保留到期滿由 store 移出清單。
  *   劃線本身不會被讀屏念出，所以選取鈕名稱另帶隱藏的「已確認」。
  */
 const props = defineProps<{
@@ -30,14 +30,12 @@ const emit = defineEmits<{
 
 const headingId = useId();
 
-function timeText(item: AnomalySummaryItem): string {
-  const rel = formatRelative(item.since, props.now);
-  if (item.active) return rel === "剛剛" ? "剛進入" : `進入 ${rel}`;
-  return rel === "剛剛" ? "剛回復" : `已回復 ${rel}`;
+function markText(item: AnomalySummaryItem): string {
+  return latchText(item, props.now);
 }
 
 /**
- * 清除後清除鈕會隨 struck 消失；先把焦點交給同列的選取鈕，鍵盤操作者不會掉回頁首。
+ * 確認後確認鈕會隨 struck 消失；先把焦點交給同列的選取鈕，鍵盤操作者不會掉回頁首。
  */
 function onClear(machineId: string, event: MouseEvent): void {
   const row = (event.currentTarget as HTMLElement | null)?.closest("li");
@@ -82,7 +80,7 @@ function onClear(machineId: string, event: MouseEvent): void {
             <span
               class="truncate text-xs text-ink-3"
               :class="item.struck ? 'line-through' : ''"
-            >{{ STATE_STYLE[item.level].label }} · {{ timeText(item) }}</span>
+            >{{ markText(item) }}</span>
           </span>
           <span v-if="item.struck" class="sr-only">（已確認）</span>
         </button>
@@ -92,12 +90,13 @@ function onClear(machineId: string, event: MouseEvent): void {
           type="button"
           data-fg="anomaly-clear"
           class="flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-ink-3 transition-colors duration-150 hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
-          :aria-label="`清除 ${item.label} 的異常標記`"
+          :aria-label="`確認 ${item.label} 的異常標記`"
+          title="確認此異常（劃線保留至回復後 30 秒）"
           @click="onClear(item.machineId, $event)"
         >
-          <X class="h-4 w-4" aria-hidden="true" />
+          <Check class="h-4 w-4" aria-hidden="true" />
         </button>
-        <!-- 已確認：清除鈕移除，留同尺寸佔位，劃線不改列寬 -->
+        <!-- 已確認：確認鈕移除，留同尺寸佔位，劃線不改列寬 -->
         <span v-else class="h-7 w-7 shrink-0" aria-hidden="true" />
       </li>
     </ul>

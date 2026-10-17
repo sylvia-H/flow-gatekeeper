@@ -349,7 +349,7 @@ describe("搜尋框 Enter", () => {
   });
 });
 
-describe("x：清除聚焦卡片的異常標記", () => {
+describe("x：確認聚焦卡片的異常標記", () => {
   it("聚焦卡片且標記可見時呼叫 clearLatch(該台)", () => {
     attach();
     state.latchVisible.add("a3");

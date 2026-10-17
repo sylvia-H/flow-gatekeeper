@@ -7,7 +7,7 @@ import type { AnomalySummaryItem } from "../lib/anomaly-latch.js";
 
 /**
  * 手機異常清單覆蓋層（T061；FR-033a、FR-034a、ui-contract §3）：純 props／emit 的容器，
- * 內容重用 AnomalySummary；dialog 語意、起於工具列下緣、選台後收合、清除不收合、
+ * 內容重用 AnomalySummary；dialog 語意、起於工具列下緣、選台後收合、確認不收合、
  * Escape／遮罩／關閉鈕收合、焦點陷阱與還原。
  */
 
@@ -111,7 +111,7 @@ describe("AnomalyOverlay 事件", () => {
     expect(w.emitted("close")).toHaveLength(1);
   });
 
-  it("清除：只 emit clear，不收合", async () => {
+  it("確認：只 emit clear，不收合", async () => {
     const w = mountOverlay();
     await dialog(w).get('[data-machine="oven-04"] [data-fg="anomaly-clear"]').trigger("click");
     expect(w.emitted("clear")).toEqual([["oven-04"]]);

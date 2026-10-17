@@ -113,7 +113,7 @@ export const SHORTCUTS = [
     id: "clear-latch",
     keys: ["x"],
     eventKeys: ["x"],
-    action: "清除（確認）聚焦卡片的異常標記",
+    action: "確認聚焦卡片的異常（劃線保留至回復後 30 秒）",
     scope: NOT_IN_INPUT,
     group: "機台卡片",
   },

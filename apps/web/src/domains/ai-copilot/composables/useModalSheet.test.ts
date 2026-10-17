@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createModalSheet, nextTrapTarget } from "./useModalSheet.js";
+import { MOBILE_QUERY, createModalSheet, nextTrapTarget } from "./useModalSheet.js";
 
 describe("nextTrapTarget（bottom sheet 焦點循環）", () => {
   const items = ["close", "diagnose", "cancel"];
@@ -32,7 +32,7 @@ interface FakeEl {
   isConnected: boolean;
 }
 
-function harness(opts: { mobile: boolean }) {
+function harness(opts: { mobile: boolean; autoFocus?: () => boolean }) {
   let active: unknown = null;
   const focused: string[] = [];
   const mk = (name: string, rendered = true): FakeEl => ({
@@ -70,7 +70,7 @@ function harness(opts: { mobile: boolean }) {
     IntersectionObserver: StubIO,
     activeElement: () => active,
     defer: (fn) => fn(),
-  });
+  }, { autoFocus: opts.autoFocus });
   sheet.attach();
   const key = (k: string, shiftKey = false) => {
     const e = { key: k, shiftKey, preventDefault: vi.fn(), stopPropagation: vi.fn() };
@@ -82,10 +82,83 @@ function harness(opts: { mobile: boolean }) {
     onClose,
     focused,
     key,
+    el,
     setActive: (name: string) => (active = el(name)),
+    clearActive: () => (active = null),
     show: (v: boolean) => ioCallback?.([{ isIntersecting: v }]),
   };
 }
+
+describe("createModalSheet：不搶焦點的非 modal 開啟（critique 第二輪 P1／鍵盤使用者）", () => {
+  it("autoFocus=false 且焦點在卡片：open 但不接手、不攔 Escape；關閉時不搬動焦點", () => {
+    const h = harness({ mobile: true, autoFocus: () => false });
+    h.setActive("opener");
+    h.show(true);
+    expect(h.sheet.open.value).toBe(true);
+    expect(h.sheet.trapActive.value).toBe(false);
+    expect(h.focused).toEqual([]);
+    const e = h.key("Escape");
+    expect(h.onClose).not.toHaveBeenCalled();
+    expect(e.stopPropagation).not.toHaveBeenCalled();
+    h.show(false);
+    expect(h.sheet.open.value).toBe(false);
+    expect(h.focused).toEqual([]);
+  });
+
+  it("autoFocus=false 且焦點在 body（觸控 Safari 點卡片不給焦點）→ 不強制接手，維持非 modal（第三輪交叉審查 medium）", () => {
+    const h = harness({ mobile: true, autoFocus: () => false });
+    h.clearActive();
+    h.show(true);
+    expect(h.sheet.open.value).toBe(true);
+    expect(h.sheet.trapActive.value).toBe(false);
+    expect(h.focused).toEqual([]);
+  });
+
+  it("autoFocus=true 且焦點在 body（空狀態或有可操作內容）→ 照樣接手", () => {
+    const h = harness({ mobile: true, autoFocus: () => true });
+    h.clearActive();
+    h.show(true);
+    expect(h.sheet.trapActive.value).toBe(true);
+    expect(h.focused.at(-1)).toBe("root");
+  });
+
+  it("engage()：開著時改由程式接手並記下原焦點，關閉時歸還；未開時無作用", () => {
+    const h = harness({ mobile: true, autoFocus: () => false });
+    h.setActive("opener");
+    h.sheet.engage();
+    expect(h.sheet.trapActive.value).toBe(false); // 尚未出現
+    h.show(true);
+    h.sheet.engage();
+    expect(h.sheet.trapActive.value).toBe(true);
+    expect(h.focused.at(-1)).toBe("root");
+    h.show(false);
+    expect(h.focused.at(-1)).toBe("opener");
+  });
+
+  it("onFocusIn：使用者自己進入 sheet → 接手（不再搬焦點），關閉時把焦點還給它離開的元素", () => {
+    const h = harness({ mobile: true, autoFocus: () => false });
+    h.setActive("opener");
+    h.show(true);
+    h.setActive("diagnose");
+    h.sheet.onFocusIn({ relatedTarget: h.el("opener") });
+    expect(h.sheet.trapActive.value).toBe(true);
+    expect(h.focused).toEqual([]);
+    const e = h.key("Escape");
+    expect(h.onClose).toHaveBeenCalledTimes(1);
+    expect(e.stopPropagation).toHaveBeenCalled();
+    h.show(false);
+    expect(h.focused.at(-1)).toBe("opener");
+  });
+
+  it("桌機：onFocusIn／engage 都不啟用焦點陷阱", () => {
+    const h = harness({ mobile: false });
+    h.show(true);
+    h.sheet.onFocusIn({ relatedTarget: null });
+    h.sheet.engage();
+    expect(h.sheet.open.value).toBe(false);
+    expect(h.sheet.trapActive.value).toBe(false);
+  });
+});
 
 describe("createModalSheet", () => {
   it("手機：sheet 顯示 → trapActive 並聚焦容器；隱藏 → 解除並把焦點還給開啟前元素", () => {
@@ -136,5 +209,21 @@ describe("createModalSheet", () => {
     const e = h.key("Escape");
     expect(h.onClose).toHaveBeenCalledTimes(1);
     expect(e.stopPropagation).toHaveBeenCalled();
+  });
+});
+
+describe("bottom sheet 斷點（T073 D：推擠式側欄門檻 lg→desk／1366）", () => {
+  it("< 1366px 為 sheet：查詢字串與 AppLayout 的 desk 斷點一致，attach 時以它查詢", () => {
+    expect(MOBILE_QUERY).toBe("(max-width: 1365.98px)");
+    const matchMedia = vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    const sheet = createModalSheet(() => null, vi.fn(), {
+      matchMedia,
+      activeElement: () => null,
+      defer: (fn) => fn(),
+    });
+    sheet.attach();
+    expect(matchMedia).toHaveBeenCalledWith(MOBILE_QUERY);
+    expect(sheet.isSheet.value).toBe(true);
+    sheet.detach();
   });
 });

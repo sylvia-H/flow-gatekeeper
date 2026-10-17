@@ -43,6 +43,12 @@ describe("StageColumn 標題與區域（FR-038、ui-contract §3）", () => {
     expect(w.text()).not.toContain("Forming");
   });
 
+  it("標題字級：手機 Heading 16px（text-md）、md+ 14px（md:text-sm），字重 600", () => {
+    const classes = mountColumn(stage()).get("h2").classes();
+    expect(classes).toEqual(expect.arrayContaining(["text-md", "md:text-sm", "font-semibold"]));
+    expect(classes).not.toContain("text-sm");
+  });
+
   it("標頭顯示可見機台數「N 台」", () => {
     expect(mountColumn(stage()).get("header").text()).toContain("2 台");
     expect(mountColumn(stage({ machineIds: ["press-02"] })).get("header").text()).toContain("1 台");

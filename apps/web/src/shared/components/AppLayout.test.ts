@@ -35,7 +35,7 @@ function stubStorage(): void {
 /**
  * 依視窗寬度回答 `max-width`／`min-width` 媒體查詢（其餘如 reduced-motion 一律 false），
  * 並記下 change 監聽，`setViewportWidth` 改寬度時對結果翻轉的查詢送出 change。
- * < 1024px＝ bottom-sheet；< 768px＝手機（rail 隱藏、主區摘要條）。
+ * < 1366px＝ bottom-sheet（T073 D 由 1024 提到 1366）；< 768px＝手機（rail 隱藏、主區摘要條）。
  */
 let viewportWidth = 1366;
 const mediaListeners: { query: string; cb: (e: { matches: boolean }) => void }[] = [];
@@ -83,11 +83,23 @@ async function setViewportWidth(width: number): Promise<void> {
 const DESKTOP = 1366;
 const PHONE = 390;
 
-/** 假 ResizeObserver：TopBar 以容器寬度決定段位，測試以 `resizeToolbar` 手動送出寬度。 */
+/**
+ * 假 ResizeObserver：TopBar 以容器寬度決定段位，測試以 `resizeToolbar` 手動送出寬度；
+ * AppLayout 觀察 Copilot 面板外框（`[data-fg="copilot"]`）的高度決定主區底部留白，測試以 `resizeSheet` 送出高度。
+ */
 let resizeToolbar: (width: number) => void = () => {};
+let resizeSheet: (height: number) => void = () => {};
 class FakeResizeObserver {
   constructor(private readonly callback: ResizeObserverCallback) {}
   observe(target: Element): void {
+    if (target.matches('[data-fg="copilot"]')) {
+      resizeSheet = (height) =>
+        this.callback(
+          [{ target, contentRect: { height }, borderBoxSize: [{ blockSize: height, inlineSize: 0 }] } as unknown as ResizeObserverEntry],
+          this,
+        );
+      return;
+    }
     resizeToolbar = (width) =>
       this.callback([{ target, contentRect: { width } } as unknown as ResizeObserverEntry], this);
   }
@@ -115,6 +127,7 @@ beforeEach(() => {
   stubStorage();
   stubViewport(DESKTOP);
   resizeToolbar = () => {};
+  resizeSheet = () => {};
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   vi.stubGlobal("WebSocket", IdleWebSocket);
   vi.stubGlobal(
@@ -350,13 +363,28 @@ describe("手機 bottom-sheet 與 peek 條（T062、FR-033）", () => {
     expect(isOpen(w)).toBe(true);
   });
 
-  it("遮罩點擊只收合當次（退為 peek 條、不寫偏好）", async () => {
+  it("遮罩只在 sheet 接手焦點（drawer update:engaged=true）時渲染；點擊只收合當次（退為 peek 條、不寫偏好）", async () => {
     const w = mountApp();
     await openSheet(w);
+    w.findComponent({ name: "CopilotDrawer" }).vm.$emit("update:engaged", true);
+    await flushPromises();
     await w.get(".bg-scrim\\/50").trigger("click");
     expect(isOpen(w)).toBe(false);
     expect(storedPreference()).toBeUndefined();
     expect(peek(w).exists()).toBe(true);
+  });
+
+  it("閒置非 modal sheet（update:engaged=false）不渲染遮罩：選取卡不被調暗，點其他卡片就是改選", async () => {
+    const w = mountApp();
+    await openSheet(w);
+    w.findComponent({ name: "CopilotDrawer" }).vm.$emit("update:engaged", false);
+    await flushPromises();
+    expect(isOpen(w)).toBe(true);
+    expect(w.find(".bg-scrim\\/50").exists()).toBe(false);
+    // 沒有遮罩攔截：改選另一台，sheet 跟著換機台、維持展開
+    await select("oven-04");
+    expect(useMonitoringStore().selectedMachineId).toBe("oven-04");
+    expect(isOpen(w)).toBe(true);
   });
 
   it("有手動收合偏好時選台不展開，直接顯示 peek 條；點擊展開並清除偏好", async () => {
@@ -390,6 +418,73 @@ describe("手機 bottom-sheet 與 peek 條（T062、FR-033）", () => {
     expect(peek(w).exists()).toBe(false);
     expect(isOpen(w)).toBe(false);
     expect(storedPreference()).toEqual({ manuallyCollapsed: true });
+  });
+});
+
+describe("工具列快捷鍵說明鈕與 `?` 共用同一個開關（T073 C）", () => {
+  const helpLayer = () => document.querySelector('[data-fg="shortcut-help"]');
+  const helpButton = (w: VueWrapper) => w.get('[data-fg="shortcut-help-toggle"]');
+
+  it("點說明鈕開說明層（aria-expanded 同步）、按 `?` 關；再按 `?` 開、點說明鈕關", async () => {
+    const w = mountApp(["TopBar", "ShortcutHelp"]);
+    await flushPromises();
+    expect(helpLayer()).toBeNull();
+
+    await helpButton(w).trigger("click");
+    await flushPromises();
+    expect(helpLayer()).not.toBeNull();
+    expect(helpButton(w).attributes("aria-expanded")).toBe("true");
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+    await flushPromises();
+    expect(helpLayer()).toBeNull();
+    expect(helpButton(w).attributes("aria-expanded")).toBe("false");
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "?", bubbles: true }));
+    await flushPromises();
+    expect(helpLayer()).not.toBeNull();
+    await helpButton(w).trigger("click");
+    await flushPromises();
+    expect(helpLayer()).toBeNull();
+  });
+});
+
+describe("1024–1365px 同樣走 bottom-sheet（T073 D，推擠門檻提到 desk／1366）", () => {
+  it("1024 寬：選台展開為 dialog 語意的 sheet（閒置非 modal、診斷開始後接手焦點）；sheet 內 Escape 只收合當次並退為 peek 條", async () => {
+    stubViewport(1024);
+    const w = mountApp();
+    await select("press-02");
+    expect(isOpen(w)).toBe(true);
+    showSheet();
+    await flushPromises();
+    const dialog = w.get('[role="dialog"]');
+    // 閒置選台：非 modal（焦點留在卡片），不蓋遮罩
+    expect(dialog.attributes("aria-modal")).toBe("false");
+    expect(w.find(".bg-scrim\\/50").exists()).toBe(false);
+    // 診斷開始 → sheet 接手焦點：aria-modal=true，遮罩出現
+    useCopilotStore().jobs.set("press-02", startActiveState("press-02", "job-1"));
+    await flushPromises();
+    expect(dialog.attributes("aria-modal")).toBe("true");
+    expect(w.find(".bg-scrim\\/50").exists()).toBe(true);
+    await dialog.trigger("keydown", { key: "Escape" });
+    expect(isOpen(w)).toBe(false);
+    expect(storedPreference()).toBeUndefined();
+    expect(useMonitoringStore().selectedMachineId).toBe("press-02");
+    expect(peek(w).exists()).toBe(true);
+  });
+
+  it("1280、1365 寬仍是 sheet；1366 寬是常駐側欄（不掛 dialog 語意）", async () => {
+    stubViewport(1280);
+    const w = mountApp();
+    await select("press-02");
+    showSheet();
+    await flushPromises();
+    expect(w.find('[role="dialog"]').exists()).toBe(true);
+    await setViewportWidth(1365);
+    expect(w.find('[role="dialog"]').exists()).toBe(true);
+    await setViewportWidth(1366);
+    expect(w.find('[role="dialog"]').exists()).toBe(false);
+    expect(isOpen(w)).toBe(true);
   });
 });
 
@@ -551,7 +646,13 @@ describe("手機機群健康摘要條與異常清單覆蓋層（T061 接線、FR
 });
 
 describe("AppLayout 外觀（純 props）", () => {
-  function mountLayout(props: { panelOpen: boolean; peekLabel: string | null; peekStatus?: string | null }) {
+  function mountLayout(props: {
+    panelOpen: boolean;
+    peekLabel: string | null;
+    peekStatus?: string | null;
+    sheetEngaged?: boolean;
+    sheetCompact?: boolean;
+  }) {
     wrapper = mount(AppLayout, { props, attachTo: document.body });
     return wrapper;
   }
@@ -561,7 +662,24 @@ describe("AppLayout 外觀（純 props）", () => {
     const cls = panel(w).classes();
     expect(cls).toContain("max-h-[85vh]");
     expect(cls.some((c) => c.startsWith("min-h-["))).toBe(false);
-    expect(panel(w).find(".lg\\:hidden .w-10").exists()).toBe(true);
+    expect(panel(w).find(".desk\\:hidden .w-10").exists()).toBe(true);
+  });
+
+  it("推擠式側欄門檻為 desk（≥ 1366px）：面板、遮罩、展開窄條、peek 條都不再用 lg: 斷點", () => {
+    const open = mountLayout({ panelOpen: true, peekLabel: "壓製機 02", sheetEngaged: true });
+    expect(panel(open).classes()).toEqual(
+      expect.arrayContaining(["desk:static", "desk:w-[360px]", "desk:shrink-0", "desk:bg-surface/72", "desk:shadow-glass"]),
+    );
+    expect(open.get(".bg-scrim\\/50").classes()).toContain("desk:hidden");
+    open.unmount();
+    // 未接手焦點（閒置非 modal sheet、未傳 prop）時不渲染遮罩
+    const idle = mountLayout({ panelOpen: true, peekLabel: "壓製機 02" });
+    expect(idle.find(".bg-scrim\\/50").exists()).toBe(false);
+    idle.unmount();
+    const closed = mountLayout({ panelOpen: false, peekLabel: "壓製機 02" });
+    expect(closed.get('button[aria-label="展開 AI 診斷"]').classes()).toContain("desk:flex");
+    expect(closed.get('[data-fg="copilot-peek"]').classes()).toContain("desk:hidden");
+    expect(closed.html()).not.toMatch(/\b(lg|xl):/);
   });
 
   it("peek 條：無診斷時不渲染 chip，可讀名稱只有機台名；按鈕內沒有互動元素", () => {
@@ -574,10 +692,96 @@ describe("AppLayout 外觀（純 props）", () => {
   });
 
   it("peek 條：有診斷時顯示 chip 文字並併進可讀名稱", () => {
-    const w = mountLayout({ panelOpen: false, peekLabel: "攪拌機 01", peekStatus: "結果 · 嚴重" });
+    const w = mountLayout({ panelOpen: false, peekLabel: "壓製機 02", peekStatus: "AI：嚴重" });
     const bar = w.get('[data-fg="copilot-peek"]');
-    expect(bar.get("span.rounded-pill").text()).toBe("結果 · 嚴重");
-    expect(bar.attributes("aria-label")).toBe("展開 AI 診斷：攪拌機 01，診斷：結果 · 嚴重");
+    expect(bar.get("span.rounded-pill").text()).toBe("AI：嚴重");
+    expect(bar.attributes("aria-label")).toBe("展開 AI 診斷：壓製機 02，診斷：AI：嚴重");
+    // 可見只剩機台名＋chip：「AI 診斷」標籤改為視覺隱藏，避免與 chip 的「AI：」重複；高度維持 32px
+    const label = bar.findAll("span").find((s) => s.text() === "AI 診斷")!;
+    expect(label.classes()).toEqual(["sr-only"]);
+    const visible = bar.findAll("span").filter((s) => !s.classes().includes("sr-only")).map((s) => s.text());
+    expect(visible).toEqual(["壓製機 02", "AI：嚴重"]);
+    expect(bar.classes()).toContain("h-8");
+  });
+
+  describe("主區與 rail 底部留白（critique 第三輪 P1、第四輪交叉審查）", () => {
+    const TABLET = 1024;
+    const reserve = (w: VueWrapper) =>
+      (w.get(".h-screen").element as HTMLElement).style.getPropertyValue("--fg-bottom-reserve");
+
+    it("< desk：peek 條 32px、閒置單列 sheet＝實際高度；接手焦點後 sheet 長高不跟著動；收合回 peek、無選取歸零", async () => {
+      stubViewport(TABLET);
+      const w = mountLayout({ panelOpen: false, peekLabel: null });
+      expect(reserve(w)).toBe("0px");
+      // 兩處都以同一個變數留白，desk+ 由 desk:pb-0 蓋掉
+      for (const el of [w.get(".bg-bench-grid-lines"), w.get('aside[aria-label="側欄"]')]) {
+        expect(el.classes()).toEqual(expect.arrayContaining(["pb-[var(--fg-bottom-reserve)]", "desk:pb-0"]));
+      }
+
+      await w.setProps({ peekLabel: "壓製機 02" });
+      expect(reserve(w)).toBe("32px");
+
+      // 展開閒置單列：尚未量到時保留前值，量到後採用實際高度
+      await w.setProps({ panelOpen: true, sheetCompact: true });
+      expect(reserve(w)).toBe("32px");
+      resizeSheet(51);
+      await flushPromises();
+      expect(reserve(w)).toBe("51px");
+
+      // 開始診斷：瀏覽器順序是 sheet 先長高（ResizeObserver）、drawer 的 engaged 後到；sheetCompact 已同步轉 false，留白不動
+      await w.setProps({ sheetCompact: false });
+      resizeSheet(420);
+      await flushPromises();
+      expect(reserve(w)).toBe("51px");
+      await w.setProps({ sheetEngaged: true });
+      resizeSheet(653);
+      await flushPromises();
+      expect(reserve(w)).toBe("51px");
+
+      // 收合 → peek 條（一次重排）
+      resizeSheet(0);
+      await w.setProps({ panelOpen: false, sheetEngaged: false });
+      expect(reserve(w)).toBe("32px");
+
+      await w.setProps({ peekLabel: null });
+      expect(reserve(w)).toBe("0px");
+    });
+
+    it("一打開就是 modal（從 peek 重開／改選已有結果的機台）：先送大高度、再送 engaged=true，留白維持開啟前的值（第四輪交叉審查 high）", async () => {
+      stubViewport(TABLET);
+      const w = mountLayout({ panelOpen: false, peekLabel: "壓製機 02" });
+      expect(reserve(w)).toBe("32px");
+      await w.setProps({ panelOpen: true, sheetCompact: false });
+      resizeSheet(653);
+      await flushPromises();
+      expect(reserve(w)).toBe("32px");
+      await w.setProps({ sheetEngaged: true });
+      await flushPromises();
+      expect(reserve(w)).toBe("32px");
+      w.unmount();
+
+      // 已開著的閒置單列改選到有結果的機台：sheetCompact 同步轉 false，sheet 先長高、engaged 後到，留白維持單列高度
+      const v = mountLayout({ panelOpen: true, peekLabel: "攪拌機 01", sheetCompact: true });
+      resizeSheet(51);
+      await flushPromises();
+      expect(reserve(v)).toBe("51px");
+      await v.setProps({ peekLabel: "壓製機 02", sheetCompact: false });
+      resizeSheet(653);
+      await flushPromises();
+      expect(reserve(v)).toBe("51px");
+      await v.setProps({ sheetEngaged: true });
+      expect(reserve(v)).toBe("51px");
+    });
+
+    it("desk+（≥ 1366px）：推擠式側欄的高度不寫進留白，恆 0", async () => {
+      stubViewport(DESKTOP);
+      const w = mountLayout({ panelOpen: true, peekLabel: "壓製機 02", sheetCompact: true });
+      resizeSheet(700);
+      await flushPromises();
+      expect(reserve(w)).toBe("0px");
+      await w.setProps({ panelOpen: false });
+      expect(reserve(w)).toBe("0px");
+    });
   });
 
   it("peek 條點擊 emit open-panel；面板展開或無選取時不渲染", async () => {

@@ -272,7 +272,7 @@ describe("StageTopology 卡片診斷接線", () => {
 });
 
 describe("StageTopology 卡片底列接線：異常標記與診斷 chip（T051）", () => {
-  it("可見期內的 latch 傳進卡片；點清除鈕 → store.clearLatch（劃線，不選台）；回復滿 30 秒後不再傳", async () => {
+  it("可見期內的 latch 傳進卡片；卡片標記不可點（點了不確認）、store.clearLatch（rail／x）後卡片劃線；回復滿 30 秒後不再傳", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     const store = useMonitoringStore();
     store.tickNow();
@@ -282,7 +282,14 @@ describe("StageTopology 卡片底列接線：異常標記與診斷 chip（T051�
     expect(card().attributes("data-latch")).toBe("critical");
     expect(w.get('.machine-card[data-machine="oven-04"]').attributes("data-latch")).toBe("none");
 
-    await w.get('[data-fg="latch-clear"]').trigger("click");
+    // 標記不可點（T073 第三輪）：不是按鈕、點了不會確認
+    const mark = w.get('[data-fg="latch-mark"]');
+    expect(mark.element.tagName).toBe("SPAN");
+    await mark.trigger("click");
+    expect(store.latchFor("press-02")?.clearedBy).toBeNull();
+    // 確認走 rail 列／x：同一份 store 狀態，卡片隨之劃線
+    store.clearLatch("press-02");
+    await w.vm.$nextTick();
     expect(store.latchFor("press-02")?.clearedBy).toBe("user");
     expect(card().attributes("data-latch-cleared")).toBe("");
     expect(store.selectedMachineId).toBeNull();
@@ -294,7 +301,7 @@ describe("StageTopology 卡片底列接線：異常標記與診斷 chip（T051�
     await w.vm.$nextTick();
     expect(store.latchVisible("press-02")).toBeFalsy();
     expect(card().attributes("data-latch")).toBe("none");
-    expect(w.find('[data-fg="latch-clear"]').exists()).toBe(false);
+    expect(w.find('[data-fg="latch-mark"]').exists()).toBe(false);
     clock.mockRestore();
   });
 

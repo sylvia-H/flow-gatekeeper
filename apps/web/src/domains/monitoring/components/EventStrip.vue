@@ -8,6 +8,9 @@ import { STATE_STYLE } from "../../../shared/lib/state-style.js";
  * 純呈現，資料由 `store.events`（前端衍生、最近 50 筆）餵入（FR-009）；高度由外層拖曳把手調整（預設 150px）。
  * 每列左側一道 16×2px 的蝕刻短線依嚴重度上色（獨立小元素，不是整列的左邊框）；
  * 嚴重度另有中文文字，不只靠顏色（FR-004）。時間為 24 小時制 mono（FR-022）。
+ * 合併列（`count > 1` 且起訖不在同一秒）顯示起訖「16:51:04–16:52:07」，單筆只顯示一個時間；
+ * 視窗 < 640px（`sm`）時起點與分隔符只留給螢幕閱讀器（`max-sm:sr-only`），時間欄的 `title` 恆為全文。
+ * 時間欄 `whitespace-nowrap`，起訖不換行，列高維持 32px（event-strip-size.ts）。
  * 每列是一顆滿寬按鈕，點擊選取對應機台（FR-029）；可讀名稱即列上的可見文字，不另加 aria-label。
  * 面板容器 `overflow-hidden`，焦點環用 `ring-inset` 畫在列內，避免被裁切。分隔線畫在按鈕上（border-box），列高維持 32px。
  * 選取中的列另加 1px 內框 `ring-1 ring-inset ring-accent` 並把訊息文字加深為 `text-ink`：深色主題下 accent-wash
@@ -18,6 +21,14 @@ withDefaults(defineProps<{ events: DerivedEvent[]; height: number; selectedId?: 
 });
 
 const emit = defineEmits<{ select: [machineId: string] }>();
+
+/** 起訖文字：合併列且起訖不在同一秒才有 `start`；`full` 給時間欄的 `title`。 */
+function clockRange(event: DerivedEvent): { start: string | null; end: string; full: string } {
+  const end = formatClock(event.ts);
+  const start = event.count > 1 ? formatClock(event.firstTs) : null;
+  if (start === null || start === end) return { start: null, end, full: end };
+  return { start, end, full: `${start}–${end}` };
+}
 
 // 顏色 token 取自共用 STATE_STYLE；回復事件用中性的蝕刻色，不借用任一狀態色。
 const SEVERITY: Record<DerivedEvent["severity"], { label: string; text: string; tick: string }> = {
@@ -62,7 +73,13 @@ const SEVERITY: Record<DerivedEvent["severity"], { label: string; text: string; 
           @click="emit('select', event.machineId)"
         >
           <span class="h-0.5 w-4 shrink-0" :class="SEVERITY[event.severity].tick" aria-hidden="true" />
-          <span class="shrink-0 font-mono text-xs tabular-nums text-ink-3">{{ formatClock(event.ts) }}</span>
+          <span
+            data-fg="event-time"
+            class="shrink-0 whitespace-nowrap font-mono text-xs tabular-nums text-ink-3"
+            :title="clockRange(event).full"
+          >
+            <span v-if="clockRange(event).start" class="max-sm:sr-only">{{ clockRange(event).start }}–</span>{{ clockRange(event).end }}
+          </span>
           <span class="w-8 shrink-0 text-xs font-semibold" :class="SEVERITY[event.severity].text">
             {{ SEVERITY[event.severity].label }}
           </span>

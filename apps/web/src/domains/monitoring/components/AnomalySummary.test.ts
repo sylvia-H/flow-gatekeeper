@@ -88,19 +88,19 @@ describe("AnomalySummary 相對時間與等級文字（FR-026、FR-027）", () =
     expect(rows(w)[0]!.text()).toContain("嚴重 · 進入 12 秒前");
   });
 
-  it("回復後：「警告 · 已回復 N 秒前」，錨定 since（回復時間）", () => {
+  it("回復後：過去式「曾警告 · N 秒前回復」，錨定 since（回復時間）", () => {
     const w = mountSummary([item({ level: "warning", active: false, since: NOW - 5_000 })]);
-    expect(rows(w)[0]!.text()).toContain("警告 · 已回復 5 秒前");
+    expect(rows(w)[0]!.text()).toContain("曾警告 · 5 秒前回復");
   });
 
-  it("2 秒內寫成「剛進入」／「剛回復」，不出現「進入 剛剛」", () => {
+  it("2 秒內寫成「嚴重 · 剛進入」／「曾嚴重 · 剛回復」，不出現「進入 剛剛」", () => {
     const w = mountSummary([
       item({ since: NOW - 1_000 }),
       item({ machineId: "oven-04", label: "烤爐 04", active: false, since: NOW }),
     ]);
     const [a, b] = rows(w);
-    expect(a!.text()).toContain("剛進入");
-    expect(b!.text()).toContain("剛回復");
+    expect(a!.text()).toContain("嚴重 · 剛進入");
+    expect(b!.text()).toContain("曾嚴重 · 剛回復");
     expect(w.text()).not.toContain("剛剛");
   });
 
@@ -119,17 +119,20 @@ describe("AnomalySummary 互動（emit select／clear）", () => {
     expect(w.emitted("clear")).toBeUndefined();
   });
 
-  it("清除鈕的可讀名稱含中文名；點擊 emit clear(machineId) 而不 emit select", async () => {
+  it("確認鈕（Check 圖示）的可讀名稱「確認 … 的異常標記」、tooltip 說明劃線保留；點擊 emit clear(machineId) 而不 emit select", async () => {
     const w = mountSummary([item()]);
     const btn = rows(w)[0]!.get('[data-fg="anomaly-clear"]');
     expect(btn.element.tagName).toBe("BUTTON");
-    expect(btn.attributes("aria-label")).toBe("清除 壓製機 02 的異常標記");
+    expect(btn.attributes("aria-label")).toBe("確認 壓製機 02 的異常標記");
+    expect(btn.attributes("title")).toBe("確認此異常（劃線保留至回復後 30 秒）");
+    expect(btn.find('svg[class*="lucide-check"]').exists()).toBe(true);
+    expect(btn.find('svg[class*="lucide-x"]').exists()).toBe(false);
     await btn.trigger("click");
     expect(w.emitted("clear")).toEqual([["press-02"]]);
     expect(w.emitted("select")).toBeUndefined();
   });
 
-  it("點清除後焦點移到同列的選取鈕（清除鈕隨劃線消失，焦點不掉回頁首）", async () => {
+  it("點確認後焦點移到同列的選取鈕（確認鈕隨劃線消失，焦點不掉回頁首）", async () => {
     const w = mountSummary([item()], { attach: true });
     try {
       await rows(w)[0]!.get('[data-fg="anomaly-clear"]').trigger("click");
@@ -154,7 +157,7 @@ describe("AnomalySummary 互動（emit select／clear）", () => {
 });
 
 describe("AnomalySummary 已確認（劃線保留至期滿，FR-026）", () => {
-  it("struck 列名稱與時間劃線、沒有清除鈕、選取鈕名稱帶「已確認」，列仍在清單中", () => {
+  it("struck 列名稱與時間劃線、沒有確認鈕、選取鈕名稱帶「已確認」，列仍在清單中", () => {
     const w = mountSummary([item({ struck: true })]);
     const row = rows(w)[0]!;
     const struckText = row.findAll(".line-through").map((el) => el.text());
@@ -162,7 +165,7 @@ describe("AnomalySummary 已確認（劃線保留至期滿，FR-026）", () => {
     expect(struckText.some((t) => t.includes("進入 12 秒前"))).toBe(true);
     expect(row.find('[data-fg="anomaly-clear"]').exists()).toBe(false);
     expect(row.get('[data-fg="anomaly-select"]').text()).toContain("已確認");
-    // 清除鈕原位留同尺寸佔位，列寬不因劃線改變
+    // 確認鈕原位留同尺寸佔位，列寬不因劃線改變
     const spacer = row.get("span.h-7.w-7");
     expect(spacer.attributes("aria-hidden")).toBe("true");
   });
@@ -172,7 +175,7 @@ describe("AnomalySummary 已確認（劃線保留至期滿，FR-026）", () => {
     expect(light.attributes("aria-hidden")).toBe("true");
   });
 
-  it("未確認列沒有劃線、有清除鈕", () => {
+  it("未確認列沒有劃線、有確認鈕", () => {
     const row = rows(mountSummary([item()]))[0]!;
     expect(row.findAll(".line-through")).toHaveLength(0);
     expect(row.find('[data-fg="anomaly-clear"]').exists()).toBe(true);

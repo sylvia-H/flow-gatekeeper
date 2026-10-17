@@ -3,7 +3,12 @@ import { computed, markRaw, ref, shallowRef, triggerRef } from "vue";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { fleetHealthOf, type FleetHealthSummary } from "../lib/fleet-health.js";
 import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
-import { deriveTransitionEvent, mergeEvent, type DerivedEvent } from "../lib/events.js";
+import {
+  EVENT_MERGE_WINDOW_MS,
+  deriveTransitionEvent,
+  mergeEvent,
+  type DerivedEvent,
+} from "../lib/events.js";
 import {
   applyTransition,
   clearLatch as clearLatchOf,
@@ -19,8 +24,8 @@ import {
   clearSamples,
   createRateSeries,
   droppedInWindow as droppedInWindowOf,
+  invalidateNext,
   markStale,
-  maxOf,
   pushSample,
   windowRatio as windowRatioOf,
   type RateSample,
@@ -30,8 +35,6 @@ import { backpressureRatio } from "../../../shared/lib/backpressure.js";
 
 /** US3 事件保留上限（FR-011）。 */
 const EVENT_CAP = 50;
-/** 013 事件合併視窗（data-model §10、FR-029）：同機台同嚴重度相距 ≤ 10 秒（閉區間）即合併。 */
-const EVENT_MERGE_WINDOW_MS = 10_000;
 
 /**
  * 連線三態（源自 013 前的 design-spec §8.2，已退役）。單一資料來源為本 store 的 `connectionStatus`，
@@ -116,7 +119,7 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   const now = ref(Date.now());
   /**
    * US3 前端衍生事件（最近 50 筆，最新在頂端）；於 applyTelemetryBatch 批次點衍生。
-   * 013 起經 `mergeEvent` 推入：同機台同嚴重度 10 秒內合併為一筆（`count` 累加、移到頂端）。
+   * 013 起經 `mergeEvent` 推入：同機台同嚴重度在以 `firstTs` 起算的 60 秒固定窗內合併為一筆（`count` 累加、起訖擴展、移到頂端；滿窗另起一列）。
    */
   const events = ref<DerivedEvent[]>([]);
   /** US3 事件唯一鍵用單調序號（非 reactive）：保 v-for key 在同批次同機台多筆時仍唯一。 */
@@ -204,19 +207,12 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     const samples = rateSeries.value.samples;
     return samples[samples.length - 1] ?? null;
   });
-  /**
-   * 走勢線 y 軸的共同上限：60 秒內訊息與批次速率的最大值（實務上即訊息峰值）。兩條線共用同一個上限，
-   * 線下面積的比例才會與比值一致（US2 AS2）；取兩者之大，避免批次多於訊息的極端情況畫出界。
-   */
-  const ratePeak = computed(() =>
-    Math.max(maxOf(rateSeries.value, "msgsPerSec"), maxOf(rateSeries.value, "batchesPerSec")),
-  );
   /** 60 秒視窗比值（FR-009 主顯示）；批次總和為 0 時為 null（顯示「—」）。 */
   const windowRatio = computed(() => windowRatioOf(rateSeries.value));
   /** 60 秒視窗內的捨棄總數（FR-011；> 0 才顯示）。 */
   const droppedInWindow = computed(() => droppedInWindowOf(rateSeries.value));
   /**
-   * 「連線中斷」標示：序列已停止推入，且本頁曾連上過——首次連線前序列同樣不推入，但那是
+   * 「已斷線」標示：序列已停止推入，且本頁曾連上過——首次連線前序列同樣不推入，但那是
    * 「連線中」（橫幅已說明），不該標成中斷。
    */
   const rateStale = computed(() => rateSeries.value.stale && everConnected.value);
@@ -257,7 +253,8 @@ export const useMonitoringStore = defineStore("monitoring", () => {
       // 事件時間用 payload 自身 timestamp（非批次 receivedAt）：pause 後 resume 一次沖出整段
       // buffer 時，各筆仍保留真實發生時序，不會全被壓成同一個 resume 時刻（review 006）。
       // timestamp 解析失敗才退回 receivedAt。id 唯一性另由單調 eventSeq 保證（見 events.ts）。
-      // 013：改經 mergeEvent 推入（同機台同嚴重度 10 秒內合併、上限 50），合併視窗以事件 ts 計。
+      // 013：改經 mergeEvent 推入（同機台同嚴重度 60 秒固定窗合併、上限 50），窗以事件 ts 計；
+      // firstTs 由 deriveTransitionEvent 帶出、合併時在 mergeEvent 內擴展，此批次點不另寫。
       const prevState = map.get(point.machineId)?.state;
       const parsedTs = Date.parse(point.timestamp);
       const eventTs = Number.isNaN(parsedTs) ? receivedAt : parsedTs;
@@ -353,7 +350,8 @@ export const useMonitoringStore = defineStore("monitoring", () => {
    * 1 Hz tick（App 的 setInterval）：推進 `now`，並為背壓序列取一次差分樣本。
    * 先依連線狀態同步 stale（`markStale` 冪等；重連時清掉差分基準，斷線期間的累積量不灌進單一格），
    * 重連那一刻再清空斷線前的舊樣本（否則 60 秒視窗會混入斷線前的資料），然後推入；
-   * Pause 期間照常推入（計數不是畫面內容）。序列有變才 `triggerRef`，每秒至多一次。
+   * Pause 期間照常推入（計數不是畫面內容），但樣本標為無效（`invalidateNext`）：暫停時 pump 不 flush，
+   * 該秒的訊息 ÷ 批次是操作造成的離群值，不進合併比、最高水位與走勢線。序列有變才 `triggerRef`，每秒至多一次。
    */
   function tickNow(): void {
     const t = Date.now();
@@ -362,6 +360,7 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     const wasStale = series.stale;
     markStale(series, connectionStatus.value !== "connected");
     if (wasStale && !series.stale) clearSamples(series);
+    if (paused.value) invalidateNext(series, 1);
     const pushed = pushSample(
       series,
       {
@@ -378,10 +377,18 @@ export const useMonitoringStore = defineStore("monitoring", () => {
         : null;
   }
 
-  /** US4：切換 pause（畫面凍結／恢復）。 */
+  /**
+   * 暫停解除後要標無效的樣本筆數：恢復那一幀把整個 buffer 當成 1 批交出，落在恢復後第一筆樣本；
+   * 若 1 Hz tick 恰好落在「按下恢復」與下一個 rAF flush 之間（約 16ms），那一批會落到第二筆——
+   * 多排一筆，代價只是視窗少算 1 秒有效資料。
+   */
+  const RESUME_INVALID_SAMPLES = 2;
+
+  /** US4：切換 pause（畫面凍結／恢復）。暫停期間的樣本由 `tickNow` 標無效，恢復時再排定恢復當下的樣本。 */
   function togglePause(): void {
     paused.value = !paused.value;
     pausedAt.value = paused.value ? Date.now() : null;
+    if (!paused.value) invalidateNext(rateSeries.value, RESUME_INVALID_SAMPLES);
   }
 
   /** US4：由 composable `onLatency` 餵入 ping/pong RTT。 */
@@ -420,7 +427,6 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     rateSeries,
     rateSamples,
     latestRate,
-    ratePeak,
     windowRatio,
     droppedInWindow,
     rateStale,

@@ -35,7 +35,12 @@ import { STATE_STYLE } from "../../../shared/lib/state-style.js";
  * 缺陷來源（三層）：`colors.inset` 讓 `ring-inset` 變成環顏色；狀態 class 輸出在選取 class 之後
  * 蓋掉選取；當時的 critical pulse 動畫（box-shadow 擴散）蓋掉 ring 選取框。焦點環同理（T056）：
  * 改為 `.machine-card:focus-visible` 的 outline。T065 起 pulse 改為只動 background-color 與 border-color（不用光暈），
- * 選取規則以 `animation: none` 停住它，選取的 accent-wash 底不被脈動覆寫。
+ * 選取規則以 `animation: none` 停住它。
+ *
+ * T073 第四輪：選取不再換邊框與底色——只加外側 2px accent outline（offset 0），狀態自己的邊框與底色保留
+ * （crit 卡選取後仍是 crit 邊框＋crit-bg 靜止底）；只有 healthy／placeholder 另鋪 accent-wash 底。
+ * 焦點環（offset 2px）與選取框（offset 0）位置錯開；兩者同時成立時改畫 6px double（內線＝選取框位置、外線＝焦點環）。
+ * 「選取與未選取看得出差別」現在靠 outline：未選取卡片的 outline 是 transparent（focus 時）或不存在，選取恆為 accent 2px。
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -223,6 +228,17 @@ function expectedUnselected(state: CardState, hover: boolean): { border: string;
   return { border: EXPECTED_HOVER[state].border ?? idle.border, bg: EXPECTED_HOVER[state].bg };
 }
 
+/**
+ * 選取後的預期邊框與底色（T073 第四輪）：邊框一律沿用狀態自己的（含 hover 換色）；
+ * 底色 healthy／placeholder 換 accent-wash（不論 hover），warning／critical 沿用狀態底色（crit 卡仍是 crit-bg）。
+ */
+const SELECTED_WASH: ReadonlySet<CardState> = new Set<CardState>(["placeholder", "healthy"]);
+
+function expectedSelected(state: CardState, hover: boolean): { border: string; bg: string } {
+  const base = expectedUnselected(state, hover);
+  return SELECTED_WASH.has(state) ? { border: base.border, bg: "accent.wash" } : base;
+}
+
 /** `focus+focus-visible`＝鍵盤聚焦（Tab／方向鍵／搜尋 Enter 移焦）；只有 `focus`＝滑鼠點選。 */
 type Interaction =
   | "none"
@@ -240,7 +256,7 @@ function cardElement(state: CardState, opts: { selected: boolean; stale: boolean
   const all = [staticClass, CARD_ROOT_CLASS, stateCls, opts.stale ? CARD_STALE_CLASS : ""].join(" ");
   return {
     classes: new Set(all.split(/\s+/).filter(Boolean)),
-    attrs: { "data-selected": opts.selected ? "true" : "false" },
+    attrs: { "data-selected": opts.selected ? "true" : "false", "data-state": state },
     active: new Set(opts.interaction === "none" ? [] : opts.interaction.split("+")),
   };
 }
@@ -295,14 +311,22 @@ describe("WEB-1：MachineNodeCard 選取態勝過狀態 class", () => {
       const hover = interaction.includes("hover");
       const label = `${state}${stale ? "+stale" : ""}${interaction === "none" ? "" : `+${interaction}`}`;
 
-      it(`${label}：選取 → accent 邊框、accent-wash 底、accent outline`, () => {
+      it(`${label}：選取 → 外側 2px accent outline（offset 0），狀態自己的邊框保留；${SELECTED_WASH.has(state) ? "accent-wash 底" : "狀態底色保留"}`, () => {
         const el = cardElement(state, { selected: true, stale, interaction });
-        expect(colorVar(resolveProp(el, "border-color"))).toBe(token("accent"));
-        expect(colorWithAlpha(resolveProp(el, "background-color"))).toBe(tokenWithAlpha("accent.wash"));
+        const expected = expectedSelected(state, hover);
+        expect(colorVar(resolveProp(el, "border-color"))).toBe(token(expected.border));
+        expect(colorWithAlpha(resolveProp(el, "background-color"))).toBe(tokenWithAlpha(expected.bg));
+        expect(resolveProp(el, "border-style")).toBe(stale ? "dashed" : undefined);
         const outline = resolveProp(el, "outline") ?? "";
-        expect(outline).toMatch(/\b1px solid\b/);
+        expect(outline).toMatch(/^2px solid\b/);
         expect(colorVar(outline)).toBe(token("accent"));
-        expect(resolveProp(el, "outline-offset")).toBe("-2px");
+        expect(resolveProp(el, "outline-offset")).toBe("0");
+        expect(resolveProp(el, "animation")).toBe("none");
+        // 選取不換狀態邊框：crit／warn 卡選取後不得出現 accent 邊框或 accent-wash 底
+        if (!SELECTED_WASH.has(state)) {
+          expect(colorVar(resolveProp(el, "border-color"))).not.toBe(token("accent"));
+          expect(colorVar(resolveProp(el, "background-color"))).not.toBe(token("accent.wash"));
+        }
       });
 
       it(`${label}：未選取 → 狀態自身外觀（與選取可區分）`, () => {
@@ -340,7 +364,7 @@ describe("WEB-1：MachineNodeCard 選取態勝過狀態 class", () => {
     for (const d of decls) expect(d.prop).not.toMatch(/width|shadow|outline|transform|padding|margin/);
   });
 
-  it("嚴重卡片帶 animate-critical-pulse；選取規則停用動畫（accent-wash 底不被脈動染回 crit-bg）", () => {
+  it("嚴重卡片帶 animate-critical-pulse；選取規則停用動畫，留在 crit 邊框＋crit-bg 80% 靜止底", () => {
     expect(cardElement("critical", { selected: false, stale: false, interaction: "none" }).classes.has("animate-critical-pulse")).toBe(
       true,
     );
@@ -354,6 +378,8 @@ describe("WEB-1：MachineNodeCard 選取態勝過狀態 class", () => {
     // 選取規則 (0,2,0) 勝過 `.animate-critical-pulse`（(0,1,0)）
     const el = cardElement("critical", { selected: true, stale: false, interaction: "none" });
     expect(resolveProp(el, "animation")).toBe("none");
+    expect(colorVar(resolveProp(el, "border-color"))).toBe(token("crit"));
+    expect(colorWithAlpha(resolveProp(el, "background-color"))).toBe(tokenWithAlpha("crit.bg/0.8"));
     expect(resolveProp(cardElement("critical", { selected: false, stale: false, interaction: "none" }), "animation")).toMatch(
       /^criticalPulse 1\.2s ease-in-out infinite$/,
     );
@@ -375,18 +401,32 @@ describe("T056：卡片鍵盤焦點環（FR-034d）不被 critical pulse 蓋掉�
     expect(classes.filter((c) => /(^|:)outline(-|$)/.test(c))).toEqual(["focus:outline-none"]);
   });
 
-  it("焦點環規則存在且輸出在選取規則之後（同為 (0,2,0)，靠順序勝出）", () => {
+  it("焦點環規則存在且輸出在選取規則之後（同為 (0,2,0)，靠順序勝出）；選取＋聚焦另有 (0,3,0) 規則", () => {
     let selectedAt = -1;
     let focusAt = -1;
+    let bothAt = -1;
     let order = 0;
     root.each((node) => {
       if (node.type !== "rule") return;
       order++;
       if (node.selectors.includes(".machine-card[data-selected='true']")) selectedAt = order;
       if (node.selectors.includes(".machine-card:focus-visible")) focusAt = order;
+      if (node.selectors.includes(".machine-card[data-selected='true']:focus-visible")) bothAt = order;
     });
     expect(selectedAt).toBeGreaterThan(0);
     expect(focusAt).toBeGreaterThan(selectedAt);
+    expect(bothAt).toBeGreaterThan(0);
+  });
+
+  it("選取框與焦點環位置錯開：選取 offset 0（緊貼卡片）、焦點環 offset 2px；雙線的內線落在選取框位置", () => {
+    const sel = cardElement("healthy", { selected: true, stale: false, interaction: "none" });
+    const foc = cardElement("healthy", { selected: false, stale: false, interaction: "focus+focus-visible" });
+    const both = cardElement("healthy", { selected: true, stale: false, interaction: "focus+focus-visible" });
+    expect(resolveProp(sel, "outline-offset")).toBe("0");
+    expect(resolveProp(foc, "outline-offset")).toBe("2px");
+    // double 6px = 2px 線／2px 縫／2px 線；offset 與選取框相同，內線（0–2px）與選取框重合，外線在 4–6px
+    expect(resolveProp(both, "outline")).toMatch(/^6px double\b/);
+    expect(resolveProp(both, "outline-offset")).toBe(resolveProp(sel, "outline-offset"));
   });
 
   for (const { state, stale } of CASES) {
@@ -406,14 +446,16 @@ describe("T056：卡片鍵盤焦點環（FR-034d）不被 critical pulse 蓋掉�
         expect(colorWithAlpha(resolveProp(el, "background-color"))).toBe(tokenWithAlpha(expected.bg));
       });
 
-      it(`${label}：選取 → 焦點環外框勝過內縮選取框，accent 邊框與 accent-wash 底仍在`, () => {
+      it(`${label}：選取 → 焦點環勝出改畫 6px focus 色雙線（offset 0），狀態邊框與選取底色仍在、脈動仍停`, () => {
         const el = cardElement(state, { selected: true, stale, interaction });
         const outline = resolveProp(el, "outline") ?? "";
-        expect(outline).toMatch(/\b2px solid\b/);
+        expect(outline).toMatch(/^6px double\b/);
         expect(colorVar(outline)).toBe(token("focus"));
-        expect(resolveProp(el, "outline-offset")).toBe("2px");
-        expect(colorVar(resolveProp(el, "border-color"))).toBe(token("accent"));
-        expect(colorWithAlpha(resolveProp(el, "background-color"))).toBe(tokenWithAlpha("accent.wash"));
+        expect(resolveProp(el, "outline-offset")).toBe("0");
+        const expected = expectedSelected(state, hover);
+        expect(colorVar(resolveProp(el, "border-color"))).toBe(token(expected.border));
+        expect(colorWithAlpha(resolveProp(el, "background-color"))).toBe(tokenWithAlpha(expected.bg));
+        expect(resolveProp(el, "animation")).toBe("none");
       });
     }
   }

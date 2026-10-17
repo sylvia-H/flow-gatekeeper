@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, useTemplateRef, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, useTemplateRef, watch } from "vue";
 import AppLayout from "./shared/components/AppLayout.vue";
 import TopBar from "./shared/components/TopBar.vue";
 import ShortcutHelp from "./shared/components/ShortcutHelp.vue";
@@ -25,8 +25,11 @@ import {
   eventStripInitialHeight,
 } from "./domains/monitoring/lib/event-strip-size.js";
 import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
+import { Play } from "lucide-vue-next";
 import { machineLabel } from "./domains/monitoring/lib/machine-labels.js";
 import { diagnosisBadgeText } from "./domains/ai-copilot/lib/diagnosis-badge.js";
+import { formatClock } from "./shared/lib/format.js";
+import { bannerOf } from "./shared/lib/status-banner.js";
 import type { CopilotJobState } from "./domains/ai-copilot/lib/copilot-reducer.js";
 
 /**
@@ -74,12 +77,23 @@ store.$onAction(({ name, args }) => {
   if (name === "selectMachine" && args[0] === store.selectedMachineId) copilot.onMachineSelected(args[0]);
 });
 
+/**
+ * sheet 是否接手焦點（drawer `update:engaged`；< desk 的 sheet 為 modal 時 true，閒置非 modal 與桌機推擠式為 false）。
+ * 交給 AppLayout 決定遮罩：只有 true 才蓋遮罩，閒置 sheet 不調暗選取卡、點其他卡片就是改選。
+ */
+const sheetEngaged = ref(false);
+
 /** drawer 恆依 selectedMachineId 取對應那一份狀態（未選取→idle 空殼，由 machineId=null 走空狀態）。 */
 const selectedState = computed<CopilotJobState>(() =>
   store.selectedMachineId !== null
     ? copilot.stateFor(store.selectedMachineId)
     : { status: "idle", machineId: "" },
 );
+/**
+ * sheet 是否為閒置單列（已選機台且該台診斷狀態為 idle；與 drawer 的 `compactIdle` 同條件，斷點由 AppLayout 自己判斷）。
+ * 同步算出交給 AppLayout：只有閒置單列時才以量到的 sheet 高度當主區底部留白（第四輪交叉審查 high）。
+ */
+const sheetCompact = computed(() => store.selectedMachineId !== null && selectedState.value.status === "idle");
 const selectedLabel = computed(() =>
   store.selectedMachineId !== null ? machineLabel(store.selectedMachineId) : "",
 );
@@ -112,8 +126,11 @@ function clearSelection(): void {
   store.selectedMachineId = null;
 }
 
-/** 鍵盤快捷鍵說明層（`?` 開關；FR-034b）。 */
+/** 鍵盤快捷鍵說明層（`?` 與工具列說明鈕共用同一個開關；FR-034b、T073 C）。 */
 const helpOpen = ref(false);
+function toggleHelp(): void {
+  helpOpen.value = !helpOpen.value;
+}
 
 /** 工具列 expose 的搜尋框（`searchInput` 經 template ref 自動解包成元素）。 */
 const topBar = useTemplateRef<InstanceType<typeof TopBar>>("topBar");
@@ -170,9 +187,7 @@ useKeyboardShortcuts({
     diagnose: onDiagnose,
     clearLatch: store.clearLatch,
     isLatchVisible: store.latchVisible,
-    toggleHelp: () => {
-      helpOpen.value = !helpOpen.value;
-    },
+    toggleHelp,
     getSelectedId: () => store.selectedMachineId,
     getSearchResultIds: () => store.visibleMachineIds,
     layers: {
@@ -205,32 +220,23 @@ useKeyboardShortcuts({
 const machineCount = computed(() => MACHINE_IDS.length);
 
 /**
- * 連線／授權橫幅：連上前顯示「連線中」，之後依三態提示；不清空資料。
- * 連線正常但訂閱未授權時改顯示未授權說明（沿用 store 的 AUTH_ERROR_MESSAGE，本身已含「未授權」）。
+ * 連線／授權／暫停橫幅（同一位置、同一元件形態）：決策與優先序（斷線 ＞ 未授權 ＞ 暫停）在 `bannerOf`；不清空資料。
+ * 暫停橫幅回應 critique 2026-10-17 P1（暫停後卡片停在「剛剛」、連線 chip 仍「已連線」，凍結畫面看起來像即時）。
  * 橫幅不設 live region：連線三態由 TopBar 連線 chip（role=status）、未授權由未授權 chip
- * （role=alert）朗讀，避免同一件事念兩次。
+ * （role=alert）、暫停由暫停鈕的 aria-pressed 朗讀，避免同一件事念兩次。
  */
-const banner = computed(() => {
-  switch (store.connectionStatus) {
-    case "reconnecting":
-      return {
-        text: "重新連線中…（畫面保留最後已知資料）",
-        cls: "border-warn bg-warn-bg text-warn-fg",
-      };
-    case "disconnected":
-      return !store.everConnected
-        ? { text: "連線中…", cls: "border-edge bg-surface/72 text-ink-2" }
-        : {
-            text: "已斷線，畫面保留最後已知資料，可能已過時",
-            cls: "border-crit bg-crit-bg text-crit-fg",
-          };
-    case "connected":
-      return store.authError !== null
-        ? { text: store.authError, cls: "border-crit bg-crit-bg text-crit-fg" }
-        : null;
-  }
-  return null;
-});
+const banner = computed(() =>
+  bannerOf(store.connectionStatus, store.everConnected, store.authError, store.paused, store.pausedAt),
+);
+
+/** 暫停橫幅的「恢復」：走工具列同一個 `togglePause`；橫幅隨即消失，焦點交回工具列暫停鈕。 */
+function onBannerResume(): void {
+  if (!store.paused) return;
+  store.togglePause();
+  void nextTick(() => {
+    topBar.value?.focusPauseToggle();
+  });
+}
 
 // 每秒 tick 驅動 stale 重算（低頻，不需高頻；research R7）。`store.now` 恆照走——Pause 的
 // 凍結只作用在 `store.staleNow`（卡片／機群健康），watchdog 與 metrics 面板仍用真實時間。
@@ -287,6 +293,8 @@ const handle = useHighFrequencyWs({
     :panel-open="copilot.panelOpen"
     :peek-label="peekLabel"
     :peek-status="peekStatus"
+    :sheet-engaged="sheetEngaged"
+    :sheet-compact="sheetCompact"
     @open-panel="copilot.openPanel"
     @dismiss-panel="copilot.dismissPanel"
   >
@@ -322,7 +330,7 @@ const handle = useHighFrequencyWs({
     </template>
 
     <template #topbar>
-      <TopBar ref="topBar" />
+      <TopBar ref="topBar" :help-open="helpOpen" @toggle-help="toggleHelp" />
     </template>
 
     <template #main>
@@ -342,20 +350,41 @@ const handle = useHighFrequencyWs({
         <BackpressureStrip
           class="shrink-0"
           :samples="store.rateSamples"
-          :peak="store.ratePeak"
           :window-ratio="store.windowRatio"
           :cumulative-ratio="store.cumulativeRatio"
           :dropped="store.droppedInWindow"
           :stale="store.rateStale"
+          :connection="store.connectionStatus"
+          :paused="store.paused"
           :msgs-per-sec="store.latestRate?.msgsPerSec ?? null"
           :batches-per-sec="store.latestRate?.batchesPerSec ?? null"
         />
         <div
           v-if="banner"
-          class="shrink-0 rounded-card border px-3.5 py-2 text-sm shadow-glass"
+          :data-fg="banner.pausedAt !== undefined ? 'pause-banner' : undefined"
+          class="flex shrink-0 items-center gap-3 rounded-card border px-3.5 py-2 text-sm shadow-glass"
           :class="banner.cls"
         >
-          {{ banner.text }}
+          <span class="min-w-0 flex-1">
+            <template v-if="banner.pausedAt !== undefined">
+              <span class="font-semibold">{{ banner.text }}</span>
+              <span class="text-ink-2"> · 暫停於 </span>
+              <span class="font-mono tabular-nums text-ink-2">{{ formatClock(banner.pausedAt) }}</span>
+            </template>
+            <template v-else>{{ banner.text }}</template>
+          </span>
+          <!-- 暫停橫幅內嵌次要鈕：-my-1 抵掉多出的高度，橫幅與連線橫幅同高 -->
+          <button
+            v-if="banner.pausedAt !== undefined"
+            type="button"
+            data-fg="banner-resume"
+            class="-my-1 flex h-7 shrink-0 items-center gap-1.5 rounded-control border border-edge bg-surface-strong px-2.5 text-sm font-semibold text-ink transition-colors duration-150 hover:border-etch hover:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+            title="恢復畫面更新，跳到最新資料"
+            @click="onBannerResume"
+          >
+            <Play class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            恢復
+          </button>
         </div>
         <!-- 拓樸捲動區：下緣一道蝕刻邊是捲動邊界（邊在捲動容器外層、不隨內容捲），
              卡片被捲動區截斷時讀成「沒入刻線之下」，不與下方事件列玻璃讀成重疊 -->
@@ -398,6 +427,7 @@ const handle = useHighFrequencyWs({
         @cancel="onCancel"
         @close="copilot.collapsePanel"
         @dismiss="copilot.dismissPanel"
+        @update:engaged="sheetEngaged = $event"
       />
     </template>
   </AppLayout>

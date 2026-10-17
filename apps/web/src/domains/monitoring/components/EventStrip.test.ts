@@ -16,6 +16,7 @@ function event(over: Partial<DerivedEvent> = {}): DerivedEvent {
   return {
     id: `${TS}-press-02#1`,
     ts: TS,
+    firstTs: TS,
     machineId: "press-02",
     severity: "critical",
     message: "壓製機 02 進入嚴重",
@@ -85,6 +86,30 @@ describe("EventStrip 事件列項", () => {
     expect(times.attributes("aria-hidden")).toBe("true");
     const single = mountStrip([event({ count: 1 })]).get("li");
     expect(single.text()).not.toContain("×");
+  });
+
+  it("單筆只顯示一個時間（title 同字）", () => {
+    const time = mountStrip([event()]).get('[data-fg="event-time"]');
+    expect(time.text()).toBe("21:05:09");
+    expect(time.attributes("title")).toBe("21:05:09");
+    expect(time.text()).not.toContain("–");
+  });
+
+  it("合併列顯示起訖「起–訖」；title 恆為全文；起點與分隔符在 < sm 只留給螢幕閱讀器", () => {
+    const first = new Date(2026, 9, 16, 21, 4, 2).getTime();
+    const time = mountStrip([event({ count: 23, firstTs: first })]).get('[data-fg="event-time"]');
+    expect(time.text()).toBe("21:04:02–21:05:09");
+    expect(time.attributes("title")).toBe("21:04:02–21:05:09");
+    expect(time.classes()).toEqual(expect.arrayContaining(["whitespace-nowrap", "font-mono", "tabular-nums"]));
+    const start = time.get("span");
+    expect(start.text()).toBe("21:04:02–");
+    expect(start.classes()).toContain("max-sm:sr-only");
+  });
+
+  it("合併列起訖落在同一秒時只顯示一個時間", () => {
+    const time = mountStrip([event({ count: 2, firstTs: TS, ts: TS + 400 })]).get('[data-fg="event-time"]');
+    expect(time.text()).toBe("21:05:09");
+    expect(time.find("span").exists()).toBe(false);
   });
 
   it("依傳入順序渲染（最新在頂端由 store 保證）", () => {

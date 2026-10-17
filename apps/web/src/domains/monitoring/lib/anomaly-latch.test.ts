@@ -5,6 +5,7 @@ import {
   clearLatch,
   isLatchStruck,
   isLatchVisible,
+  latchText,
   summarize,
   type AnomalyLatch,
 } from "./anomaly-latch.js";
@@ -222,5 +223,30 @@ describe("summarize（data-model §6）", () => {
       ["press-02", true, 2_000],
       ["oven-04", false, 8_000],
     ]);
+  });
+});
+
+describe("latchText（research R13 時態註記，T073 第四輪）", () => {
+  const NOW = 100_000;
+  it.each([
+    [{ level: "critical", active: true, since: NOW - 12_000 }, "嚴重 · 進入 12 秒前"],
+    [{ level: "warning", active: true, since: NOW - 1_000 }, "警告 · 剛進入"],
+    [{ level: "critical", active: false, since: NOW - 3_000 }, "曾嚴重 · 3 秒前回復"],
+    [{ level: "warning", active: false, since: NOW - 12_000 }, "曾警告 · 12 秒前回復"],
+    [{ level: "critical", active: false, since: NOW }, "曾嚴重 · 剛回復"],
+  ] as const)("%o → %s", (mark, text) => {
+    expect(latchText(mark, NOW)).toBe(text);
+  });
+
+  it("已回復一律以「曾」起頭（過去式）；仍異常不帶「曾」、不出現「已回復」或「進入 剛剛」", () => {
+    for (const level of ["warning", "critical"] as const) {
+      for (const offset of [0, 1_500, 5_000, 75_000]) {
+        expect(latchText({ level, active: false, since: NOW - offset }, NOW)).toMatch(/^曾(警告|嚴重) · /);
+        const active = latchText({ level, active: true, since: NOW - offset }, NOW);
+        expect(active).not.toMatch(/^曾/);
+        expect(active).not.toContain("剛剛");
+        expect(active).not.toContain("已回復");
+      }
+    }
   });
 });
