@@ -32,33 +32,33 @@
 
 ## 端到端操作 Demo（實機錄影）
 
-> 不想自己 `docker compose up` 也能感受這個系統跑起來的樣子——以下是**對正在跑的一鍵 demo 容器**（`docker compose --profile demo up -d --build` → `http://localhost:8080`）用 Playwright 腳本化操作、原始無剪接錄下的 22 秒全程，**非後製動畫**：
+> 不想自己 `docker compose up` 也能感受這個系統跑起來的樣子——以下是**對正在跑的一鍵 demo 容器**（`docker compose --profile demo up -d --build` → `http://localhost:8080`）用 Playwright 腳本化操作、原始無剪接錄下的 23 秒全程，**非後製動畫**：
 
 <div align="center">
 
 ![Demo 海報](https://github.com/sylvia-H/flow-gatekeeper/raw/main/docs/demo/flow-gatekeeper-demo-poster.jpg)
 
-## 🎬 [下載完整 Demo（22 秒）](https://github.com/sylvia-H/flow-gatekeeper/releases/download/1.0.0/flow-gatekeeper-demo.mp4)
+## 🎬 [下載完整 Demo（23 秒）](https://github.com/sylvia-H/flow-gatekeeper/releases/download/2.0.0/flow-gatekeeper-demo.mp4)
 
 </div>
 
-**22 秒 demo 劇本（依 013 新介面）**：在 1440×900（≥ 1366px，AI 診斷面板為右側推擠式）、不收合 AI 診斷面板的情況下照下表操作，同一輪就能依序找到三個機制的畫面證據——背壓 strip 的合併比與液柱、串流中逐格填入的結果骨架、快取命中的耗時對比橫條與「再次診斷」（鏡頭 1～3）。上方影片是 1.0.0 依同一節奏錄的舊介面，畫面位置以本表為準。
+**23 秒 demo 劇本（2.0.0 介面）**：在 1440×900（≥ 1366px，AI 診斷面板為右側推擠式）、不收合 AI 診斷面板的情況下照下表操作，同一輪就能依序找到三個機制的畫面證據——背壓 strip 的合併比與液柱、串流中逐格填入的結果骨架、快取命中的耗時對比橫條與「再次診斷」（鏡頭 1～3）。上方影片即依本表錄製；串流與完成的時間點隨 LLM 回應速度浮動（本次首次診斷約 2.3 秒）。
 
 | 時間 | 操作 | 畫面位置 |
 | --- | --- | --- |
 | 0:00 | 打開首頁（第一屏就是工作台，AI 診斷面板預設收合） | **鏡頭 1：背壓 strip**——主區頂端、工具列正下方常駐，讀數依序為「每秒訊息 · 近 60 秒 → 每秒批次 · 近 60 秒 → 合併比 · 訊息 ÷ 批次」，三者同一個 60 秒視窗；下緣 0–60 比值刻度從 1:1 錨點起畫實心液柱，液位線標出目前合併比、蝕刻短線標近 60 秒最高水位（超過 60 釘在右端並標「>60」）；右側常駐一行白話「每幀合併約 N 則 · 近 60 秒最高 X」，旁邊是近 60 秒合併比走勢線 |
-| 0:04 | 看主區三 stage 拓樸 | 「前處理 → 成型烘烤 → 包裝分揀」三欄與欄間連線；壓製機 02（`press-02`）約每 12 秒一次嚴重尖峰，回到正常後卡片保留「曾嚴重 · N 秒前回復」標記 30 秒，側欄最近異常列與底部事件流（同類事件合併成「HH:mm:ss–HH:mm:ss · ×N」一列）同步記錄 |
-| 0:06 | 在工具列搜尋框（或按 `/`）輸入片段 | 只留命中的卡片，三欄寬度與順序不變，沒有命中的欄顯示空狀態 |
-| 0:07 | 清除搜尋，點選壓製機 02，按「診斷」 | 選取即自動展開右側 AI 診斷面板（348px，推擠主區；閒置時只有機台名、狀態、「診斷」鈕與一行說明，標頭 chip「未診斷」）；背壓 strip 仍在主區頂端 |
-| 0:08–0:15 | 等串流 | **鏡頭 2：串流骨架**——面板狀態為「進行中」，卡片 id 列同步顯示「診斷中 N%」；進度列與「中止診斷」下方的結果骨架依完成態順序排好「摘要與嚴重度 → 建議動作 → 可能原因 → 證據」，各欄解析到就逐格填入（先後依 LLM 輸出順序），還沒解析到的欄位顯示佔位；「原始串流」可展開看逐字文字 |
-| 0:16 | 完成 | 狀態轉為「已完成」（中性色 chip）：嚴重度色條與一行 meta「完成 HH:mm:ss · N.N s」，其下是次要鈕「再次診斷」；卡片 id 列出現方角 tag「AI：<嚴重度>」。此次**非快取**，真的呼叫了一次 Gemini |
-| 0:19–0:22 | 對同一台再診斷一次（面板的「再次診斷」、工具列「主要動作」的診斷鈕，或按 `d`） | **鏡頭 3：快取耗時對比**——結果整塊直接出現、不走逐字動畫，meta 以大字顯示「快取 · 耗時」（不到 1 秒以 ms 顯示），下方兩條同刻度耗時橫條「快取」對「上一次」（例如數百 ms 對數秒），卡片 tag 加上「· 快取」（cache-aside + dedupe lock 的可視化證據） |
+| 0:02 | 看主區三 stage 拓樸 | 「前處理 → 成型烘烤 → 包裝分揀」三欄與欄間連線；壓製機 02（`press-02`）約每 12～13 秒一次嚴重尖峰（影片第 2 秒即是一次），回到正常後卡片保留「曾嚴重 · N 秒前回復」標記 30 秒，側欄最近異常列與底部事件流（同類事件合併成「HH:mm:ss–HH:mm:ss · ×N」一列）同步記錄 |
+| 0:04 | 在工具列搜尋框（或按 `/`）輸入片段（影片輸入「p」） | 只留命中的卡片，三欄寬度與順序不變，沒有命中的欄顯示空狀態 |
+| 0:06–0:08 | 清除搜尋，點選壓製機 02，按「診斷」 | 選取即自動展開右側 AI 診斷面板（348px，推擠主區；閒置時只有機台名、狀態、「診斷」鈕與一行說明，標頭 chip「未診斷」）；背壓 strip 仍在主區頂端 |
+| 0:08–0:11 | 等串流 | **鏡頭 2：串流骨架**——面板狀態為「進行中」，卡片 id 列同步顯示「診斷中 N%」；進度列與「中止診斷」下方的結果骨架依完成態順序排好「摘要與嚴重度 → 建議動作 → 可能原因 → 證據」，各欄解析到就逐格填入（先後依 LLM 輸出順序），還沒解析到的欄位顯示佔位；「原始串流」可展開看逐字文字 |
+| 0:11 | 完成 | 狀態轉為「已完成」（中性色 chip）：嚴重度色條與一行 meta「完成 HH:mm:ss · N.N s」，其下是次要鈕「再次診斷」；卡片 id 列出現方角 tag「AI：<嚴重度>」。此次**非快取**，真的呼叫了一次 Gemini |
+| 0:19–0:23 | 對同一台再診斷一次（面板的「再次診斷」、工具列「主要動作」的診斷鈕，或按 `d`） | **鏡頭 3：快取耗時對比**——結果整塊直接出現、不走逐字動畫，meta 以大字顯示「快取 · 耗時」（不到 1 秒以 ms 顯示），下方兩條同刻度耗時橫條「快取」對「上一次」（例如數百 ms 對數秒），卡片 tag 加上「· 快取」（cache-aside + dedupe lock 的可視化證據） |
 
 > 照劇本操作前先執行 `./scripts/demo-reset.ps1` 清掉 AI 快取，第一次診斷才看得到串流。快取簽章含該台**最近一筆 state**：第二次診斷時若剛好碰上尖峰（狀態與第一次不同），會再呼叫一次 LLM 而不是命中快取——等卡片回到正常再按即可。
 
-> 1.0.0 影片的錄製方式：本機清空 `ai-cache:*`／`ai-lock:*` 後，用 Playwright 對著跑在容器裡的真實全棧（api／worker／web／Redis／MongoDB，AI 由 Gemini 2.5 Flash 即時回覆）做一次腳本化操作並錄影，全程無手動剪輯或字卡。想自己重現，見下方「[快速開始](#快速開始)」。
+> 錄製方式（2.0.0，2026-10-17）：本機清空 `ai-cache:*`／`ai-lock:*` 後，以錄影劇本 `apps/web/scripts/record-demo.cjs`（Playwright 驅動 headless Chromium、CDP 逐格擷取再以 ffmpeg 轉 H.264，畫面上的游標是劇本注入的假游標）對著跑在容器裡的真實全棧（api／worker／web／Redis／MongoDB，AI 由 Gemini `gemini-3.5-flash-lite` 即時回覆）一鏡到底錄影，全程無手動剪輯或字卡。想自己重現，見下方「[快速開始](#快速開始)」的「截圖劇本」段末。1.0.0 影片以同一方式錄製，當時 AI 為 Gemini 2.5 Flash。
 
-> **版本註記**：影片與海報仍是 **1.0.0**（tag 原名 `v1.0.0`，2026-09-28 更名）的畫面；1.1.0 與 feature 013 的 UI 全面改版（已在 `develop`、尚未發布，見 [`CHANGELOG.md`](CHANGELOG.md) `[Unreleased]`）都**未重錄**，下載連結維持指向 1.0.0 release 的資產，是否重錄留待下一次 release 決定。上方劇本表與下方「功能逐項展示」已依 013 新介面改寫：14 張截圖於 2026-10-17 由截圖劇本 `apps/web/scripts/screenshots.cjs --readme` 單輪重拍（用法見「[快速開始](#快速開始)」的「截圖劇本」）。影片刻意**同時**放在 git（`docs/demo/`）與 GitHub Release：Release 供上方連結直接下載，git 內一份供 clone 後離線閱讀 README，兩者維持現狀。
+> **版本註記**：影片與海報為 **2.0.0** 的畫面（2026-10-17 重錄，feature 013 UI 全面改版之後的繁中介面），下載連結指向 2.0.0 release 的資產；1.0.0 的舊介面影片仍留在 1.0.0 release，不再代表現況（1.1.0 未重錄、沿用 1.0.0）。下方「功能逐項展示」的 14 張截圖於 2026-10-17 由截圖劇本 `apps/web/scripts/screenshots.cjs --readme` 單輪重拍（用法見「[快速開始](#快速開始)」的「截圖劇本」）。影片刻意**同時**放在 git（`docs/demo/`）與 GitHub Release：Release 供上方連結直接下載，git 內一份供 clone 後離線閱讀 README，兩者維持現狀。
 
 ---
 
@@ -524,6 +524,7 @@ flow-gatekeeper/
 │       ├── DESIGN.md           # 雙主題 token 與元件規格（視覺真實來源之一，impeccable 工件）
 │       ├── design/             # design-spec.md（2026-10 已退役，保留全文作歷史；refs/ 已移除）
 │       ├── scripts/screenshots.cjs  # 截圖劇本（playwright-core）：--viewports 版面驗收、--readme 產出 docs/screenshots/
+│       ├── scripts/record-demo.cjs  # demo 錄影劇本（playwright-core＋ffmpeg）：產出 docs/demo/ 的影片與海報
 │       └── .env.example        # ← 選用：僅 VITE_METRICS_PANEL 開關（複製成 apps/web/.env）
 ├── packages/
 │   ├── contracts/     # Zod schema 單一來源（events / DiagnosisResult / job payload / SystemMetrics）
@@ -686,6 +687,14 @@ node apps/web/scripts/screenshots.cjs --readme
 
 # 其他選項：--url、--out、--settle、--search、--no-fail（--viewports 另有 --pulse-wait、--only）；完整說明見 --help
 node apps/web/scripts/screenshots.cjs --help
+```
+
+**demo 影片**（`apps/web/scripts/record-demo.cjs`）：依上方「[端到端操作 Demo](#端到端操作-demo實機錄影)」的劇本表一鏡到底錄 1440×900，輸出 `docs/demo/flow-gatekeeper-demo.mp4` 與海報（快取命中後的最後一格）。以 CDP 逐格擷取 JPEG、再用 ffmpeg 轉 30fps H.264（比 Playwright 內建錄影的即時 VP8 清楚）；headless 沒有游標，劇本只在錄影頁面注入假游標、不動產品程式碼。開錄前量 `press-02` 的尖峰週期，讓尖峰落在鏡頭第 2 秒、兩次診斷都在回到正常後送出（第二次才會命中快取）。需要含 **libx264** 的 ffmpeg（Playwright 自帶的只有 VP8），以 `--ffmpeg` 或環境變數 `FFMPEG` 指定，Windows 可下載 [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) 的 essentials 建置解壓即用。第一次診斷就命中快取、或第二次沒命中時中止且不寫檔，不自動重試（避免多打 LLM）。
+
+```powershell
+docker compose --profile demo up -d --build    # 對一鍵 demo 容器錄（預設 --url http://localhost:8080/）
+./scripts/demo-reset.ps1
+node apps/web/scripts/record-demo.cjs --ffmpeg C:\tools\ffmpeg\bin\ffmpeg.exe   # 約 1 分鐘（含 20 秒暖機與對齊尖峰），呼叫 LLM 一次
 ```
 
 `--readme` 的注意事項：worker 需有效的 `GEMINI_API_KEY`（整輪只真正呼叫一次 LLM，其餘命中快取）；「斷線」與「失敗」兩張由劇本在自己的瀏覽器分頁內攔截 `/ws` 與 `POST /diagnoses` 重現，不必關掉 api，也不影響其他連線。拍不到的截圖（例如快取沒清、第一次診斷就命中）不寫檔、保留舊檔，結束時列出缺漏並以 exit 1 結束。量測期間避免同時修改 `apps/web/src`，Vite HMR 會讓 `--viewports` 的差值無法判讀。

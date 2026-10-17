@@ -41,7 +41,7 @@ Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全
 - **新增 localStorage key**：`fg.theme`（`"light"`｜`"dark"`，主題選擇）與 `fg.copilot-panel`（`{"manuallyCollapsed":boolean}`，AI 診斷面板的手動收合偏好）；
   讀寫失敗（私密視窗、封鎖儲存）時回到預設、不顯示錯誤。既有的 `flow-gatekeeper:sidebar-width`、`flow-gatekeeper:event-strip-height` 沿用、不改名，升級後原有尺寸保留。
 - **主題預設為淺色、不跟隨作業系統**：首次載入一律淺色，深色需手動切換一次，之後依 `fg.theme` 記憶。
-- **新 devDependency `playwright-core`**（`apps/web`，`~1.64.1`）：只供截圖劇本 `apps/web/scripts/screenshots.cjs` 使用，不進 production bundle；
+- **新 devDependency `playwright-core`**（`apps/web`，`~1.64.1`）：只供截圖劇本 `apps/web/scripts/screenshots.cjs` 與 demo 錄影劇本 `apps/web/scripts/record-demo.cjs` 使用，不進 production bundle；
   劇本需本機 Playwright Chromium（`PLAYWRIGHT_CHROMIUM` 指定路徑，未設時自動尋找 `ms-playwright` 目錄），見 README「快速開始」。一般開發、`pnpm check`、`pnpm build` 與 demo 容器不需要瀏覽器。
 - **介面文案全面改為繁體中文**：依英文標籤（`Diagnose`、`Connected`、`Cached`、`Retry`、stage 名稱等）寫的外部截圖說明、操作手冊或 UI 自動化腳本需改用中文標籤；machine id、job id、技術單位（含 px）、`Mock`／`AI`／`WS`、佇列名 `diagnosis`、產品名 flow-gatekeeper 與 AI 回覆內容維持原文。
 - **背壓比值的口徑改變**：主要顯示的比值由「自頁面載入起的累計值」改為「最近 60 秒視窗」，與 1.1.0 TopBar 徽章的數字不可直接比較；累計值改放 tooltip。
@@ -89,6 +89,8 @@ Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全
 - **全部 UI 文案改為繁體中文**（stage 標題不附英文副標）；時間格式統一為 24 小時制 `HH:mm:ss`、相對時間「剛剛／N 秒前／N 分鐘前」、耗時 `N ms`／`N.N s`。
 - **最小功能性字級 12px**：徽章、單位、計數、時間戳等小字不再小於 12px，兩套主題下文字對比皆 ≥ 4.5:1。
 - **README 截圖**：「功能逐項展示」的截圖隨本版以新介面重拍（含深色主題與拓樸），圖說與 demo 劇本改用中文術語。
+- **README demo 影片重錄**（`docs/20261018-demo-video`）：以新介面與新模型重錄 23 秒 demo（1440×900 H.264，`docs/demo/`），下載連結改指 `releases/download/2.0.0/`；
+  1.0.0 的舊介面影片作廢、僅留在 1.0.0 release。新增錄影劇本 `apps/web/scripts/record-demo.cjs`（CDP 逐格擷取＋ffmpeg，需含 libx264 的 ffmpeg，見 README「截圖劇本」段末）。
 - **AI 模型**（worker）：預設 `GEMINI_MODEL` 由 `gemini-2.5-flash` 改為 `gemini-3.5-flash-lite`。3.x 以後的 `flash`／`flash-lite` 不接受
   `thinkingBudget: 0`（400），改送 `thinkingConfig.thinkingLevel: MEDIUM`；實測真實診斷 prompt 的 thinking token 為 0～約 1150（模型動態決定），
   首 token 0.6～4.2 秒、全程 1.4～4.6 秒（思考時較長；003 SC-001 的 5 秒首 token 目標仍達成但餘裕有限）。`AI_TEMPERATURE` 維持 0.2：Google 建議 Gemini 3 系列用 1.0，但實測 0.2／1.0 皆無截斷、0.2 結果較一致。3.x 的 pro 等其他變體維持不送 thinking 設定。3.x `flash`／`flash-lite` 配 `AI_MAX_OUTPUT_TOKENS` 低於 4096 時 worker 啟動會 warn
