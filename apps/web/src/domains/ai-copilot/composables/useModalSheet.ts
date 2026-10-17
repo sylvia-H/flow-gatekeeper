@@ -77,6 +77,8 @@ function asFocusable(el: unknown): FocusableLike | null {
  * 不依賴元件生命週期的核心：由 `useModalSheet` 在 mounted／unmounted 呼叫 attach／detach，
  * 測試則直接注入 stub 的 matchMedia／IntersectionObserver 驅動。
  */
+// TODO（合併門第 3 輪 #6，後續）：開啟時的焦點落點分散在 `sync()`、drawer 的 `focusAfterPeekOpen` 與 AppLayout 的
+// panelOpen watch 三處；改為 `focusOnOpen` 選項統一。
 export function createModalSheet(
   getRoot: () => SheetRootLike | null,
   onClose: () => void,
@@ -145,8 +147,14 @@ export function createModalSheet(
     trapActive.value = false;
     const active = env.activeElement();
     const focusWasInside = !visible && (active === null || focusInsideRoot(active));
+    // 滑鼠／觸控在焦點本來就在 body 時點收合鈕，也會把焦點交給選取卡（並捲入視野）：刻意如此——把焦點還給觸發者
+    // 是合理行為（合併門最後一批 #2 裁決接受）。
+    // 接手前的元素若在 sheet 內（例如根節點），sheet 隱藏後對它 focus() 無效，改用 `restoreTarget`（合併門最後一批 #1）。
     if (wasTrapped || focusWasInside) {
-      const target = restoreTo && restoreTo.isConnected !== false ? restoreTo : (options.restoreTarget?.() ?? null);
+      const target =
+        restoreTo && restoreTo.isConnected !== false && !focusInsideRoot(restoreTo)
+          ? restoreTo
+          : (options.restoreTarget?.() ?? null);
       if (target && target.isConnected !== false) target.focus();
     }
     restoreTo = null;

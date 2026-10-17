@@ -22,6 +22,8 @@ let storage: Map<string, string>;
 let wrapper: VueWrapper | null = null;
 /** sheet 出現時手動觸發 IntersectionObserver（happy-dom 不做 layout）。 */
 let showSheet: () => void = () => {};
+/** sheet 隱藏（收合後 aside 變 hidden）時手動觸發。 */
+let hideSheet: () => void = () => {};
 
 /** 以 Map 模擬 localStorage：新版 Node 的實驗性 localStorage 會遮蔽 happy-dom 的實作。 */
 function stubStorage(): void {
@@ -135,6 +137,7 @@ beforeEach(() => {
     class {
       constructor(cb: (entries: { isIntersecting: boolean }[]) => void) {
         showSheet = () => cb([{ isIntersecting: true }]);
+        hideSheet = () => cb([{ isIntersecting: false }]);
       }
       observe(): void {}
       disconnect(): void {}
@@ -570,6 +573,25 @@ describe("1024–1365px 同樣走 bottom-sheet（T073 D，推擠門檻提到 des
     expect(document.activeElement).toBe(document.body);
   });
 
+  it("1024 寬：modal sheet 收合、選取卡不在 DOM（拓樸未渲染）→ 焦點落在 peek 條（App 傳入的後備，合併門最後一批 #5）", async () => {
+    stubViewport(1024);
+    const w = mountApp(); // StageTopology 已 stub：畫面上沒有 .machine-card
+    await select("press-02");
+    showSheet();
+    await flushPromises();
+    useCopilotStore().jobs.set("press-02", startActiveState("press-02", "job-1"));
+    await flushPromises();
+    expect(w.get('[role="dialog"]').attributes("aria-modal")).toBe("true");
+    expect(document.querySelector(".machine-card")).toBeNull();
+
+    await collapseButton(w).trigger("click");
+    await flushPromises();
+    expect(peek(w).exists()).toBe(true);
+    hideSheet();
+    await flushPromises();
+    expect(document.activeElement).toBe(peek(w).element);
+  });
+
   it("1280、1365 寬仍是 sheet；1366 寬是常駐側欄（不掛 dialog 語意）", async () => {
     stubViewport(1280);
     const w = mountApp();
@@ -753,6 +775,49 @@ describe("AppLayout 外觀（純 props）", () => {
     wrapper = mount(AppLayout, { props, attachTo: document.body });
     return wrapper;
   }
+
+  describe("desk+ 收合／展開的焦點交接（合併門最後一批 #3：改讀 deskViewport，無 matchMedia 視為桌機）", () => {
+    function mountWithDrawerButton(panelOpen: boolean) {
+      wrapper = mount(AppLayout, {
+        props: { panelOpen, peekLabel: "壓製機 02" },
+        slots: { drawer: '<button type="button" data-test="inside">內</button>' },
+        attachTo: document.body,
+      });
+      return wrapper;
+    }
+    const expandStrip = (w: VueWrapper) => w.get('button[aria-label="展開 AI 診斷"]');
+
+    it("desk+：焦點在面板內時收合 → 焦點接到展開窄條；再展開 → 回到面板", async () => {
+      stubViewport(DESKTOP);
+      const w = mountWithDrawerButton(true);
+      (w.get('[data-test="inside"]').element as HTMLButtonElement).focus();
+      await w.setProps({ panelOpen: false });
+      await flushPromises();
+      expect(document.activeElement).toBe(expandStrip(w).element);
+      await w.setProps({ panelOpen: true });
+      await flushPromises();
+      expect(panel(w).element.contains(document.activeElement)).toBe(true);
+    });
+
+    it("< desk（bottom-sheet）：不交接，交給 drawer 的 useModalSheet", async () => {
+      stubViewport(1024);
+      const w = mountWithDrawerButton(true);
+      const inside = w.get('[data-test="inside"]').element as HTMLButtonElement;
+      inside.focus();
+      await w.setProps({ panelOpen: false });
+      await flushPromises();
+      expect(document.activeElement).toBe(inside);
+    });
+
+    it("沒有 matchMedia：視為桌機，照常交接", async () => {
+      vi.stubGlobal("matchMedia", undefined);
+      const w = mountWithDrawerButton(true);
+      (w.get('[data-test="inside"]').element as HTMLButtonElement).focus();
+      await w.setProps({ panelOpen: false });
+      await flushPromises();
+      expect(document.activeElement).toBe(expandStrip(w).element);
+    });
+  });
 
   it("bottom-sheet 高度依內容（不設固定最小高度）、最高 85vh，並有抓取把手", () => {
     const w = mountLayout({ panelOpen: true, peekLabel: "壓製機 02" });

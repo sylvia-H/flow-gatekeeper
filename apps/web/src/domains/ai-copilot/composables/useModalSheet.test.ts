@@ -387,6 +387,14 @@ describe("createModalSheet 關閉時的焦點歸還（合併門第 3 輪 #1）",
     expect(h.focused.length).toBe(before);
   });
 
+  it("接手前的元素在 sheet 內（例如根節點；隱藏後對它 focus() 無效）→ 退用 restoreTarget（合併門最後一批 #1）", () => {
+    const h = withCard(() => true);
+    h.setActive("close"); // sheet 內的元素
+    h.show(true); // autoFocus：記下 close 為 restoreTo 並接手
+    h.show(false);
+    expect(h.focused.at(-1)).toBe("opener");
+  });
+
   it("接手前的元素已脫離 DOM → 退用 restoreTarget", () => {
     const h = withCard(() => true);
     h.setActive("hidden");

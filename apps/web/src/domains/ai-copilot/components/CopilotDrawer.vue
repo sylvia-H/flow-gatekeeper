@@ -40,6 +40,11 @@ const props = defineProps<{
   canDiagnose: boolean;
   /** 連線面不可診斷的原因（停用 tooltip）；null＝連線就緒。 */
   connectionBlockedReason: string | null;
+  /**
+   * sheet 關閉時焦點歸還的次要後備（選取卡不在 DOM 時用）；App 傳 AppLayout 的 peek 條。
+   * 由外部提供，drawer 不以 selector 查 AppLayout 的 DOM（合併門最後一批 #5）。
+   */
+  restoreFallback?: () => HTMLElement | null;
 }>();
 
 const emit = defineEmits<{
@@ -210,9 +215,7 @@ const { isSheet, open: sheetOpen, trapActive, engage, disengage, quietFocus, onK
     autoFocus: () => props.machineId === null || props.state.status !== "idle",
     focusScope: (el) => el.closest<HTMLElement>('[data-fg="copilot"]'),
     // 關閉時歸還焦點的後備：目前選取卡，其次收合後出現的 peek 條（合併門第 3 輪 #1）。
-    restoreTarget: () =>
-      selectedCard() ??
-      (typeof document !== "undefined" ? document.querySelector<HTMLElement>('[data-fg="copilot-peek"]') : null),
+    restoreTarget: () => selectedCard() ?? props.restoreFallback?.() ?? null,
   },
 );
 

@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ChevronUp, PanelRightOpen } from "lucide-vue-next";
 import { useResizeDrag } from "../composables/useResizeDrag.js";
-import { DESK_QUERY, hasMatchMedia, matchesMedia, useMediaQuery } from "../composables/useMediaQuery.js";
+import { DESK_QUERY, hasMatchMedia, useMediaQuery } from "../composables/useMediaQuery.js";
 
 /**
  * 監控台外殼：rail（sidebar slot）／工具列（topbar slot）／主區桌面（main slot）／
@@ -136,6 +136,9 @@ onUnmounted(() => sheetObserver?.disconnect());
  * 以免打斷卡片間的鍵盤操作。bottom-sheet（< desk）的焦點由 drawer 的 useModalSheet 負責。
  */
 const panelRef = ref<HTMLElement | null>(null);
+/** peek 條；對外以 `peekElement()` 提供，App 交給 drawer 當 sheet 關閉時的焦點歸還後備（合併門最後一批 #5）。 */
+const peekRef = ref<HTMLButtonElement | null>(null);
+defineExpose({ peekElement: (): HTMLButtonElement | null => peekRef.value });
 const expandRef = ref<HTMLButtonElement | null>(null);
 watch(
   () => props.panelOpen,
@@ -143,7 +146,8 @@ watch(
     const active = document.activeElement;
     const leaving = open ? expandRef.value : panelRef.value;
     if (!leaving || !(active instanceof Node) || !leaving.contains(active)) return;
-    if (hasMatchMedia() && !matchesMedia(DESK_QUERY)) return;
+    // 沒有 matchMedia 時視為桌機（保留原語意）；`isDesktop()` 讀 `deskViewport`，與留白同一個來源（合併門最後一批 #3）。
+    if (hasMatchMedia() && !isDesktop()) return;
     void nextTick(() => (open ? panelRef.value : expandRef.value)?.focus());
   },
 );
@@ -261,6 +265,7 @@ const {
          按鈕內一律非互動元素；名稱與狀態已併進 aria-label，chip 不另被念出 -->
     <button
       v-if="peekVisible"
+      ref="peekRef"
       type="button"
       data-fg="copilot-peek"
       class="fixed inset-x-0 bottom-0 z-40 flex h-8 items-center gap-2 border-t border-edge bg-surface-strong px-4 text-sm text-ink shadow-sheet transition-colors duration-150 hover:bg-surface focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus desk:hidden"

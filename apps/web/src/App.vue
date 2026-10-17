@@ -116,6 +116,12 @@ function onRetry(): void {
  * 落在閒置單列「診斷」鈕、維持非 modal）。桌機展開窄條時 drawer 不是 sheet，不動作。
  */
 const drawer = useTemplateRef<InstanceType<typeof CopilotDrawer>>("drawer");
+/** sheet 關閉時焦點歸還的次要後備：AppLayout 的 peek 條（選取卡不在 DOM 時）。 */
+// AppLayout 有具名 slot，InstanceType 推不出 expose 型別；只描述用到的 expose。
+const layout = useTemplateRef<{ peekElement: () => HTMLButtonElement | null }>("layout");
+function peekElement(): HTMLElement | null {
+  return layout.value?.peekElement() ?? null;
+}
 function onOpenPanel(): void {
   copilot.openPanel();
   drawer.value?.focusAfterPeekOpen();
@@ -277,6 +283,7 @@ const handle = useHighFrequencyWs({
 
 <template>
   <AppLayout
+    ref="layout"
     :panel-open="copilot.panelOpen"
     :peek-label="peekLabel"
     :peek-status="peekStatus"
@@ -410,6 +417,7 @@ const handle = useHighFrequencyWs({
         :summary="store.selectedMachine"
         :can-diagnose="canDiagnose"
         :connection-blocked-reason="connectionBlockedReason"
+        :restore-fallback="peekElement"
         @diagnose="onDiagnose"
         @retry="onRetry"
         @cancel="onCancel"

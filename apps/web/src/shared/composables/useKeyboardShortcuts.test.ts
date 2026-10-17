@@ -470,6 +470,21 @@ describe("Copilot bottom-sheet 為 modal 時不處理 /（合併門第 2 輪 #2�
     expect(handlers.focusSearch).toHaveBeenCalledTimes(1);
   });
 
+  it("Ctrl／Meta／Alt + / 不被吃掉：說明層開著或 sheet 為 modal 時都交給瀏覽器（合併門最後一批 #4）", () => {
+    handlers.isCopilotSheetModal = () => true;
+    attach();
+    state.open = { ...allClosed(), "copilot-panel": true, selection: true };
+    for (const mod of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }]) {
+      expect(press(document.body, "/", mod).defaultPrevented).toBe(false);
+    }
+    state.open = { ...allClosed(), help: true };
+    for (const mod of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }]) {
+      expect(press(document.body, "/", mod).defaultPrevented).toBe(false);
+    }
+    expect(press(document.body, "/").defaultPrevented).toBe(true); // 不帶修飾鍵仍吃掉
+    expect(handlers.focusSearch).not.toHaveBeenCalled();
+  });
+
   it("未提供 isCopilotSheetModal 時視為 false（/ 照常聚焦搜尋）", () => {
     attach();
     press(document.body, "/");

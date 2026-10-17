@@ -79,6 +79,11 @@ export interface UseKeyboardShortcutsOptions {
 
 const CARD_SELECTOR = ".machine-card";
 
+/** 是否帶 Ctrl／Meta／Alt（這類組合鍵一律交給瀏覽器與系統）。 */
+function hasModifier(event: KeyboardEvent): boolean {
+  return event.ctrlKey || event.metaKey || event.altKey;
+}
+
 function eventKeysOf(id: ShortcutId): readonly string[] {
   return SHORTCUTS.find((s) => s.id === id)?.eventKeys ?? [];
 }
@@ -162,11 +167,12 @@ export function attachKeyboardShortcuts(options: UseKeyboardShortcutsOptions): (
     if (handlers.layers.help.isOpen() && !KEYS.toggleHelp.includes(key) && !KEYS.escape.includes(key)) {
       // `/` 仍要吃掉瀏覽器預設：Firefox 的 `/` 是 Quick Find，會把焦點拉出對話框（合併門第 3 輪 #3）。
       // 只吃 `/`：Tab／方向鍵等要留給說明層自己的焦點陷阱與捲動。
-      if (KEYS.focusSearch.includes(key) && !isTypingTarget(event)) event.preventDefault();
+      // 帶 Ctrl／Meta／Alt 的組合鍵不吃（不搶瀏覽器與系統快捷鍵，合併門最後一批 #4）。
+      if (KEYS.focusSearch.includes(key) && !isTypingTarget(event) && !hasModifier(event)) event.preventDefault();
       return;
     }
     if (isTypingTarget(event)) return;
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (hasModifier(event)) return;
     // 手機異常覆蓋層（aria-modal）開著時只處理 Escape 與 `/`：搜尋覆蓋排在它之上（FR-034a）可以放行，
     // 其餘（`d`、`x`、方向鍵、`?`）會作用到覆蓋層底下看不見的拓樸或疊出第二個對話框。
     if (
@@ -181,7 +187,7 @@ export function attachKeyboardShortcuts(options: UseKeyboardShortcutsOptions): (
     // （Firefox Quick Find 會把焦點拉出陷阱，合併門第 3 輪 #3）。
     // TODO（合併門第 3 輪 #7，後續）：說明層、異常覆蓋層與這裡是三套 modal 守門，規則不一；改為 EscapeLayer.isModal 統一守門。
     if (KEYS.focusSearch.includes(key) && handlers.isCopilotSheetModal?.() === true) {
-      event.preventDefault();
+      if (!hasModifier(event)) event.preventDefault();
       return;
     }
 
