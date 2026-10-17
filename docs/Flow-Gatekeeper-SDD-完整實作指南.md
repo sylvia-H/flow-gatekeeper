@@ -3187,7 +3187,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 ### 15.6 1.0.0 之後的現況摘要
 
-本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；這些分支於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布，變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
+本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；表中第 1～5 列於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第 6～8 列與 SDD feature 013 於 2026-10-17 以產品版本 **2.0.0**（tag `2.0.0`）發布。變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
 但改動了多處跨 feature 的行為；各章 reference code 保留，另以「已變更」註記指回本節。依 `develop` 的 merge 順序
 （`git log --oneline --first-parent --merges 3e94ac2..HEAD` 核對）：
 
@@ -3199,8 +3199,9 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 3 | `docs/20260927-research-review02` | `63b6f66` | 新增第二輪審查報告 `docs/20260927-research-review02.md` | — |
 | 4 | `fix/20260927-research-review02` | `898ccfc` | 第二輪審查 Batch A／B 修復 | 第二輪審查修復 |
 | 5 | `fix/20260927-review02-batch-cd` | `4c43d18` | 第二輪報告 Batch C（文件與 release 準備）、Batch D（測試基礎建設），外加 6 項 code-review findings | Batch C／D |
-| 6 | `upgrade/20261017-gemini-3.5-flash-lite` | `7d9f9d9` | 預設 LLM 模型改 `gemini-3.5-flash-lite`、3.x flash 送 `thinkingLevel: MEDIUM`、`AI_MAX_OUTPUT_TOKENS` 預設 4096 | Gemini 3.5 flash-lite 升級 |
-| 7 | `docs/20261018-demo-video` | （併入後補） | README demo 影片以 2.0.0 介面重錄、新增錄影劇本 `record-demo.cjs` | Demo 影片重錄 |
+| 6 | `fix/20261017-pause-toggle-label` | `b7f7780` | 暫停鈕按下後換成「恢復」（Play 圖示）、拿掉 `aria-pressed`、暫停橫幅 `role=status` | 013 UI 全面改版（「暫停」條） |
+| 7 | `upgrade/20261017-gemini-3.5-flash-lite` | `7d9f9d9` | 預設 LLM 模型改 `gemini-3.5-flash-lite`、3.x flash 送 `thinkingLevel: MEDIUM`、`AI_MAX_OUTPUT_TOKENS` 預設 4096 | Gemini 3.5 flash-lite 升級 |
+| 8 | `docs/20261018-demo-video` | `84feedd` | README demo 影片以 2.0.0 介面重錄、新增錄影劇本 `record-demo.cjs` | Demo 影片重錄 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」），但不列入本表。
 
@@ -3324,7 +3325,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 - **Batch C（文件與 release 準備）**：
   - 契約：`asyncapi.yaml` 的 `info.version` 已升 **1.2.0**（明細見上方第二輪修復段與 `CHANGELOG.md`「asyncapi 契約版本」）；新增 repo 根 `CHANGELOG.md`（版本策略：產品版本與契約版本兩條獨立演進）。
-  - 產品版本：六份 `package.json`（root 新增 `version`、五套件由 `0.1.0` 對齊）為 **1.1.0**，已於 2026-09-28 與 tag `1.1.0`、CHANGELOG 條目一致發布（產品 tag 自此不帶 `v` 前綴）。
+  - 產品版本：六份 `package.json`（root 新增 `version`、五套件由 `0.1.0` 對齊）為 **1.1.0**，已於 2026-09-28 與 tag `1.1.0`、CHANGELOG 條目一致發布（產品 tag 自此不帶 `v` 前綴；**已變更**：2026-10-17 六份升為 2.0.0、tag `2.0.0`）。
   - 憲章升 **1.5.0**：Principle III「型別來源分層」改為全部 WS message 與 `POST /diagnoses` 一律 Zod＋`z.infer`；Governance 新增「跨 feature／跨分支決策 MUST 回補真實來源（涵蓋維護分支）」與「契約變更 MUST 升 `info.version` 並記 CHANGELOG」。`CLAUDE.md` 補「維護分支」小節。
   - 本節由「2026-09 修復摘要」改名為「1.0.0 之後的現況摘要」（原「v1.0.0 之後」，隨 tag 更名）並加上維護分支表；ADR-002 新增 §6.5「已知未做與延後項」表。
   - specs 001–008 補狀態與「已變更」橫幅；第一輪報告數字更正後凍結為歷史快照。
@@ -3370,7 +3371,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   仍在 5 s 內但**餘裕有限**：context 變長或思考變多時可能超標；這是保留 MEDIUM 推理的已知取捨，超標時先評估改 LOW／MINIMAL。
 - **實機**（一鍵 demo 容器，2026-10-17）：首次診斷全程約 4.5 s、快取命中約 200 ms，回覆為繁體中文（2.5 flash 時約四分之三回英文；prompt 未指定語言，屬模型行為、非保證）。
 
-**Demo 影片重錄**（`docs/20261018-demo-video`，2026-10-17；為 2.0.0 release 準備）：
+**Demo 影片重錄**（`docs/20261018-demo-video`，merge `84feedd`，2026-10-17；為 2.0.0 release 準備）：
 
 - **影片**：`docs/demo/flow-gatekeeper-demo.mp4`（23 秒、1440×900、30fps H.264）與海報依 README 劇本表重錄，對象為一鍵 demo 容器（`:8080`，正式 build），AI 為 `gemini-3.5-flash-lite`；
   README 下載連結改指 `releases/download/2.0.0/`，劇本表時間點改為實錄值。1.0.0 舊介面影片作廢、只留在 1.0.0 release。
@@ -3380,7 +3381,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   輸出 BT.709／limited range 並標記色彩；先在暫存目錄編碼完成才覆寫 `docs/demo/`（不用 .tmp＋rename：Windows 上目標被播放器開著時 rename 會失敗），覆寫失敗時保留暫存成品並印出路徑；逐格寫檔失敗或對齊失準皆在呼叫 LLM 前中止；Chromium 尋找與面板狀態對照抽成 `apps/web/scripts/lib/browser.cjs`，與截圖劇本共用。
   使用者裁決：輸出 mp4（ffmpeg 用下載解壓即用的可攜版，不安裝到系統）、注入假游標、對 demo 容器錄。
 
-**013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[Unreleased]`）：
+**013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 
 前端整套視覺改為「實驗室玻璃與蝕刻刻度」，視覺真實來源由 design-spec＋refs 切換為 impeccable 工件 `apps/web/PRODUCT.md`＋`apps/web/DESIGN.md`。全部是前端改動：`packages/contracts`、`asyncapi.yaml` 與後端行為不變（FR-039），只消費既有 12 則 WS 訊息與 `POST /diagnoses`；高頻遙測仍是「先進 buffer、每幀至多一次批次提交」（硬規則 1）。
 
