@@ -3,15 +3,41 @@ import { computed, markRaw, ref, shallowRef, triggerRef } from "vue";
 import type { MachineState, TelemetryPoint } from "@flow-gatekeeper/contracts";
 import { fleetHealthOf, type FleetHealthSummary } from "../lib/fleet-health.js";
 import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
-import { deriveTransitionEvent, pushCapped, type DerivedEvent } from "../lib/events.js";
+import {
+  EVENT_MERGE_WINDOW_MS,
+  deriveTransitionEvent,
+  mergeEvent,
+  type DerivedEvent,
+} from "../lib/events.js";
+import {
+  applyTransition,
+  clearLatch as clearLatchOf,
+  isLatchVisible,
+  summarize,
+  type AnomalyLatch,
+  type AnomalySummaryItem,
+} from "../lib/anomaly-latch.js";
+import { machineLabel } from "../lib/machine-labels.js";
 import { filterMachineIds } from "../lib/machine-search.js";
 import { staleClock } from "../lib/stale.js";
+import {
+  clearSamples,
+  createRateSeries,
+  droppedInWindow as droppedInWindowOf,
+  invalidateNext,
+  markStale,
+  pushSample,
+  windowRatio as windowRatioOf,
+  type RateSample,
+  type RateSeries,
+} from "../../../shared/lib/rate-series.js";
+import { backpressureRatio } from "../../../shared/lib/backpressure.js";
 
 /** US3 事件保留上限（FR-011）。 */
 const EVENT_CAP = 50;
 
 /**
- * 連線三態（design-spec §8.2）。單一資料來源為本 store 的 `connectionStatus`，
+ * 連線三態（源自 013 前的 design-spec §8.2，已退役）。單一資料來源為本 store 的 `connectionStatus`，
  * 元件（AppLayout / TopBar chip）一律讀它，不另立平行狀態。
  */
 export type ConnectionStatus = "connected" | "reconnecting" | "disconnected";
@@ -91,7 +117,10 @@ export const useMonitoringStore = defineStore("monitoring", () => {
    * 不能被 Pause 凍結；卡片／Fleet Health 的 stale 改讀下方 `staleNow`。
    */
   const now = ref(Date.now());
-  /** US3 前端衍生事件（最近 50 筆，最新在頂端）；於 applyTelemetryBatch 批次點衍生。 */
+  /**
+   * US3 前端衍生事件（最近 50 筆，最新在頂端）；於 applyTelemetryBatch 批次點衍生。
+   * 013 起經 `mergeEvent` 推入：同機台同嚴重度在以 `firstTs` 起算的 60 秒固定窗內合併為一筆（`count` 累加、起訖擴展、移到頂端；滿窗另起一列）。
+   */
   const events = ref<DerivedEvent[]>([]);
   /** US3 事件唯一鍵用單調序號（非 reactive）：保 v-for key 在同批次同機台多筆時仍唯一。 */
   let eventSeq = 0;
@@ -103,6 +132,26 @@ export const useMonitoringStore = defineStore("monitoring", () => {
   const pausedAt = ref<number | null>(null);
   /** US4 search 查詢字串；空＝全部。sidebar 清單與主區卡片共用 `visibleMachineIds`。 */
   const searchQuery = ref("");
+  /**
+   * 013 US2 背壓速率序列（最近 60 秒，data-model §3）。只在 1 Hz `tickNow` 推入差分樣本，
+   * **不在 rAF 幀或 ws handler**（憲章 IV）：就地修改後 `triggerRef` 一次，下列 getter 由它衍生。
+   * 序列本身不需深層追蹤，故 shallowRef + markRaw。
+   */
+  const rateSeries = shallowRef<RateSeries>(markRaw(createRateSeries()));
+  /**
+   * 自載入起的累計比值（tooltip 用，沿用 `backpressureRatio`）。在 tick 取樣而非 computed：
+   * 兩個計數器每幀都在變，computed 會讓讀它的背壓 strip 每幀重繪；tick 取樣則與序列同為 1 Hz。
+   * 尚無任何批次時為 null（顯示「—」，不顯示成 0:1）。
+   */
+  const cumulativeRatio = ref<number | null>(null);
+  /**
+   * 013 US5 異常標記（data-model §5、FR-026）：每台一份，記住「這次異常」直到回復後 30 秒。
+   * 只在 `applyTelemetryBatch` 既有的 prev→next 判斷處更新（憲章 IV）：逐筆 `set` 不觸發依賴，
+   * 整批結束且確有 latch 變化時 `triggerRef` 一次；`clearLatch` 同樣整筆替換後 `triggerRef`。
+   * latch 物件整筆替換、從不就地修改，故 shallowRef + markRaw。對外唯讀語意：只經本 store 的 action 寫入。
+   * 期滿的 latch 不自 Map 移除（名冊固定 5 台，至多 5 筆）；可見性一律經 `isLatchVisible` 判定。
+   */
+  const latches = shallowRef<Map<string, AnomalyLatch>>(markRaw(new Map()));
 
   // ── Getters ────────────────────────────────────────────────────────
   /**
@@ -147,30 +196,85 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     filterMachineIds(MACHINE_IDS, searchQuery.value),
   );
 
+  // ── 013 US2 背壓 getter：全部由 `rateSeries` 衍生（每秒至多觸發一次） ──
+  /**
+   * 樣本的**新陣列**（由舊到新）。序列是就地修改的同一個陣列，若直接把 `samples` 當 prop 傳，
+   * 子元件的 prop 比對會判定「沒變」而不重繪；每秒複製 60 筆換一個新參照，成本可忽略。
+   */
+  const rateSamples = computed<readonly RateSample[]>(() => [...rateSeries.value.samples]);
+  /** 最新一筆樣本（strip 的「每秒訊息／每秒批次」）；尚無樣本為 null。 */
+  const latestRate = computed<RateSample | null>(() => {
+    const samples = rateSeries.value.samples;
+    return samples[samples.length - 1] ?? null;
+  });
+  /** 60 秒視窗比值（FR-009 主顯示）；批次總和為 0 時為 null（顯示「—」）。 */
+  const windowRatio = computed(() => windowRatioOf(rateSeries.value));
+  /** 60 秒視窗內的捨棄總數（FR-011；> 0 才顯示）。 */
+  const droppedInWindow = computed(() => droppedInWindowOf(rateSeries.value));
+  /**
+   * 「已斷線」標示：序列已停止推入，且本頁曾連上過——首次連線前序列同樣不推入，但那是
+   * 「連線中」（橫幅已說明），不該標成中斷。
+   */
+  const rateStale = computed(() => rateSeries.value.stale && everConnected.value);
+
+  // ── 013 US5 異常標記 getter：由 `latches` 與 `staleNow` 衍生（批次有 latch 變化或 1 Hz tick 才重算） ──
+  /**
+   * 異常摘要列（data-model §6、FR-027）：可見者，active 優先、再依 enteredAt 降冪；label 用繁中機台名。
+   * 以 `staleNow` 判定可見性：Pause 期間凍結（不倒數），恢復後依實際經過時間判定（Pause 期間計入）。
+   */
+  const anomalySummary = computed<AnomalySummaryItem[]>(() =>
+    summarize(latches.value, staleNow.value, machineLabel),
+  );
+
+  /** 該台目前的 latch（含已期滿、尚未被新異常覆寫者；是否顯示請用 `latchVisible`）。 */
+  function latchFor(machineId: string): AnomalyLatch | undefined {
+    return latches.value.get(machineId);
+  }
+
+  /** 該台的異常標記此刻是否可見（仍異常，或回復未滿 30 秒；以 `staleNow` 計）。供卡片使用。 */
+  function latchVisible(machineId: string): boolean {
+    const latch = latches.value.get(machineId);
+    return latch !== undefined && isLatchVisible(latch, staleNow.value);
+  }
+
   // ── Actions ────────────────────────────────────────────────────────
   /**
    * 每次呼叫 = 一個 rAF 幀 = 一次批次（不論 batch 幾筆）：
    * 逐筆覆寫該台最新快照，received += batch.length，rendered += 1。
+   * 013 US5：同一個 prev→next 判斷處一併更新異常標記（latch），整批結束有變化才 `triggerRef(latches)` 一次。
    */
   function applyTelemetryBatch(batch: TelemetryPoint[]): void {
     const receivedAt = Date.now();
     const map = machines.value;
+    const latchMap = latches.value;
+    let latchChanged = false;
     for (const point of batch) {
-      // US3：覆寫快照**前**讀 prevState，於狀態轉入 warning/critical 時衍生一筆事件（去重、上限 50）。
+      // US3：覆寫快照**前**讀 prevState，於狀態轉入 warning/critical 或回復 healthy 時衍生一筆事件。
       // 事件時間用 payload 自身 timestamp（非批次 receivedAt）：pause 後 resume 一次沖出整段
       // buffer 時，各筆仍保留真實發生時序，不會全被壓成同一個 resume 時刻（review 006）。
       // timestamp 解析失敗才退回 receivedAt。id 唯一性另由單調 eventSeq 保證（見 events.ts）。
+      // 013：改經 mergeEvent 推入（同機台同嚴重度 60 秒固定窗合併、上限 50），窗以事件 ts 計；
+      // firstTs 由 deriveTransitionEvent 帶出、合併時在 mergeEvent 內擴展，此批次點不另寫。
       const prevState = map.get(point.machineId)?.state;
       const parsedTs = Date.parse(point.timestamp);
       const eventTs = Number.isNaN(parsedTs) ? receivedAt : parsedTs;
       const event = deriveTransitionEvent(prevState, point.state, point.machineId, eventTs, eventSeq);
       if (event) {
         eventSeq += 1;
-        pushCapped(events.value, event, EVENT_CAP);
+        mergeEvent(events.value, event, EVENT_MERGE_WINDOW_MS, EVENT_CAP);
+      }
+      // 013 US5：latch 時間一律用客端 receivedAt（不用 payload 時戳，data-model §5／§10 末段）。
+      // applyTransition 無變化回原物件（無 latch 時回 null），只有新物件才寫回 Map。
+      const latch = latchMap.get(point.machineId);
+      const nextLatch = applyTransition(latch, prevState, point.state, receivedAt, point.machineId);
+      if (nextLatch !== null && nextLatch !== latch) {
+        latchMap.set(point.machineId, markRaw(nextLatch));
+        latchChanged = true;
       }
       map.set(point.machineId, markRaw(project(point, receivedAt)));
     }
     if (batch.length > 0) triggerRef(machines);
+    if (latchChanged) triggerRef(latches);
     receivedMessages.value += batch.length;
     renderedBatches.value += 1;
   }
@@ -191,8 +295,51 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     receivedMessages.value += overflow + invalid;
   }
 
+  /**
+   * 選取變更的訂閱者（非 reactive）：copilot 面板依它展開／收合（App 以 `onSelectionChange` 接線）。
+   * 合併門第 2 輪 #16：原本 App 以 `watch(selectedMachineId)` 加 `$onAction`（補「再選同一台」）兩路通知，
+   * `$onAction` 會攔到每一幀的 `applyTelemetryBatch`；改由選取 action 本身在每次呼叫時通知，一條路徑。
+   */
+  const selectionListeners = new Set<(machineId: string | null) => void>();
+
+  /** 訂閱選取變更：每次 `selectMachine`（含再選同一台）與實際生效的 `clearSelection` 都會呼叫；回傳解除函式。 */
+  function onSelectionChange(listener: (machineId: string | null) => void): () => void {
+    selectionListeners.add(listener);
+    return () => {
+      selectionListeners.delete(listener);
+    };
+  }
+
+  function notifySelection(machineId: string | null): void {
+    for (const listener of selectionListeners) listener(machineId);
+  }
+
+  /** 選台（卡片、事件列、異常摘要、搜尋 Enter、快捷鍵共用）。再選同一台也通知：Escape 收合後再點同一張卡依偏好展開。 */
   function selectMachine(machineId: string): void {
     selectedMachineId.value = machineId;
+    notifySelection(machineId);
+  }
+
+  /** 取消選取（Escape 最後一層）；本來就沒有選取時不動作、不通知。 */
+  function clearSelection(): void {
+    if (selectedMachineId.value === null) return;
+    selectedMachineId.value = null;
+    notifySelection(null);
+  }
+
+  /**
+   * 013 US5：操作者確認該台異常標記（FR-026）→ `clearedBy = "user"`（劃線，期滿才消失）。
+   * 卡片標記、`x` 快捷鍵與異常摘要列（含手機覆蓋層）都呼叫這一份，讀寫同一個 Map。
+   * 無 latch、已期滿（不可見）或已確認者不動作、不觸發。
+   */
+  function clearLatch(machineId: string): void {
+    const map = latches.value;
+    const latch = map.get(machineId);
+    if (latch === undefined || !isLatchVisible(latch, staleNow.value)) return;
+    const cleared = clearLatchOf(latch);
+    if (cleared === latch) return;
+    map.set(machineId, markRaw(cleared));
+    triggerRef(latches);
   }
 
   function setConnectionStatus(status: ConnectionStatus): void {
@@ -227,14 +374,52 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     authError.value = authorized ? null : AUTH_ERROR_MESSAGE;
   }
 
+  /**
+   * 1 Hz tick（App 的 setInterval）：推進 `now`，並為背壓序列取一次差分樣本。
+   * 先依連線狀態同步 stale（`markStale` 冪等；重連時清掉差分基準，斷線期間的累積量不灌進單一格），
+   * 重連那一刻再清空斷線前的舊樣本（否則 60 秒視窗會混入斷線前的資料），然後推入；
+   * Pause 期間照常推入（計數不是畫面內容），但樣本標為無效（`invalidateNext`）：暫停時 pump 不 flush，
+   * 該秒的訊息 ÷ 批次是操作造成的離群值，不進合併比、最高水位與走勢線。序列有變才 `triggerRef`，每秒至多一次。
+   */
   function tickNow(): void {
-    now.value = Date.now();
+    const t = Date.now();
+    now.value = t;
+    const series = rateSeries.value;
+    const wasStale = series.stale;
+    markStale(series, connectionStatus.value !== "connected");
+    // 斷線期間排下的無效筆數由 `markStale` 翻回 fresh 時一併歸零（見 rate-series.ts `markStale`）；
+    // 重連當下若仍暫停，下一行照常再排 1 筆。
+    if (wasStale && !series.stale) clearSamples(series);
+    if (paused.value) invalidateNext(series, 1);
+    const pushed = pushSample(
+      series,
+      {
+        receivedMessages: receivedMessages.value,
+        renderedBatches: renderedBatches.value,
+        droppedMessages: droppedMessages.value,
+        invalidMessages: invalidMessages.value,
+      },
+      t,
+    );
+    if (pushed || wasStale !== series.stale) triggerRef(rateSeries);
+    cumulativeRatio.value =
+      renderedBatches.value > 0
+        ? backpressureRatio(receivedMessages.value, renderedBatches.value)
+        : null;
   }
 
-  /** US4：切換 pause（畫面凍結／恢復）。 */
+  /**
+   * 暫停解除後要標無效的樣本筆數：恢復那一幀把整個 buffer 當成 1 批交出，落在恢復後第一筆樣本；
+   * 若 1 Hz tick 恰好落在「按下恢復」與下一個 rAF flush 之間（約 16ms），那一批會落到第二筆——
+   * 多排一筆，代價只是視窗少算 1 秒有效資料。
+   */
+  const RESUME_INVALID_SAMPLES = 2;
+
+  /** US4：切換 pause（畫面凍結／恢復）。暫停期間的樣本由 `tickNow` 標無效，恢復時再排定恢復當下的樣本。 */
   function togglePause(): void {
     paused.value = !paused.value;
     pausedAt.value = paused.value ? Date.now() : null;
+    if (!paused.value) invalidateNext(rateSeries.value, RESUME_INVALID_SAMPLES);
   }
 
   /** US4：由 composable `onLatency` 餵入 ping/pong RTT。 */
@@ -270,9 +455,23 @@ export const useMonitoringStore = defineStore("monitoring", () => {
     selectedMachine,
     fleetHealth,
     visibleMachineIds,
+    rateSeries,
+    rateSamples,
+    latestRate,
+    windowRatio,
+    droppedInWindow,
+    rateStale,
+    cumulativeRatio,
+    latches,
+    anomalySummary,
+    latchFor,
+    latchVisible,
     applyTelemetryBatch,
     recordDropped,
     selectMachine,
+    clearSelection,
+    onSelectionChange,
+    clearLatch,
     setConnectionStatus,
     setClientId,
     setAuthorized,

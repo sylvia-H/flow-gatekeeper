@@ -1,5 +1,5 @@
 /**
- * ProgressBar 呈現推導（design-spec §7.5、FR-004）。抽成純函式使進度條的顯示不變量
+ * ProgressBar 呈現推導（FR-004；不變量源自 013 前的 design-spec §7.5，已退役）。抽成純函式使進度條的顯示不變量
  * 可單元測試（同 copilot-reducer／classifyWsMessage 的做法）：
  * - `indeterminate` **僅** waiting/active 且無數值時為真；completed/failed 皆為收尾態，
  *   絕不走 indeterminate 動畫（避免對已結束任務誤顯「處理中」）。

@@ -15,7 +15,10 @@ export type AiFinishReason = "stop" | "max_tokens" | "safety" | "other";
 
 export interface AiUsage {
   inputTokens?: number;
+  /** 回覆本身的 token（不含 thinking）。 */
   outputTokens?: number;
+  /** thinking token：與 outputTokens 一起計入輸出上限，`max_tokens` 截斷時用來判斷是誰吃掉了上限。 */
+  thoughtsTokens?: number;
   totalTokens?: number;
 }
 

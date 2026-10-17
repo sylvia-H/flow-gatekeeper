@@ -3,8 +3,8 @@ import { METRIC_THRESHOLDS } from "@flow-gatekeeper/shared";
 
 /**
  * US1 卡片呈現純函式（telemetry 的呈現投影，不改 store 型別、不動契約）。
- * 三支：`metricUnit`（單位）、`offendingMetrics`（越界判定，供 amber/crit 染色）、
- * `relativeTimeLabel`（相對「Ns ago」）。皆為決定性純函式，便於單元測試（研究 R1/R2/R3）。
+ * 兩支：`metricUnit`（單位）、`offendingMetrics`（越界判定，供 amber/crit 染色）。皆為決定性純函式，便於單元測試
+ * （研究 R1/R2）。相對時間由 `shared/lib/format.ts` 的 `formatRelative` 直接提供（原 `relativeTimeLabel` 包裝已刪）。
  */
 export type MetricKey = "temperature" | "vibration" | "throughput" | "errorRate";
 
@@ -18,7 +18,7 @@ const UNITS: Record<MetricKey, string> = {
   errorRate: "%",
 };
 
-/** 遙測單位（FR-003）；靜態字串常數，design-spec §7.3 未規定字串、無衝突。 */
+/** 遙測單位（FR-003）；靜態字串常數。 */
 export function metricUnit(key: MetricKey): string {
   return UNITS[key];
 }
@@ -46,19 +46,4 @@ export function offendingMetrics(t: TelemetryPoint["telemetry"]): Record<MetricK
     errorRate: classify(t.errorRate, METRIC_THRESHOLDS.errorRate.warn, METRIC_THRESHOLDS.errorRate.crit),
     throughput: null,
   };
-}
-
-/**
- * 相對時間「Ns ago」（FR-004）。以 sec 級精度，讀既有 `store.staleNow`（每秒 tick；Pause 且連線中時凍結）即可更新，
- * 不另開計時器。邊界：<5s→`just now`、<60s→`Ns ago`、<60m→`Nm ago`、<24h→`Nh ago`、否則 `Nd ago`。
- */
-export function relativeTimeLabel(lastUpdated: number, now: number): string {
-  const sec = Math.floor(Math.max(0, now - lastUpdated) / 1000);
-  if (sec < 5) return "just now";
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.floor(hr / 24)}d ago`;
 }

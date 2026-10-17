@@ -38,3 +38,13 @@ Thumbs.db
 # Stryker 變異測試：sandbox 暫存目錄與報告輸出（皆可重建）
 /.stryker-tmp/
 /reports/
+
+# 013 截圖劇本輸出（apps/web/scripts/screenshots.cjs --viewports；可重建，不入 git）
+apps/web/.screenshots/
+
+# impeccable 決策頁 session 紀錄與 hook 快取（不入 git；設計工件 surfaces/、critique/、design.json、選定草圖 assigned.html 仍追蹤）
+apps/web/.impeccable/questions/
+apps/web/.impeccable/hook.cache.json
+
+# impeccable finish-review 截圖（每次收尾重拍，不入庫；T074 定案）
+apps/web/.impeccable/review/

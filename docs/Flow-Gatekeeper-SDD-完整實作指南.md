@@ -205,9 +205,12 @@ flow-gatekeeper/
           monitoring/
           ai-copilot/
         shared/
+        styles/theme.css    # 雙主題色值的唯一位置（013 起）
+      scripts/screenshots.cjs  # Playwright 截圖劇本（013 起，含 layout shift 量測）
+      PRODUCT.md            # 視覺真實來源：產品定位與介面約束（013 起）
+      DESIGN.md             # 視覺真實來源：雙主題 token 與元件（013 起）
       design/
-        design-spec.md
-        refs/
+        design-spec.md      # 2026-10（013）已退役，保留全文作歷史；原 refs/ 參考圖已移除
   packages/
     contracts/
       src/
@@ -438,6 +441,9 @@ flow-gatekeeper 是一個致敬 Argo CD 的即時流程監控與 AI 診斷 side 
 - pnpm monorepo
 ```
 
+> **已變更（2026-10，feature 013）**：上面 prompt 第 10 條「Design handoff：固化成 refs 截圖與 design-spec tokens」是起草時的原文。
+> 013 起 design-spec 已退役、`refs/` 已移除，憲章第 II 條「視覺」改指向 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`；現況見憲章與 §15.6「013 UI 全面改版」。
+
 驗收：
 
 ```bash
@@ -448,6 +454,7 @@ git commit -m "docs: add flow-gatekeeper engineering constitution"
 ```
 
 ---
+
 
 ## 6. Feature 001：Monorepo、Contracts、Infra、Env
 
@@ -1838,7 +1845,7 @@ export class GeminiProvider implements AiProvider {
 
 > 未來要換 Claude，就新增 `claude-provider.ts implements AiProvider`，worker 只改一行 `const ai = new GeminiProvider(...)`。
 
-> **已變更，現況：介面形狀擴充、SDK 遷移至 `@google/genai`**（上面兩段為起草時的形狀）。`AiProvider` 現為 `{ readonly id; readonly model; streamDiagnosis({ prompt, signal, responseJsonSchema?, onToken }) → { text, finishReason, usage? } }`：`signal` 由核心以 `AbortSignal.timeout(AI_TIMEOUT_MS)` 建立、adapter MUST 交給 SDK 讓逾時真的中止 HTTP 串流；`finishReason` 正規化為 `stop｜max_tokens｜safety｜other`；錯誤一律丟 `AiProviderError{ retryable, code }`，`retryable=false`（金鑰缺失／無效、權限不足、請求格式錯）由核心轉 BullMQ `UnrecoverableError`。`GeminiProvider` 缺金鑰時直接丟不可重試的 `provider_error`；只對 `gemini-2.5-flash` 系列送 `thinkingBudget: 0`（`gemini-2.5-pro` 不可關 thinking、其他系列不送）。換 Claude 時需對應 system／user 分開、`max_tokens` 必填、`stop_reason` → `finishReason`、錯誤分類（`overloaded`／`rate_limit` 可重試）。見 `apps/worker/src/ai/provider.ts`、`gemini-provider.ts`。
+> **已變更，現況：介面形狀擴充、SDK 遷移至 `@google/genai`**（上面兩段為起草時的形狀）。`AiProvider` 現為 `{ readonly id; readonly model; streamDiagnosis({ prompt, signal, responseJsonSchema?, onToken }) → { text, finishReason, usage? } }`：`signal` 由核心以 `AbortSignal.timeout(AI_TIMEOUT_MS)` 建立、adapter MUST 交給 SDK 讓逾時真的中止 HTTP 串流；`finishReason` 正規化為 `stop｜max_tokens｜safety｜other`；錯誤一律丟 `AiProviderError{ retryable, code }`，`retryable=false`（金鑰缺失／無效、權限不足、請求格式錯）由核心轉 BullMQ `UnrecoverableError`。`GeminiProvider` 缺金鑰時直接丟不可重試的 `provider_error`；`gemini-2.5-flash` 系列送 `thinkingBudget: 0`；3.x 以後的 `flash`／`flash-lite` 送 `thinkingLevel: MEDIUM`（它們不接受 `thinkingBudget: 0`）；`gemini-2.5-pro`、3.x pro 等其他變體不送（見 §15.6「Gemini 3.5 flash-lite 升級」）。換 Claude 時需對應 system／user 分開、`max_tokens` 必填、`stop_reason` → `finishReason`、錯誤分類（`overloaded`／`rate_limit` 可重試）。見 `apps/worker/src/ai/provider.ts`、`gemini-provider.ts`。
 
 ### 8.10 Worker processor
 
@@ -2098,17 +2105,22 @@ git merge 003-bullmq-ai-streaming
 
 ## 9. 設計階段：Claude Design 交接
 
+> ⛔ **整章已退役（2026-10，feature 013），以下保留作歷史。** 本章描述的 design-spec＋refs 交接是 004–012 期間的視覺真實來源；
+> 013 起 `apps/web/design/design-spec.md` 檔頭標註退役並保留全文、`apps/web/design/refs/`（含 `_sources/`）已自 repo 移除，
+> 現況視覺真實來源為 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`，色值只存在 `apps/web/src/styles/theme.css`，
+> 摘要見 §15.6「013 UI 全面改版」。本章所有「現況」「canonical」「驗收硬需求」字樣都指 013 之前。
+
 > 這個階段在 Feature 004/005 前做，因為前端元件要共用同一套視覺 token。
 
 **本階段不是 Spec Kit feature，而是一次性的「設計固化 + 前端視覺地基」交接。** 產出雖然不多，
 但都是 Feature 004/005 元件的共同前提：`apps/web/design/`（design-spec + refs 截圖）與可用的
 Tailwind token 設定。做完這一階段，後續 feature 才有「唯一視覺真實來源」可依。
 
-**與 constitution / CLAUDE.md 的關係**：CLAUDE.md 明訂視覺真實來源是
-`apps/web/design/design-spec.md` 與 `apps/web/design/refs/*.png`——不是 `docs/design-spec.md`。
+**與 constitution / CLAUDE.md 的關係**：當時 CLAUDE.md 明訂視覺真實來源是
+`apps/web/design/design-spec.md` 與 `apps/web/design/refs/*.png`——不是 `docs/design-spec.md`（013 起已改為 PRODUCT.md／DESIGN.md）。
 起草時本專案的完整規格放在 `docs/design-spec.md`（v0.3），本階段的第一件事就是把它落地到
 `apps/web/design/`，之後 **以 `apps/web/design/design-spec.md` 為單一 canonical 檔**，避免兩處
-內容分岔。（見下方 9.1 的「single source」註記；**已落地**，canonical 現為 v0.6，見 9.1 橫幅。）
+內容分岔。（見下方 9.1 的「single source」註記；**已落地**，canonical 最終版為 v0.6，013 起整份退役，見本章頂端橫幅。）
 
 > ⚠️ **不要重寫這一段的規格細節。** `docs/design-spec.md` 已經有完整的 token、Tailwind
 > `theme.extend`（§5）、component states（§7）、interaction states（§8）、file mapping（§9）、
@@ -2117,7 +2129,7 @@ Tailwind token 設定。做完這一階段，後續 feature 才有「唯一視�
 
 ### 9.1 建立設計資料夾並落地 design-spec
 
-> ⛔ **本步驟已於 Feature 004 前完成，勿再執行**：`apps/web/design/design-spec.md` 已是 canonical（現況 v0.6，
+> ⛔ **本步驟已於 Feature 004 前完成，勿再執行**：`apps/web/design/design-spec.md` 曾是 canonical（最終 v0.6，013 起已退役，
 > 版本紀錄見該檔），`docs/design-spec.md` 是 v0.3 歷史起點且已加移轉橫幅；再執行下方的 `Copy-Item`／`cp`
 > 會用舊檔**覆蓋** canonical，把之後所有 token 回寫（v0.4–v0.6）一併抹掉。以下指令區塊僅保留作歷史 reference。
 
@@ -2283,7 +2295,7 @@ import './styles/tailwind.css';
 （`canvas`、`surface`、`fg-muted`、`accent`、`ok`/`warn`/`crit`、`rounded-card`、`shadow-drawer`、
 `animate-critical-pulse` 等），元件才能照 design-spec 直接引用。
 
-> **已變更（design-spec v0.5，2026-09-27）**：底色 token 由 `base` 改名 **`canvas`**（`bg-base` → `bg-canvas`）——`colors.base` 與 Tailwind 內建 `fontSize.base` 撞名，`text-base` 會同時輸出字級與顏色；`fg-subtle` 提亮為 `#7C8A98`（AA 對比）；新增 `fontSize` token `2xs`／`pill`／`md`／`lg`／`number`。現況以 `apps/web/design/design-spec.md` v0.5 §4–§5 為準。
+> **已變更（design-spec v0.5，2026-09-27）**：底色 token 由 `base` 改名 **`canvas`**（`bg-base` → `bg-canvas`）——`colors.base` 與 Tailwind 內建 `fontSize.base` 撞名，`text-base` 會同時輸出字級與顏色；`fg-subtle` 提亮為 `#7C8A98`（AA 對比）；新增 `fontSize` token `2xs`／`pill`／`md`／`lg`／`number`。當時以 `apps/web/design/design-spec.md` v0.5 §4–§5 為準（013 起已退役，現況 token 見 `apps/web/DESIGN.md` 與 `apps/web/src/styles/theme.css`）。
 
 > 這個 Tailwind 設定要不要算進本階段、還是併入 Feature 004 的第一個 commit，取捨見 9.7。
 > 無論放哪，token 名稱都以 design-spec §5 為單一來源。
@@ -2392,7 +2404,7 @@ export const useMonitoringStore = defineStore('monitoring', {
 });
 ```
 
-> **已變更，現況**：比值計算已移出 store，改由 `apps/web/src/shared/lib/backpressure.ts` 的 **`backpressureRatio(received, rendered)`** 單一實作（BackpressureBadge 直接呼叫，store 不再另留 `batchRatio` getter，避免兩處定義漂移）。`receivedMessages` 以**遙測資料點**計，且**含**溢位合併丟棄的 `droppedMessages` 與格式不符的剔除筆數（它回答「網路上收到多少」），因此比值隨節拍、機台數與幀率而異、不宣稱固定值。`machines` 改為 `shallowRef`。規格見 design-spec v0.5 §7.2.1。
+> **已變更，現況**：比值計算已移出 store，改由 `apps/web/src/shared/lib/backpressure.ts` 的 **`backpressureRatio(received, rendered)`** 單一實作（1.1.0 由 BackpressureBadge 直接呼叫；013 起由 `BackpressureStrip` 經 `rate-series.ts` 的 60 秒視窗計算，store 不再另留 `batchRatio` getter，避免兩處定義漂移；合併門第 1 輪（2026-10-17）起 `backpressureRatio()` 不取整，顯示端統一一位小數，累計 7÷5 顯示 1.4:1 而非 1:1）。`receivedMessages` 以**遙測資料點**計，且**含**溢位合併丟棄的 `droppedMessages` 與格式不符的剔除筆數（它回答「網路上收到多少」），因此比值隨節拍、機台數與幀率而異、不宣稱固定值。`machines` 改為 `shallowRef`。規格當時見 design-spec v0.5 §7.2.1（013 起已退役）。013 起 BackpressureBadge 由背壓 strip 取代，主顯示改為 60 秒視窗比值、`backpressureRatio` 的累計比值只留在 tooltip，見 §15.6「013 UI 全面改版」。
 
 ### 10.3 `useHighFrequencyWs`
 
@@ -2522,7 +2534,7 @@ export function useHighFrequencyWs<T>(opts: Options<T>) {
 }
 ```
 
-> **已變更，現況見 design-spec v0.5**（上面程式碼為起草時的 reference）：
+> **已變更**（上面程式碼為起草時的 reference；以下規則當時記於 design-spec v0.5，該檔 013 起已退役，下列行為仍為現況）：
 >
 > - **溢位不再「丟最舊、保最新」**：buffer 超過上限時改為**合併**——每台保留「第一筆＋每個 state 轉換點＋最新一筆」，丟掉中間同態的重複值（`lib/telemetry-coalesce.ts`），合併後仍超限才從最舊的非最新點丟到低水位；丟棄筆數計入 `droppedMessages` 並納入背壓比值。理由：單純截斷會把背景分頁或 Pause 期間的 warning／critical 轉換整段丟掉，Event Stream 永遠看不到。
 > - **入口守衛**：`machine/data` 裸陣列逐點以 `isTelemetryPoint` 驗證，不合格者剔除並計數；`ai/*` 事件以 `AiStreamEventSchema` 驗證後才交給 copilot。
@@ -2639,7 +2651,7 @@ git merge 005-copilot-ui-design
 
 ### 12.1 為什麼要有這個 feature（背景）
 
-以 `apps/web/design/design-spec.md` 與 `refs/*.png` 為視覺唯一來源，逐張比對目前實作，發現三類落差：
+以 `apps/web/design/design-spec.md` 與 `refs/*.png` 為視覺唯一來源（006 當時；013 起兩者已退役，現況見 `apps/web/PRODUCT.md`、`apps/web/DESIGN.md`），逐張比對目前實作，發現三類落差：
 
 - **卡片保真（對齊 `node-states.png`／§7.3）**：實機 `MachineNodeCard` 缺狀態文字徽章（只有狀態
   燈點）、warning 沒把數值染 amber 反而誤加 warn 邊框、遙測數值缺單位（°C／mm/s／u/min）、時間戳用
@@ -3175,7 +3187,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 ### 15.6 1.0.0 之後的現況摘要
 
-本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；這些分支於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布，變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
+本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；表中第 1～5 列與其後的 1.1.0 release 準備列於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第 6～9 列、2.0.0 release 準備列與 SDD feature 013 於 2026-10-17 以產品版本 **2.0.0**（tag `2.0.0`）發布。只改版號與文件的 release 準備分支、及直接 commit 以「—」列出、不編號。變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
 但改動了多處跨 feature 的行為；各章 reference code 保留，另以「已變更」註記指回本節。依 `develop` 的 merge 順序
 （`git log --oneline --first-parent --merges 3e94ac2..HEAD` 核對）：
 
@@ -3187,8 +3199,14 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 3 | `docs/20260927-research-review02` | `63b6f66` | 新增第二輪審查報告 `docs/20260927-research-review02.md` | — |
 | 4 | `fix/20260927-research-review02` | `898ccfc` | 第二輪審查 Batch A／B 修復 | 第二輪審查修復 |
 | 5 | `fix/20260927-review02-batch-cd` | `4c43d18` | 第二輪報告 Batch C（文件與 release 準備）、Batch D（測試基礎建設），外加 6 項 code-review findings | Batch C／D |
+| — | `docs/20260928-release-1.1.0` | `8ae83f4` | 1.1.0 release 準備（版號、CHANGELOG、文件版本註記） | — |
+| 6 | `docs/20260927-research-review03` | `3ad0e9b` | 新增第三輪審查報告 `docs/20260927-research-review03.md`（2026-10-15 併入；發現的缺陷含 P1，截至 2.0.0 未修） | — |
+| 7 | `fix/20261017-pause-toggle-label` | `b7f7780` | 修正 013 開發期間改成的固定「暫停」：按下後換成「恢復」（Play 圖示；1.1.0 起即換字，當時為英文 `Resume`）、拿掉 `aria-pressed`、暫停橫幅 `role=status` | 013 UI 全面改版（「暫停」條） |
+| 8 | `upgrade/20261017-gemini-3.5-flash-lite` | `7d9f9d9` | 預設 LLM 模型改 `gemini-3.5-flash-lite`、3.x flash 送 `thinkingLevel: MEDIUM`、`AI_MAX_OUTPUT_TOKENS` 預設 4096 | Gemini 3.5 flash-lite 升級 |
+| 9 | `docs/20261018-demo-video` | `84feedd` | README demo 影片以 2.0.0 介面重錄、新增錄影劇本 `record-demo.cjs` | Demo 影片重錄 |
+| — | `docs/20261017-release-2.0.0` | （以 `git log --first-parent --merges` 為準） | 2.0.0 release 準備（版號、CHANGELOG、文件版本註記） | — |
 
-之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。
+之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」），但不列入本表。
 
 **第一輪審查修復**（`fix/20260927-research-review`，報告 `docs/20260927-research-review.md`）：
 
@@ -3211,7 +3229,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - 去重：取鎖後 double-check cache、`randomUUID` 鎖值＋Lua compare-and-del；`AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`（5 秒餘裕） 啟動驗證。
   - 逾時：`AbortSignal.timeout(AI_TIMEOUT_MS)` 統一逾時並交給 SDK，殭屍串流不再送 token。
   - SDK：遷移至 **`@google/genai`**；`responseJsonSchema` 由 `DiagnosisResultSchema` 產生走原生 structured output；
-    僅 `gemini-2.5-flash` 系列送 `thinkingBudget: 0`。
+    僅 `gemini-2.5-flash` 系列送 `thinkingBudget: 0`（**已變更**：3.x `flash`／`flash-lite` 另送 `thinkingLevel: MEDIUM`，見下方「Gemini 3.5 flash-lite 升級」）。
   - `AiProvider` 新形狀：`id`／`model`／`signal`／`finishReason`／`usage`，錯誤為 `AiProviderError{retryable}`。
   - 重試：非最終嘗試不送 `ai/error`，所有事件帶 `attempt`，不可重試錯誤轉 `UnrecoverableError`。
   - 空脈絡短路：窗口內無 telemetry、`latestState` 為 `unknown`、無 errorlog、無維修紀錄時，送不可重試的
@@ -3225,7 +3243,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 - **web**：jobId 前端產生、送出前先建 pending；in-flight 去重；fetch 15s 逾時；`attempt` 換輪清空串流文字；
   `ai/done` 二次 schema 防線；StreamingPanel 不再逐 token 朗讀；行動版 dialog／focus trap；溢位合併與
   `droppedMessages` 計入背壓比值；Pause 且連線中凍結 stale；退避在 `system/connected` 才歸零（已變更為 `machine/subscribed`，見下方 web 條）、`online` 事件重連；
-  `machines` 改 `shallowRef`；Tailwind token 依 design-spec v0.5（`canvas`、`fg-subtle` #7C8A98、`2xs`／`pill`／`md`／`lg`／`number`）。
+  `machines` 改 `shallowRef`；Tailwind token 依 design-spec v0.5（`canvas`、`fg-subtle` #7C8A98、`2xs`／`pill`／`md`／`lg`／`number`；**已變更**：013 起 design-spec 退役、token 改為雙主題 CSS 變數，見下方「013 UI 全面改版」）。
 - **worker 多實例 key**：`worker:heartbeat:<instanceId>`（TTL 30s）、`metrics:worker:<instanceId>`（TTL 3 × 間隔）；
   `instanceId = WORKER_INSTANCE_ID ?? os.hostname()`（容器內即 container id；限 `^[A-Za-z0-9._-]+$`、≤128，不合法拒絕啟動）。
   demo 容器內 `WORKER_INSTANCE_ID` 由 compose `environment` 釘為空字串，一律使用 hostname（container id），`apps/worker/.env` 裡的值只對 host 直跑生效。
@@ -3296,9 +3314,9 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - `POST /diagnoses`：檢查順序為名冊 `404` → `socketId` 在線／已授權（否則 `409`，中文 message）→ `jobId` 冪等；既有 `409` 條件不變。
   - relay 的 Redis／QueueEvents 錯誤日誌改為轉態節流（轉態時記、故障期間每 30 秒至多一則）；`system/metrics` 新增 optional `persist: { dropped, failed }`。
 - **web**：ping 後 5 秒未回 pong 即視為斷線、立即重連；Diagnose 只在連線就緒時可按（`system/connected` 且已 `machine/subscribed`、未斷線、未收到 `system/unauthorized`），卡片 icon 等所有入口共用同一閘門（未就緒時不送 POST）；退避改在 `machine/subscribed` 才歸零；`409` 顯示可讀訊息；
-  `system/unauthorized` 以 TopBar「未授權」chip 呈現；內嵌面 token 改名 `bg-surface-inset`（design-spec v0.6）。
+  `system/unauthorized` 以 TopBar「未授權」chip 呈現；內嵌面 token 改名 `bg-surface-inset`（design-spec v0.6；013 起 design-spec 已退役，現況 token 見 `apps/web/DESIGN.md`）。
 - **worker**：chaos 在 production 預設拒絕武裝，容器內演練需另設 `WORKER_CHAOS_ALLOW_IN_PRODUCTION=true`（§16.3 第 5 列）；
-  新增 `AI_MAX_OUTPUT_TOKENS`（2048，截斷視為不可重試的 `schema_invalid`）、`AI_TEMPERATURE`（0.2）；
+  新增 `AI_MAX_OUTPUT_TOKENS`（2048，截斷視為不可重試的 `schema_invalid`；**已變更**：預設改 4096，見下方「Gemini 3.5 flash-lite 升級」）、`AI_TEMPERATURE`（0.2）；
   鎖 TTL 條件改為 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`；致命 kind 補 `invalidConfig`／`bootstrap`。
 - **運維**：web 入口改 `${WEB_BIND:-127.0.0.1}:8080:8080`（對外示範設 `WEB_BIND=0.0.0.0`）；nginx 對 `/diagnoses`
   `limit_req` 10 r/m、burst 5、超限 `429`，`/ws` `limit_conn` 每來源 20 條（Docker Desktop 下來源皆為 gateway，兩者皆實為全體共用一桶）；redis／mongo
@@ -3310,7 +3328,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 - **Batch C（文件與 release 準備）**：
   - 契約：`asyncapi.yaml` 的 `info.version` 已升 **1.2.0**（明細見上方第二輪修復段與 `CHANGELOG.md`「asyncapi 契約版本」）；新增 repo 根 `CHANGELOG.md`（版本策略：產品版本與契約版本兩條獨立演進）。
-  - 產品版本：六份 `package.json`（root 新增 `version`、五套件由 `0.1.0` 對齊）為 **1.1.0**，已於 2026-09-28 與 tag `1.1.0`、CHANGELOG 條目一致發布（產品 tag 自此不帶 `v` 前綴）。
+  - 產品版本：六份 `package.json`（root 新增 `version`、五套件由 `0.1.0` 對齊）為 **1.1.0**，已於 2026-09-28 與 tag `1.1.0`、CHANGELOG 條目一致發布（產品 tag 自此不帶 `v` 前綴；**已變更**：2026-10-17 六份升為 2.0.0、tag `2.0.0`）。
   - 憲章升 **1.5.0**：Principle III「型別來源分層」改為全部 WS message 與 `POST /diagnoses` 一律 Zod＋`z.infer`；Governance 新增「跨 feature／跨分支決策 MUST 回補真實來源（涵蓋維護分支）」與「契約變更 MUST 升 `info.version` 並記 CHANGELOG」。`CLAUDE.md` 補「維護分支」小節。
   - 本節由「2026-09 修復摘要」改名為「1.0.0 之後的現況摘要」（原「v1.0.0 之後」，隨 tag 更名）並加上維護分支表；ADR-002 新增 §6.5「已知未做與延後項」表。
   - specs 001–008 補狀態與「已變更」橫幅；第一輪報告數字更正後凍結為歷史快照。
@@ -3336,6 +3354,112 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **未修、待決**：`AI_PROVIDER=fake` 在 production 只 warn、是否改為須 opt-in 旗標（需使用者決策）；`@vitest/coverage-v8` 釘死而 `vitest` 用 caret，下次升級相依時統一；兩項重構類建議。報告第二輪其餘未排程項已集中到 ADR-002 §6.5.1。
   - **收尾數字**（2026-09-28 實跑）：`pnpm test:coverage` 94 檔 982 測試通過，lines 81.52％、branches 76.56％；整合測試 27（worker 20＋api 7）；e2e 5 場景；契約 lint／typecheck／lint／`pnpm -r build` 全綠。
 - **e2e 實測發現（留給 012-lite）**：worker 被 `SIGKILL` 後，BullMQ 需等 job lock（30 s）過期、再經 stalled 檢查（每 30 s，先標記、下一輪才搬回 wait），重派的 `waiting`／第二次 `active` 約在 kill 後 **92 秒**才出現、`completed` 約 101 秒；這段期間前端**收不到任何事件**，已超過前端 45 秒無進展 watchdog。stalled 重派**不遞增** `attemptsMade`，重跑的 `ai/*` `attempt` 維持 1、`seq` 從 0 重播。這是審查報告 AR-1／AR-3（relay 未監聽 `stalled`、等待者無 keepalive）的實測佐證，處理排入 roadmap 012-lite（ADR-002 §6.5）。
+
+**Gemini 3.5 flash-lite 升級**（`upgrade/20261017-gemini-3.5-flash-lite`，merge `7d9f9d9`，2026-10-17；使用者裁決：2.5 系列已舊，改用另一專案每天穩定使用的 `gemini-3.5-flash-lite`）：
+
+- **預設模型**：worker `GEMINI_MODEL` 預設由 `gemini-2.5-flash` 改為 `gemini-3.5-flash-lite`（`env-schema.ts`、`smoke-gemini.ts`、`apps/worker/.env.example`）。
+  模型名進快取簽章，換模型後舊快取自然失效；契約不變。
+- **thinking 設定**：`lib/model-capabilities.ts` 新增 `leveled` 類——3.x 以後的 `flash`／`flash-lite`（含 preview 變體）不接受 `thinkingBudget: 0`
+  （實測 400），改送 `thinkingConfig.thinkingLevel: MEDIUM`（`THINKING_LEVEL` 常數）；3.x 的 pro 等其他變體維持 `always-on`、不送設定；2.5 flash 系列仍送 `thinkingBudget: 0`。
+  等級由使用者在實測後裁決（`gemini-3.5-flash-lite` 短 prompt：HIGH 首 token 約 2.5 s／thoughts 約 600；MEDIUM 約 2 s／450；LOW、MINIMAL 不到 1 s 但不思考）。
+- **輸出上限**：thinking token 計入 `maxOutputTokens`。真實診斷 prompt 實測 MEDIUM 的 thinking token 為 0～約 1150（模型動態決定，多數為 0）、
+  結果約 200～470 token，單次實測合計最多約 1460（兩個上界相加約 1620）；`AI_MAX_OUTPUT_TOKENS` 預設因此由 2048 改為 4096（2.5 倍以上餘裕）；`leveled` 模型低於 4096 時 worker 啟動會 warn，
+  `always-on` 模型的 8192 門檻不變。usage log 另記 `thoughtsTokens`，截斷時可判斷是 thinking 還是回覆吃掉上限。
+- **temperature 維持 0.2**：Google 的 Gemini 3 開發指南建議所有 Gemini 3 模型維持 1.0（低於 1.0 可能 looping 或品質下降）。合併門第 1 輪提出後，
+  以真實診斷 prompt 交替實測 0.2 與 1.0（各 10 次，其中 3 次撞 429 不計）：兩者皆 0 次截斷、全部通過 schema；0.2 嚴重度 8／9 一致、回中文 9／9，
+  1.0 為 6／8 與 6／8。使用者裁決維持 0.2；若日後 log 出現 `max_tokens` 截斷，先試 1.0。
+- **smoke 與預設值單一來源**：`smoke:gemini` 改送與 worker 相同的 `thinkingConfigFor(model)`（模型拒收 thinking 設定時 smoke 就會失敗）；預設模型名改由
+  `env-schema.ts` 的 `DEFAULT_GEMINI_MODEL` 單一來源。模型判定只依名稱：`gemini-flash-lite-latest` 這類不帶版本號的 `*-latest` 別名判不出系列（不送 thinking 設定、不檢查上限），啟動時 warn 建議寫完整模型名。
+- **回應性（003 SC-001「首 token ≤ 5 s」）**：真實 prompt 實測首 token 0.6～4.2 s、全程 1.4～4.6 s（不思考時約 1 s 內出首 token，思考約 1000 token 時約 3～4 s）。
+  仍在 5 s 內但**餘裕有限**：context 變長或思考變多時可能超標；這是保留 MEDIUM 推理的已知取捨，超標時先評估改 LOW／MINIMAL。
+- **實機**（一鍵 demo 容器，2026-10-17）：首次診斷全程約 4.5 s、快取命中約 200 ms，回覆為繁體中文（2.5 flash 時約四分之三回英文；prompt 未指定語言，屬模型行為、非保證）。
+
+**Demo 影片重錄**（`docs/20261018-demo-video`，merge `84feedd`，2026-10-17；為 2.0.0 release 準備）：
+
+- **影片**：`docs/demo/flow-gatekeeper-demo.mp4`（23 秒、1440×900、30fps H.264）與海報依 README 劇本表重錄，對象為一鍵 demo 容器（`:8080`，正式 build），AI 為 `gemini-3.5-flash-lite`；
+  README 下載連結改指 `releases/download/2.0.0/`，劇本表時間點改為實錄值。1.0.0 舊介面影片作廢、只留在 1.0.0 release。
+- **錄影劇本** `apps/web/scripts/record-demo.cjs`：CDP `Page.startScreencast` 逐格取 JPEG，以 node 端收到時刻為時間戳（CDP metadata 時間戳與排程時鐘實測差 2～3 秒），
+  ffmpeg concat 轉 30fps H.264（limited range，避免 QuickTime 發灰）；Playwright 自帶 ffmpeg 只有 VP8，需另備含 libx264 的 ffmpeg。headless 與有頭模式的 recordVideo 都錄不到系統游標，
+  劇本以 `addInitScript` 注入假游標（頁面 CSP `style-src self` 擋 `<style>`，樣式走 CSSOM、動畫走 Web Animations）。開錄前量 `press-02` 尖峰週期（容器內實測約 13.0～13.3 秒，非名目 12 秒）對齊時間軸。
+  輸出 BT.709／limited range 並標記色彩；先在暫存目錄編碼完成才覆寫 `docs/demo/`（不用 .tmp＋rename：Windows 上目標被播放器開著時 rename 會失敗），覆寫失敗時保留暫存成品並印出路徑；逐格寫檔失敗或對齊失準皆在呼叫 LLM 前中止；Chromium 尋找與面板狀態對照抽成 `apps/web/scripts/lib/browser.cjs`，與截圖劇本共用。
+  使用者裁決：輸出 mp4（ffmpeg 用下載解壓即用的可攜版，不安裝到系統）、注入假游標、對 demo 容器錄。
+
+**013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
+
+前端整套視覺改為「實驗室玻璃與蝕刻刻度」，視覺真實來源由 design-spec＋refs 切換為 impeccable 工件 `apps/web/PRODUCT.md`＋`apps/web/DESIGN.md`。全部是前端改動：`packages/contracts`、`asyncapi.yaml` 與後端行為不變（FR-039），只消費既有 12 則 WS 訊息與 `POST /diagnoses`；高頻遙測仍是「先進 buffer、每幀至多一次批次提交」（硬規則 1）。
+
+- **視覺真實來源切換**：
+  - `apps/web/design/design-spec.md` 檔頭標註「已退役（2026-10，feature 013）」並保留全文；`apps/web/design/refs/`（含 `_sources/`）已自 repo 移除。
+  - 現況視覺依 `apps/web/PRODUCT.md`（產品定位、介面約束、無障礙門檻）與 `apps/web/DESIGN.md`（雙主題 token 與元件）；
+    方向契約 `apps/web/.impeccable/surfaces/src-app-vue.md` 只供設計流程使用，不得出現在瀏覽器交付物（`apps/web/dist/`）。
+  - 憲章第 II 條「視覺」條目與「開發工作流程與品質門檻」段的 design-spec 引用已於本次修訂改指向上述工件；CLAUDE.md 真實來源段同步。本指南 §9 整章改標為歷史。
+- **雙主題**：
+  - 淺色／深色共用同一組語意 token 名稱、只有值不同。色值只存在 `apps/web/src/styles/theme.css`
+    （`:root[data-theme="light"|"dark"]` 兩組 CSS 變數），Tailwind 以 `rgb(var(--c-…) / <alpha-value>)` 引用，元件只用語意 class。
+  - 偏好存 localStorage `fg.theme`；首次載入預設 light，不跟隨 `prefers-color-scheme`；掛載前先套用，切換在同一幀完成；讀寫失敗回預設、不報錯。
+- **三 stage 拓樸**（`StageTopology.vue`）：
+  - 主區改為「前處理 → 成型烘烤 → 包裝分揀」三欄，歸屬沿用 `machine-groups.ts`（不在任何分組者歸最後一欄）。
+    欄間連線的粗細與流速隨下游 stage 的產能變化；偏好減少動態效果時只變粗細、不流動。
+  - 版面以**容器寬度**判斷：內容寬 < 708px（3 × 220 + 2 × 24）改為單欄堆疊，連線改成朝下短箭頭、不流動。
+    1366×768 面板展開時恰為 708px，仍三欄並排；1024×768 原接受堆疊，T073 裁決（2026-10-17）把推擠式面板門檻提到 1366px 後，1024–1365 改走 bottom-sheet、拓樸維持三欄（卡片 220px 下限不縮，否則嚴重時的五位數溫度會被截斷）。
+  - 搜尋過濾後空欄保留並顯示空狀態，欄寬與順序不變。側欄只留品牌列、機群健康、異常摘要列與主題切換，不再重複機台清單。
+- **背壓 strip**（`BackpressureStrip.vue`，取代 TopBar 的 BackpressureBadge）：
+  - 常駐於主區頂端，讀數為「每秒訊息 → 每秒批次 → 合併比」（標籤「合併比 · 訊息 ÷ 批次」，下方常駐一行白話說明）。三個讀數同取**最近 60 秒視窗**
+    （每秒訊息、每秒批次為視窗內平均，合併比＝視窗內訊息總數 ÷ 批次總數，三者相除對得上；`shared/lib/rate-series.ts`）；`backpressureRatio` 算的自載入累計比值**只在 tooltip**。
+    暫停期間與恢復後 2 筆樣本標 `invalid`，排除於合併比、平均、最高水位與走勢線（丟棄數照計）；斷線／重新連線／暫停時以狀態 pill「已斷線／重新連線中／已暫停」標示。
+  - 下緣是 0–60 線性比值刻度（1 格 = 1:1、每 10 格標數字）與液位線，比值 > 60 時釘在右端並標「>60」。
+    近 60 秒走勢線畫單秒合併比一條（T073 第三輪由訊息／批次兩條改），不共用比值刻度（y 軸自 0、離群值釘頂、無效秒斷線）；刻度上 0 到液位為實心液柱、另有最高水位短線與 1:1 錨點。60 秒內丟棄數 > 0 時以警示色顯示「丟棄 N 則」，歸零即消失、不佔版面。
+  - 手機保留比值、每秒訊息與丟棄數；任何斷點都不整體隱藏。資料由 store 每秒取樣，不逐筆寫 state。
+- **診斷串流骨架與結果順序**：
+  - 串流中以容錯的漸進解析（`domains/ai-copilot/lib/partial-json.ts`）把已解析的摘要、可能原因、建議動作填入與完成態相同的骨架，
+    未解析欄位顯示佔位、解析失敗不對操作者報錯；原始串流可展開查看。
+  - 完成態順序固定為「摘要與嚴重度 → 建議動作 → 可能原因 → 證據」。證據預設展開前 2 筆，`source` 相同且 `excerpt` 正規化後相同者合併為一列並標 `×N`。
+  - 完成時以一行 meta 顯示完成時間與耗時，加嚴重度色條，不再用滿版進度條。失敗態顯示分類說明、重試與中斷前的原始串流，不顯示骨架。
+- **快取耗時對比**：耗時由前端從送出請求量到收到完成事件。快取命中時結果整塊直接呈現（不走逐字動畫），meta 為「快取 · N ms」，並列該台上一次非快取耗時，下方以同一刻度的兩條耗時橫條對照（只有一筆時不畫）；完成態在 meta 列下方提供「再次診斷」次要鈕。
+  全站時間格式由 `apps/web/src/shared/lib/format.ts` 單一提供：絕對時間 `HH:mm:ss`（本地時區 24 小時制）；相對時間 ≤ 2 秒顯示「剛剛」，其餘「N 秒前／N 分鐘前」；
+  耗時 < 1000 ms 顯示整數 ms，否則顯示一位小數的秒。
+- **異常標記**（`domains/monitoring/lib/anomaly-latch.ts`）：
+  - 機台由警告／嚴重回到正常後，卡片保留「最近異常」標記 **30 秒**（自回復起算，以 `staleNow` 判定，Pause 期間凍結顯示）。
+    相對時間的錨點：進行中為「嚴重 · 進入 N 秒前」，回復後改以過去式「曾嚴重 · N 秒前回復」（T073 第四輪，讓卡片上現在式的狀態徽章、過去式的異常標記、「AI：」前綴的診斷 chip 三種時態分得開）。
+  - 操作者確認（側欄異常列的 Check 鈕、聚焦卡片按 `x` 或手機覆蓋層；卡片 pill 本身不可互動——T073 第三輪把原「卡片標記可點清除」改掉，避免點選台時誤觸不可逆確認）後改為**劃線**的「已確認」，期滿消失。卡片標記與側欄異常摘要列讀寫同一份狀態。
+  - 卡片另有診斷狀態 chip（4px 方角 tag：「診斷中 N%」／「AI：嚴重度」／「AI：嚴重度 · 快取」／「AI 失敗」，T073 第四輪加「AI：」前綴以標示是 AI 判定、不與狀態徽章混淆），由每機台診斷狀態衍生。
+- **事件流合併**：每一列可點擊選取機台。新事件與清單中同機台、同嚴重度的最近一筆落在自該筆首筆（`firstTs`）起算的 60 秒固定窗內（閉區間）時合併——更新次數與結束時間、保留起始時間並移到頂端，不新增列；滿窗另起新列。
+  列上顯示起訖與次數「`HH:mm:ss–HH:mm:ss · ×N`」（T073 裁決 2026-10-17 由原「相距 ≤ 10 秒滑動窗、只留最後時間」改，避免反覆跳動被壓成沒有起點的計數）。
+  新增中性色的「回復正常」事件，同樣計入上限 50 筆，且不阻斷前後同類異常事件的合併。
+- **Copilot 面板偏好**（UI 標籤「AI 診斷」）：
+  - 所有 viewport 預設收合；沒有手動收合偏好時，選取機台即自動展開。
+  - 只有按面板上的收合鈕才記錄手動收合偏好（localStorage `fg.copilot-panel`，跨重新載入保留）；之後選台不展開，觸發診斷或點展開把手才展開並清除偏好。
+    Escape 收合只影響當次、不寫偏好；取消選取時面板收合（不改偏好）。
+  - < 1366px 的 bottom-sheet 有抓取把手；閒置態（未診斷）只佔單列約 51px、非 modal（`aria-modal="false"`、無遮罩、焦點留在卡片），主區與 rail 以 `--fg-bottom-reserve` 依 sheet 高度留白（sheet 接手焦點後凍結），進行中／完成／失敗才轉 modal；
+    收合後只要仍有選取機台，就退為 32px peek 條（顯示機台名與診斷狀態 chip）。標頭 chip 未診斷為「未診斷」、完成為中性的「已完成」。
+- **暫停**：工具列「暫停」鈕按下後換成「恢復」（Play 圖示、墨色底，使用者 2026-10-17 裁決推翻 T073 第三輪的固定文字）；暫停時主區上方顯示「已暫停畫面更新 · 暫停於 HH:mm:ss」橫幅並附「恢復」鈕。
+- **鍵盤快捷鍵**（`apps/web/src/shared/composables/useKeyboardShortcuts.ts`；按 `?` 開關說明層 `ShortcutHelp.vue`）：
+  - `/` 聚焦搜尋；搜尋結果只剩一台時按 Enter 選取並把焦點移到該台卡片；方向鍵依視覺位置在卡片間移焦；Enter 選取聚焦的卡片。
+  - `d` 對**選取**的機台觸發診斷（前置條件與去重同診斷按鈕，不作用於僅聚焦的卡片）；`x` 確認聚焦卡片的異常標記（改為劃線）。工具列另有說明鈕，與 `?` 共用同一個開關。
+  - Escape 每次只關最上層一項：說明層 → 搜尋覆蓋 → 手機異常覆蓋層 → Copilot 面板（< 1366px 即 bottom-sheet）→ 取消選取。
+  - 每張卡片只佔一個 Tab 停駐點；側欄寬度與事件流高度的拖曳把手可用方向鍵以 16px 步距調整（側欄 200–420px、事件流 100–360px）。
+- **響應式策略**：
+  - 工具列依自身寬度分三段：≥ 820px 全部顯示；640–819px 控制項只留圖示；< 640px 搜尋收成圖示鈕，點擊或按 `/` 展開為覆蓋式輸入（Escape 或失焦收回）。
+    控制項分為導航、播放控制、系統狀態、主要動作四組，每組可見選項不超過 4 個。
+  - 手機（< 768px）側欄隱藏：主畫面頂端改為常駐的「機群健康摘要條」（比例條＋四個計數），點擊展開異常摘要列覆蓋層；主題切換移入工具列的系統狀態分組。
+  - Copilot 面板在 ≥ 1366px 為主區右側的推擠式面板（348px；T077 由 360 改，避免 1366 寬含捲軸時拓樸翻單欄）；< 1366px（含 1024 橫式與 768 直式）為 bottom-sheet，因為 1024 寬推擠會把拓樸擠成單欄、768 寬會把卡片欄擠到約 110px（門檻原為 1024，T073 第一輪 critique 後先提到 1280，交叉審查算出 1280–1365 推擠後拓樸仍 < 708px 而單欄，使用者裁決提到 1366）。
+  - 驗收 viewport 為 1366×768、1440×900、1024×768、768×1024、390×844，兩主題下無文字溢出、無控制項重疊、無橫向捲動，hover／選取／脈動不造成 layout shift。
+- **文案語言**：UI 文案全部改為繁體中文，術語以 `specs/013-ui-redesign/research.md` R13 為準
+  （例：機群健康、事件流、已連線／重新連線中／已斷線、正常／警告／嚴重／停滯、AI 診斷、快取、重試；stage 標題只用中文）。
+  維持原文的例外只有 machine id、job id、技術單位（°C、mm/s、u/min、%、ms、s、px）、`Mock`／`AI`／`WS` 等技術縮寫、佇列名稱 `diagnosis`、產品名「flow-gatekeeper」（rail 品牌列與分頁標題）與 AI 回覆內容（spec FR-038）。
+- **最小字級與對比**：功能性文字（徽章、單位、計數、時間戳、表格儲存格）不小於 **12px**；兩主題下對比 ≥ 4.5:1，深色半透明面板以合成後的底色量測。
+- **截圖劇本與瀏覽器相依（推翻既有取捨）**：
+  - 新增 web devDependency `playwright-core`（不下載瀏覽器，只用本機已安裝的 Chromium；路徑由 `PLAYWRIGHT_CHROMIUM` 或 ms-playwright 目錄解析）
+    與截圖劇本 `apps/web/scripts/screenshots.cjs`。
+  - `--viewports` 模式輸出五個驗收 viewport × 兩主題共 10 張截圖，並量測 overflow、搜尋過濾前後、critical 脈動、hover、選取時卡片與 stage 欄的 rect
+    （容差 0.5px，有差值即以非 0 結束），作為 layout shift 驗收。
+  - `--readme` 模式一次產出 README「功能逐項展示」的 14 張（12 張淺色功能截圖＋深色全景＋拓樸裁切，輸出 `docs/screenshots/`）。
+    斷線與失敗兩個情境都在劇本自己的分頁內重現：以 `page.routeWebSocket` 代理 `/ws` 切斷並拒絕重連、以 `page.route` 把 `POST /diagnoses` 攔成 503，
+    不關 api、不停 worker（research R11 實作裁決）；拍不到的截圖不寫檔，結束時列出缺漏並以非 0 結束。
+  - 這**推翻**了 `MachineNodeCard.css.test.ts` 註解記載的「以 CSS cascade 測試取代 Playwright 截圖、不新增瀏覽器相依」取捨。
+    cascade 測試仍保留為單元層回歸（跑在 `pnpm test`、不需瀏覽器）；截圖劇本需先起 api 與 web dev server，手動執行，不進 CI。
+
+- **T073 critique 結果與後續待辦（2026-10-17）**：改版前基準 20/40，四輪修正後最後一次評分 29/40（趨勢 20→28→29→29→29，快照在 `apps/web/.impeccable/critique/`）。門檻 30 未達，使用者裁決結案不再追分：四位獨立審查者的 P1 互不重疊且各輪都已修掉，分數停滯的結構性原因是「說明與文件」四輪皆 2 分（概念說明只靠 tooltip）。留給後續 feature 的待辦：768 高視窗的卡片密度（第二排卡片與異常標記被裁切）、AI 結果與機台現況脫鉤的交代（依據時刻、之後已回復）、側欄確認鈕改文字鈕並在確認後顯示「已確認」tag、桌機面板展開時工具列「診斷」主鈕降級、分頁 title／favicon 嚴重告警、卡片三線刻度改迷你量筒（閾值分段＋液位）、768 堆疊改 2 欄、進行中步驟清單加小標、零值計數改中性色、`humanizeError` 的英文原文後援改繁中。
 
 ---
 
@@ -3399,7 +3523,7 @@ docker compose ps -a                          # 判讀就緒：seed Exited(0) + 
 1. 開入口位址——**開發模式** `http://localhost:5173`／**一鍵 demo** `http://localhost:8080`。
 2. 看到 machine cards 持續更新。
 3. 顯示 connection status 為 connected。
-4. 把 mock frequency 調快，指著 TopBar 的 BackpressureBadge 說明：收進上萬筆遙測資料點、只觸發數百次渲染批次（例如 41:1），這就是 rAF batching 的背壓效果，把抽象說法變成畫面上看得見的數字。（比值以資料點計、含丟棄筆數，實際數字隨節拍、機台數與幀率而異；不要宣稱固定比值。）
+4. 把 mock frequency 調快，指著主區頂端的背壓 strip（013 起取代 TopBar 的 BackpressureBadge；三讀數同取近 60 秒視窗）說明：收進大量遙測資料點、只觸發少量渲染批次（例如合併比 41:1），這就是 rAF batching 的背壓效果，把抽象說法變成畫面上看得見的數字。（比值以資料點計、含丟棄筆數，實際數字隨節拍、機台數與幀率而異；不要宣稱固定比值。）
 5. 等待或手動切出 critical machine。
 6. 點 Diagnose。
 7. drawer 顯示 job active。
@@ -3442,7 +3566,7 @@ docker compose ps -a                          # 判讀就緒：seed Exited(0) + 
 | 前端仍卡頓 | 確認 `onmessage` 沒有直接寫 store，並量測 renderedBatches。 |
 | AI 回傳非 JSON | final result 要 schema validation；必要時做 repair prompt 或 fallback error。 |
 | 429 | 降低 `AI_RPM`，確認 worker 取鎖後的 `ai-rpm:<分鐘>` 固定窗限流與 retry/backoff 生效（已不使用 BullMQ limiter）。 |
-| 設計對不齊 | 更新 `refs/*.png` 與 `design-spec.md`，不要只憑口頭描述。 |
+| 設計對不齊 | 以 `apps/web/PRODUCT.md`、`apps/web/DESIGN.md` 為準：改視覺先改 DESIGN.md 與 `apps/web/src/styles/theme.css` 的 token，再用 `apps/web/scripts/screenshots.cjs` 重拍比對，不要只憑口頭描述（013 前的 `refs/*.png`／design-spec 已退役）。 |
 | 改了 `packages/contracts` 但 api 行為沒變 | api `start:dev` watch 的是 packages `dist`，重跑 `pnpm --filter api start:dev`（worker／web 會即時生效）。 |
 | `docker compose --profile demo up --build` 報 `--mount` 不支援 | Dockerfile 用 `RUN --mount=type=cache`，需 BuildKit（Docker 23+ 預設）；舊版先設 `DOCKER_BUILDKIT=1`（PowerShell：`$env:DOCKER_BUILDKIT=1`）。 |
 | 想升級 base image | tag 與 digest 一起改：`docker buildx imagetools inspect <image>:<tag>` 取新 digest，更新 Dockerfile／compose 的 `image:@sha256:…`；只改 tag 不改 digest 等於沒升。 |

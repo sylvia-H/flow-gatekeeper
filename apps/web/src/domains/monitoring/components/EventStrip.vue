@@ -1,53 +1,114 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import type { DerivedEvent } from "../lib/events.js";
+import { formatClock } from "../../../shared/lib/format.js";
 import { STATE_STYLE } from "../../../shared/lib/state-style.js";
 
 /**
- * US3 Event Stream（design-spec §7.8 `EventStrip`）：列出最近門檻跨越/錯誤事件。
- * 純呈現，資料由 `store.events`（前端衍生、最近 50 筆）餵入（FR-009）。
- * row 32–40px、timestamp 用 mono（design-spec §7.8）；高度由外層拖曳把手調整（預設 150px）。
+ * 事件流面板：列出最近的狀態轉移事件（進入警告／嚴重、回復正常）。本身是一片玻璃面板。
+ * 純呈現，資料由 `store.events`（前端衍生、最近 50 筆）餵入（FR-009）；高度由外層拖曳把手調整（預設 150px）。
+ * 每列左側一道 16×2px 的蝕刻短線依嚴重度上色（獨立小元素，不是整列的左邊框）；
+ * 嚴重度另有中文文字，不只靠顏色（FR-004）。時間為 24 小時制 mono（FR-022）。
+ * 合併列（`count > 1` 且起訖不在同一秒）顯示起訖「16:51:04–16:52:07」，單筆只顯示一個時間；
+ * 視窗 < 640px（`sm`）時起點與分隔符只留給螢幕閱讀器（`max-sm:sr-only`），時間欄的 `title` 恆為全文。
+ * 時間欄 `whitespace-nowrap`，起訖不換行，列高維持 32px（event-strip-size.ts）。
+ * 每列是一顆滿寬按鈕，點擊選取對應機台（FR-029）；可讀名稱即列上的可見文字，不另加 aria-label。
+ * 面板容器 `overflow-hidden`，焦點環用 `ring-inset` 畫在列內，避免被裁切。分隔線畫在按鈕上（border-box），列高維持 32px。
+ * 選取中的列另加 1px 內框 `ring-1 ring-inset ring-accent` 並把訊息文字加深為 `text-ink`：深色主題下 accent-wash
+ * 與玻璃亮度相近，靠內框與文字辨識；內框是 box-shadow 不改尺寸，鍵盤聚焦時由 `focus-visible:ring-2 ring-focus` 覆蓋。
+ * `aria-current` 只標選取機台**最新的一列**（清單最新在頂端，即該台第一列）——同一台每列都標會讓讀屏念出多個「目前項目」；
+ * 該台其餘列仍有同樣的視覺標示，另附視覺隱藏文字「（選取中）」，讀屏與畫面一致（合併門第 2 輪 low）。
  */
-defineProps<{ events: DerivedEvent[]; height: number }>();
+const props = withDefaults(defineProps<{ events: DerivedEvent[]; height: number; selectedId?: string | null }>(), {
+  selectedId: null,
+});
 
-// 顏色 token 取自共用 STATE_STYLE；僅縮寫 label 為呈現層自理。
-const SEVERITY: Record<DerivedEvent["severity"], { label: string; cls: string; dot: string }> = {
-  warning: { label: "WARN", cls: STATE_STYLE.warning.badgeText, dot: STATE_STYLE.warning.dot },
-  critical: { label: "CRIT", cls: STATE_STYLE.critical.badgeText, dot: STATE_STYLE.critical.dot },
-};
+const emit = defineEmits<{ select: [machineId: string] }>();
 
-function clockLabel(ts: number): string {
-  return new Date(ts).toLocaleTimeString();
+/** 起訖文字：合併列且起訖不在同一秒才有 `start`；`full` 給時間欄的 `title`。 */
+function clockRange(event: DerivedEvent): { start: string | null; end: string; full: string } {
+  const end = formatClock(event.ts);
+  const start = event.count > 1 ? formatClock(event.firstTs) : null;
+  if (start === null || start === end) return { start: null, end, full: end };
+  return { start, end, full: `${start}–${end}` };
 }
+
+/**
+ * 每列的起訖字串預先算好（合併門第 1 輪 low：template 原本每列呼叫 `clockRange` 四次、各建兩個 Date）。
+ * `events` 只在事件衍生時（批次點）換新，這裡每列只算一次。
+ */
+const rows = computed(() => props.events.map((event) => ({ event, time: clockRange(event) })));
+
+/** 選取機台最新一列的事件 id（標 `aria-current`）；未選或該台無事件為 null。 */
+const currentEventId = computed(() =>
+  props.selectedId === null ? null : (props.events.find((e) => e.machineId === props.selectedId)?.id ?? null),
+);
+
+// 顏色 token 取自共用 STATE_STYLE；回復事件用中性的蝕刻色，不借用任一狀態色。
+const SEVERITY: Record<DerivedEvent["severity"], { label: string; text: string; tick: string }> = {
+  warning: { label: STATE_STYLE.warning.label, text: STATE_STYLE.warning.badgeText, tick: STATE_STYLE.warning.dot },
+  critical: { label: STATE_STYLE.critical.label, text: STATE_STYLE.critical.badgeText, tick: STATE_STYLE.critical.dot },
+  recovered: { label: "回復", text: "text-ink-2", tick: "bg-etch" },
+};
 </script>
 
 <template>
-  <section class="flex flex-col bg-surface" :style="{ height: `${height}px` }" aria-label="Event stream">
-    <div class="flex shrink-0 items-center justify-between border-b border-subtle px-4 py-1.5">
-      <span class="text-xs font-medium uppercase tracking-wide text-fg-subtle">Event Stream</span>
-      <span class="font-mono text-2xs text-fg-subtle">{{ events.length }}/50</span>
+  <section
+    class="flex flex-col overflow-hidden rounded-card border border-edge bg-surface/72 shadow-glass"
+    :style="{ height: `${height}px` }"
+    aria-label="事件流"
+  >
+    <!-- 標題列固定 34px（含 1px 底線）：外框 2＋34＋每列 32 × n，100／164px 正好整列（event-strip-size.ts） -->
+    <div class="flex h-[34px] shrink-0 items-baseline justify-between gap-2 border-b border-edge px-3.5 py-1.5">
+      <span class="text-sm font-semibold text-ink-2">事件流</span>
+      <span class="font-mono text-xs text-ink-3">{{ events.length }}/50</span>
     </div>
 
     <!-- 空狀態 -->
     <div
       v-if="events.length === 0"
-      class="flex flex-1 items-center justify-center text-xs text-fg-subtle"
+      class="flex flex-1 items-center justify-center px-3.5 text-center text-xs text-ink-3"
     >
-      無事件——機台狀態轉入 warning/critical 時於此顯示。
+      尚無事件，機台進入警告或嚴重時會列在這裡
     </div>
 
-    <!-- 事件列（最新在頂端；overflow 自捲） -->
+    <!-- 事件列項（最新在頂端；overflow 自捲） -->
     <ul v-else class="min-h-0 flex-1 overflow-auto">
-      <li
-        v-for="event in events"
-        :key="event.id"
-        class="flex min-h-[34px] items-center gap-3 border-b border-subtle/60 px-4 py-1 text-xs"
-      >
-        <span class="shrink-0 font-mono text-fg-subtle">{{ clockLabel(event.ts) }}</span>
-        <span class="flex shrink-0 items-center gap-1.5" :class="SEVERITY[event.severity].cls">
-          <span class="h-1.5 w-1.5 rounded-pill" :class="SEVERITY[event.severity].dot" aria-hidden="true" />
-          {{ SEVERITY[event.severity].label }}
-        </span>
-        <span class="truncate text-fg-muted">{{ event.message }}</span>
+      <li v-for="{ event, time } in rows" :key="event.id" class="group">
+        <button
+          type="button"
+          data-fg="event"
+          :data-machine="event.machineId"
+          :data-severity="event.severity"
+          :data-count="event.count"
+          :aria-current="event.id === currentEventId ? 'true' : undefined"
+          class="flex min-h-8 w-full items-center gap-3 border-b border-edge/60 px-3.5 py-1 text-left group-last:border-b-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus"
+          :class="event.machineId === selectedId ? 'bg-accent-wash ring-1 ring-inset ring-accent' : 'hover:bg-surface'"
+          @click="emit('select', event.machineId)"
+        >
+          <span class="h-0.5 w-4 shrink-0" :class="SEVERITY[event.severity].tick" aria-hidden="true" />
+          <span
+            data-fg="event-time"
+            class="shrink-0 whitespace-nowrap font-mono text-xs tabular-nums text-ink-3"
+            :title="time.full"
+          >
+            <span v-if="time.start" class="max-sm:sr-only">{{ time.start }}–</span>{{ time.end }}
+          </span>
+          <span class="w-8 shrink-0 text-xs font-semibold" :class="SEVERITY[event.severity].text">
+            {{ SEVERITY[event.severity].label }}
+          </span>
+          <span
+            class="min-w-0 flex-1 truncate text-sm"
+            :class="event.machineId === selectedId ? 'text-ink' : 'text-ink-2'"
+          >
+            {{ event.message }}
+            <span v-if="event.machineId === selectedId && event.id !== currentEventId" class="sr-only">（選取中）</span>
+          </span>
+          <span v-if="event.count > 1" class="shrink-0 font-mono text-xs text-ink-3">
+            <span aria-hidden="true">×{{ event.count }}</span>
+            <span class="sr-only">共 {{ event.count }} 次</span>
+          </span>
+        </button>
       </li>
     </ul>
   </section>

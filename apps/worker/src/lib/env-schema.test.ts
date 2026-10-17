@@ -11,8 +11,8 @@ describe("parseWorkerEnv", () => {
     expect(r.env.AI_DEDUPE_LOCK_SECONDS).toBe(45);
     expect(r.env.REDIS_PORT).toBe(6379);
     expect(r.env.WORKER_CONCURRENCY).toBe(2);
-    expect(r.env.GEMINI_MODEL).toBe("gemini-2.5-flash");
-    expect(r.env.AI_MAX_OUTPUT_TOKENS).toBe(2048);
+    expect(r.env.GEMINI_MODEL).toBe("gemini-3.5-flash-lite");
+    expect(r.env.AI_MAX_OUTPUT_TOKENS).toBe(4096);
     expect(r.env.AI_TEMPERATURE).toBe(0.2);
     expect(r.warnings.some((w) => w.includes("GEMINI_API_KEY"))).toBe(true);
   });
@@ -108,6 +108,26 @@ describe("parseWorkerEnv", () => {
     expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.5-pro", AI_MAX_OUTPUT_TOKENS: "8192" })).toBe(false);
     expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.5-flash" })).toBe(false);
     expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-2.0-flash" })).toBe(false);
+    // 3.x flash 以 thinkingLevel 思考：門檻 4096（預設值即通過）
+    expect(hasThinkingWarning({})).toBe(false);
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-3.5-flash-lite", AI_MAX_OUTPUT_TOKENS: "2048" })).toBe(true);
+    expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-3.5-flash-lite", AI_MAX_OUTPUT_TOKENS: "4096" })).toBe(false);
+  });
+
+  it("別名（*-latest）判不出 thinking 系列 → warning；完整模型名或 fake provider 不 warn", () => {
+    const hasAliasWarning = (raw: Record<string, string>): boolean => {
+      const r = parseWorkerEnv({ GEMINI_API_KEY: "k", ...raw });
+      if (!r.ok) throw new Error(r.error);
+      return r.warnings.some((w) => w.includes("別名"));
+    };
+    expect(hasAliasWarning({ GEMINI_MODEL: "gemini-flash-lite-latest" })).toBe(true);
+    expect(hasAliasWarning({ GEMINI_MODEL: "models/gemini-flash-latest" })).toBe(true);
+    expect(hasAliasWarning({ GEMINI_MODEL: "gemini-pro-latest" })).toBe(true);
+    expect(hasAliasWarning({ GEMINI_MODEL: "gemini-1.5-flash-latest" })).toBe(false);
+    expect(hasAliasWarning({ GEMINI_MODEL: "gemini-exp-latest-preview" })).toBe(false);
+    expect(hasAliasWarning({ GEMINI_MODEL: "gemini-3.5-flash-lite" })).toBe(false);
+    expect(hasAliasWarning({ GEMINI_MODEL: "my-custom-model" })).toBe(false);
+    expect(hasAliasWarning({ AI_PROVIDER: "fake", GEMINI_MODEL: "gemini-flash-latest" })).toBe(false);
   });
 });
 
@@ -178,6 +198,10 @@ describe("AI_PROVIDER 與 fake provider 參數（review02 Batch D e2e）", () =>
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.warnings.some((w) => w.includes("thinking"))).toBe(false);
+    const leveled = parseWorkerEnv({ AI_PROVIDER: "fake", GEMINI_MODEL: "gemini-3.5-flash-lite", AI_MAX_OUTPUT_TOKENS: "2048" });
+    expect(leveled.ok).toBe(true);
+    if (!leveled.ok) return;
+    expect(leveled.warnings.some((w) => w.includes("thinking"))).toBe(false);
   });
 
   it("warn 的段數以假診斷 JSON 字元數為上限（FAKE_AI_TOKENS 過大不會誤報逾時）", () => {

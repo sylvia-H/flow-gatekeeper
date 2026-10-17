@@ -1,7 +1,8 @@
 <!-- SPECKIT START -->
-<!-- 提醒：下次執行 speckit-agent-context-update 會覆寫本區塊，屆時再把 current plan 指向新 feature 的 plan.md。 -->
-目前**無進行中的 SDD feature**；最近一次完成的是 009（`specs/009-observability-baseline/plan.md`）。
-009 之後的修復與升級見兩輪審查報告 `docs/20260927-research-review.md`、`docs/20260927-research-review02.md`（數字與結論以第二輪為準；`fix/20260927-research-review`、`upgrade/20260927-tech-stack`、`fix/20260927-research-review02`、`fix/20260927-review02-batch-cd` 皆已併入 `develop`，並於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第三輪審查報告 `docs/20260927-research-review03.md` 在 `docs/20260927-research-review03` 分支、尚未併入），
+<!-- 提醒：下次執行 speckit-agent-context-update 會覆寫本區塊，屆時再把 current plan 指向新 feature 的 plan.md，並保留下方 1.1.0／2.0.0 的版本現況句。 -->
+目前無進行中的 SDD feature；最近一次完成的是 **013-ui-redesign**（UI 全面改版，`specs/013-ui-redesign/plan.md`，2026-10-17 implement 與驗收完成；視覺方向「實驗室玻璃與蝕刻刻度」，direction contract 在 `apps/web/.impeccable/surfaces/src-app-vue.md`；視覺真實來源為 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`，impeccable 工件在 `apps/web/.impeccable/`；critique 四輪最後 29/40，後續待辦見指南 §15.6「013 UI 全面改版」段末）；其前一次完成的是 009（`specs/009-observability-baseline/plan.md`）。
+009 之後的修復與升級見兩輪審查報告 `docs/20260927-research-review.md`、`docs/20260927-research-review02.md`（數字與結論以第二輪為準；`fix/20260927-research-review`、`upgrade/20260927-tech-stack`、`fix/20260927-research-review02`、`fix/20260927-review02-batch-cd` 皆已併入 `develop`，並於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第三輪審查報告 `docs/20260927-research-review03.md` 已於 2026-10-15 併入 `develop`）。
+013、第三輪審查報告與 2026-10 的維護分支（暫停鈕中文化、預設模型 `gemini-3.5-flash-lite`、demo 影片重錄）於 2026-10-17 以產品版本 **2.0.0**（tag `2.0.0`）發布。
 現況摘要見 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15.6「1.0.0 之後的現況摘要」。技術棧、結構與指令以 README 與指南為準。
 <!-- SPECKIT END -->
 
@@ -17,7 +18,7 @@ flow-gatekeeper 是一個致敬 Argo CD 的即時流程監控與 AI 診斷 side 
 
 ## 真實來源（Source of Truth，不得憑空發明）
 
-- **視覺**：一律依 `apps/web/design/design-spec.md` 與 `apps/web/design/refs/*.png`。顏色、圓角、陰影、間距一律用具名 token，**不在元件內散落 hex**。
+- **視覺**：一律依 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`（impeccable 工件；`apps/web/design/design-spec.md` 與 `refs/` 已於 2026-10 退役，design-spec 保留全文作歷史）。顏色、圓角、陰影、間距一律用具名 token，色值只存在 `apps/web/src/styles/theme.css`，**不在元件內散落 hex**；禁用 `backdrop-filter`、光暈與色彩漸層（唯一例外 1px 桌面格線）。
 - **通訊契約**：一律依 `packages/contracts`（Zod schema 為單一來源，type 由 `z.infer` 推導）與 `asyncapi.yaml`。新增 event/payload 先改契約，再改 API/worker/web。
 - **開發步驟**：依 `docs/Flow-Gatekeeper-SDD-完整實作指南.md`。指南中的完整 code 區塊是「期望產出 / reference」，正式流程仍走 Spec Kit。
 - **架構決策**：重大技術取捨記錄在 `docs/adr-*.md`。即時通道為何用原生 ws 而非 Socket.IO，見 `docs/adr-001-native-websocket.md`。

@@ -30,4 +30,16 @@ describe("jobSteps（US7、FR-019）", () => {
   it("progress 100：前五步 done、末步 active", () => {
     expect(statuses(100)).toEqual(["done", "done", "done", "done", "done", "active"]);
   });
+
+  it("標籤為繁體中文介面文案，不夾英文字（013 FR-038）", () => {
+    expect(jobSteps(0).map((s) => s.label)).toEqual([
+      "任務啟動",
+      "彙整診斷資料",
+      "取得去重鎖",
+      "收到首段串流",
+      "解析結果成功",
+      "寫入並完成",
+    ]);
+    for (const s of jobSteps(null)) expect(s.label).not.toMatch(/[A-Za-z]/);
+  });
 });

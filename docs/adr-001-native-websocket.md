@@ -112,4 +112,6 @@ flow-gatekeeper 是一個即時流程監控與 AI 診斷面板，有三個與本
 
 前端 store 維護 `receivedMessages` 與 `renderedBatches` 兩個計數：把 mock frequency 拉到 10ms，demo 時秀出「收進 N 筆訊息、只觸發 M 次渲染批次」（例如 41:1）。把「背壓」從抽象說法變成一個畫面上看得見的比值，是這個決策最直接的證據。
 
-> **比值定義（2026-09 更正）**：`receivedMessages` 以**遙測資料點**計（一則 WS `machine/data` 訊息是一個裸陣列、含多個點），且**含**溢位合併與格式不符而未渲染的丟棄筆數；比值由 `apps/web/src/shared/lib/backpressure.ts` 的 `backpressureRatio` 單一實作。上面的 41:1 只是示意——實際比值隨節拍、機台數與瀏覽器幀率而異，不宣稱固定值；可重跑的量測自動化列為 roadmap 011（效能證據自動化）。規格見 `apps/web/design/design-spec.md` v0.5 §7.2.1。
+> **比值定義（2026-09 更正）**：`receivedMessages` 以**遙測資料點**計（一則 WS `machine/data` 訊息是一個裸陣列、含多個點），且**含**溢位合併與格式不符而未渲染的丟棄筆數；比值由 `apps/web/src/shared/lib/backpressure.ts` 的 `backpressureRatio` 單一實作。上面的 41:1 只是示意——實際比值隨節拍、機台數與瀏覽器幀率而異，不宣稱固定值；可重跑的量測自動化列為 roadmap 011（效能證據自動化）。規格當時見 `apps/web/design/design-spec.md` v0.5 §7.2.1（已於 2026-10 隨 feature 013 退役）。
+
+> **現況（2026-10，feature 013）**：畫面上的證據由「背壓 strip」呈現——主顯示改為**最近 60 秒視窗**的收到／渲染比值，附 0–60 比值刻度、走勢線與丟棄數；`backpressureRatio` 的自載入累計比值只留在 tooltip。視覺現況見 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`，摘要見指南 §15.6「013 UI 全面改版」。

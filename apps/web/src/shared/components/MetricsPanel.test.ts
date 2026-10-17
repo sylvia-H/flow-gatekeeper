@@ -51,7 +51,7 @@ function mountPanel(): VueWrapper {
   return wrapper;
 }
 
-const trigger = () => wrapper!.get('button[aria-label="Metrics panel"]');
+const trigger = () => wrapper!.get('button[aria-label="指標面板"]');
 const panel = () => document.body.querySelector<HTMLElement>("div.fixed");
 
 async function openPanel(): Promise<HTMLElement> {
@@ -71,41 +71,49 @@ function receive(opts: { connected: boolean; elapsedMs: number }): void {
 }
 
 describe("MetricsPanel 四態文案（stale 與 disconnected 必須分得開）", () => {
-  it("empty：尚未收到快照 → No data、無指標列、年齡為 —", async () => {
+  it("empty：尚未收到快照 → 尚無資料、無指標列、年齡為 —", async () => {
     mountPanel();
     const el = await openPanel();
-    expect(el.textContent).toContain("No data");
+    expect(el.textContent).toContain("尚無資料");
     expect(el.textContent).toContain("尚未收到任何指標摘要");
     expect(el.querySelector("dl")).toBeNull();
     expect(el.textContent).toContain("—");
   });
 
-  it("live：連線中且在 2×windowMs 內 → Live、顯示年齡／窗口與四項指標", async () => {
+  it("live：連線中且在 2×windowMs 內 → 即時、以 formatRelative 顯示年齡、週期與四項指標", async () => {
     receive({ connected: true, elapsedMs: 3_000 });
     mountPanel();
     const el = await openPanel();
-    expect(el.textContent).toContain("Live");
-    expect(el.textContent).toContain("3s ago");
-    expect(el.textContent).toContain("5s window");
+    expect(el.textContent).toContain("即時");
+    expect(el.textContent).toContain("3 秒前");
+    expect(el.textContent).toContain("週期 5 秒");
     expect(el.textContent).toContain("2/1/0"); // queue waiting/active/failed
     expect(el.textContent).toContain("1,200ms/2,400ms/3,100ms");
     expect(el.textContent).toContain("75%");
   });
 
-  it("stale：連線中但逾 2×windowMs 未收新快照 → Stale 與「後端可能停止廣播」提示", async () => {
+  it("年齡 ≤ 2 秒顯示「剛剛」（formatRelative 閉區間），不再出現英文「s ago」", async () => {
+    receive({ connected: true, elapsedMs: 2_000 });
+    mountPanel();
+    const el = await openPanel();
+    expect(el.textContent).toContain("剛剛");
+    expect(el.textContent).not.toMatch(/s ago|window/);
+  });
+
+  it("stale：連線中但逾 2×windowMs 未收新快照 → 逾時 與「後端可能停止廣播」提示", async () => {
     receive({ connected: true, elapsedMs: 2 * WINDOW_MS + 1_000 });
     mountPanel();
     const el = await openPanel();
-    expect(el.textContent).toContain("Stale");
+    expect(el.textContent).toContain("逾時");
     expect(el.textContent).toContain("後端指標可能停止廣播");
-    expect(el.textContent).not.toContain("Offline");
+    expect(el.textContent).not.toContain("已斷線");
   });
 
-  it("disconnected：有快照但即時通道未連線 → Offline 與「顯示最後已知數值」提示，且與 stale 色點不同", async () => {
+  it("disconnected：有快照但即時通道未連線 → 已斷線 與「顯示最後已知數值」提示，且與 stale 色點不同", async () => {
     receive({ connected: false, elapsedMs: 1_000 });
     mountPanel();
     const el = await openPanel();
-    expect(el.textContent).toContain("Offline");
+    expect(el.textContent).toContain("已斷線");
     expect(el.textContent).toContain("即時通道未連線");
     expect(el.textContent).toContain("2/1/0");
     // 四態以「文案 + 色點」雙重編碼（design token：disconnected=crit、stale=warn）
@@ -153,16 +161,16 @@ describe("MetricsPanel 展開／收合", () => {
 });
 
 describe("MetricsPanel 可及性（WEB-7 記錄現況）", () => {
-  it("【WEB-7 尚未修】每秒變動的「Ns ago」目前落在整塊 role=\"status\" 內——修正後此測試應改為斷言不在 live region 內", async () => {
+  it("【WEB-7 尚未修】每秒變動的「N 秒前」目前落在整塊 role=\"status\" 內——修正後此測試應改為斷言不在 live region 內", async () => {
     receive({ connected: true, elapsedMs: 3_000 });
     mountPanel();
     const el = await openPanel();
     expect(el.getAttribute("role")).toBe("status");
-    const age = Array.from(el.querySelectorAll("span")).find((s) => s.textContent?.includes("s ago"));
+    const age = Array.from(el.querySelectorAll("span")).find((s) => s.textContent?.includes("秒前"));
     expect(age?.closest('[role="status"]')).toBe(el);
 
     useMonitoringStore().now = T0 + 4_000;
     await flushPromises();
-    expect(el.textContent).toContain("4s ago"); // live region 內容每秒變動 → 螢幕閱讀器每秒播報
+    expect(el.textContent).toContain("4 秒前"); // live region 內容每秒變動 → 螢幕閱讀器每秒播報
   });
 });

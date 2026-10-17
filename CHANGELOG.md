@@ -25,9 +25,101 @@
 - 1.0.0 時五份套件 `package.json`（apps ×3、packages ×2）的 `version` 一直停在 `0.1.0`，root `package.json` 則沒有 `version` 欄位，
   與 tag 沒有單一來源（第二輪審查 DOC-D14）；自 1.1.0 起五份套件由 `0.1.0` 對齊為 `1.1.0`、root 新增 `version`，六份與 tag 對齊。
 
-## [Unreleased]
+## [2.0.0] - 2026-10-17
 
-（無）
+主版號升級：web 監控台整體換皮、介面文案改為繁體中文、1.0.0 的 demo 影片不再代表現況（使用者 2026-10-17 裁決）。WS／HTTP 契約與 api 行為向後相容（`asyncapi.yaml` 的 `info.version` 維持 1.2.0）；
+worker 預設模型與輸出上限的變更見下方不相容變更。demo 影片 `docs/demo/flow-gatekeeper-demo.mp4` 同時為 2.0.0 GitHub Release 的資產（README 下載連結指向它）。本版包含：
+
+- Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全面改版。013 只動前端呈現，**後端、契約與部署方式皆不變**；
+  視覺方向為「實驗室玻璃與蝕刻刻度」，視覺真實來源由 `apps/web/design/design-spec.md` 改為 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`。
+- `docs/20260927-research-review03`（merge `3ad0e9b`，2026-10-15）：第三輪審查報告；其發現的缺陷本版**未修**，見下方相容性注意。
+- 維護分支 `fix/20261017-pause-toggle-label`：修正 013 開發期間改成固定「暫停」的做法，維持按下後換字（1.1.0 起即如此），本版文字為中文「恢復」、拿掉 `aria-pressed`。
+- 維護分支 `upgrade/20261017-gemini-3.5-flash-lite`：worker 的預設 LLM 模型改為 `gemini-3.5-flash-lite`（契約不變）。
+- 維護分支 `docs/20261018-demo-video`：README demo 影片以新介面重錄，新增錄影劇本 `apps/web/scripts/record-demo.cjs`。
+
+### 不相容變更
+
+- **介面文案全面改為繁體中文**：依 1.1.0 英文標籤（`Diagnose`、`Pause`／`Resume`、`Connected`、`Cached`、`Retry`、`Fleet monitor`、連線橫幅等）寫的外部截圖說明、操作手冊或 UI 自動化腳本需改用中文標籤；machine id、job id、技術單位（含 px）、`Mock`／`AI`／`WS`、佇列名 `diagnosis`、產品名 flow-gatekeeper 與 AI 回覆內容維持原文。
+- **側欄機台清單（含英文分組標題 `Prep`／`Forming & Baking`／`Fulfilment`）移除**：機台與分組改由主區的三 stage 拓樸承載，stage 標題只有中文（前處理／成型烘烤／包裝分揀）；側欄只留品牌列、機群健康、異常摘要列與主題切換。依側欄清單點選機台、或依英文分組名定位的說明與腳本需改。
+- **AI 診斷面板的斷點與互動模型改變**：視窗寬 ≥ 1366px 為寬 348px 的推擠式右側面板，< 1366px 一律改為底部 bottom-sheet；所有寬度預設收合，選取機台才自動展開（手動收合後不再自動展開）。1.1.0 在 ≥ 768px 為寬 400px、預設展開、選台即重新展開的可收合右欄，< 768px 為帶遮罩的 bottom-sheet（70–85vh）；2.0.0 在 768–1365px 也改為 bottom-sheet，細節見下方 Changed。
+- **背壓比值的口徑改變**：主要顯示的比值由「自頁面載入起的累計值」改為「最近 60 秒視窗」，與 1.1.0 TopBar 徽章的數字不可直接比較；累計值改放 tooltip。
+- **1.0.0 demo 影片作廢**：舊介面影片只留在 1.0.0 Release，README 下載連結改指 2.0.0 Release（1.1.0 未重錄）。
+- **預設模型改為 `gemini-3.5-flash-lite`、`AI_MAX_OUTPUT_TOKENS` 預設 2048 → 4096**（worker）：只影響 `GEMINI_MODEL`／`AI_MAX_OUTPUT_TOKENS` 留空的部署；
+  `apps/worker/.env` 明寫 `GEMINI_MODEL=gemini-2.5-flash` 者維持舊模型，要換請改值或清空。3.x flash 系列以 `thinkingLevel: MEDIUM` 思考，
+  thinking token 計入輸出上限：`AI_MAX_OUTPUT_TOKENS` 明寫 2048 的部署換到新模型時，worker 啟動會 warn，建議改為 ≥ 4096（或清空走預設）。
+  模型名進快取簽章，換模型後舊快取自然不再命中（第一次診斷會重新呼叫 LLM）。
+
+### 相容性注意（升級前必讀）
+
+- **第三輪審查發現的缺陷在 2.0.0 仍未修**：含一項 P1——api 端 BullMQ producer `Queue` 未掛 `error` listener，設了 `REDIS_PASSWORD` 而 Redis 認證失敗時，密碼會經 BullMQ 的 `console.error` 明文進 stderr（pino 路徑已遮蔽）。
+  部署時請留意 api 的 stderr 收集範圍；細節與其他未修項見 `docs/20260927-research-review03.md` 與 README「已宣告的取捨」。
+- **新增 localStorage key**：`fg.theme`（`"light"`｜`"dark"`，主題選擇）與 `fg.copilot-panel`（`{"manuallyCollapsed":boolean}`，AI 診斷面板的手動收合偏好）；
+  讀寫失敗（私密視窗、封鎖儲存）時回到預設、不顯示錯誤。既有的 `flow-gatekeeper:sidebar-width`、`flow-gatekeeper:event-strip-height` 沿用、不改名，升級後原有尺寸保留。
+- **主題預設為淺色、不跟隨作業系統**：首次載入一律淺色，深色需手動切換一次，之後依 `fg.theme` 記憶。
+- **新 devDependency `playwright-core`**（`apps/web`，`~1.64.1`）：只供截圖劇本 `apps/web/scripts/screenshots.cjs` 與 demo 錄影劇本 `apps/web/scripts/record-demo.cjs` 使用，不進 production bundle；
+  劇本需本機 Playwright Chromium（`PLAYWRIGHT_CHROMIUM` 指定路徑，未設時自動尋找 `ms-playwright` 目錄），見 README「快速開始」。一般開發、`pnpm check`、`pnpm build` 與 demo 容器不需要瀏覽器。
+- **字型改為 Source Sans 3、Noto Sans TC、JetBrains Mono**（仍經 Google Fonts、載入失敗退回系統字型）；nginx CSP 不需調整。
+- Node／pnpm 版本要求不變（`engines.node >=22.12`、pnpm 10.34.5）。
+
+### Added
+
+- **深淺雙主題**：淺色為預設，以單一控制項切換（桌機在側欄、手機在工具列），切換同一幀完成、無閃爍與版面位移，選擇記在本機。
+- **背壓 strip**：主區頂端常駐顯示每秒訊息數 → 每秒批次數 → 合併比，三個讀數同取最近 60 秒視窗（相除對得上），標籤「合併比 · 訊息 ÷ 批次」並常駐一行白話說明（例如「每幀平均合併 N 則訊息」）；
+  比值刻度 0–60（每 10 格標數字），0 到目前比值為實心液柱、液位線標目前比值，超過 60 釘在右端標「>60」，刻度上另有 1:1 錨點與近 60 秒最高水位短線；
+  另附最近 60 秒的單秒合併比走勢線（一條，y 軸自 0、離群值釘頂）與 60 秒內丟棄數（「丟棄 N 則」，有丟棄才以警示色顯示）；暫停期間與恢復後 2 筆樣本排除於合併比、平均、最高水位與走勢線（走勢線斷線，丟棄數照計）；
+  斷線、重新連線、暫停時以狀態 pill「已斷線／重新連線中／已暫停」標示；手機仍保留比值、每秒訊息數與丟棄數。
+- **暫停橫幅**：暫停時主區上方顯示「已暫停畫面更新 · 暫停於 HH:mm:ss」橫幅並附「恢復」鈕（1.1.0 沒有橫幅）；工具列的暫停鈕照舊按下後換字，改為中文「恢復」與墨色底，不再用 `aria-pressed`（狀態改由按鈕名稱表達）。
+- **診斷串流漸進骨架**：診斷進行中，摘要、嚴重度、建議動作、可能原因、證據會邊串流邊填入與完成態相同的結果骨架，未解析出的欄位以佔位呈現；原始串流文字可展開查看。
+- **快取耗時對比**：完成時以一行顯示「完成 HH:mm:ss · 耗時」；命中快取時以大字顯示本次耗時並列該台上一次非快取耗時，下方以同一刻度的兩條耗時橫條對照（只有一筆時不畫），結果整塊直接呈現。
+- **「再次診斷」**：完成態在 meta 列下方提供「再次診斷」次要鈕，不必回工具列即可再診斷同一台、走到快取對比。
+- **異常標記記憶**：機台由警告／嚴重回到正常後，卡片保留「最近異常」標記與相對時間 30 秒（進行中「嚴重 · 進入 N 秒前」、回復後「曾嚴重 · N 秒前回復」）；
+  卡片上的標記不可點擊（避免誤觸選台區域就不可逆地確認），確認入口有三個——側欄異常摘要列每列的「確認」鈕（Check 圖示）、鍵盤聚焦卡片按 `x`、手機異常清單——三處讀寫同一份狀態；
+  確認後改為劃線的「已確認」狀態並保留到回復滿 30 秒；30 秒內再次異常或警告升為嚴重時重置為未確認。
+- **側欄異常摘要列**：列出目前異常與最近 30 秒內曾異常的機台（狀態燈、名稱、相對時間），點列選取該台、每列有「確認」鈕，全部正常時顯示「目前沒有異常」。
+- **卡片診斷狀態 chip**：每張卡片顯示該台的診斷狀態（診斷中與進度、「AI：嚴重度」、「AI：嚴重度 · 快取」、「AI 失敗」），以「AI：」起頭與狀態徽章區隔，4px 方角、無圖示。
+- **事件流合併與「回復正常」事件**：同機台、同嚴重度的事件自該列首筆起算 60 秒固定窗內合併為一列，列上顯示起訖時間與次數（`HH:mm:ss–HH:mm:ss · ×N`），滿 60 秒另起新列；機台回到正常時新增中性色的「回復正常」事件；每一列可點擊選取對應機台。
+- **快捷鍵說明鈕**：工具列提供開啟快捷鍵說明層的按鈕，與 `?` 共用同一個開關。
+- **鍵盤快捷鍵**：`/` 聚焦搜尋（搜尋結果只剩一台時 Enter 直接選取）、方向鍵依視覺位置在卡片間移動焦點、Enter 選取聚焦卡片、`d` 對選取機台觸發診斷、
+  `x` 確認聚焦卡片的異常標記、Escape 每次只關最上層一項（說明層 → 搜尋覆蓋 → 手機異常清單 → AI 診斷面板 → 取消選取）、`?` 開關快捷鍵說明層；輸入欄內不觸發。
+- **拖曳把手可用鍵盤調整**：側欄寬度與事件流高度的把手可 Tab 聚焦，方向鍵以 16px 步距調整（範圍不變：側欄 200–420px、事件流 100–360px）。
+- **AI 診斷面板偏好與 peek 條**：以面板收合鈕手動收合後，之後選取機台不再自動展開，「觸發診斷」或點展開把手才展開並清除此偏好（Escape 收合不算）；
+  收合時若仍有選取機台，退為 32px 的 peek 條（機台名稱與診斷狀態），點一下即展開。
+- **手機機群健康摘要條**：手機寬度時主區頂端常駐一條比例條與四個計數，點擊展開為異常清單覆蓋層（不推擠拓樸）。
+
+### Changed
+
+- **視覺世界**：改為「實驗室玻璃與蝕刻刻度」——桌面格線底、半透明玻璃面板、蝕刻刻度與等寬數值；所有顏色改為語意 token，兩套主題同名、只換值。
+- **三 stage 產線拓樸取代機台網格**：主畫面依序分為「前處理 → 成型烘烤 → 包裝分揀」三欄，相鄰欄之間的流向連線粗細與流動速度隨下游產能變化（減少動態效果時只變粗細）；
+  搜尋過濾後空欄保留並顯示「此階段無符合的機台」；窄版改為上下堆疊、段間以短箭頭連接。
+- **卡片**：數值改 24px 等寬並附小刻度（超標換警示色），警告卡片加全邊框、嚴重卡片加底色與邊框，停滯改為虛線邊框＋「停滯」徽章（不再整卡降透明）；
+  機台 id 與更新時間移到標頭第二列（相對時間 ≥ 3 秒才顯示）；選取態改為卡片外側 2px outline，保留原本的狀態邊框與底色；狀態、hover、選取與嚴重脈動皆不改卡片尺寸。
+- **診斷結果**：區段順序改為摘要與嚴重度 → 建議動作 → 可能原因 → 證據；證據預設只展開前 2 筆，來源與內容相同者合併為一列並顯示 `×N`；
+  完成態改以頂部嚴重度色條與一行 meta 呈現，不再用滿版進度條；失敗態以分類說明錯誤、提供重試，並展開原始串流保留中斷前的推理。
+- **AI 診斷面板在所有寬度預設收合**，無手動收合偏好時選取機台才自動展開；視窗寬 ≥ 1366px 為寬 348px 的推擠式側面板，< 1366px 一律改用底部抽屜（bottom-sheet，附抓取把手）；
+  抽屜在未診斷的閒置態只佔單列（約 51px）、非 modal（無遮罩、焦點留在卡片），主區與側欄依抽屜高度留白不被遮住，進行中／完成／失敗時才轉為 modal。
+  面板標頭 chip 在未診斷時顯示「未診斷」、完成時顯示中性的「已完成」。
+- **工具列**：分為導航、播放控制、系統狀態、主要動作四組；可用寬度 640–819px 時只留圖示、< 640px 時搜尋收成圖示鈕並以覆蓋式輸入框展開；手機的主題切換移入系統狀態組。
+- **全部 UI 文案改為繁體中文**（stage 標題只有中文）；時間格式統一為 24 小時制 `HH:mm:ss`、相對時間「剛剛／N 秒前／N 分鐘前」、耗時 `N ms`／`N.N s`。
+- **最小功能性字級 12px**：徽章、單位、計數、時間戳等小字不再小於 12px，兩套主題下文字對比皆 ≥ 4.5:1。
+- **README 截圖**：「功能逐項展示」的截圖隨本版以新介面重拍（含深色主題與拓樸），圖說與 demo 劇本改用中文術語。
+- **README demo 影片重錄**（`docs/20261018-demo-video`）：以新介面與新模型重錄 23 秒 demo（1440×900 H.264，`docs/demo/`），下載連結改指 `releases/download/2.0.0/`；
+  1.0.0 的舊介面影片作廢、僅留在 1.0.0 release。新增錄影劇本 `apps/web/scripts/record-demo.cjs`（CDP 逐格擷取＋ffmpeg，需含 libx264 的 ffmpeg，見 README「截圖劇本」段末）。
+- **AI 模型**（worker）：預設 `GEMINI_MODEL` 由 `gemini-2.5-flash` 改為 `gemini-3.5-flash-lite`。3.x 以後的 `flash`／`flash-lite` 不接受
+  `thinkingBudget: 0`（400），改送 `thinkingConfig.thinkingLevel: MEDIUM`；實測真實診斷 prompt 的 thinking token 為 0～約 1150（模型動態決定），
+  首 token 0.6～4.2 秒、全程 1.4～4.6 秒（思考時較長；003 SC-001 的 5 秒首 token 目標仍達成但餘裕有限）。`AI_TEMPERATURE` 維持 0.2：Google 建議 Gemini 3 系列用 1.0，但實測 0.2／1.0 皆無截斷、0.2 結果較一致。3.x 的 pro 等其他變體維持不送 thinking 設定。3.x `flash`／`flash-lite` 配 `AI_MAX_OUTPUT_TOKENS` 低於 4096 時 worker 啟動會 warn
+  （2.5 pro 等不能關 thinking 的模型門檻維持 8192）；`GEMINI_MODEL` 為不帶版本號的 `*-latest` 別名時啟動 warn（判不出 thinking 系列）。
+  worker `LLM stream finished` log 的 `usage` 另記 `thoughtsTokens`（thinking token，與只算回覆的 `outputTokens` 分開）。
+
+### Removed
+
+- **側欄機台清單**：機台改由拓樸三欄承載，側欄只留品牌列、機群健康、異常摘要列與主題切換。
+- **TopBar 背壓徽章**：由主區頂端的背壓 strip 取代。
+- **`apps/web/design/refs/`** 截圖參考目錄自 repo 移除；`apps/web/design/design-spec.md` 保留全文、檔頭標註已退役，視覺以 `apps/web/PRODUCT.md`、`apps/web/DESIGN.md` 為準。
+
+### 契約
+
+- **無變更**：`asyncapi.yaml` 的 `info.version` 維持 1.2.0；12 則 WS 訊息與 `POST /diagnoses` 的請求與回應皆未修改，api 無行為變更，
+  worker 只換預設模型、thinking 設定與 `AI_MAX_OUTPUT_TOKENS` 預設（見上方 Changed「AI 模型」）。新呈現（背壓 strip、拓樸連線、異常標記、診斷耗時）全部由既有訊息在前端衍生。
 
 ## [1.1.0] - 2026-09-28
 

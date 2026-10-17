@@ -8,12 +8,13 @@
 並把「背壓比值」與「逐字串流的 AI 推理」直接畫在同一個畫面上——
 再把整套系統做進**受監督的容器**、補齊**崩潰自癒**與**可觀測性基線**，讓它不只是能跑，而是禁得起斷線、崩潰與被監控。
 
-**現況為 1.1.0**（2026-09-28）：在 1.0.0 之後經三輪全面審查修復、技術棧升級（NestJS 11／Express 5、Vite 7、Zod 4、Pinia 3、Vitest 4、pnpm 10）
-與測試基礎建設補齊（覆蓋率門檻、真 Redis／Mongo 整合測試、跨 process e2e、變異測試）；逐項變更與升級注意事項見 [`CHANGELOG.md`](CHANGELOG.md)。
+**現況為 2.0.0**（2026-10-17）：feature 013 把監控台整體換皮為「實驗室玻璃與蝕刻刻度」、介面文案改為繁體中文，AI 預設模型改為 Gemini `gemini-3.5-flash-lite`，demo 影片以新介面重錄。
+更早的 1.1.0（2026-09-28）在 1.0.0 之後經三輪全面審查修復、技術棧升級（NestJS 11／Express 5、Vite 7、Zod 4、Pinia 3、Vitest 4、pnpm 10）
+與測試基礎建設補齊（覆蓋率門檻、真 Redis／Mongo 整合測試、跨 process e2e、變異測試）。逐項變更與升級注意事項（含 2.0.0 的不相容變更）見 [`CHANGELOG.md`](CHANGELOG.md)。
 
 <br/>
 
-![Release 1.1.0](https://img.shields.io/badge/release-1.1.0-0f6cbd)
+![Release 2.0.0](https://img.shields.io/badge/release-2.0.0-0f6cbd)
 ![asyncapi 1.2.0](https://img.shields.io/badge/asyncapi-1.2.0-6b7280)
 ![Vue 3.5](https://img.shields.io/badge/Vue-3.5-42b883?logo=vuedotjs&logoColor=white)
 ![NestJS 11](https://img.shields.io/badge/NestJS-11-e0234e?logo=nestjs&logoColor=white)
@@ -32,28 +33,33 @@
 
 ## 端到端操作 Demo（實機錄影）
 
-> 不想自己 `docker compose up` 也能感受這個系統跑起來的樣子——以下是**對正在跑的一鍵 demo 容器**（`docker compose --profile demo up -d --build` → `http://localhost:8080`）用 Playwright 腳本化操作、原始無剪接錄下的 22 秒全程，**非後製動畫**：
+> 不想自己 `docker compose up` 也能感受這個系統跑起來的樣子——以下是**對正在跑的一鍵 demo 容器**（`docker compose --profile demo up -d --build` → `http://localhost:8080`）用 Playwright 腳本化操作、原始無剪接錄下的 23 秒全程，**非後製動畫**：
 
 <div align="center">
 
 ![Demo 海報](https://github.com/sylvia-H/flow-gatekeeper/raw/main/docs/demo/flow-gatekeeper-demo-poster.jpg)
 
-## 🎬 [下載完整 Demo（22 秒）](https://github.com/sylvia-H/flow-gatekeeper/releases/download/1.0.0/flow-gatekeeper-demo.mp4)
+## 🎬 [下載完整 Demo（23 秒）](https://github.com/sylvia-H/flow-gatekeeper/releases/download/2.0.0/flow-gatekeeper-demo.mp4)
 
 </div>
 
-| 時間 | 畫面 |
-| --- | --- |
-| 0:00 | 監控台全景：5 台機台即時遙測、`BackpressureBadge` 比值持續累積 |
-| 0:05 | TopBar search 即時過濾 sidebar 與卡片 |
-| 0:07 | 點選 `press-02`（此刻已轉 critical）→ 按 **Diagnose** |
-| 0:08–0:15 | Copilot drawer 進入 **Active**：任務 meta、處理步驟清單、AI 回覆**逐字串流**（畫面凍結於 68% 時可見 JSON 逐段浮現） |
-| 0:16 | **Completed**：結構化結果（Summary／Likely Causes／Evidence），此次**非快取**——真的呼叫了一次 Gemini |
-| 0:19–0:22 | 對同一台再按一次 Diagnose → 秒回並標示 **Cached**（cache-aside + dedupe lock 的可視化證據） |
+**23 秒 demo 劇本（2.0.0 介面）**：在 1440×900（≥ 1366px，AI 診斷面板為右側推擠式）、不收合 AI 診斷面板的情況下照下表操作，同一輪就能依序找到三個機制的畫面證據——背壓 strip 的合併比與液柱、串流中逐格填入的結果骨架、快取命中的耗時對比橫條與「再次診斷」（鏡頭 1～3）。上方影片即依本表錄製；串流與完成的時間點隨 LLM 回應速度浮動（本片首次診斷約 2.0 秒、快取約 220 ms）。
 
-> 錄製方式：本機清空 `ai-cache:*`／`ai-lock:*` 後，用 Playwright 對著跑在容器裡的真實全棧（api／worker／web／Redis／MongoDB，AI 由 Gemini 2.5 Flash 即時回覆）做一次腳本化操作並錄影，全程無手動剪輯或字卡。想自己重現，見下方「[快速開始](#快速開始)」。
+| 時間 | 操作 | 畫面位置 |
+| --- | --- | --- |
+| 0:00 | 打開首頁（第一屏就是工作台，AI 診斷面板預設收合） | **鏡頭 1：背壓 strip**——主區頂端、工具列正下方常駐，讀數依序為「每秒訊息 · 近 60 秒 → 每秒批次 · 近 60 秒 → 合併比 · 訊息 ÷ 批次」，三者同一個 60 秒視窗；下緣 0–60 比值刻度從 1:1 錨點起畫實心液柱，液位線標出目前合併比、蝕刻短線標近 60 秒最高水位（超過 60 釘在右端並標「>60」）；右側常駐一行白話「每幀合併約 N 則 · 近 60 秒最高 X」，旁邊是近 60 秒合併比走勢線 |
+| 0:02 | 看主區三 stage 拓樸 | 「前處理 → 成型烘烤 → 包裝分揀」三欄與欄間連線；壓製機 02（`press-02`）約每 13 秒一次嚴重尖峰（mock 名目 12 秒，一鍵 demo 容器內實測約 13.0～13.3 秒；影片第 2 秒即是一次），回到正常後卡片保留「曾嚴重 · N 秒前回復」標記 30 秒，側欄最近異常列與底部事件流（同類事件合併成「HH:mm:ss–HH:mm:ss · ×N」一列）同步記錄 |
+| 0:04 | 在工具列搜尋框（或按 `/`）輸入片段（影片輸入「p」） | 只留命中的卡片，三欄寬度與順序不變，沒有命中的欄顯示空狀態 |
+| 0:06–0:08 | 清除搜尋，點選壓製機 02，按「診斷」 | 選取即自動展開右側 AI 診斷面板（348px，推擠主區；閒置時只有機台名、狀態、「診斷」鈕與一行說明，標頭 chip「未診斷」）；背壓 strip 仍在主區頂端 |
+| 0:08–0:11 | 等串流 | **鏡頭 2：串流骨架**——面板狀態為「進行中」，卡片 id 列同步顯示「診斷中 N%」；進度列與「中止診斷」下方的結果骨架依完成態順序排好「摘要與嚴重度 → 建議動作 → 可能原因 → 證據」，各欄解析到就逐格填入（先後依 LLM 輸出順序），還沒解析到的欄位顯示佔位；「原始串流」可展開看逐字文字 |
+| 0:11 | 完成 | 狀態轉為「已完成」（中性色 chip）：嚴重度色條與一行 meta「完成 HH:mm:ss · N.N s」，其下是次要鈕「再次診斷」；卡片 id 列出現方角 tag「AI：<嚴重度>」。此次**非快取**，真的呼叫了一次 Gemini |
+| 0:19–0:23 | 對同一台再診斷一次（面板的「再次診斷」、工具列「主要動作」的診斷鈕，或按 `d`） | **鏡頭 3：快取耗時對比**——結果整塊直接出現、不走逐字動畫，meta 以大字顯示「快取 · 耗時」（不到 1 秒以 ms 顯示），下方兩條同刻度耗時橫條「快取」對「上一次」（例如數百 ms 對數秒），卡片 tag 加上「· 快取」（cache-aside + dedupe lock 的可視化證據） |
 
-> **版本註記**：影片與海報為 **1.0.0**（tag 原名 `v1.0.0`，2026-09-28 更名）畫面（下方「功能逐項展示」的截圖同樣攝於 1.0.0 發布前，2026-07-31）；1.1.0 **未重錄**，下載連結維持指向 1.0.0 release 的資產。之後的 UI 變更——機台卡片選取態、連線狀態 chip（含 pong 逾時的活性判定）、未授權 chip、Copilot 任務 meta 改標 Attempt `N / 3` 等——以 [`CHANGELOG.md`](CHANGELOG.md) 為準，未重錄。影片刻意**同時**放在 git（`docs/demo/`）與 GitHub Release：Release 供上方連結直接下載，git 內一份供 clone 後離線閱讀 README，兩者維持現狀。
+> 照劇本操作前先執行 `./scripts/demo-reset.ps1` 清掉 AI 快取，第一次診斷才看得到串流。快取簽章含該台**最近一筆 state**：第二次診斷時若剛好碰上尖峰（狀態與第一次不同），會再呼叫一次 LLM 而不是命中快取——等卡片回到正常再按即可。
+
+> 錄製方式（2.0.0，2026-10-17）：本機清空 `ai-cache:*`／`ai-lock:*` 後，以錄影劇本 `apps/web/scripts/record-demo.cjs`（Playwright 驅動 headless Chromium、CDP 逐格擷取再以 ffmpeg 轉 H.264，畫面上的游標是劇本注入的假游標）對著跑在容器裡的真實全棧（api／worker／web／Redis／MongoDB，AI 由 Gemini `gemini-3.5-flash-lite` 即時回覆）一鏡到底錄影，全程無手動剪輯或字卡。想自己重現，見下方「[快速開始](#快速開始)」的「截圖劇本」段末。1.0.0 影片同樣是對容器全棧腳本化操作、無剪輯，當時以 Playwright 內建錄影（即時 VP8、無游標），AI 為 Gemini 2.5 Flash。
+
+> **版本註記**：影片與海報為 **2.0.0** 的畫面（2026-10-17 重錄，feature 013 UI 全面改版之後的繁中介面），下載連結指向 2.0.0 release 的資產；1.0.0 的舊介面影片仍留在 1.0.0 release，不再代表現況（1.1.0 未重錄、沿用 1.0.0）。下方「功能逐項展示」的 14 張截圖於 2026-10-17 由截圖劇本 `apps/web/scripts/screenshots.cjs --readme` 單輪重拍（用法見「[快速開始](#快速開始)」的「截圖劇本」）。影片刻意**同時**放在 git（`docs/demo/`）與 GitHub Release：Release 供上方連結直接下載，git 內一份供 clone 後離線閱讀 README，兩者維持現狀。
 
 ---
 
@@ -107,7 +113,7 @@
 | 🔌 **原生 `ws`，不用 Socket.IO** | 前端 `new WebSocket()`／後端 `ws` 掛在 NestJS，完全掌控 wire format | 決策取捨見 [ADR-001](docs/adr-001-native-websocket.md) |
 | 🧵 **跨進程 AI 串流 relay** | worker 不直接 emit WS；AI token 走 Redis Pub/Sub → Gateway 轉發到對應連線 | 單一 WebSocket 連線同時承載遙測與診斷串流 |
 | 🚦 **佇列削峰 + 韌性** | BullMQ + Redis：`attempts` 重試、指數退避、worker 崩潰不拖垮 API；LLM 限流在 worker **取鎖後**以 Redis 固定窗（`ai-rpm:<分鐘>`，`AI_RPM`）計數，cache 命中與等待者不吃額度 | 20 筆並發診斷不超過每分鐘 LLM 上限 |
-| 💰 **Cache-aside + dedupe lock** | 相同機台／狀態簽章直接回快取、`ai-lock:<sig>` 讓同情境只打一次 LLM | 第二次同類診斷秒回並標 `Cached` |
+| 💰 **Cache-aside + dedupe lock** | 相同機台／狀態簽章直接回快取、`ai-lock:<sig>` 讓同情境只打一次 LLM | 第二次同類診斷秒回，面板顯示「快取 · N ms」並列上一次耗時 |
 | ✅ **Schema 驗證的 AI 輸出** | AI 回傳必經 `DiagnosisResultSchema.parse()`，失敗走 `ai/error`，不把未驗證物件當結果；Gemini 端另以同一份 schema 產生的 `responseJsonSchema` 走原生 structured output | Zod 為單一真實來源，型別由 `z.infer` 推導 |
 | 📐 **契約優先的全棧型別安全** | web／api／worker 三端共用 `packages/contracts` 同一份事件／結果型別 | strict TypeScript、`asyncapi.yaml` 契約 lint + asyncapi↔Zod 漂移測試 |
 | 🤖 **每機台狀態機的 Copilot Drawer** | `Map<machineId, CopilotJobState>`：多台可並存診斷，切換選取即還原各自呈現 | idle／active／streaming／completed／failed 五態 |
@@ -121,81 +127,93 @@
 
 ## 功能逐項展示（實機截圖）
 
-> 以下皆為**實際執行中的 app 截圖**（前端 Vue + 後端 NestJS Gateway + 獨立 worker + Gemini 全棧跑起來後擷取），逐一對應每個可操作的功能。視覺規格單一來源另見 [`apps/web/design/`](apps/web/design/)（design-spec 與 refs）。
+> 以下皆為**實際執行中的 app 截圖**（前端 Vue + 後端 NestJS Gateway + 獨立 worker + Gemini 全棧跑起來後擷取），逐一對應每個可操作的功能。14 張（12 張功能截圖為淺色，另附拓樸裁切與深色全景各 1 張）於 2026-10-17（feature 013）由可重播的截圖劇本 `apps/web/scripts/screenshots.cjs --readme` 單輪一次產出，桌機 1440×900、手機 390×844；劇本步驟與前置見「[快速開始](#快速開始)」的「截圖劇本」。介面文案為繁體中文，下文介面詞首次出現時附 1.1.0 的英文標籤對照。視覺真實來源見 [`apps/web/PRODUCT.md`](apps/web/PRODUCT.md)（產品定位、介面約束與無障礙門檻）與 [`apps/web/DESIGN.md`](apps/web/DESIGN.md)（雙主題 token 與元件）；舊的 `apps/web/design/design-spec.md` 已於 2026-10（feature 013）退役、保留全文作歷史，`refs/` 參考圖已移除。
 
-### 1. 即時 fleet 監控台全景 + 背壓量化
+### 1. 第一屏工作台 + 背壓 strip
 
-打開應用**第一屏即是可操作的監控台**（非 landing page），自動連上 `/ws` 並訂閱 5 台示範機台。整個監控台一次到位：左側 sidebar 依機台群組分區（**Prep／Forming & Baking／Fulfilment**）並在左下以 **Fleet Health** 面板把全隊狀態聚合成 healthy／warning／critical／stale 計數與比例條；主區頂部是「**Fleet monitor · N machines**」標題列，其下為機台卡片（狀態文字徽章、帶單位的遙測、`updated Ns ago` 相對時間戳）；主區底部是 **Event Stream**，記錄最近的門檻跨越／錯誤事件。頂部工具列的 **BackpressureBadge** 即時顯示 `收到數 · 渲染批次數 · 比值`（截圖當下為 `505 msgs · 101 frames · 5:1`；`msgs` 是**遙測資料點數**而非 WS 訊息數，含未渲染即丟棄的筆數。比值隨節拍、機台數與瀏覽器幀率而異，此數字只代表截圖當下，不是固定規格。預設節拍〔`MOCK_TELEMETRY_INTERVAL_MS` 50ms、每 tick 一個含全部已訂閱機台的批次〕下，一個 tick 通常就落在一幀內，比值因此**約等於機台數**——主要來自伺服器端「一 tick 一批」，rAF 合併本身約只貢獻 1 倍；節拍調快到一幀內收到多個 tick、或分頁切背景時，rAF 合併的貢獻才會拉開）——把「收到多少資料點、實際渲染幾次」的關係直接畫在畫面上，不用開 DevTools；一旁還有 pause／resume、connection chip（含延遲毫秒）與 search。右側為桌機常駐的 AI Copilot 面板（未選機台時為空狀態提示）。
+打開應用**第一屏即是可操作的監控台**（非 landing page），自動連上 `/ws` 並訂閱 5 台示範機台。版面分四區：左側欄是品牌列、**機群健康**（Fleet Health）、**最近異常摘要列**與主題切換；頂部工具列分「導航（搜尋）／播放控制（暫停切換鈕、Mock 頻率；暫停時主區另有橫幅與「恢復」鈕）／系統狀態（連線 chip 含延遲毫秒、未授權 chip、快捷鍵說明鈕（鍵盤圖示）；開發模式另有「指標」面板開關）／主要動作（診斷）」四組，暫停鈕文字固定為「暫停」、以按下態表示暫停中；主區由上而下是**背壓 strip**、三 stage 拓樸與**事件流**（Event Stream）；**AI 診斷**面板（AI Copilot）預設收合，選取機台才展開。
 
-![即時 fleet 監控台全景：分組 sidebar、Fleet Health、Event Stream 與背壓比值](docs/screenshots/monitoring-live.png)
+背壓 strip 取代 1.1.0 工具列上的 BackpressureBadge，常駐於主區頂端：讀數依序是「每秒訊息 · 近 60 秒 → 每秒批次 · 近 60 秒 → **合併比** · 訊息 ÷ 批次」，三者同取**最近 60 秒視窗**（前兩者為視窗平均、合併比為視窗內訊息總數 ÷ 批次總數，相除對得上），最近 1 秒瞬時值與自載入起的累計比值只留在 tooltip；下緣是 0–60 的線性比值刻度（1 格 = 1:1、每 10 格標數字，起點標 1:1 錨點，代表「每則訊息各自重繪、沒有合併」），0 到液位為實心液柱、液位線在液面上、另有視窗內最高比值的蝕刻短線，超過 60 時釘在右端並標「>60」；右側常駐一行白話「每幀合併約 N 則 · 近 60 秒最高 X」，旁邊的近 60 秒走勢線只畫單秒合併比一條；60 秒內有丟棄時才以警示色顯示「丟棄 N 則」，斷線或暫停時另以狀態 pill 標「已斷線／重新連線中／已暫停」。「訊息」是**遙測資料點數**而非 WS 訊息數，含溢位合併丟棄與格式不符剔除的筆數。比值隨節拍、機台數與瀏覽器幀率而異，截圖上的數字只代表當下、不是固定規格：預設節拍（`MOCK_TELEMETRY_INTERVAL_MS` 50ms、每 tick 一個含全部已訂閱機台的批次）下，一個 tick 通常落在一幀內，比值因此**約等於機台數**——主要來自伺服器端「一 tick 一批」，rAF 合併本身約只貢獻 1 倍；節拍調快到一幀內收到多個 tick、或分頁切到背景時，rAF 合併的貢獻才會拉開。strip 的資料由 store 每秒取樣，不逐筆寫 reactive state——把「收到多少資料點、實際渲染幾次」直接畫在畫面上，不用開 DevTools。
 
-### 2. 機台狀態呈現：healthy / warning / critical
+![第一屏工作台：側欄機群健康與最近異常摘要、主區背壓 strip、三 stage 拓樸與事件流](docs/screenshots/monitoring-live.png)
 
-每張卡片固定 footprint，狀態切換只改**狀態文字徽章**（HEALTHY／WARNING／CRITICAL）、狀態燈與遙測顏色，**不造成 layout shift**；狀態**不只靠顏色**（徽章帶文字、狀態燈帶 `aria-label`）。下圖三態同屏：`press-02` 進入 critical（紅色徽章、紅色卡片 tint、越界的 Temp `92.1°C`／Vibration `2.50 mm/s`／Errors `16.0%` 一併轉紅），`oven-04` 為 warning（**越界數值本身染 amber**，如 Vibration `1.13 mm/s`、Errors `6.0%`，而卡片**邊框維持 subtle**、不額外加粗），其餘維持 healthy。左下 Fleet Health 同步反映 `Healthy 3 / Warning 1 / Critical 1`（比例條按佔比著色），Event Stream 也各記一筆狀態轉換。遙測由 mock producer 以決定性規律產生，內含週期性 warning／critical 尖峰，確保 demo 可重播。
+### 2. 三 stage 產線拓樸
 
-![機台 healthy／warning／critical 三態同屏，Fleet Health 同步聚合](docs/screenshots/monitoring-states.png)
+主區不是無序的卡片網格，而是 Argo CD 式的**產線 stage 拓樸**：「**前處理 → 成型烘烤 → 包裝分揀**」（Prep／Forming & Baking／Fulfilment）三欄，機台歸屬沿用前端靜態對照 `machine-groups.ts`（不在任何分組的機台歸最後一欄）。欄間連線的粗細與流速隨下游 stage 的產能變化，作業系統設定「減少動態效果」時只變粗細、不流動。版面依**容器寬度**而非視窗斷點判斷：內容寬 < 708px 時改為單欄堆疊，連線改成朝下的短箭頭。下圖為拓樸區裁切，卡片上可見「最近異常」標記。
 
-### 3. Fleet Health 聚合面板
+![三 stage 拓樸：前處理 → 成型烘烤 → 包裝分揀，欄間連線與最近異常標記](docs/screenshots/topology.png)
 
-sidebar 左下的 **Fleet Health** 面板把全隊狀態即時聚合成 **healthy／warning／critical／stale** 四類計數與一條比例條，讓操作者不必逐張數卡片就掌握整體健康度。作為不變量，四類計數之和**恆等於**納入統計的機台總數（stale 亦計入 total）；比例條依佔比著色、隨遙測每批次更新，並與各卡片當下狀態一致（下圖凍結於 `4 healthy · 1 warning` 的瞬間，比例條同步分成綠／琥珀兩段）。stale 沿用 004 的 `isStale` 判定（預設 10s 未更新即歸此類）。
+### 3. 機台狀態：正常／警告／嚴重 + 最近異常標記
 
-![Fleet Health 面板：四類計數與比例條](docs/screenshots/fleet-health.png)
+每張卡片固定 footprint，狀態切換只改**狀態文字徽章**（**正常／警告／嚴重**，Healthy／Warning／Critical）、狀態燈、數值顏色與數值旁的 3 格小刻度（越過嚴重門檻時刻度全填實），**不造成 layout shift**（由截圖劇本 `--viewports` 的 rect 量測驗證）；狀態**不只靠顏色**（徽章帶文字、狀態燈帶 `aria-label`）。卡片顯示**溫度／振動／產能／錯誤率**（Temp／Vibration／Throughput／Errors；單位 °C、mm/s、u/min、% 維持原文）與更新時間：標頭第二列是 id 列（machine id、更新時間只在 ≥ 3 秒前或停滯時顯示「N 秒前」，否則留給螢幕閱讀器、停滯徽章、診斷 chip）。機台進入警告或嚴重時，卡片底部出現「**最近異常**」pill（「嚴重 · 剛進入」／「嚴重 · 進入 N 秒前」），回到正常後改為過去式「曾嚴重 · N 秒前回復」並保留 30 秒；pill 只是標記、不可點，確認在側欄最近異常列的確認鈕（Check 圖示）、聚焦卡片按 `x` 或手機覆蓋層進行，確認後改為劃線的「已確認」、期滿消失。id 列的診斷 chip 為方角 tag、不帶圖示，標示這是 AI 判定：進行中「診斷中 N%」、完成「AI：<嚴重度>」（如「AI：嚴重」）、命中快取「AI：<嚴重度> · 快取」、失敗「AI 失敗」。下圖為壓製機 02（`press-02`）嚴重、烤爐 04（`oven-04`）警告同屏的瞬間。遙測由 mock producer 以決定性規律產生，內含週期性的警告與嚴重尖峰，確保 demo 可重播。
 
-### 4. Event Stream 事件列
+![機台正常／警告／嚴重三態同屏，機群健康、最近異常摘要與事件流同步](docs/screenshots/monitoring-states.png)
 
-主區底部的 **Event Stream** 列出最近的**門檻跨越／錯誤**事件，每筆含時間、機台、嚴重度（WARN／CRIT）與可讀短訊息，讓操作者回顧「剛剛哪台、何時、發生了什麼」。事件**只在狀態轉換時記一筆**（同一狀態內的數值抖動不會重複灌爆），並保留**最近 50 筆**上限（超過即淘汰最舊、不無限成長）。這條事件流是**前端衍生**的——由既有 telemetry 在 state 轉換時就地產生，不新增任何 `packages/contracts` 事件、也不加後端負擔。
+### 4. 機群健康 + 最近異常摘要列
 
-![Event Stream：狀態轉換事件列（時間 · 嚴重度 · 機台 · 短訊息）](docs/screenshots/event-stream.png)
+側欄的**機群健康**面板把全隊狀態即時聚合成**正常／警告／嚴重／停滯**（Healthy／Warning／Critical／Stale）四類計數與一條比例條；四類計數之和**恆等於**納入統計的機台總數（停滯亦計入總數），停滯沿用 `isStale` 判定（預設 10 秒未更新）。其下的**最近異常摘要列**列出目前異常與最近 30 秒內曾異常的機台（狀態燈、名稱、相對時間），點列即選取該台、每列右側有確認鈕（Check 圖示，名稱為「確認 … 的異常標記」），與卡片上的標記讀寫同一份狀態；全部正常時顯示「目前沒有異常」。下圖與第 3 張同一瞬間（劇本從第 3 張全景直接裁切出第 4、5 張與拓樸）。
 
-### 5. sidebar 機台分組 + 即時 search 過濾
+![機群健康：四類計數與比例條，下方為最近異常摘要列](docs/screenshots/fleet-health.png)
 
-sidebar 依前端**靜態對照**把機台分成 **Prep／Forming & Baking／Fulfilment** 三組呈現（每組一標題，對照缺項的機台落入 fallback 群組而非漏顯示）。頂部 search 欄位則做**實際過濾**（非僅外觀）：輸入片段字串會**同時**收斂 sidebar 清單與主區卡片，比對鍵涵蓋 machineId 與顯示名稱（任一 `includes` 命中，空查詢回全部）。下圖輸入 `p` 後只剩 `Press 02` 與 `Pack 03`，而主區標題與 Fleet Health 仍以**全隊**為母數（過濾只影響呈現、不改統計）。
+### 5. 事件流
 
-![sidebar 分組與 search 過濾：輸入 p 後只留 Press 02、Pack 03](docs/screenshots/monitoring-search.png)
+主區底部的**事件流**列出最近的門檻跨越事件，每列含時間（`HH:mm:ss`）、嚴重度、機台與短訊息。事件**只在狀態轉換時記一筆**；同機台、同嚴重度的新事件在自首筆起算的 **60 秒固定窗**內**合併**為一列、顯示起訖時間「HH:mm:ss–HH:mm:ss」並標 `×N`（移到頂端；滿窗另起一列），機台回到正常時另記一筆中性色的「回復正常」。清單上限 **50 筆**（超過淘汰最舊）。每一列可點擊選取對應機台。事件流由前端從既有 telemetry 衍生，不新增任何 `packages/contracts` 事件、也不加後端負擔；面板高度可拖曳上緣把手或聚焦後用方向鍵調整（100–360px）。
 
-### 6. 機台選取（驅動診斷對象）
+![事件流：時間、嚴重度、機台與短訊息，同類事件合併標 ×N](docs/screenshots/event-stream.png)
 
-點選卡片或左側清單即設定 `selectedMachineId`（同時至多一台），以 accent 高亮呈現選取；這個選取就是 Diagnose 的作用對象。下圖選取了正處於 critical 的 `Press 02`（清單項與卡片皆高亮，紅色 tint 一併呈現於選取態），右側 Copilot 面板隨即帶出該台的即時摘要（State／Temp／Vibration／Errors）與 **Run diagnosis** 按鈕。
+### 6. 搜尋過濾（空欄保留）
 
-![選取 Press 02，Copilot 帶出該台摘要與 Run diagnosis](docs/screenshots/monitoring-selected.png)
+工具列搜尋做**實際過濾**（非僅外觀），按 `/` 可直接聚焦：比對鍵涵蓋 machine id 與中文名稱（任一 `includes` 命中；查詢的空白會正規化為 `-`、並容忍去掉連字號的寫法，所以 `Press 02`、`press02` 都能找到 `press-02`，空查詢回全部）。過濾只收斂拓樸中的卡片，**三欄仍在、欄寬與順序不變**，沒有命中的欄顯示空狀態而不塌掉；機群健康仍以全隊為母數（過濾只影響呈現、不改統計）。搜尋結果只剩一台時按 Enter 直接選取並把焦點移到該台卡片。工具列寬度 < 640px 時搜尋收成圖示鈕，點開為覆蓋式輸入。下圖輸入 `p` 後只留壓製機 02（`press-02`，成型烘烤）與包裝機 03（`pack-03`，包裝分揀），前處理欄為空狀態。
 
-### 7. 斷線自動重連 + stale 標示
+![搜尋過濾：輸入 p 後只留壓製機 02 與包裝機 03，前處理欄保留空狀態](docs/screenshots/monitoring-search.png)
 
-即時通道中斷（含 ping 後 5 秒未回 `pong`——連同 15 秒心跳間隔，最長約 20 秒內偵測，不等瀏覽器 close 事件）時，頂部 connection chip 轉為 **Reconnecting** 並顯示「顯示最後已知資料」橫幅，以指數退避 + 抖動自動重連；期間**不清空**最後已知資料，而是把超過門檻（預設 10s）未更新的機台打上 **STALE** 標記、降低視覺權重，並讓卡片凍結在最後已知值（下圖 `press-02` 就停格在中斷前的 critical 讀數）。Fleet Health 同步把它們計入獨立的 **stale** 類（此例 stale=5，仍計入 total）。恢復連線後自動重新訂閱並繼續推送。
+### 7. 選取機台（驅動診斷對象）
 
-![斷線重連中：Reconnecting 橫幅、全機台 STALE、press-02 凍結於 critical](docs/screenshots/monitoring-reconnecting-stale.png)
+點選卡片、事件列項或最近異常摘要列（或用方向鍵在卡片間移焦後按 Enter）即設定選取（同時至多一台），以卡片外側的深青 outline 標示、保留卡片原本的狀態框與底色（嚴重卡被選取時仍是紅框紅底）；卡片 hover 或取得焦點時右下角另有診斷圖示鈕；這個選取就是「**診斷**」（Diagnose）的作用對象。沒有手動收合偏好時，選取即自動展開 **AI 診斷**面板（≥ 1366px 為右側 348px 的推擠式面板，1366px 以下為底部 bottom-sheet，見第 13 節）；閒置的面板只帶出機台名、狀態徽章、「診斷」按鈕與一行說明，不重複卡片上的遙測數值，標頭 chip 為「未診斷」。以面板收合鈕手動收合後，之後選台不再自動展開（偏好記在本機），觸發診斷或點展開把手才展開並清除偏好。下圖選取了正處於嚴重的壓製機 02（紅框紅底外加深青 outline），側欄與事件流中該台的列同步高亮。
 
-### 8. 觸發診斷 + 逐字串流
+![選取壓製機 02：卡片外側深青 outline，AI 診斷面板展開為閒置態「未診斷」與診斷按鈕](docs/screenshots/monitoring-selected.png)
 
-對選取機台按 **Diagnose**（只在連線就緒時可按——已收到本次連線的 `system/connected` 且已完成 `machine/subscribed`、未斷線、未收到 `system/unauthorized`；重連期間停用並以 tooltip 說明）：前端帶著目前的 `socketId`（即 WS `clientId`）呼叫 `POST /diagnoses`，drawer **立即進入 active**（不等任何 AI 內容）。active 上方顯示任務 meta（Queue `diagnosis`、Attempt `N / 3`——換輪時看得出串流為何重來；concurrency 為 worker 端設定值 `WORKER_CONCURRENCY`，前端不顯示）與一份**處理步驟清單**（任務啟動 → 組建診斷 context → 取得去重鎖 → 接收首個 token → 解析結果成功 → 寫入並完成，依 `job/status` 進度里程碑 0/20/40/60/80/100 由待辦→進行中→已完成推進）；接著 worker 的 AI 推理 **逐段 append 出現並帶串流游標**，不必等整段生成完。此時右側 Copilot 面板明確標示對應機台（`press-02`）與任務短碼。
+### 8. 斷線自動重連 + 停滯標示
 
-![Copilot drawer 進入 active：任務 meta、處理步驟清單與逐字串流](docs/screenshots/copilot-streaming.png)
+即時通道中斷（含 ping 後 5 秒未回 `pong`——連同 15 秒心跳間隔，最長約 20 秒內偵測，不等瀏覽器 close 事件）時，工具列連線 chip 轉為「**重新連線中**」（Reconnecting），主區顯示「重新連線中…（畫面保留最後已知資料）」橫幅，背壓 strip 的狀態 pill 同步標「重新連線中」（放棄重連後為「已斷線」），並以指數退避 + 抖動自動重連；期間**不清空**最後已知資料，而是把超過門檻（預設 10 秒）未更新的機台標為「**停滯**」（Stale；虛線邊框、id 列的「N 秒前」與停滯徽章，數值保留），機群健康同步計入停滯類。恢復連線後自動重新訂閱並繼續推送。下圖由截圖劇本在瀏覽器端攔下 `/ws` 並拒絕重連而得（不必關掉 api），壓製機 02 停格在斷線前的嚴重讀數。
 
-> 截圖為 1.0.0 發布前（2026-07-31 重拍，Feature 009 完成時）的畫面，早於 2026-09 審查修復：當時任務 meta 仍顯示 Concurrency，現為 Attempt `N / 3`。
+![斷線重連中：重新連線中橫幅、全部機台停滯、讀數停格於斷線前](docs/screenshots/monitoring-reconnecting-stale.png)
 
-### 9. 結構化診斷結果（五區塊）
+### 9. 觸發診斷 + 串流骨架
 
-`ai/done` 抵達後，drawer 原地渲染**通過 `DiagnosisResultSchema` 驗證**的結構化結果，欄位一致無錯位：**Summary + 嚴重度徽章**（ok／warning／critical）、**Likely Causes**、**Evidence**（來源標記 telemetry／errorlog／maintenance 的佐證片段）、**Suggested Actions**（含 `priority` 與可選 `command`）。進度條走到 100%，先前串流原文收合可回看。
+對選取機台按「**診斷**」（工具列主要動作、卡片上的診斷圖示、面板內按鈕與 `d` 走同一條路；只在連線就緒時可按——已收到本次連線的 `system/connected` 且已完成 `machine/subscribed`、未斷線、未收到 `system/unauthorized`，停用時以 tooltip 說明原因）：前端帶著目前的 `socketId`（即 WS `clientId`）呼叫 `POST /diagnoses`，面板**立即進入「進行中」**（Active），卡片 id 列同步顯示「診斷中 N%」，不等任何 AI 內容。串流中以容錯的漸進解析，把已解析的欄位填入**與完成態同順序的結果骨架**（摘要與嚴重度 → 建議動作 → 可能原因 → 證據；各欄解析到就填，先後依 LLM 輸出順序），還沒解析到的欄位顯示佔位、解析失敗不對操作者報錯；「原始串流」預設收合，可展開看逐字文字。骨架上方是進度與「中止診斷」，下方是任務 meta（佇列 `diagnosis`、嘗試 `N / 3`——換輪時看得出串流為何重來）與**處理步驟清單**（依 `job/status` 進度里程碑 0/20/40/60/80/100 由待辦 → 進行中 → 已完成推進）。面板標頭標示對應機台 id 與任務短碼。
 
-![完成的結構化診斷結果：summary、causes、evidence、actions](docs/screenshots/copilot-completed.png)
+![AI 診斷進行中：進度與中止診斷，結果骨架各欄依解析到的順序填入，未到的欄位為佔位](docs/screenshots/copilot-streaming.png)
 
-### 10. 快取命中標示（Cache before API）
+### 10. 結構化診斷結果
 
-對同一機台、同一狀態簽章再次診斷時，後端 cache-aside 直接回既有結果、**不再呼叫 LLM**，drawer 顯示 **Cached** 標記、進度直接 100%。這是 003「Cache before API / dedupe lock」在前端的可視化證據——demo 中可直接展示「第二次同樣診斷秒回且標為 cached」。
+`ai/done` 抵達後，面板原地渲染**通過 `DiagnosisResultSchema` 驗證**的結構化結果，順序固定為「**摘要**與嚴重度（正常／警告／嚴重）→ **建議動作**（含 `priority` 與可選的 `command`）→ **可能原因** → **證據**」（Summary／Suggested actions／Likely causes／Evidence）。證據預設展開前 2 筆，`source`（telemetry／errorlog／maintenance）相同且摘錄正規化後相同者合併為一列並標 `×N`。完成時標頭 chip 轉為中性色的「已完成」，以嚴重度色條與一行 meta「完成 HH:mm:ss · 耗時」收尾、不再用滿版進度條，meta 下方是次要鈕「**再次診斷**」，卡片 id 列出現「AI：<嚴重度>」tag；耗時由前端從送出請求量到收到完成事件（< 1000 ms 顯示整數 ms，否則顯示一位小數的秒）。原始串流收合在結果下方可回看；AI 回覆內容依 LLM 輸出原樣呈現。
 
-![診斷結果標示 Cached badge](docs/screenshots/copilot-cached.png)
+![診斷完成：嚴重度色條、完成 meta 與再次診斷鈕，摘要與建議動作在前，可能原因與證據接在下方](docs/screenshots/copilot-completed.png)
 
-### 11. 失敗與重試
+### 11. 快取命中與耗時對比（Cache before API）
 
-當診斷因 worker 停擺、AI 錯誤或連線中斷導致綁定失效時，drawer 進入 **Failed**，顯示**可讀的錯誤訊息**（非原始堆疊，如「連線中斷，請重試」）與一個 **Retry** 動作；按 Retry 對同機台重新發起診斷、回到 active 流程（若簽章相同命中快取則照常標 Cached）。
+對同一機台、同一狀態簽章（含該台最近一筆 state、近期錯誤類型、prompt 版本與模型）再次診斷時，後端 cache-aside 直接回既有結果、**不再呼叫 LLM**：結果整塊直接呈現（不走逐字動畫），完成 meta 以大字顯示「**快取 · 耗時**」（Cached；不到 1 秒以 ms 顯示），下方是兩條同刻度的耗時橫條「快取」與「上一次」（該台上一次非快取的耗時；這個分頁只有一筆紀錄時不畫），卡片 tag 變為「AI：<嚴重度> · 快取」——把「第二次同樣的診斷為什麼秒回」量化在畫面上。下圖即兩次耗時的實測對比（數值每輪不同）。這是 003「Cache before API／dedupe lock」在前端的可視化證據；快取屬後端行為，前端只負責呈現。
 
-![診斷失敗狀態與 Retry 按鈕](docs/screenshots/copilot-failed.png)
+![快取命中：完成 meta 大字「快取 · 耗時」，下方快取與上一次兩條同刻度耗時橫條](docs/screenshots/copilot-cached.png)
 
-### 12. 響應式 / 手機 bottom-sheet
+### 12. 失敗與重試
 
-四個基準 viewport（1366×768／1440×900／768×1024／390×844）皆不溢出、不重疊、不遮住頂部狀態列。手機尺寸下卡片退化為**單欄清單**，Copilot 由右側常駐面板改為**底部 bottom-sheet**（選台即開啟、可上滑展開、可關閉、含 Escape）；下圖 bottom-sheet 內即為一份完整的結構化診斷（Summary + 嚴重度徽章、Likely Causes、Evidence、帶 priority 標籤的 Suggested Actions；`command` 為可選欄位，視 AI 回覆內容而定，桌機版 [copilot-completed.png](docs/screenshots/copilot-completed.png) 可見帶 command 的範例），在窄螢幕下仍欄位一致、可捲動閱讀。
+當診斷因佇列不可用、worker 停擺、AI 錯誤或連線中斷使綁定失效時，面板進入「**失敗**」（Failed），顯示**分類後的可讀錯誤**（非原始堆疊）與「**重試**」（Retry）；有中斷前的串流時以「原始串流（中斷前）」保留，不顯示骨架。按「重試」對同機台重新發起診斷、回到進行中流程（簽章相同時照常命中快取）。下圖由截圖劇本在瀏覽器端把 `POST /diagnoses` 攔成 `503` 而得，畫面為「診斷佇列暫時無法使用，請稍後再試」，卡片 tag 為「AI 失敗」。
 
-![手機 390×844 bottom-sheet Copilot：窄螢幕下的完整結構化診斷](docs/screenshots/responsive-mobile.png)
+![診斷失敗：可讀錯誤訊息與重試按鈕](docs/screenshots/copilot-failed.png)
+
+### 13. 響應式 / 手機 bottom-sheet
+
+五個驗收 viewport（1366×768、1440×900、1024×768、768×1024、390×844）在淺色與深色下皆無文字溢出、無控制項重疊、無橫向捲動（截圖劇本 `--viewports` 量測）。工具列依自身寬度分三段：≥ 820px 全部顯示、640–819px 控制項只留圖示、< 640px 搜尋收成圖示鈕。AI 診斷面板在 ≥ 1366px 為右側推擠式面板，< 1366px（含 1024 橫式與 768 直式）改為**底部 bottom-sheet**：有抓取把手；選了機台、尚未診斷時是約 51px 的單列（機台名、狀態徽章、行內「診斷」、收合鈕），非 modal、不加遮罩，主區依 sheet 實際高度在底部留白、不被蓋住；診斷進行中或完成後 sheet 才展高並成為 modal（遮罩＋焦點陷阱）。收合後只要仍有選取機台就退為 32px 的 peek 條（顯示機台名與診斷狀態 chip）。手機（< 768px）側欄隱藏，主畫面頂端改為常駐的**機群健康摘要條**（比例條與四個計數，點擊展開異常清單覆蓋層），主題切換移入工具列；背壓 strip 保留每秒訊息、合併比、縮小的 0–60 刻度與液位線及丟棄則數。下圖為 390×844 診斷完成後的 modal bottom-sheet，內含一份完整的結構化診斷（命中桌機劇本留下的快取；這個分頁只有一筆紀錄，故不畫耗時對比橫條）。
+
+![手機 390×844：精簡工具列、機群健康摘要條與 bottom-sheet 內的快取診斷結果](docs/screenshots/responsive-mobile.png)
+
+### 14. 深淺雙主題
+
+淺色為預設，深色以單一控制項切換（桌機在側欄底部、手機在工具列），切換在同一幀完成、無閃爍與版面位移，選擇記在本機（localStorage `fg.theme`；首次載入不跟隨作業系統設定）。兩套主題共用同一組語意 token、只有值不同，色值只存在 `apps/web/src/styles/theme.css`；兩主題下功能性文字皆不小於 12px、對比 ≥ 4.5:1。下圖為深色主題全景，與第 11 張同一畫面切到深色：選取壓製機 02，AI 診斷面板為快取命中與耗時對比橫條。
+
+![深色主題全景：選取壓製機 02，AI 診斷面板為快取命中與耗時對比橫條](docs/screenshots/dark-theme.png)
 
 ---
 
@@ -213,8 +231,8 @@ WebSocket.onmessage ──▶ 只 push 進 buffer（不碰 reactive state）
 
 - `useHighFrequencyWs` 的 `onmessage` **只**把訊息推進 buffer，絕不直接寫 reactive state（憲章硬規則 #1）。
 - 每一幀（rAF）才把累積的 buffer 一次性提交：一幀內不論收到幾則 WS 訊息都只提交一次，渲染次數以幀率為上限、不隨訊息速率線性成長。
-- buffer 設**上限**，避免分頁切到背景時逐幀暫停、記憶體無限成長。溢位時不再單純截斷最舊，而是**合併**：每台保留「第一筆＋每個 state 轉換點＋最新一筆」，丟掉中間同態的重複值——Event Stream 因此不會漏掉背景期間的 warning／critical（規格見 `apps/web/design/design-spec.md` v0.5）。
-- store 維護 `receivedMessages`（以遙測資料點計，**含** `droppedMessages` 與格式不符的丟棄筆數）與 `renderedBatches` 兩個計數，比值由 `shared/lib/backpressure.ts` 的 `backpressureRatio` 單一實作，**把背壓從抽象說法變成畫面上看得見的比值**——這是整個決策最直接的證據。比值隨節拍與機台數而異，不宣稱固定值：預設節拍（50ms、一 tick 一批含全部已訂閱機台）下一幀通常只落一個 tick，比值**約等於機台數**，主要反映伺服器端的逐 tick 批次，rAF 合併只貢獻約 1 倍；rAF 的效果要在一幀內湧入多個 tick（節拍調快、主執行緒忙、分頁回前景時）才明顯。
+- buffer 設**上限**，避免分頁切到背景時逐幀暫停、記憶體無限成長。溢位時不再單純截斷最舊，而是**合併**：每台保留「第一筆＋每個 state 轉換點＋最新一筆」，丟掉中間同態的重複值——事件流因此不會漏掉背景期間的 warning／critical（此規則最初記於 `apps/web/design/design-spec.md` v0.5，該檔已於 013 退役）。
+- store 維護 `receivedMessages`（以遙測資料點計，**含** `droppedMessages` 與格式不符的丟棄筆數）與 `renderedBatches` 兩個計數，自載入起的累計比值由 `shared/lib/backpressure.ts` 的 `backpressureRatio` 單一實作（013 起只放在背壓 strip 的 tooltip）；畫面主顯示是背壓 strip 的**最近 60 秒視窗比值**（`shared/lib/rate-series.ts`，store 每秒取樣），**把背壓從抽象說法變成畫面上看得見的比值**——這是整個決策最直接的證據。比值隨節拍與機台數而異，不宣稱固定值：預設節拍（50ms、一 tick 一批含全部已訂閱機台）下一幀通常只落一個 tick，比值**約等於機台數**，主要反映伺服器端的逐 tick 批次，rAF 合併只貢獻約 1 倍；rAF 的效果要在一幀內湧入多個 tick（節拍調快、主執行緒忙、分頁回前景時）才明顯。
 - Pause 且連線中時凍結 stale 判定；重連退避在收到 `machine/subscribed`（訂閱成功）才歸零——token 錯誤被 `1008` 關閉的連線也會收到 `system/connected`，若在那時歸零會以約 1 秒週期無限重連；瀏覽器 `online` 事件會立即重連。
 
 ### 🔌 2. 即時通道統一用原生 WebSocket
@@ -222,7 +240,7 @@ WebSocket.onmessage ──▶ 只 push 進 buffer（不碰 reactive state）
 前端 `new WebSocket()`、後端 `ws` 套件掛在 NestJS HTTP server（path `/ws`）。刻意**不用 Socket.IO**：高頻場景需要 wire format 的完全控制（直接推裸 JSON 陣列、少一層封包開銷），也避免函式庫內部緩衝與自己的 rAF 批次策略打架、讓「背壓由誰負責」變模糊。代價（reconnect、heartbeat、訂閱表、jobId 對應）全部手刻並列入驗收。完整取捨見 **[ADR-001](docs/adr-001-native-websocket.md)**。
 
 - **指數退避 + 抖動**重連（非使用者主動關閉才重連）。
-- 應用層 `ping`/`pong` heartbeat：ping 後 5 秒未回 `pong` 即視為斷線（連同 15 秒心跳間隔，最長約 20 秒內偵測），立即顯示 Reconnecting 並退避重連，不等瀏覽器的 close 事件。
+- 應用層 `ping`/`pong` heartbeat：ping 後 5 秒未回 `pong` 即視為斷線（連同 15 秒心跳間隔，最長約 20 秒內偵測），立即顯示「重新連線中」並退避重連，不等瀏覽器的 close 事件。
 - 伺服器端主動探活，回收「半死」連線（網路硬中斷）：協定層 ping 帶 nonce，pong 必須原樣帶回才算存活（瀏覽器與 `ws` 會自動回；自寫 client 若關閉 autoPong 需自行回），未經請求或 nonce 不符的 pong 不算。
 - **慢 client 背壓**：單一連線 `bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES` 即略過該筆**高頻流**推送（遙測批次與 `ai/token`；`ai/done`／`ai/error`／`job/status` 等終態與控制訊息照送，漏掉的 token 由 `ai/done` 補齊，記憶體由下一句的 terminate 兜底），連續 3 個心跳 tick 仍超標則 terminate；同時連線數達 `MAX_WS_CONNECTIONS` 時 upgrade 直接回 HTTP 503；有設 `WS_AUTH_SECRET` 時，尚未授權的連線另有子上限 `max(10, floor(MAX_WS_CONNECTIONS × 20%))`，達到即回 503——這限制的是未授權者可佔的總名額（已授權者不受未授權洪水影響），持 token 的新連線同樣得先經過未授權池，池滿時一樣 503，不保證新授權連線必能進入。
 - **Gateway 輸入加固**：客戶端控制訊息一律以 `ClientControlMessageSchema` `safeParse`（`machineIds` ≤ 50、每個 ≤ 64 字、token ≤ 512 字），`maxPayload` 16 KiB、每條連線掛 `error` listener、`machineIds` 與後端機台名冊取交集；可選 Origin 白名單 `WS_ALLOWED_ORIGINS`。任何畸形輸入只會被拒絕，不會讓 api 崩潰；同一連線累計 10 次違規（無法解析、schema 不符、錯誤 token）即以 close code `1008` 關閉。
@@ -261,7 +279,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 
 ### ✅ 6. Schema 驗證的 AI 輸出 + LLM provider 抽象
 
-- LLM 包在 `AiProvider` interface 後面（憲章硬規則 #4）：主邏輯只依賴 interface，換 provider 只改 adapter（目前為 Gemini `gemini-2.5-flash`，SDK 為 `@google/genai`）。介面帶 `id`／`model`（進快取簽章）、`signal`（取消）、回傳 `finishReason`／`usage`，錯誤一律包成 `AiProviderError{retryable}`，不可重試者轉 BullMQ `UnrecoverableError`；僅 `gemini-2.5-flash` 系列送 `thinkingBudget: 0`。
+- LLM 包在 `AiProvider` interface 後面（憲章硬規則 #4）：主邏輯只依賴 interface，換 provider 只改 adapter（目前預設為 Gemini `gemini-3.5-flash-lite`，SDK 為 `@google/genai`）。介面帶 `id`／`model`（進快取簽章）、`signal`（取消）、回傳 `finishReason`／`usage`，錯誤一律包成 `AiProviderError{retryable}`，不可重試者轉 BullMQ `UnrecoverableError`；thinking 依模型系列設定：`gemini-2.5-flash` 系列送 `thinkingBudget: 0`（關閉），3.x 以後的 `flash`／`flash-lite` 送 `thinkingLevel: MEDIUM`（它們不接受 `thinkingBudget: 0`），其餘不送。
 - AI 回傳**必經** `DiagnosisResultSchema.parse()`（憲章硬規則 #6）；失敗走 `ai/error`，絕不把未驗證物件當結果。
 - 診斷結果的結構、即時事件的型別，全部以 `packages/contracts` 的 **Zod schema 為單一來源**，型別由 `z.infer` 推導——不讓「驗證」與「型別」各寫一份而分歧。
 
@@ -277,7 +295,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 - `copilot.store` 以 `Map<machineId, CopilotJobState>` 維護**每台各自**的診斷狀態機，多台可並存進行；drawer 同一時間只呈現目前選取機台的那一份，切換選取即還原該台的呈現。
 - 進度**純事件驅動**：progress 完全以 `job/status` 攜帶值為準（前端不合成假值），未帶值時 indeterminate。worker 把里程碑綁**真實處理階段**：`0` job active → `20` 組完 context → `40` 取鎖即將呼叫 LLM → `60` 首個 token → `80` 串流結束且 schema 解析成功 → `100` 寫庫/快取並發 `ai/done`。這些里程碑在 006 進一步於 active drawer 呈現為可見的**處理步驟清單**（待辦／進行中／已完成），旁列任務 meta：Queue `diagnosis`、Attempt `N / 3`（換輪時看得出串流為何重來；queue 自契約常數、attempt 取自串流事件）；concurrency 為 worker 端設定值 `WORKER_CONCURRENCY`，前端不顯示。（006 當時顯示 `queue` / `concurrency` / `attempts` 三項靜態值。）
 - `jobId` 由前端產生，**送出 `POST /diagnoses` 之前**就先建立 pending 狀態，早於 HTTP 回應抵達的 `job/status`／`ai/*` 也對得上；同機台進行中的請求在前端去重，fetch 設 15 秒逾時；`ai/done` 在前端再過一次 schema 驗證。
-- 重連（新 `clientId`）即把該台進行中任務**標中斷 + 提供 Retry**（不用逾時偵測）；過期／亂序的舊 job 串流片段一律忽略，不覆蓋目前任務；`attempt` 換輪時清空已累積的串流文字。StreamingPanel 不再逐 token 朗讀（a11y），行動版 bottom-sheet 以 dialog 語意＋focus trap 呈現。
+- 重連（新 `clientId`）即把該台進行中任務**標中斷 + 提供「重試」**（不用逾時偵測）；過期／亂序的舊 job 串流片段一律忽略，不覆蓋目前任務；`attempt` 換輪時清空已累積的串流文字。StreamingPanel 不再逐 token 朗讀（a11y），< 1366px 的 bottom-sheet 以 dialog 語意呈現：閒置選台時為非 modal 單列，診斷進行中／完成才成為 modal＋focus trap。
 
 ### 🩺 9. let it crash + process 監督（007）
 
@@ -349,7 +367,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 
 ### 一次診斷走一遍（端到端）
 
-以操作者對某台按下 **Diagnose** 為例，資料在多個進程間如此流動：
+以操作者對某台按下「**診斷**」為例，資料在多個進程間如此流動：
 
 1. **web → api**：前端先以 `crypto.randomUUID()` 產生 `jobId` 並建立 pending 狀態，再帶當前 `socketId`（＝ WS `clientId`）呼叫 `POST /diagnoses`；`JobsController` 以 `CreateDiagnosisBodySchema` 驗證後只負責**綁定＋入列**並立即回 `jobId`，不做任何 long-running 工作（狀態碼見「[注意事項](#注意事項)」）。
 2. **api → Redis**：任務進 BullMQ `diagnosis` queue（`attempts: 3`＋指數退避），由 worker 以 `WORKER_CONCURRENCY` 並行消化。
@@ -478,11 +496,13 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | **003** | [診斷任務佇列、AI 串流、Redis 快取](specs/003-bullmq-ai-streaming/spec.md) | `POST /diagnoses`、BullMQ（limiter/attempts/backoff；limiter 已於 2026-09 改為 worker 取鎖後的 Redis 固定窗）、獨立 worker、cache-aside + dedupe lock、`AiProvider` streaming、Pub/Sub relay、`DiagnosisResultSchema` 驗證、diagnoses 持久化 + 觸發稽核 |
 | **004** | [前端高頻 WebSocket 監控台](specs/004-frontend-ws-gatekeeper/spec.md) | monitoring domain、`useHighFrequencyWs`（buffer + rAF 批次）、BackpressureBadge、機台卡片六態、指數退避重連、stale 標示、`selectedMachineId`、四 viewport 響應式 |
 | **005** | [AI Copilot Drawer](specs/005-ai-copilot-drawer/spec.md) | `ai-copilot` domain、`Map<machineId>` 狀態機、逐段串流 + 游標、結構化結果五區塊、`Cached` badge、同機台去重、Retry、桌機常駐 / 手機 bottom-sheet、worker 進度里程碑細化 |
-| **006** | [監控台前端保真補完（Monitoring Console Fidelity）](specs/006-monitoring-console-fidelity/spec.md) | 對齊 design-spec／`refs` 把 004／005 漏做或未對齊的前端項補齊（**全前端-only、不動契約與後端**）：卡片保真（狀態文字徽章、warning 越界值染 amber 而邊框維持 subtle、遙測單位、`Ns ago` 相對時間戳）、**Fleet Health** 聚合面板（healthy／warning／critical／stale 計數 + 比例條）、**Event Stream** 狀態轉換事件列（去重、上限 50、前端衍生）、**TopBar**（pause／resume、connection 延遲 ms、search 實際過濾）、主區「Fleet monitor · N machines」標題列、sidebar 機台分組、Drawer active 任務 meta + 處理步驟清單 |
+| **006** | [監控台前端保真補完（Monitoring Console Fidelity）](specs/006-monitoring-console-fidelity/spec.md) | 對齊當時的 design-spec／`refs`（013 起已退役，現況見 `apps/web/PRODUCT.md`、`apps/web/DESIGN.md`）把 004／005 漏做或未對齊的前端項補齊（**全前端-only、不動契約與後端**）：卡片保真（狀態文字徽章、warning 越界值染 amber 而邊框維持 subtle、遙測單位、`Ns ago` 相對時間戳）、**Fleet Health** 聚合面板（healthy／warning／critical／stale 計數 + 比例條）、**Event Stream** 狀態轉換事件列（去重、上限 50、前端衍生）、**TopBar**（pause／resume、connection 延遲 ms、search 實際過濾）、主區「Fleet monitor · N machines」標題列、sidebar 機台分組、Drawer active 任務 meta + 處理步驟清單 |
 | **007** | [Worker 生產化與 process 監督](specs/007-worker-process-supervision/spec.md) | worker 容器化（多階段 Dockerfile）、崩潰語意由「log + 續跑」翻轉為 **let it crash**（`exit(1)`）交給 Docker `restart: on-failure` 監督重啟、Redis heartbeat key 偵測「活著但卡住」、可決定性重現的故障注入旗標、崩潰迴圈防護（連續 5 次失敗即停止重啟，避免熱迴圈打爆 LLM 額度） |
 | **008** | [整棧容器化與一鍵 Demo](specs/008-fullstack-containerization/spec.md) | api／web 比照 007 容器化並收進 `demo` compose profile，nginx 反向代理 `/ws`、`/diagnoses` 至 api，瀏覽器**單一入口** `http://localhost:8080`；`seed` 一次性服務備妥示範資料；開發模式（host 直跑）零影響；乾淨收場（`down -v` 可重播） |
 | **009** | [可觀測性基線](specs/009-observability-baseline/spec.md) | 三端補齊「監控台自己也該可被監控」的基線：pino 結構化 JSON 日誌（含關聯鍵）、`GET /healthz` 依賴狀態探針（Redis／Mongo 二態回應）、queue 深度／WS 連線數／LLM latency／cache 命中率等關鍵指標週期入 log、dev-only **Metrics Panel**（`VITE_METRICS_PANEL`，唯讀、預設收合，production build 預設關閉）、有損寫入語意明文化（見下方「[已宣告的取捨](#已宣告的取捨)」） |
 | **1.1.0 維護**（2026-09，非 SDD） | [`CHANGELOG.md`](CHANGELOG.md)、指南 §15.6 | 四條維護分支：兩輪審查修復（第一輪 P0～P2、第二輪 Batch A～D）、技術棧升級（NestJS 11／Express 5、Vite 7、Zod 4、Pinia 3、Vitest 4、pnpm 10、`@google/genai`）、測試基礎建設（覆蓋率門檻、整合測試、e2e、變異測試）、契約升 1.2.0 與新增 `CHANGELOG.md`；第三輪審查報告與其修復留待 1.1.0 之後 |
+| **013** | [UI 全面改版（實驗室玻璃與蝕刻刻度）](specs/013-ui-redesign/spec.md) | web 監控台整體換皮：三 stage 產線拓樸取代機台網格、背壓 strip（60 秒視窗合併比＋液柱刻度）、診斷串流漸進骨架與快取耗時對比、深淺雙主題、繁中文案、≥ 1366px 推擠式／< 1366px bottom-sheet 的 AI 診斷面板；視覺真實來源改為 `apps/web/PRODUCT.md`／`DESIGN.md` |
+| **2.0.0 維護**（2026-10，非 SDD） | [`CHANGELOG.md`](CHANGELOG.md)、指南 §15.6 | 暫停鈕維持按下換字（中文「恢復」、拿掉 `aria-pressed`、暫停橫幅改 `role=status`）、預設模型改 `gemini-3.5-flash-lite`（3.x flash 送 `thinkingLevel: MEDIUM`、輸出上限預設 4096）、demo 影片重錄與錄影劇本 `record-demo.cjs`；第三輪審查報告（`docs/20260927-research-review03.md`）已併入，其修復仍待後續 |
 
 ---
 
@@ -500,10 +520,15 @@ flow-gatekeeper/
 │   │   │               #   heartbeat、let-it-crash 致命守門
 │   │   ├── Dockerfile           # ← 多階段建置（007）；第二進入點 dist/healthcheck.js 供容器 healthcheck
 │   │   └── .env.example   # ← worker 專屬 env 範本（GEMINI_API_KEY 只在這；複製成 apps/worker/.env）
-│   └── web/           # Vue 3 + Pinia：monitoring / ai-copilot domains、design-spec token、
+│   └── web/           # Vue 3 + Pinia：monitoring / ai-copilot domains、雙主題 token（src/styles/theme.css）、
 │       │               #   dev-only MetricsPanel（VITE_METRICS_PANEL）
 │       ├── Dockerfile          # ← 建置靜態產物 + nginx 同源反代 /ws、/diagnoses（008）
-│       ├── design/             # design-spec.md + refs/*.png（視覺單一來源）
+│       ├── PRODUCT.md          # 產品定位與介面約束（視覺真實來源之一，impeccable 工件）
+│       ├── DESIGN.md           # 雙主題 token 與元件規格（視覺真實來源之一，impeccable 工件）
+│       ├── design/             # design-spec.md（2026-10 已退役，保留全文作歷史；refs/ 已移除）
+│       ├── scripts/screenshots.cjs  # 截圖劇本（playwright-core）：--viewports 版面驗收、--readme 產出 docs/screenshots/
+│       ├── scripts/record-demo.cjs  # demo 錄影劇本（playwright-core＋ffmpeg）：產出 docs/demo/ 的影片與海報
+│       ├── scripts/lib/browser.cjs  # 兩支劇本共用：Chromium 尋找、面板狀態 chip 對照
 │       └── .env.example        # ← 選用：僅 VITE_METRICS_PANEL 開關（複製成 apps/web/.env）
 ├── packages/
 │   ├── contracts/     # Zod schema 單一來源（events / DiagnosisResult / job payload / SystemMetrics）
@@ -512,10 +537,10 @@ flow-gatekeeper/
 ├── tests/
 │   └── e2e/           # 跨 process e2e（@flow-gatekeeper/e2e）：起 compose 全棧 + fake AiProvider，見 tests/e2e/README.md
 ├── specs/             # 001–009 每條 feature 的 spec / plan / tasks / checklist
-├── docs/              # ADR、SDD 完整實作指南、design-spec、demo 影片與截圖
+├── docs/              # ADR、SDD 完整實作指南、design-spec（v0.3 歷史起點，已退役）、demo 影片與截圖
 ├── scripts/           # dev-up.ps1（一鍵起全棧）、demo-reset.ps1（清 AI 快取）
 ├── asyncapi.yaml      # 即時通道契約（Spectral lint；info.version 1.2.0）
-├── CHANGELOG.md       # 產品版本（1.1.0）與 asyncapi 契約版本的變更紀錄與版本策略
+├── CHANGELOG.md       # 產品版本（2.0.0）與 asyncapi 契約版本的變更紀錄與版本策略
 ├── docker-compose.yml # Redis 7 + MongoDB 7（不帶分組）＋ demo profile：api/worker/web/seed 全棧受監督容器
 ├── docker-compose.e2e.yml # 只給 tests/e2e 用的 override（獨立專案名、18080、AI_PROVIDER=fake）
 ├── vitest.config.ts   # 只給 test:coverage：test.projects 聚合五個套件、合併覆蓋率與門檻
@@ -640,6 +665,44 @@ pnpm build   # 選用：走一次 production 建置路徑（packages build → a
 
 整合測試（真 Redis／Mongo）、跨 process e2e 與變異測試不在 `pnpm check` 內，指令與前置見「[測試與品質門檻](#測試與品質門檻)」。
 
+### 截圖劇本（選用：README 截圖與版面驗收）
+
+`apps/web/scripts/screenshots.cjs` 以瀏覽器操作正在跑的監控台並截圖，有兩種用法。它需要先起好軌道 A（或以 `--url` 指向軌道 B 的 `http://localhost:8080/`），手動執行、不進 CI；`pnpm check`、`pnpm build` 與 demo 容器都不需要瀏覽器。
+
+- **`playwright-core`** 是 `apps/web` 的 devDependency（`~1.64.1`），隨 `pnpm install` 安裝；它**不下載瀏覽器**，只驅動本機已安裝的 Chromium。
+- **Chromium 路徑**（依腳本現狀的尋找順序）：
+  1. 環境變數 `PLAYWRIGHT_CHROMIUM`：可執行檔的絕對路徑（chrome 或 chrome-headless-shell），指到不存在的檔案會直接報錯。
+  2. 未設定時，在 `PLAYWRIGHT_BROWSERS_PATH`（設為 `0` 時略過）與預設的 ms-playwright 目錄（Windows `%LOCALAPPDATA%\ms-playwright`、macOS `~/Library/Caches/ms-playwright`、Linux `~/.cache/ms-playwright`）下找 `chromium_headless_shell-<revision>` 與 `chromium-<revision>`，取 revision 最新者，同 revision 時 headless shell 優先。
+  3. 目前以 `chromium_headless_shell-1243`（Chrome 153）實測；`playwright-core` 1.64.1 對應的 revision 是 1248，目錄裡有哪個就用哪個。
+  4. 都找不到時印出安裝指引並以非 0 結束：執行一次 `pnpm --filter web exec playwright-core install chromium-headless-shell`，或設定 `PLAYWRIGHT_CHROMIUM` 指向既有的瀏覽器。
+
+```powershell
+# 選用：指定瀏覽器（未設定時自動尋找 ms-playwright 目錄）
+$env:PLAYWRIGHT_CHROMIUM = "$env:LOCALAPPDATA\ms-playwright\chromium_headless_shell-1243\chrome-headless-shell-win64\chrome-headless-shell.exe"
+
+# --viewports：五個驗收 viewport（1366×768、1440×900、1024×768、768×1024、390×844）× 淺色／深色 × AI 診斷面板展開，
+#   共 10 張，輸出到 apps/web/.screenshots/（不入 git）；每張另存 .json，量測 hover、選取、嚴重脈動、搜尋過濾前後的
+#   卡片與 stage 欄 rect，有差值或橫向溢出即以 exit 1 結束（版面位移驗收）
+node apps/web/scripts/screenshots.cjs --viewports
+
+# --readme：README「功能逐項展示」的 14 張（12 張淺色功能截圖＋ dark-theme ＋ topology），輸出到 docs/screenshots/，約 1.5–3 分鐘（視嚴重尖峰的時機）
+./scripts/demo-reset.ps1                       # 先清 AI 快取，第一次診斷才拍得到串流骨架
+node apps/web/scripts/screenshots.cjs --readme
+
+# 其他選項：--url、--out、--settle、--search、--no-fail（--viewports 另有 --pulse-wait、--only）；完整說明見 --help
+node apps/web/scripts/screenshots.cjs --help
+```
+
+`--readme` 的注意事項：worker 需有效的 `GEMINI_API_KEY`（整輪只真正呼叫一次 LLM，其餘命中快取）；「斷線」與「失敗」兩張由劇本在自己的瀏覽器分頁內攔截 `/ws` 與 `POST /diagnoses` 重現，不必關掉 api，也不影響其他連線。拍不到的截圖（例如快取沒清、第一次診斷就命中）不寫檔、保留舊檔，結束時列出缺漏並以 exit 1 結束。量測期間避免同時修改 `apps/web/src`，Vite HMR 會讓 `--viewports` 的差值無法判讀。
+
+**demo 影片**（`apps/web/scripts/record-demo.cjs`）：依上方「[端到端操作 Demo](#端到端操作-demo實機錄影)」的劇本表一鏡到底錄 1440×900，輸出 `docs/demo/flow-gatekeeper-demo.mp4` 與海報（快取命中後的最後一格）。以 CDP 逐格擷取 JPEG、再用 ffmpeg 轉 30fps H.264（比 Playwright 內建錄影的即時 VP8 清楚）；headless 沒有游標，劇本只在錄影頁面注入假游標、不動產品程式碼。開錄前量 `press-02` 的尖峰週期，讓尖峰落在鏡頭第 2 秒、兩次診斷都在回到正常後送出（第二次才會命中快取）。Chromium 的尋找規則與截圖劇本相同（共用 `apps/web/scripts/lib/browser.cjs`）。需要含 **libx264** 的 ffmpeg（Playwright 自帶的只有 VP8），以 `--ffmpeg` 或環境變數 `FFMPEG` 指定，Windows 可下載 [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) 的 essentials 建置解壓即用。對齊失準（尖峰週期量不出來、第一格晚於鏡頭 0 秒）時在呼叫 LLM 之前中止；第一次診斷就命中快取、或第二次沒命中時也中止。影片在暫存目錄編碼完成才覆寫 `docs/demo/`；覆寫失敗（例如影片正被播放器開著）時保留暫存成品並印出路徑，手動複製即可、不必重錄。劇本不自動重試（避免多打 LLM）。
+
+```powershell
+docker compose --profile demo up -d --build    # 對一鍵 demo 容器錄（預設 --url http://localhost:8080/）
+./scripts/demo-reset.ps1
+node apps/web/scripts/record-demo.cjs --ffmpeg C:\tools\ffmpeg\bin\ffmpeg.exe   # 約 1 分鐘（含 20 秒暖機與對齊尖峰），呼叫 LLM 一次
+```
+
 ---
 
 ## 執行模式：開發模式與一鍵 demo
@@ -718,15 +781,15 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 | `WS_HEARTBEAT_MS` | api | `15000` | 伺服器端心跳探活間隔；下限 1000、上限 2147483647，超出即拒絕啟動 |
 | `MOCK_TELEMETRY_INTERVAL_MS` | api | `50` | 遙測產生節拍（拉到 5ms 可把吞吐放大 ~10×；單次量測示例：26 秒收近 1.9 萬筆而僅批次渲染約 1,600 次，實際數字隨機器與幀率而異）；下限 5、上限 2147483647，超出即拒絕啟動 |
 | `TELEMETRY_TTL_SECONDS` | api | `604800`（demo 範本 `.env.demo.example` 為 `86400`） | 時序遙測保存期（dev 7 天；demo 1 天，避免長跑撐大 `mongo-data` volume）；collection 已存在時以 `collMod` 更新，改值重啟即生效 |
-| `GEMINI_API_KEY` / `GEMINI_MODEL` | **worker** | *(空)* / `gemini-2.5-flash` | LLM provider（包在 `AiProvider` 後）；**只有 worker 需要**。任何環境皆可留空——每筆診斷立即以 `provider_error` 失敗、不重試 |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | **worker** | *(空)* / `gemini-3.5-flash-lite` | LLM provider（包在 `AiProvider` 後）；**只有 worker 需要**。任何環境皆可留空——每筆診斷立即以 `provider_error` 失敗、不重試。模型請寫完整名稱：thinking 設定依名稱判定，`gemini-flash-lite-latest` 這類不帶版本號的 `*-latest` 別名判不出系列（不送 thinking 設定、不檢查輸出上限），啟動時 warn |
 | `AI_RPM` | worker | `8` | 每分鐘**實際 LLM 呼叫**上限（取鎖且 cache 未命中才計數的 Redis 固定窗 `ai-rpm:<分鐘>`；超過即延後到下一窗、不消耗重試次數） |
 | `WORKER_CONCURRENCY` | worker | `2` | 同時處理的 job 數（BullMQ concurrency） |
 | `WORKER_INSTANCE_ID` | worker | *(空＝hostname)* | 組成 `worker:heartbeat:<id>`／`metrics:worker:<id>`；只允許英數字與 `. _ -`（≤ 128），不合法即拒絕啟動。demo 容器由 compose 釘為空字串（一律 hostname），本值只對 host 直跑生效；同機直跑多個 worker 時才手動設不同值 |
 | `AI_CACHE_TTL_SECONDS` | worker | `600` | 診斷快取有效期 |
 | `AI_DEDUPE_LOCK_SECONDS` | worker | `45` | 同簽章去重鎖有效期；必須 `× 1000 ≥ AI_TIMEOUT_MS + 5000`（5 秒餘裕涵蓋結果寫入與收尾），否則 worker 拒絕啟動 |
 | `AI_TIMEOUT_MS` | worker | `30000` | 單次 AI streaming 逾時；以 `AbortSignal` 真正中止底層串流。**MUST 小於前端 45 秒無進展 watchdog** 並預留等待鎖／首 token 前的時間，否則後端仍在跑時前端已判定逾時（見「已知限制」的重派靜默）；調高時 worker `stop_grace_period`（45s）與 `AI_DEDUPE_LOCK_SECONDS` 須一併調整 |
-| `AI_MAX_OUTPUT_TOKENS` | worker | `2048` | Gemini `maxOutputTokens`；正整數、≤ 65536。thinking token 也計入此上限；輸出被截斷視為**不可重試**的 `schema_invalid`（重試同一 prompt 只會再被截斷）。不能關 thinking 的模型（`gemini-2.5-pro`、3.x）建議 ≥ 8192，低於此值 worker 啟動會 warn；本值與 `AI_TEMPERATURE` 都不進快取簽章 |
-| `AI_TEMPERATURE` | worker | `0.2` | Gemini 取樣溫度，範圍 0–2 |
+| `AI_MAX_OUTPUT_TOKENS` | worker | `4096` | Gemini `maxOutputTokens`；正整數、≤ 65536。thinking token 也計入此上限；輸出被截斷視為**不可重試**的 `schema_invalid`（重試同一 prompt 只會再被截斷）。預設模型以 `thinkingLevel: MEDIUM` 思考（真實診斷 prompt 實測 0～約 1150 個 thinking token，由模型動態決定），3.x `flash`／`flash-lite` 低於 4096、不能關 thinking 的模型（`gemini-2.5-pro`、3.x pro）低於 8192 時 worker 啟動會 warn；本值與 `AI_TEMPERATURE` 都不進快取簽章 |
+| `AI_TEMPERATURE` | worker | `0.2` | Gemini 取樣溫度，範圍 0–2。Google 建議 Gemini 3 系列用 1.0（低於 1.0 可能 looping）；以預設模型實測 0.2／1.0 皆無截斷、0.2 結果較一致，故維持 0.2——log 出現 `max_tokens` 截斷時可先改 1.0 |
 | `AI_PROVIDER` | worker | `gemini` | AI provider 選擇：`gemini`（正式唯一 provider）／`fake`（**測試替身**：不呼叫 LLM、不需金鑰，輸出固定假診斷並逐段串流；仍經 `DiagnosisResultSchema` 驗證、照常進 cache 與 Pub/Sub）。**`fake` 僅供跨 process e2e 與演練**——`NODE_ENV=production` 下仍允許但啟動時記一則 warn；非法值（如 `openai`）拒絕啟動 |
 | `FAKE_AI_TOKENS` | worker | `20` | fake provider 把診斷 JSON 切成幾段送出（1–1000）；`AI_PROVIDER=gemini` 時不作用 |
 | `FAKE_AI_TOKEN_DELAY_MS` | worker | `500` | fake provider 相鄰兩段的延遲（0–60000 ms，可為 0）；`(FAKE_AI_TOKENS − 1) × FAKE_AI_TOKEN_DELAY_MS ≥ AI_TIMEOUT_MS` 時啟動 warn（每筆都會逾時）。`AI_PROVIDER=gemini` 時不作用 |
@@ -773,9 +836,9 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 
 | 項目 | 現況 |
 | --- | --- |
-| **產品版本** | **1.1.0**（2026-09-28；git tag `1.1.0`，指向 `develop` 併入 `main` 的 merge commit）。六份 `package.json` 的 `version` 與 tag 一致。產品 tag **不帶 `v` 前綴**——第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`（同一 commit `3e94ac2`），GitHub Release 與 demo 影片連結一併改指 `1.0.0` |
+| **產品版本** | **2.0.0**（2026-10-17；git tag `2.0.0`，指向 `develop` 併入 `main` 的 merge commit；前一版 1.1.0 為 2026-09-28）。六份 `package.json` 的 `version` 與 tag 一致。產品 tag **不帶 `v` 前綴**——第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`（同一 commit `3e94ac2`），GitHub Release 與 demo 影片連結當時一併改指 `1.0.0`（2.0.0 起影片重錄、連結改指 `2.0.0`，見「端到端操作 Demo」版本註記） |
 | **契約版本** | `asyncapi.yaml` `info.version` **1.2.0**，獨立於產品版本演進；每版加嚴／新增欄位／新增消費端義務都記在 `CHANGELOG.md`「asyncapi 契約版本」小節 |
-| **變更紀錄** | [`CHANGELOG.md`](CHANGELOG.md)（Keep a Changelog 格式；升級前先讀「相容性注意」）；維護分支的現況摘要見指南 §15.6 |
+| **變更紀錄** | [`CHANGELOG.md`](CHANGELOG.md)（Keep a Changelog 格式；升級前先讀「不相容變更」與「相容性注意」）；維護分支的現況摘要見指南 §15.6 |
 | **Release** | `main` 只接收發布：`develop` 以 `--no-ff` 併入 `main` → annotated tag → GitHub Release（流程見 `CLAUDE.md`「`main` 的 release 流程」）；日常開發與 feature merge 一律在 `develop` |
 
 ---
@@ -822,11 +885,11 @@ specify → clarify → plan → checklist → tasks → analyze → implement �
 
 ## 已知限制
 
-- **重連不 rebind**：Gateway 每次連線派新 `clientId`，「任務 → 連線」綁定以記憶體 Map 實作；重連會使進行中任務綁定失效——前端把它收尾為「中斷 + Retry」，不做跨重連續傳（正式做法可改存 Redis）。`POST /diagnoses` 以同一 `jobId` 重送也**不會改綁**到新連線（防止他人把診斷結果改送到自己的連線），需以新 `jobId` 重新發起。
-- **診斷結果目前沒有讀取端點**：`diagnoses` 確實落 MongoDB、結果也進 Redis 快取，但 HTTP 只有 `POST /diagnoses` 與 `GET /healthz`，前端**無法**在重連後取回某個 `jobId` 的完整結果；目前唯一的「取回」是按 Retry 重新發起，若簽章相同且快取未過期（`AI_CACHE_TTL_SECONDS`，預設 10 分鐘）會秒回並標 Cached。`GET /diagnoses/:jobId` 與重連 rebind 列為 roadmap 012-lite（串流韌性）。
+- **重連不 rebind**：Gateway 每次連線派新 `clientId`，「任務 → 連線」綁定以記憶體 Map 實作；重連會使進行中任務綁定失效——前端把它收尾為「中斷 + 重試」，不做跨重連續傳（正式做法可改存 Redis）。`POST /diagnoses` 以同一 `jobId` 重送也**不會改綁**到新連線（防止他人把診斷結果改送到自己的連線），需以新 `jobId` 重新發起。
+- **診斷結果目前沒有讀取端點**：`diagnoses` 確實落 MongoDB、結果也進 Redis 快取，但 HTTP 只有 `POST /diagnoses` 與 `GET /healthz`，前端**無法**在重連後取回某個 `jobId` 的完整結果；目前唯一的「取回」是按「重試」重新發起，若簽章相同且快取未過期（`AI_CACHE_TTL_SECONDS`，預設 10 分鐘）會秒回並標「快取」。`GET /diagnoses/:jobId` 與重連 rebind 列為 roadmap 012-lite（串流韌性）。
 - **Gateway 單實例**（worker 已可多實例：heartbeat／metrics key 帶實例識別、api 掃描合併）：Gateway 訂閱表與 `jobId` 路由都在行程內記憶體，目前不跨多 server 水平擴展；要擴展時訂閱表需外置 Redis、`psubscribe ai-stream:*` 需改精準 channel subscribe（見 [ADR-002 §6.1](docs/adr-002-productionization-scope.md)、ADR-001 §6）。
 - **worker 崩潰後的重派有長時間靜默**：e2e 實測 worker 被 `SIGKILL` 後，BullMQ 要等 job lock（30 秒）過期、再經 stalled 檢查（每 30 秒，先標記、下一輪才搬回 wait）才重派，約 **92 秒**內前端收不到任何事件，超過前端 45 秒的無進展 watchdog（任務先被收尾為 failed）；重派後 `ai/*` 的 `attempt` 仍為 1、`seq` 從 0 重播。relay 監聽 `stalled` 與等待者 keepalive 列為 roadmap 012-lite（見 [ADR-002 §6.5](docs/adr-002-productionization-scope.md)）。
-- **AI token 串流為 at-most-once**：Redis Pub/Sub 是 fire-and-forget，Gateway 重啟或前端斷線期間的 token 會永久丟失（最終診斷結果仍會落 MongoDB 與快取，但如上一條所述目前沒有讀取端點，斷線的那一方看不到它，只能 Retry）；升級路徑見 [ADR-002 §6.2／§6.5](docs/adr-002-productionization-scope.md)（012-lite 傾向以 BullMQ `returnvalue`＋`job/status.result`＋讀取端點取代 Redis Streams）。
+- **AI token 串流為 at-most-once**：Redis Pub/Sub 是 fire-and-forget，Gateway 重啟或前端斷線期間的 token 會永久丟失（最終診斷結果仍會落 MongoDB 與快取，但如上一條所述目前沒有讀取端點，斷線的那一方看不到它，只能按「重試」）；升級路徑見 [ADR-002 §6.2／§6.5](docs/adr-002-productionization-scope.md)（012-lite 傾向以 BullMQ `returnvalue`＋`job/status.result`＋讀取端點取代 Redis Streams）。
 - **REST 診斷入口開發階段免授權**：`POST /diagnoses` 無身分驗證；rate limit 只在一鍵 demo 的 nginx 入口（每來源 IP 10 r/m、burst 5，超限回 `429`；Docker Desktop 下實為全體共用一桶，見「注意事項」），開發模式直連 api 時沒有（已有 Zod 輸入驗證、只收 `application/json` 以強制跨站請求先過 CORS preflight、jobId 冪等）；即時通道訂閱仍走 `WS_AUTH_SECRET`（本身也只是靜態共享字串，非正式 JWT/OIDC），另有可選的 Origin 白名單。正式環境的 REST 認證與握手階段驗證升級不在範圍，見 [ADR-002 §6.3](docs/adr-002-productionization-scope.md)。
 - **telemetry 丟棄計數**：已以 `system/metrics` 的 optional `persist: { dropped, failed }`（api 啟動以來累計）廣播；逐類明細（`droppedPoints`／`failedPoints`／`droppedErrorLogs`）仍只出現在（30 秒節流的）api error log。
 - **示範機台固定為 5 台**：`mixer-01`、`press-02`、`pack-03`、`oven-04`、`sorter-05`；遙測由 mock producer 以決定性規律產生（含週期性 warning/critical 尖峰），以滿足可重播驗收。

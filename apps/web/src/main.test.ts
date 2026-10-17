@@ -15,8 +15,10 @@ describe("apps/web entry", () => {
     await expect(import("./main.js")).resolves.toBeTruthy();
   }, 30_000);
 
+  // 同上：013 之後 App.vue 的元件圖更大（拓樸、背壓 strip、說明層），多 agent 並行跑測試時
+  // 冷 transform 實測 15–27s，預設 5s 會偶發逾時；放寬到與 entry 相同的 30s。
   it("App 根元件可 import", async () => {
     const mod = await import("./App.vue");
     expect(mod.default).toBeTruthy();
-  });
+  }, 30_000);
 });

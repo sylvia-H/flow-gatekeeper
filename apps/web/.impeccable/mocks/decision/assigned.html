@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8"><title>flow-gatekeeper 首屏草圖</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Noto+Sans+TC:wght@400;500;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#1F2A33;--edge:#C9D1D8;--desk:#DDE3E8;--line:rgba(31,42,51,.18);--acc:#0F6E8C;--ok:#2E7D4F;--warn:#B7791F;--crit:#C62828;--tick:#9AA7B2;--mute:#5A6772}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.4 "Source Sans 3","Noto Sans TC",sans-serif;color:var(--ink)}
+#root{position:relative;width:1440px;height:900px;overflow:hidden;margin:0;background:var(--desk)}
+.mono,.n,.mono *{font-family:"JetBrains Mono",monospace}
+.glass{background:rgba(255,255,255,.72);border:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.9);border-radius:6px}
+/* desk: 24px etched grid */
+#desk{position:absolute;left:240px;top:56px;right:0;bottom:0;background-color:var(--desk);background-image:linear-gradient(rgba(31,42,51,.06) 1px,transparent 1px),linear-gradient(90deg,rgba(31,42,51,.06) 1px,transparent 1px);background-size:24px 24px}
+#rail{position:absolute;left:0;top:0;bottom:0;width:240px;background:var(--edge);border-right:1px solid var(--line);padding:16px;display:flex;flex-direction:column;gap:14px}
+#bar{position:absolute;left:240px;right:0;top:0;height:56px;background:var(--edge);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:0 12px}
+.brand{font-size:20px;font-weight:700;display:flex;align-items:center;gap:8px}
+.brand em{font-style:normal;font-size:12px;border:1px solid var(--line);padding:1px 8px;border-radius:10px;font-weight:600}
+.sec{font-size:13px;color:var(--mute);font-weight:600;letter-spacing:.04em}
+.health{padding:12px}
+.hrow{display:flex;justify-content:space-between;margin-top:6px;font-size:14px}
+.hrow b{font:700 20px "JetBrains Mono"}
+.seg{display:flex;height:8px;margin-top:10px;border-radius:2px;overflow:hidden;background:#fff}
+.seg i{display:block}
+.rec{padding:10px 12px;font-size:14px;margin-top:8px;display:flex;gap:8px;align-items:center}
+.rec .tk{width:3px;height:22px}
+.sw{margin-top:auto;display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;font-size:14px}
+.sw span{flex:1;text-align:center;padding:6px}.sw .on{background:var(--ink);color:#fff}
+.in{height:36px;padding:0 12px;border:1px solid var(--line);border-radius:6px;background:rgba(255,255,255,.72);display:flex;align-items:center;font-size:14px;gap:6px}
+.in.s{width:240px;color:var(--mute)}.in.dis{opacity:.5}
+.chip{height:30px;padding:0 12px;border-radius:15px;border:1px solid var(--ok);color:var(--ok);display:flex;align-items:center;gap:6px;font-size:14px;font-weight:600;margin-left:auto}
+.chip:before{content:"";width:8px;height:8px;border-radius:4px;background:var(--ok)}
+.btn{height:36px;padding:0 20px;border-radius:6px;background:var(--acc);color:#fff;font-weight:700;display:flex;align-items:center;border:1px solid #0A5670}
+/* backpressure band */
+#bp{position:absolute;left:12px;top:12px;width:816px;height:116px;padding:8px 14px}
+#bp .row{display:flex;align-items:baseline;gap:14px}
+#bp .row .n{font-size:24px;font-weight:700}
+#bp .row small{font-size:13px;color:var(--mute)}
+#bp .arr{color:var(--tick);font-size:20px}
+#bp .ratio{font:700 34px "JetBrains Mono";color:var(--acc)}
+#bp svg{position:absolute;left:14px;top:34px}
+/* stages */
+#stages{position:absolute;left:12px;top:140px;width:816px;height:520px;display:grid;grid-template-columns:1fr 28px 1fr 28px 1fr;align-items:start}
+.stage h3{margin:0 0 8px;font-size:15px;font-weight:700}
+.stage h3 small{color:var(--mute);font-weight:400;margin-left:6px;font-size:13px}
+.stage{display:flex;flex-direction:column;gap:12px}
+.ar{align-self:center;text-align:center;color:var(--mute);font-size:26px;padding-top:20px}.ar.b{font-weight:900;font-size:34px;color:var(--ink)}
+.card{padding:14px;position:relative}
+.card.crit{background:rgba(198,40,40,.08);border-color:var(--crit)}
+.card.sel{outline:2px solid var(--acc);outline-offset:2px}
+.card.warn{border-color:var(--warn)}
+.h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.h b{font-size:17px}.h i{font:12px "JetBrains Mono";color:var(--mute);font-style:normal}
+.bd{margin-left:auto;font-size:12px;font-weight:700;color:#fff;padding:1px 8px;border-radius:3px}
+.ok{background:var(--ok)}.wn{background:var(--warn)}.cr{background:var(--crit)}
+.g{display:grid;grid-template-columns:1fr 1fr;gap:10px 8px;margin:12px 0 8px}
+.g p{margin:0;font:700 24px/1.1 "JetBrains Mono";display:flex;align-items:center;gap:4px;white-space:nowrap}
+.g u{display:block;font:11px "JetBrains Mono";color:var(--mute);text-decoration:none;font-weight:400}
+.t{width:12px;height:14px;color:var(--tick);flex:none}.t.w{color:var(--warn)}.t.c{color:var(--crit)}
+.f{font-size:12px;color:var(--mute);display:flex;gap:8px;align-items:center}
+.tag{font-size:12px;font-weight:700;padding:1px 8px;border-radius:10px;border:1px solid}
+.tag.a{color:var(--acc);border-color:var(--acc)}.tag.w{color:var(--warn);border-color:var(--warn)}
+/* events */
+#ev{position:absolute;left:12px;bottom:12px;width:816px;height:150px;padding:10px 14px}
+#ev .row{display:flex;align-items:center;gap:12px;height:26px;font-size:14px}
+#ev .row .tk{width:12px;height:2px}
+#ev .row span.m{font:500 13px "JetBrains Mono";color:var(--mute)}
+#ev .row b{font-size:13px;width:34px}
+/* copilot */
+#co{position:absolute;right:12px;top:68px;bottom:12px;width:360px;padding:14px;display:flex;flex-direction:column;gap:10px}
+#co h2{margin:0;font-size:18px}
+.prog{height:8px;background:#fff;border:1px solid var(--line);border-radius:4px}.prog i{display:block;width:60%;height:100%;background:var(--acc)}
+.blk{border-top:1px solid var(--line);padding-top:8px;font-size:14px}
+.blk h4{margin:0 0 4px;font-size:13px;color:var(--mute)}
+.blk li{margin:2px 0}.blk ul{margin:0;padding-left:18px}
+.ph{height:10px;background:rgba(31,42,51,.12);border-radius:2px;margin:6px 0}
+.stop{margin-top:auto;height:36px;border:1px solid var(--crit);color:var(--crit);border-radius:6px;display:flex;align-items:center;justify-content:center;font-weight:700}
+.tk{background:var(--tick)}.tk.c{background:var(--crit)}.tk.w{background:var(--warn)}.tk.o{background:var(--ok)}
+</style></head><body>
+<svg width="0" height="0" style="position:absolute"><symbol id="tk" viewBox="0 0 12 14"><path d="M1 12H11M1 7H11M1 2H11" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol></svg>
+<div id="root">
+<aside id="rail">
+  <div class="brand">flow-gatekeeper <em>開發</em></div>
+  <div class="glass health"><div class="sec">機群健康</div>
+    <div class="hrow"><span>正常 <b style="color:var(--ok)">3</b></span><span>警告 <b style="color:var(--warn)">1</b></span><span>嚴重 <b style="color:var(--crit)">1</b></span><span>停滯 <b>0</b></span></div>
+    <div class="seg"><i style="width:60%;background:var(--ok)"></i><i style="width:20%;background:var(--warn)"></i><i style="width:20%;background:var(--crit)"></i><i style="width:0;background:var(--tick)"></i></div></div>
+  <div><div class="sec">最近異常</div>
+    <div class="glass rec"><i class="tk c"></i>壓製機 02 · 嚴重 · 剛剛</div>
+    <div class="glass rec"><i class="tk w"></i>烤爐 04 · 警告 · 12 秒前</div></div>
+  <div class="sw"><span class="on">主題：淺色</span><span>深色</span></div>
+</aside>
+<header id="bar">
+  <div class="in s">搜尋機台</div><div class="in">暫停</div><div class="in dis">Mock 頻率</div>
+  <div class="chip">已連線 · 12 ms</div><div class="btn">診斷</div>
+</header>
+<main id="desk">
+  <section id="bp" class="glass">
+    <div class="row"><small>每秒訊息</small><span class="n">1,240</span><span class="arr">→</span><small>每秒批次</small><span class="n">60</span><span class="arr">→</span><small>比值</small><span class="ratio">20.7 : 1</span><small style="margin-left:auto">近 60 秒</small></div>
+    <svg width="788" height="76" viewBox="0 0 788 76">
+      <defs><pattern id="mn" width="10" height="8" patternUnits="userSpaceOnUse"><path d="M.5 0V8" stroke="#9AA7B2"/></pattern><pattern id="mj" width="50" height="14" patternUnits="userSpaceOnUse"><path d="M.5 0V14" stroke="#9AA7B2"/></pattern></defs>
+      <polyline points="0,30 60,24 120,28 180,18 240,22 300,14 360,20 420,12 480,18 540,10 600,16 660,9 720,13 788,8" fill="none" stroke="#1F2A33" stroke-width="1.5"/>
+      <polyline points="0,44 60,43 120,44 180,42 240,43 300,42 360,43 420,41 480,42 540,41 600,42 660,40 720,41 788,40" fill="none" stroke="#0F6E8C" stroke-width="1.5"/>
+      <rect x="0" y="50" width="788" height="8" fill="url(#mn)"/><rect x="0" y="50" width="788" height="14" fill="url(#mj)"/>
+      <path d="M0 50.5H788" stroke="#9AA7B2"/>
+      <g font-family="JetBrains Mono" font-size="10" fill="#5A6772"><text x="2" y="74">0</text><text x="125" y="74">10</text><text x="255" y="74">20</text><text x="385" y="74">30</text><text x="515" y="74">40</text><text x="645" y="74">50</text><text x="765" y="74">60s</text></g>
+      <rect x="587" y="0" width="2" height="64" fill="#0F6E8C"/>
+    </svg>
+  </section>
+  <section id="stages">
+    <div class="stage"><h3>前處理 <small>Prep</small></h3>
+      <div class="glass card"><div class="h"><b>攪拌機 01</b><i>mixer-01</i><span class="bd ok">正常</span></div>
+        <div class="g"><p>55.4<svg class="t"><use href="#tk"/></svg><u>°C</u></p><p>0.61<svg class="t"><use href="#tk"/></svg><u>mm/s</u></p><p>115<svg class="t"><use href="#tk"/></svg><u>u/min</u></p><p>0.0<svg class="t"><use href="#tk"/></svg><u>%</u></p></div>
+        <div class="f">更新 剛剛</div></div></div>
+    <div class="ar">→</div>
+    <div class="stage"><h3>成型烘烤 <small>Forming &amp; Baking</small></h3>
+      <div class="glass card crit sel"><div class="h"><b>壓製機 02</b><i>press-02</i><span class="bd cr">嚴重</span></div>
+        <div class="g"><p>97.0<svg class="t c"><use href="#tk"/></svg><u>°C</u></p><p>2.19<svg class="t c"><use href="#tk"/></svg><u>mm/s</u></p><p>73<svg class="t c"><use href="#tk"/></svg><u>u/min</u></p><p>16.0<svg class="t c"><use href="#tk"/></svg><u>%</u></p></div>
+        <div class="f"><span class="tag a">診斷中 60%</span>更新 剛剛</div></div>
+      <div class="glass card warn"><div class="h"><b>烤爐 04</b><i>oven-04</i><span class="bd wn">警告</span></div>
+        <div class="g"><p>81.3<svg class="t w"><use href="#tk"/></svg><u>°C</u></p><p>1.10<svg class="t w"><use href="#tk"/></svg><u>mm/s</u></p><p>118<svg class="t"><use href="#tk"/></svg><u>u/min</u></p><p>3.2<svg class="t w"><use href="#tk"/></svg><u>%</u></p></div>
+        <div class="f"><span class="tag w">警告 · 12 秒前</span>更新 1 秒前</div></div></div>
+    <div class="ar b">→</div>
+    <div class="stage"><h3>包裝分揀 <small>Fulfilment</small></h3>
+      <div class="glass card"><div class="h"><b>包裝機 03</b><i>pack-03</i><span class="bd ok">正常</span></div>
+        <div class="g"><p>63.5<svg class="t"><use href="#tk"/></svg><u>°C</u></p><p>0.30<svg class="t"><use href="#tk"/></svg><u>mm/s</u></p><p>121<svg class="t"><use href="#tk"/></svg><u>u/min</u></p><p>0.2<svg class="t"><use href="#tk"/></svg><u>%</u></p></div>
+        <div class="f">更新 剛剛</div></div>
+      <div class="glass card"><div class="h"><b>分揀機 05</b><i>sorter-05</i><span class="bd ok">正常</span></div>
+        <div class="g"><p>69.8<svg class="t"><use href="#tk"/></svg><u>°C</u></p><p>0.69<svg class="t"><use href="#tk"/></svg><u>mm/s</u></p><p>126<svg class="t"><use href="#tk"/></svg><u>u/min</u></p><p>1.0<svg class="t"><use href="#tk"/></svg><u>%</u></p></div>
+        <div class="f">更新 剛剛</div></div></div>
+  </section>
+  <section id="ev" class="glass"><div class="sec" style="margin-bottom:4px">事件流 · 10/50</div>
+    <div class="row"><i class="tk c"></i><span class="m">14:10:56</span><b style="color:var(--crit)">嚴重</b>壓製機 02 進入嚴重</div>
+    <div class="row"><i class="tk w"></i><span class="m">14:10:55</span><b style="color:var(--warn)">警告</b>烤爐 04 進入警告 ×3</div>
+    <div class="row"><i class="tk o"></i><span class="m">14:10:40</span><b style="color:var(--ok)">正常</b>烤爐 04 回復正常</div>
+    <div class="row"><i class="tk c"></i><span class="m">14:10:12</span><b style="color:var(--crit)">嚴重</b>壓製機 02 進入嚴重</div></section>
+</main>
+<aside id="co" class="glass" style="z-index:2">
+  <h2>AI 診斷 · press-02</h2>
+  <div class="f" style="font-size:14px"><span class="tag a">進行中</span><span class="mono" style="margin-left:auto;font-size:24px;font-weight:700">60%</span></div>
+  <div class="prog"><i></i></div>
+  <div class="blk"><h4>摘要</h4>壓製機 02 在維修後出現間歇性過熱…</div>
+  <div class="blk"><h4>建議動作</h4><ul><li>降低進料速率並檢查冷卻迴路</li><li>排程停機檢查壓力閥與軸承</li></ul></div>
+  <div class="blk"><h4>可能原因</h4><div class="ph" style="width:90%"></div><div class="ph" style="width:70%"></div></div>
+  <div class="blk"><h4>證據 ▸</h4>還有 6 筆</div>
+  <div class="blk"><h4>原始串流 ▸</h4></div>
+  <div class="stop">中止診斷</div>
+</aside>
+</div></body></html>
