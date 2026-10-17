@@ -12,7 +12,7 @@ web
 ## Users
 
 - **主要使用者：監控台操作者**——想長時間盯著一組機台（流程節點）的即時狀態、在異常時按一下就拿到 AI 診斷的工程／維運人員。情境是「掛在螢幕上反覆看」，不是一次性瀏覽。
-- **第二類使用者：展示者／評估者**——拿到 repo、用 `docker compose --profile demo up` 一鍵跑起來，在 22 秒內看懂「高頻遙測如何被背壓壓住、AI 診斷如何逐字串流、快取如何命中」的人（面試官、技術同儕、作品集讀者）。兩類使用者並列為設計對象：README 的 demo 影片、逐項截圖與「每個賣點都可驗收」的寫法為他們而設，013 也為評估者單獨設了驗收（SC-008：依 22 秒 demo 劇本首次操作即能找到背壓比值、串流骨架與快取耗時對比）。
+- **第二類使用者：展示者／評估者**——拿到 repo、用 `docker compose --profile demo up` 一鍵跑起來，在 demo 影片的二十餘秒內（2.0.0 重錄版 23 秒）看懂「高頻遙測如何被背壓壓住、AI 診斷如何逐字串流、快取如何命中」的人（面試官、技術同儕、作品集讀者）。兩類使用者並列為設計對象：README 的 demo 影片、逐項截圖與「每個賣點都可驗收」的寫法為他們而設，013 也為評估者單獨設了驗收（SC-008：依 013 當時的 22 秒 demo 劇本首次操作即能找到背壓比值、串流骨架與快取耗時對比）。
 
 ## Product Purpose
 
@@ -23,7 +23,7 @@ flow-gatekeeper 是一個致敬 Argo CD 狀態／拓樸語言的**即時流程�
 1. 開啟第一屏就是可操作的監控台（不是 landing page），5 台機台依產線三段即時更新而畫面不卡，背壓比值常駐可見。
 2. 任一機台轉為警告／嚴重時能一眼看出，回復後仍留 30 秒的異常標記；按「診斷」後 AI 診斷面板立即展開並進入「進行中」，結果骨架隨串流逐格填入，完成後是結構化結果（摘要與嚴重度、建議動作、可能原因、證據）；再按一次會秒回並標「快取」，同時列出本次與上一次非快取的耗時對比。
 3. 斷線、worker 崩潰、Pub/Sub 中斷時畫面誠實標示（重新連線中／已斷線／停滯／失敗 + 重試），不假裝正常。
-4. 展示者在 demo 影片的 22 秒內看懂背壓、串流、快取三個機制。
+4. 展示者在 demo 影片的二十餘秒內（2.0.0 版 23 秒）看懂背壓、串流、快取三個機制。
 
 ## Positioning
 
@@ -75,7 +75,7 @@ flow-gatekeeper 是一個致敬 Argo CD 狀態／拓樸語言的**即時流程�
   - 不使用官方 Argo CD logo、商標、品牌配色或直接複製官方素材。
   - 於 1366×768、1440×900、1024×768、768×1024、390×844 五個驗收 viewport、兩套主題下，不得有文字溢出、控制項重疊或裁切、橫向捲動；hover／選取／嚴重脈動與搜尋過濾不得造成 layout shift（截圖劇本自動量測）。
 - **已知產品限制（不是 UI 能解的）**：重連不 rebind、沒有診斷結果讀取端點、worker 崩潰後約 92 秒靜默、AI token 串流 at-most-once、Mock 頻率控制無後端作用。UI 對這些只能誠實呈現（失敗 + 重試、watchdog 45 秒），不得假裝已解。
-- **已決（013）**：README 的 12 張功能截圖在 013 內全部重拍（另加深色主題與拓樸各 1 張）；demo 影片是否重錄留待 release 步驟決定。
+- **已決（013）**：README 的 12 張功能截圖在 013 內全部重拍（另加深色主題與拓樸各 1 張）；demo 影片於 2.0.0 release 前重錄（`docs/20261018-demo-video`，2026-10-17，見 README「端到端操作 Demo」）。
 
 ## Brand Commitments
 
@@ -86,7 +86,7 @@ flow-gatekeeper 是一個致敬 Argo CD 狀態／拓樸語言的**即時流程�
 
 ## Evidence on Hand
 
-- 實機 demo 影片與海報：`docs/demo/flow-gatekeeper-demo.mp4`（22 秒，1.0.0 畫面）、`docs/demo/flow-gatekeeper-demo-poster.jpg`。
+- 實機 demo 影片與海報：`docs/demo/flow-gatekeeper-demo.mp4`（23 秒，2.0.0 畫面，由 `apps/web/scripts/record-demo.cjs` 錄製）、`docs/demo/flow-gatekeeper-demo-poster.jpg`。
 - README 功能截圖：`docs/screenshots/*.png`（monitoring-live、monitoring-states、fleet-health、event-stream、monitoring-search、monitoring-selected、monitoring-reconnecting-stale、copilot-streaming、copilot-completed、copilot-cached、copilot-failed、responsive-mobile，另加 dark-theme、topology），由截圖劇本 `apps/web/scripts/screenshots.cjs --readme` 以 013 新介面重拍。
 - 舊視覺世界的規格：`apps/web/design/design-spec.md` v0.6（**自 013 起已退役**，保留全文作歷史與反面參考；`apps/web/design/refs/` 參考圖已自 repo 移除）。
 - impeccable 工件：`apps/web/DESIGN.md`（視覺系統）、`apps/web/.impeccable/`（critique 快照、surface 方向紀錄）。

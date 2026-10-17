@@ -3199,7 +3199,8 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 3 | `docs/20260927-research-review02` | `63b6f66` | 新增第二輪審查報告 `docs/20260927-research-review02.md` | — |
 | 4 | `fix/20260927-research-review02` | `898ccfc` | 第二輪審查 Batch A／B 修復 | 第二輪審查修復 |
 | 5 | `fix/20260927-review02-batch-cd` | `4c43d18` | 第二輪報告 Batch C（文件與 release 準備）、Batch D（測試基礎建設），外加 6 項 code-review findings | Batch C／D |
-| 6 | `upgrade/20261017-gemini-3.5-flash-lite` | （併入後補） | 預設 LLM 模型改 `gemini-3.5-flash-lite`、3.x flash 送 `thinkingLevel: MEDIUM`、`AI_MAX_OUTPUT_TOKENS` 預設 4096 | Gemini 3.5 flash-lite 升級 |
+| 6 | `upgrade/20261017-gemini-3.5-flash-lite` | `7d9f9d9` | 預設 LLM 模型改 `gemini-3.5-flash-lite`、3.x flash 送 `thinkingLevel: MEDIUM`、`AI_MAX_OUTPUT_TOKENS` 預設 4096 | Gemini 3.5 flash-lite 升級 |
+| 7 | `docs/20261018-demo-video` | （併入後補） | README demo 影片以 2.0.0 介面重錄、新增錄影劇本 `record-demo.cjs` | Demo 影片重錄 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」），但不列入本表。
 
@@ -3350,7 +3351,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **收尾數字**（2026-09-28 實跑）：`pnpm test:coverage` 94 檔 982 測試通過，lines 81.52％、branches 76.56％；整合測試 27（worker 20＋api 7）；e2e 5 場景；契約 lint／typecheck／lint／`pnpm -r build` 全綠。
 - **e2e 實測發現（留給 012-lite）**：worker 被 `SIGKILL` 後，BullMQ 需等 job lock（30 s）過期、再經 stalled 檢查（每 30 s，先標記、下一輪才搬回 wait），重派的 `waiting`／第二次 `active` 約在 kill 後 **92 秒**才出現、`completed` 約 101 秒；這段期間前端**收不到任何事件**，已超過前端 45 秒無進展 watchdog。stalled 重派**不遞增** `attemptsMade`，重跑的 `ai/*` `attempt` 維持 1、`seq` 從 0 重播。這是審查報告 AR-1／AR-3（relay 未監聽 `stalled`、等待者無 keepalive）的實測佐證，處理排入 roadmap 012-lite（ADR-002 §6.5）。
 
-**Gemini 3.5 flash-lite 升級**（`upgrade/20261017-gemini-3.5-flash-lite`，2026-10-17；使用者裁決：2.5 系列已舊，改用另一專案每天穩定使用的 `gemini-3.5-flash-lite`）：
+**Gemini 3.5 flash-lite 升級**（`upgrade/20261017-gemini-3.5-flash-lite`，merge `7d9f9d9`，2026-10-17；使用者裁決：2.5 系列已舊，改用另一專案每天穩定使用的 `gemini-3.5-flash-lite`）：
 
 - **預設模型**：worker `GEMINI_MODEL` 預設由 `gemini-2.5-flash` 改為 `gemini-3.5-flash-lite`（`env-schema.ts`、`smoke-gemini.ts`、`apps/worker/.env.example`）。
   模型名進快取簽章，換模型後舊快取自然失效；契約不變。
@@ -3368,6 +3369,16 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 - **回應性（003 SC-001「首 token ≤ 5 s」）**：真實 prompt 實測首 token 0.6～4.2 s、全程 1.4～4.6 s（不思考時約 1 s 內出首 token，思考約 1000 token 時約 3～4 s）。
   仍在 5 s 內但**餘裕有限**：context 變長或思考變多時可能超標；這是保留 MEDIUM 推理的已知取捨，超標時先評估改 LOW／MINIMAL。
 - **實機**（一鍵 demo 容器，2026-10-17）：首次診斷全程約 4.5 s、快取命中約 200 ms，回覆為繁體中文（2.5 flash 時約四分之三回英文；prompt 未指定語言，屬模型行為、非保證）。
+
+**Demo 影片重錄**（`docs/20261018-demo-video`，2026-10-17；為 2.0.0 release 準備）：
+
+- **影片**：`docs/demo/flow-gatekeeper-demo.mp4`（23 秒、1440×900、30fps H.264）與海報依 README 劇本表重錄，對象為一鍵 demo 容器（`:8080`，正式 build），AI 為 `gemini-3.5-flash-lite`；
+  README 下載連結改指 `releases/download/2.0.0/`，劇本表時間點改為實錄值。1.0.0 舊介面影片作廢、只留在 1.0.0 release。
+- **錄影劇本** `apps/web/scripts/record-demo.cjs`：CDP `Page.startScreencast` 逐格取 JPEG，以 node 端收到時刻為時間戳（CDP metadata 時間戳與排程時鐘實測差 2～3 秒），
+  ffmpeg concat 轉 30fps H.264（limited range，避免 QuickTime 發灰）；Playwright 自帶 ffmpeg 只有 VP8，需另備含 libx264 的 ffmpeg。headless 與有頭模式的 recordVideo 都錄不到系統游標，
+  劇本以 `addInitScript` 注入假游標（頁面 CSP `style-src self` 擋 `<style>`，樣式走 CSSOM、動畫走 Web Animations）。開錄前量 `press-02` 尖峰週期（容器內實測約 13.0～13.3 秒，非名目 12 秒）對齊時間軸。
+  輸出 BT.709／limited range 並標記色彩；先在暫存目錄編碼完成才覆寫 `docs/demo/`（不用 .tmp＋rename：Windows 上目標被播放器開著時 rename 會失敗），覆寫失敗時保留暫存成品並印出路徑；逐格寫檔失敗或對齊失準皆在呼叫 LLM 前中止；Chromium 尋找與面板狀態對照抽成 `apps/web/scripts/lib/browser.cjs`，與截圖劇本共用。
+  使用者裁決：輸出 mp4（ffmpeg 用下載解壓即用的可攜版，不安裝到系統）、注入假游標、對 demo 容器錄。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[Unreleased]`）：
 
