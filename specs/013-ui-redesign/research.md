@@ -40,7 +40,7 @@
 **Decision**：
 - `rate-series.ts`：`RateSeries`（固定 60 格環狀緩衝）每 1 秒取 `receivedMessages`、`renderedBatches`、`droppedMessages` 的差分，推入 `{ msgsPerSec, batchesPerSec, droppedPerSec }`。tick 掛在 store 既有的 1 秒 `now` 計時器上，**不在 rAF 路徑**。
 - 比值口徑改為 **60 秒視窗**（FR-009）：`windowRatio` = 序列內 `Σ msgsPerSec ÷ Σ batchesPerSec`，由 `rate-series.ts` 衍生，是 strip 的主顯示；既有 `backpressure.ts` 的累計比值只放 tooltip。理由：累計值在頻率變動後會長時間落後兩條瞬時速率線，與 US2 AS2「比值與兩線關係一致」矛盾。
-- `Sparkline.vue`：單一 `<svg viewBox="0 0 60 24" preserveAspectRatio="none">` 兩條 `<polyline>`，points 由 computed 產生字串；每秒更新一次、60 個點，成本可忽略。y 軸以 60 秒內最大值正規化（避免兩條線因量級差異擠在底部，批次線另以虛線區分）。走勢線不共用比值刻度，旁標「近 60 秒」小字；reduced-motion 時無 transition（瞬間更新）。
+- `Sparkline.vue`：單一 `<svg viewBox="0 0 60 24" preserveAspectRatio="none">`，points 由 computed 產生字串；每秒更新一次、60 個點，成本可忽略。原設計為訊息／批次兩條 `<polyline>` 以 60 秒內最大值正規化；**T073 第三輪（2026-10-17）改為單秒合併比一條**，y 軸自 0 起、上限取穩健值（離群釘頂），無批次或暫停無效秒斷線。走勢線不共用比值刻度，旁標「近 60 秒」小字；reduced-motion 時無 transition（瞬間更新）。
 - `Graduation.vue`：靜態 SVG **比值刻度**（FR-009a：0–60、線性、1 格 = 1:1、每 10 格大格並標數字），只渲染一次；液位線是一條 `position:absolute` 的 2px 直線，left = `min(windowRatio, 60) / 60`（比值超過刻度上限時釘在右端並顯示 `>60`）。
 - 斷線時 series 停止推入並以 `stale` 標示；Pause 期間照常計數（計數不是畫面內容，與既有 onDrop 註解一致）。
 
@@ -127,19 +127,21 @@
 | Fleet monitor · N machines | 機群總覽 · N 台 | 主區標題改由背壓 strip 取代，保留於 aria |
 | Fleet Health | 機群健康 | |
 | Event Stream | 事件流 | 面板稱「事件流」，單一列稱「事件列項」 |
-| Connected / Reconnecting / Disconnected | 已連線 / 重新連線中 / 已斷線 | chip 與橫幅 |
+| Connected / Reconnecting / Disconnected | 已連線 / 重新連線中 / 已斷線 | chip 與橫幅；T073 第四輪（2026-10-17）：背壓 strip 斷線 pill 由「連線中斷」改為與 chip 同字（已斷線／重新連線中） |
 | 未授權 | 未授權 | 不變 |
-| Pause / Resume | 暫停 / 恢復 | |
+| Dropped N | 丟棄 N 則 | T073 第四輪（2026-10-17）：背壓 strip 桌機、手機、tooltip、region 名稱一律「丟棄 N 則」（原桌機「筆」、手機無單位） |
+| Coalescing ratio | 合併比 | T073 第四輪：≥ md 常駐白話「每幀合併約 N 則 · 近 60 秒最高 X」；刻度 1:1 處蝕刻錨點標「1:1」（＝沒有合併） |
+| Pause / Resume | 暫停 / 恢復 | T073 第三輪（2026-10-17）：工具列鈕固定顯示「暫停」並以 `aria-pressed` 表達按下態（可見文字與可讀名稱一致，WCAG 2.5.3）；「恢復」改由暫停橫幅內的鈕承擔 |
 | Mock Hz | Mock 頻率 | 維持 disabled |
-| Healthy / Warning / Critical / Stale | 正常 / 警告 / 嚴重 / 停滯 | 徽章、圖例、事件 |
+| Healthy / Warning / Critical / Stale | 正常 / 警告 / 嚴重 / 停滯 | 徽章、圖例、事件。T073 第四輪（2026-10-17）時態註記：同一張卡上只有狀態徽章用現在式「正常／警告／嚴重」；異常標記已回復者一律以「曾」起頭寫成過去式「曾嚴重 · N 秒前回復」（原「嚴重 · 已回復 N 秒前」），仍異常「嚴重 · 進入 N 秒前」維持；摘要列與手機異常清單同字 |
 | Prep / Forming & Baking / Fulfilment | 前處理 / 成型烘烤 / 包裝分揀 | stage 標題只用中文、不附英文副標（FR-038、SC-013） |
 | mixer-01 … sorter-05 | 攪拌機 01 / 壓製機 02 / 包裝機 03 / 烤爐 04 / 分揀機 05 | id 維持原文 |
 | Temp / Vibration / Throughput / Errors | 溫度 / 振動 / 產能 / 錯誤率 | 單位 °C、mm/s、u/min、% 原文 |
-| AI Copilot / Idle / Active / Completed / Failed | AI 診斷 / 閒置 / 進行中 / 已完成 / 失敗 | 文件中稱「Copilot 面板」（手機形態為 bottom-sheet），UI 標籤為「AI 診斷」 |
-| Diagnosis severity ok / warning / critical | 正常 / 警告 / 嚴重 | `DiagnosisResult.severity` 的 `ok` 譯「正常」 |
+| AI Copilot / Idle / Active / Completed / Failed | AI 診斷 / 未診斷 / 進行中 / 已完成 / 失敗 | 文件中稱「Copilot 面板」（手機形態為 bottom-sheet），UI 標籤為「AI 診斷」 |
+| Diagnosis severity ok / warning / critical | 正常 / 警告 / 嚴重 | `DiagnosisResult.severity` 的 `ok` 譯「正常」。T073 第四輪（2026-10-17）：卡片 chip 與手機 peek 條的可見文字加「AI：」前綴（「AI：嚴重」、快取「AI：嚴重 · 快取」、失敗「AI 失敗」），與狀態徽章、異常標記區分；面板內嚴重度不加前綴 |
 | Summary / Likely causes / Evidence / Suggested actions | 摘要 / 可能原因 / 證據 / 建議動作 | |
 | Cached / Retry / 中止診斷 | 快取 / 重試 / 中止診斷 | |
-| updated Ns ago | 更新 N 秒前 | 2 秒內顯示「剛剛」 |
+| updated Ns ago | 更新 N 秒前 | 2 秒內顯示「剛剛」；T073 第三輪：卡片 id 列 < 3 秒不顯示相對時間（sr-only 仍念「更新 剛剛」） |
 | Theme light/dark | 主題：淺色 / 深色 | |
 | Shortcut help | 鍵盤快捷鍵 | |
 

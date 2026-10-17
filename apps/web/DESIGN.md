@@ -105,6 +105,19 @@ components:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.ink}"
     rounded: "{rounded.control}"
+  button-tool-pressed:
+    backgroundColor: "{colors.ink}"
+    textColor: "{colors.surface-strong}"
+    typography: "{typography.body}"
+    rounded: "{rounded.control}"
+    padding: "0 10px"
+    height: "36px"
+  button-secondary:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.ink}"
+    typography: "{typography.body}"
+    rounded: "{rounded.control}"
+    padding: "4px 10px"
   button-icon:
     backgroundColor: "transparent"
     textColor: "{colors.ink-2}"
@@ -152,14 +165,20 @@ components:
     backgroundColor: "{colors.accent-wash}"
     textColor: "{colors.accent}"
     typography: "{typography.label}"
-    rounded: "{rounded.pill}"
-    padding: "1px 8px"
+    rounded: "{rounded.control}"
+    padding: "1px 6px"
+  chip-diagnosis-completed:
+    backgroundColor: "{colors.surface-strong}"
+    textColor: "{colors.ink-2}"
+    typography: "{typography.label}"
+    rounded: "{rounded.control}"
+    padding: "1px 6px"
   chip-diagnosis-cached:
     backgroundColor: "{colors.rim}"
     textColor: "{colors.ink-2}"
     typography: "{typography.label}"
-    rounded: "{rounded.pill}"
-    padding: "1px 8px"
+    rounded: "{rounded.control}"
+    padding: "1px 6px"
   latch-struck:
     backgroundColor: "{colors.rim}"
     textColor: "{colors.ink-3}"
@@ -198,13 +217,13 @@ components:
 
 # Design System: flow-gatekeeper
 
-> **現況紀錄（2026-10-16，feature 013 UI 全面改版完成後以 `/impeccable document` 掃描程式碼產出）。** 本檔整份取代 1.1.0 的「深色 Argo CD 致敬」紀錄；視覺世界「實驗室玻璃與蝕刻刻度」由使用者於 2026-10-15 選定（direction contract：`.impeccable/surfaces/src-app-vue.md`）。所有 token 值取自 `src/styles/theme.css`（全站唯一色值檔）、`tailwind.config.ts`、`src/styles/tailwind.css` 與各 `.vue` 元件；frontmatter 的色值是**淺色（預設）主題**，深色主題的同名值記在 `.impeccable/design.json` 的 `colorMeta.*.dark`。theme.css 存的是 `R G B` 三元組，此處以等價 hex 記錄，不另立來源。
+> **現況紀錄（2026-10-16，feature 013 UI 全面改版完成後以 `/impeccable document` 掃描程式碼產出；2026-10-17 依 critique 四輪修正（T073）後的程式碼再掃描更新——推擠門檻 `desk` 1366、非 modal 閒置 sheet 與 `--fg-bottom-reserve`、背壓帶 60 秒口徑／液柱／1:1 錨點／最高水位、暫停切換鈕與暫停橫幅、事件列起訖、卡片 id 列與方角診斷 chip、Copilot 中性狀態 chip 與快取對比橫條）。** 本檔整份取代 1.1.0 的「深色 Argo CD 致敬」紀錄；視覺世界「實驗室玻璃與蝕刻刻度」由使用者於 2026-10-15 選定（direction contract：`.impeccable/surfaces/src-app-vue.md`）。所有 token 值取自 `src/styles/theme.css`（全站唯一色值檔）、`tailwind.config.ts`、`src/styles/tailwind.css` 與各 `.vue` 元件；frontmatter 的色值是**淺色（預設）主題**，深色主題的同名值記在 `.impeccable/design.json` 的 `colorMeta.*.dark`。theme.css 存的是 `R G B` 三元組，此處以等價 hex 記錄，不另立來源。
 
 ## Overview
 
 **Creative North Star: "實驗桌上的量筒"（The Graduated Cylinder on the Bench）**
 
-整個監控台是一張冷色的實驗桌：桌面鋪著 24px 的極細格線，桌邊（rail 與工具列）是比桌面更深一階的鋼灰，面板是一片片放在桌上的磨砂白玻璃——72% 不透明的白、1px 的桌邊色細框、內側上緣一條 1px 高光，格線隱約從玻璃後透出。玻璃沒有模糊、沒有光暈、沒有投影；它「在桌上」這件事靠的是框線與高光，不是陰影。數字像量筒的液面一樣沿著蝕刻刻度讀取：背壓帶的下緣是一支 0–60 的比值刻度，深青的液位線停在比值所在；每張機台卡片的四個數值旁都有三格蝕刻小刻度，超標時刻度與數字一起換成狀態色；事件列每行左側一條蝕刻短線依嚴重度上色。
+整個監控台是一張冷色的實驗桌：桌面鋪著 24px 的極細格線，桌邊（rail 與工具列）是比桌面更深一階的鋼灰，面板是一片片放在桌上的磨砂白玻璃——72% 不透明的白、1px 的桌邊色細框、內側上緣一條 1px 高光，格線隱約從玻璃後透出。玻璃沒有模糊、沒有光暈、沒有投影；它「在桌上」這件事靠的是框線與高光，不是陰影。數字像量筒的液面一樣沿著蝕刻刻度讀取：背壓帶的下緣是一支 0–60 的比值刻度，25% 深青的液柱自 0 斟到合併比、液位線停在液面上，1:1 錨點與近 60 秒最高水位各一條 ink-3 短線作參照；每張機台卡片的四個數值旁都有三格蝕刻小刻度，超標時刻度與數字一起換成狀態色；事件列每行左側一條蝕刻短線依嚴重度上色。
 
 密度中高、語氣穩重：面板間距 12px、面板內距 14px，所有機器產生的值（id、數值、時間、串流）一律 JetBrains Mono 等寬並開 `tabular-nums`，人寫的標籤與說明用 Source Sans 3 配 Noto Sans TC；UI 文案一律繁體中文，只有機台 id、單位、`Mock`／`AI`／`WS`、queue 名與 LLM 輸出保留英文。整個畫面只有一種 accent（深青）：它擁有主要動作、選取、液位線與串流游標，其餘一切都是墨色三階與桌邊灰。狀態三色（正常綠、警告琥珀、嚴重紅）只出現在刻度、液位線、徽章與邊框，從不當作大面積底色——嚴重卡片的 crit-bg 是唯一例外，而且它仍是 80% 透明、透得出格線。
 
@@ -212,7 +231,7 @@ components:
 
 **Key Characteristics:**
 - 三層材質：桌面（bench + 格線）→ 桌邊（rim）→ 磨砂玻璃（surface 72% + edge 框 + 內側高光），深度靠材質不靠陰影
-- 蝕刻刻度是簽名：比值刻度 0–60 與深青液位線、卡片數值旁的三格小刻度、事件列的蝕刻短線、流向連線的蝕刻底線
+- 蝕刻刻度是簽名：比值刻度 0–60、深青液柱與液位線、1:1 錨點與最高水位短線、卡片數值旁的三格小刻度（嚴重時填實）、事件列的蝕刻短線、流向連線的蝕刻底線、快取耗時的同刻度對比橫條
 - 單一深青 accent 擁有所有 live 狀態：主要動作、選取框、液位線、串流游標、進行中 chip
 - 狀態三件套（實心／fg 文字／bg 底）各自只出現在刻度、液位線、徽章與邊框；嚴重卡片的脈動只換底色與邊框色
 - Source Sans 3 + Noto Sans TC 做 UI、JetBrains Mono tabular 做一切機器產生的值；最小功能性字級 12px
@@ -223,9 +242,9 @@ components:
 冷灰藍的實驗桌面配墨色文字，深青是唯一的飽和色；狀態三色各帶一組「實心／前景文字／徽章底」三件套，兩套主題共用同一張對照表。
 
 ### Primary
-- **深青 Lab Teal**（`accent` #0F6E8C）：主要動作「診斷」的底色、液位線、串流游標、進行中 chip 的文字、選取框（卡片 2px 框、事件列與異常列的 1px inset ring）、走勢線的批次虛線。它是「系統正在等你」與「這是你選的」的唯一訊號色。對玻璃 5.39:1 可作文字；對桌面 bench 4.47、桌邊 rim 3.75 不達標，所以**桌面與桌邊上的深青文字一律改用 accent-strong**（Copilot 標頭的聽診器圖示即是）。
+- **深青 Lab Teal**（`accent` #0F6E8C）：主要動作「診斷」的底色、液位線與 25% 液柱（`bg-accent/25`）、合併比走勢線與 32px 合併比數字、快取耗時對比的「快取」橫條、串流游標、進行中 chip 的文字、選取框（卡片外側 2px outline、事件列與異常列的 1px inset ring）、走勢線的批次虛線。它是「系統正在等你」與「這是你選的」的唯一訊號色。對玻璃 5.39:1 可作文字；對桌面 bench 4.47、桌邊 rim 3.75 不達標，所以**桌面與桌邊上的深青文字一律改用 accent-strong**（Copilot 標頭的聽診器圖示即是）。
 - **深青加深 Lab Teal Deep**（`accent-strong` #0B5A73）：主要按鈕的 hover／按下底色與邊框、桌面與桌邊上的深青文字（bench 5.96、rim 4.99）。
-- **深青水洗 Teal Wash**（`accent-wash` #D9ECF2）：選取卡片、選取事件列、選取異常列的底色；進行中 chip 的底（accent 字在上為 4.75:1，剛過門檻，不要再淡）。
+- **深青水洗 Teal Wash**（`accent-wash` #D9ECF2）：選取的正常／佔位卡片（警告／嚴重卡選取時保留自身狀態底色，T073 第四輪）、選取事件列、選取異常列的底色；進行中 chip 的底（accent 字在上為 4.75:1，剛過門檻，不要再淡）。
 
 ### Neutral
 - **實驗桌面 Bench**（`bench` #DDE3E8）：app 最底層與主區背景；也作串流面板、建議指令區塊、比例條軌道的「內凹」底。
@@ -265,9 +284,9 @@ components:
 - **Number**（500, 24px/28px, mono tabular）：卡片 2×2 遙測值、每秒訊息與每秒批次。
 - **Title**（700, 20px/28px）：rail 品牌列「flow-gatekeeper」，全站唯一一處。
 - **Heading**（600, 16px/24px）：卡片機台中文名、Copilot 標頭「AI 診斷」與面板內機台名、進行中的進度百分比（mono 500）。
-- **Body**（400, 14px/20px）：按鈕文字（600）、搜尋框、事件訊息、結果摘要與條列（`leading-relaxed`）、stage 標題與面板區段標頭（600、ink-2）。
+- **Body**（400, 14px/20px）：按鈕文字（600）、搜尋框、事件訊息、結果摘要與條列（`leading-relaxed`）、stage 標題與面板區段標頭（600、ink-2；stage 標題在 < md 升為 16px，手機單欄堆疊時作區段分界）。全站 `body` base 字級即此階（14px）。
 - **Label**（400, 12px/16px）：數值標籤、meta、刻度數字（mono）、走勢「近 60 秒」；徽章、chip、異常標記、「主題」與 peek 條的「AI 診斷」用 600。**12px 是最小功能性字級**，10／11px 已退役。
-- **Mono**（400, 12px/16px, mono tabular）：machine id、時間戳、單位、事件時刻、`N/50`、`×N`、證據摘錄、原始串流、快捷鍵 kbd。
+- **Mono**（400, 12px/16px, mono tabular）：machine id、時間戳、單位、事件時刻與合併列的起訖「HH:mm:ss–HH:mm:ss」、暫停橫幅的「暫停於 HH:mm:ss」、`N/50`、`×N`、刻度數字與「1:1」、證據摘錄、原始串流、快捷鍵 kbd。
 
 ### Named Rules
 **The Machine-Speaks-Mono Rule.** 凡是 id、數值、時間、單位、log、AI 原始輸出，一律 JetBrains Mono + `tabular-nums`；凡是人寫的標籤與說明，一律 sans。
@@ -276,18 +295,18 @@ components:
 
 ## Layout
 
-桌機（≥ 1024px）是固定三欄的 app shell，`h-screen w-screen overflow-hidden`，body 不捲動、各區自行捲動：
+桌機（≥ 1366px）是固定三欄的 app shell，`h-screen w-screen overflow-hidden`，body 不捲動、各區自行捲動：
 
 - **左 rail**（≥ 768px 顯示）：預設 240px，可拖曳或鍵盤調整 200–420px（把手 6px 寬疊在 1px 右框上，hover／focus 時顯示 60% 深青），`bg-rim border-r border-edge`，內距 16px、區塊間距 12px。由上而下：品牌列（20px 名稱 + 「開發」環境 pill）、機群健康玻璃片、最近異常玻璃片、`mt-auto` 貼底的主題切換。
 - **工具列**：56px 高、`bg-rim border-b border-edge`、左右內距 12px；四組語意分組（導航／播放控制／系統狀態／主要動作），控制項高度統一 36px、間距 12px。依工具列可用寬度三段收合：≥ 820px 全部顯示、640–819px 只留圖示、< 640px 搜尋收成圖示鈕（展開為覆蓋式輸入框）、Mock 頻率與指標面板隱藏。
-- **主區**：`bg-bench` + 24px 格線，內距 12px，直欄間距 12px：背壓帶玻璃片（約 96px）→ 連線橫幅（有事才出現，玻璃片）→ 拓樸捲動區（內距 8px 留給焦點環）→ 事件流玻璃片（可拖曳或鍵盤調整 100–360px）。
+- **主區**：`bg-bench` + 24px 格線，內距 12px，直欄間距 12px：背壓帶玻璃片（約 96px）→ 狀態橫幅（斷線／未授權／暫停，有事才出現、同一位置同一形態、優先序斷線 ＞ 未授權 ＞ 暫停；斷線與未授權用狀態三件套，暫停用中性玻璃 `border-edge bg-surface/72 text-ink` 寫「已暫停畫面更新 · 暫停於 HH:mm:ss」並內嵌 28px 的「恢復」次要鈕）→ 拓樸捲動區（內距 8px 留給焦點環）→ 事件流玻璃片（可拖曳或鍵盤調整 100–360px）。
 - **拓樸**：五欄 grid `minmax(220px,1fr) 24px minmax(220px,1fr) 24px minmax(220px,1fr)`，24px 溝槽放流向連線；三欄各有標頭（14px 600 名稱 + mono 台數）以 1px edge 下緣界定，**欄本身不包玻璃**，卡片直接放在桌面上、縱向間距 12px。容器內容寬 < 708px（3×220 + 2×24）時改為單欄堆疊、段間 24px 高的朝下短箭頭、不流動——以容器寬度而非 viewport 判斷，因為 Copilot 面板開合會改變主區寬度。
-- **Copilot 面板**：≥ 1024px 為 360px 寬的推擠式玻璃片（`my-3 mr-3`），收合時留一條 36px 寬的展開窄條（直書「AI 診斷」）；< 1024px 改為 bottom-sheet（`fixed bottom-0`，最高 85vh，頂角 6px，`bg-surface-strong` 不透明、`shadow-sheet`，後方 `bg-scrim/50` 從工具列以下蓋住），收合後仍有選取機台時退為底部 32px 的 peek 條。
-- **手機（< 768px）**：rail 隱藏；主區頂端常駐 44px 的機群健康摘要條（比例條 + 四個計數，點開為異常清單覆蓋層）；背壓帶只留每秒訊息、比值與丟棄數，刻度縮成 18px 的 compact 版；工具列主題切換改為單一 36px 圖示鈕。
+- **Copilot 面板**：≥ 1366px（`desk`）為 360px 寬的推擠式玻璃片（`my-3 mr-3`），收合時留一條 36px 寬的展開窄條（直書「AI 診斷」）；門檻取 1366 是因為 rail 240 ＋ 面板 360 之後拓樸內容寬恰為 708px、仍可三欄（1024／1280 會被擠成單欄）。< 1366px 改為 bottom-sheet（`fixed bottom-0`，最高 85vh，頂角 6px，`bg-surface-strong` 不透明、`shadow-sheet`，頂端 4×40px 的 ink-3 抓取把手，內容 `max-w-xl` 置中）：已選機台但尚未診斷時是**非 modal 的閒置單列**（`aria-modal="false"`、不渲染遮罩、不攔截點擊——點別張卡片即改選）：32px 一列放 12px ink-3「AI 診斷」前綴＋機台名、狀態徽章（含停滯）、30px 高的「診斷」主鈕與收合鈕，連把手約 51px；焦點進入 sheet 或診斷開始後才轉為 modal（`aria-modal="true"`、焦點陷阱、後方 `bg-scrim/50` 從工具列以下蓋住）。主區與 rail 的 `padding-bottom` 走 `--fg-bottom-reserve`＝sheet／peek 條的實際高度（閒置單列以 ResizeObserver 量測；modal 期間與內容變長時凍結前值），拓樸與 rail 底部的主題切換不被蓋住。收合後仍有選取機台時退為底部 32px 的 peek 條（`bg-surface-strong shadow-sheet`，右側中性 pill 顯示診斷狀態文字）。
+- **手機（< 768px）**：rail 隱藏；主區頂端常駐 44px 的機群健康摘要條（比例條 + 四個計數，點開為異常清單覆蓋層）；背壓帶只留每秒訊息、合併比與丟棄數，刻度縮成 18px 的 compact 版（含液柱與 1:1 錨點）；工具列主題切換改為單一 36px 圖示鈕。
 
 驗收 viewport 五個：1366×768、1440×900、1024×768、768×1024、390×844，兩套主題下不得溢出、重疊、橫向捲動；hover／選取／嚴重脈動／搜尋過濾不得造成 layout shift（截圖劇本量測）。
 
-間距節奏：Tailwind 4px 基準。面板間距 12px、面板與卡片內距 14px（`p-3.5`）、卡片內區塊間距 12px、2×2 遙測格 gap 12px×8px、rail 內距 16px、stage 溝槽 24px；控制項高 36px、chip 高 32px、徽章高 20px（1px 框 + `py-px` + 16px 行高）。**任何讀數、徽章、標記的出現或消失都不改變所屬容器的高度**：佔位恆在（比值的「:1」、「>60」格、卡片底列 20px、手機丟棄數位置）。
+間距節奏：Tailwind 4px 基準。面板間距 12px、面板與卡片內距 14px（`p-3.5`）、卡片內區塊間距 12px、2×2 遙測格 gap 12px×8px、rail 內距 16px、stage 溝槽 24px；控制項高 36px、chip 高 32px、徽章／診斷 tag／背壓帶狀態 pill 高 20px（1px 框 + `py-px` + 16px 行高）、閒置 sheet 單列 32px、橫幅內嵌鈕 28px。**任何讀數、徽章、標記的出現或消失都不改變所屬容器的高度**：佔位恆在（比值的「:1」、「>60」格、卡片底列 20px、手機丟棄數位置）。
 
 ## Elevation & Depth
 
@@ -300,14 +319,14 @@ components:
 ### Named Rules
 **The Glass Recipe Rule.** 一片玻璃 = `rounded-card border border-edge bg-surface/72 shadow-glass`，四件缺一不可；要不透明就換 `bg-surface-strong`，不要改 alpha 到別的值。
 **The No-Halo Rule.** 不用零位移的外擴 box-shadow、不用 `backdrop-filter`、不用色彩漸層；桌面的兩道 1px 格線是唯一的 `linear-gradient`。
-**The Pulse-Is-Color Rule.** 嚴重卡片的脈動（`criticalPulse` 1.2s）只動 `background-color`（crit-bg 80% → 100%）與 `border-color`（crit → crit-fg），不動尺寸、不動 box-shadow；選取時以 `animation: none` 停住，選取的深青框與水洗底不被染紅。
-**The Outline-Not-Ring Rule（卡片）.** 機台卡片的選取框（1px accent 邊框 + 內縮 1px outline 組成 2px）與焦點環（2px `focus` 色 outline、外延 2px）都走 `outline`，與底色脈動和玻璃高光互不相干；其他控制項的焦點環用 `focus-visible:ring-2 ring-focus`。
+**The Pulse-Is-Color Rule.** 嚴重卡片的脈動（`criticalPulse` 1.2s）只動 `background-color`（crit-bg 80% → 100%）與 `border-color`（crit → crit-fg），不動尺寸、不動 box-shadow；選取時以 `animation: none` 停住並維持 crit-bg 80% 靜止底（T073 第四輪：選取只加外側深青 outline，不再以水洗底覆蓋狀態色）。
+**The Outline-Not-Ring Rule（卡片）.** 機台卡片的選取框（外側 2px `accent` outline、offset 0，不改邊框與底色）與焦點環（2px `focus` 色 outline、外延 2px）都走 `outline`；兩者同時成立時改畫 6px `focus` 色雙線（2 線／2 縫／2 線，offset 0），內線即選取框位置、外線即焦點環，與底色脈動和玻璃高光互不相干；其他控制項的焦點環用 `focus-visible:ring-2 ring-focus`。
 
 ## Shapes
 
-三檔圓角、全部偏方：控制項（按鈕、輸入框、kbd、串流面板、色條、液位線端、抓取把手）4px；卡片、玻璃面板、bottom-sheet 頂角、覆蓋層 6px；徽章、chip、狀態燈、連線 chip、卷軸 thumb 全圓 999px。6px 是一般圓角的上限（PRODUCT.md 產品約束），pill 是明文例外。
+三檔圓角、全部偏方：控制項（按鈕、輸入框、kbd、串流面板、色條、液位線端、抓取把手）4px；卡片、玻璃面板、bottom-sheet 頂角、覆蓋層 6px；徽章、異常標記 pill、狀態燈、連線 chip、卷軸 thumb 全圓 999px；診斷 chip 例外為 4px 方角 tag（與現在式的狀態 pill 以形狀區分，T073 第四輪）。6px 是一般圓角的上限（PRODUCT.md 產品約束），pill 是明文例外。
 
-邊框一律 1px `edge`；狀態以邊框色表達——警告卡片換 `warn` 全邊框、嚴重卡片換 `crit`、選取換 `accent`，**只換色不改寬度**，盒模型不變。停滯把邊框改虛線（`border-dashed`）而不改色，與狀態色疊加；空 stage 欄的佔位也是虛線框。主要按鈕帶一圈 `accent-strong` 邊框，停用時換 `edge`。
+邊框一律 1px `edge`；狀態以邊框色表達——警告卡片換 `warn` 全邊框、嚴重卡片換 `crit`、選取不換邊框色改加外側 outline，**只換色不改寬度**，盒模型不變。停滯把邊框改虛線（`border-dashed`）而不改色，與狀態色疊加；空 stage 欄的佔位也是虛線框。主要按鈕帶一圈 `accent-strong` 邊框，停用時換 `edge`。
 
 幾何語彙是「線」：刻度是 1px 線（`vector-effect: non-scaling-stroke` 讓拉伸不變粗）、液位線是 2px 寬的深青短柱、事件列的嚴重度是 16×2px 短線、處理步驟是 12×2px 短線、可能原因的項目符號是 10×2px 短線、結果頂部的嚴重度是 2px 色條；狀態燈是 12px 方框內置中的 10px 圓點。沒有圓角大色塊、沒有填色圖示底。
 
@@ -316,8 +335,9 @@ components:
 ### Buttons
 - **Shape:** 4px 圓角，高 36px（Copilot 內的全寬主要鈕為 `py-2`），icon 16px 加 6px 間距，文字 14px/600；窄工具列只留 icon，一律有 `aria-label` 與 `title`。lucide 線性圖示，不用 glyph 字型。
 - **Primary**（工具列「診斷」、Copilot「診斷」／「重試」）：`bg-accent text-surface-strong border-accent-strong`，hover `bg-accent-strong`；disabled 工具列版 `bg-surface/72 border-edge text-ink-3`、面板版 `bg-rim border-edge text-ink-3`（不用整顆半透明，停用對比仍 ≥ 3:1）。工具列上的焦點環加 `ring-offset-2 ring-offset-rim`。
-- **Tool**（搜尋圖示鈕、暫停／恢復、主題圖示鈕、中止診斷）：玻璃配方的按鈕版 `bg-surface/72 border-edge text-ink-2 shadow-glass`，hover `bg-surface text-ink`；Mock 頻率以 `border-dashed text-ink-3 cursor-not-allowed` 作停用占位。
-- **Icon-only**（關閉、清除異常、卡片右下診斷、收合把手）：`p-1.5` 或 `h-7 w-7`／`h-8 w-8`，`text-ink-2`／`text-ink-3`，hover 轉 `text-ink` 或 `text-accent`、底轉 `bg-surface/72` 或 `bg-rim`；卡片上的那顆預設 `opacity-0`，hover／focus-within 或無 hover 裝置時顯示，並有 `bg-surface-strong border-edge` 底。
+- **Tool**（搜尋圖示鈕、暫停、快捷鍵說明（`Keyboard` 圖示、與 `?` 同一個開關）、主題圖示鈕）：玻璃配方的按鈕版 `bg-surface/72 border-edge text-ink-2 shadow-glass`，hover `bg-surface text-ink`；Mock 頻率以 `border-dashed text-ink-3 cursor-not-allowed` 作停用占位。**暫停是固定文字的切換鈕**（名稱恆為「暫停」、`aria-pressed`）：按下態比照 segmented 選中段 `border-ink bg-ink text-surface-strong font-semibold`，只剩圖示時也看得出按下；恢復可再按一次，或用主區暫停橫幅內的「恢復」。
+- **Secondary**（Copilot「中止診斷」／「再次診斷」、暫停橫幅「恢復」）：精簡的 Tool 鈕 `rounded-control border-edge bg-surface/72 px-2.5 py-1 text-sm font-medium text-ink shadow-glass`，hover `bg-rim/60`，停用 `bg-rim text-ink-3`；橫幅內的「恢復」為 28px 高 `bg-surface-strong font-semibold` 配 `Play` 圖示，hover `border-etch bg-surface`。完成態的「再次診斷」是次要鈕：主角是結果本身，不與失敗態的主要「重試」搶層級。
+- **Icon-only**（關閉、確認異常（`Check`）、卡片右下診斷、收合把手）：`p-1.5` 或 `h-7 w-7`／`h-8 w-8`，`text-ink-2`／`text-ink-3`，hover 轉 `text-ink` 或 `text-accent`、底轉 `bg-surface/72` 或 `bg-rim`；卡片上的那顆預設 `opacity-0`，hover／focus-within 或無 hover 裝置時顯示，並有 `bg-surface-strong border-edge` 底。
 - **Segmented**（主題切換「淺色｜深色」）：兩段各自帶 1px edge 框、高 32px，選中段 `bg-ink text-surface-strong font-semibold`，未選 `bg-surface/72 text-ink-2`；焦點環 `ring-offset-2 ring-offset-rim`。
 - **Disclosure**（原始串流展開、「還有 N 筆」）：無底無框的 14px 文字鈕，`text-ink-2` hover `text-ink`；「還有 N 筆」帶 `decoration-etch` 底線。
 - **Focus:** 全站 `focus:outline-none focus-visible:ring-2 focus-visible:ring-focus`；列表列與捲動區用 `ring-inset`。
@@ -326,15 +346,16 @@ components:
 - **連線 chip**：高 32px、`rounded-pill border` 透明底，點／框用狀態實心色、文字用 `*-fg`（已連線 ok、重新連線中 warn、已斷線 crit），後綴 mono 的 `· N ms`；未授權 chip 另有 `bg-crit-bg`。
 - **狀態徽章**（卡片右上、面板摘要）：12px/600、`py-px px-2 leading-4`、`bg-*-bg text-*-fg`、透明邊框佔位；嚴重卡片上的徽章改 `border-crit`（底色相近才分得出來）。
 - **停滯徽章**：`border-stale bg-surface-strong text-ink-2` + 6px `bg-stale` 色點。
-- **診斷狀態 chip**（卡片 id 列、peek 條）：進行中 `border-accent bg-accent-wash text-accent`、已完成 `border-edge bg-surface-strong text-ink-2`、快取 `bg-rim text-ink-2`、失敗 `border-crit bg-crit-bg text-crit-fg`。
-- **Copilot 狀態 chip**：閒置 `bg-surface-strong text-ink-2`、進行中 `bg-accent-wash text-accent`、已完成 `bg-ok-bg text-ok-fg`、失敗 `bg-crit-bg text-crit-fg`。
+- **診斷狀態 chip**（卡片 id 列；4px 方角 `rounded-control` tag、`px-1.5 py-px`、無圖示，形狀與全圓的狀態徽章／異常標記分開）：進行中 `border-accent bg-accent-wash text-accent`「診斷中 N%」、已完成 `border-edge bg-surface-strong text-ink-2`「AI：嚴重」、快取 `bg-rim text-ink-2`「AI：嚴重 · 快取」、失敗 `border-crit bg-crit-bg text-crit-fg`「AI 失敗」；peek 條右側的同一段文字改為中性 pill `border-edge bg-surface text-ink-2`。
+- **背壓帶狀態 pill**：高 20px `rounded-pill border-edge text-ink-2` 配 6px 色點——「已斷線」／「重新連線中」`bg-stale` 點、「已暫停」`bg-ink-2` 點（與斷線同現時只顯示斷線）；「丟棄 N 則」無框、`text-warn-fg` 配 `bg-warn` 點。
+- **Copilot 狀態 chip**：未診斷 `bg-surface-strong text-ink-2`、進行中 `bg-accent-wash text-accent`、已完成 `border-edge bg-surface-strong text-ink-2`（中性——chip 表達任務階段，嚴重度由結果色條與徽章承載；T073 第三輪由「閒置」／ok 綠改）、失敗 `bg-crit-bg text-crit-fg`。
 - **優先度 pill**（建議動作）：高 `bg-crit-bg text-crit-fg`、中 `bg-warn-bg text-warn-fg`、低 `bg-rim text-ink-2`；證據來源 pill `bg-rim text-ink-2` 500。
 - **環境 pill**（rail 品牌列「開發」）：`border-edge text-ink-2` 12px/600。
 
 ### Cards / Containers
 - **玻璃面板**（背壓帶、機群健康、最近異常、事件流、連線橫幅、桌機 Copilot）：`rounded-card border border-edge bg-surface/72 shadow-glass`，內距 14px（背壓帶 `px-3.5 py-2`）；面板標頭 14px/600 `text-ink-2` 配右側 mono 12px 計數；Copilot 標頭另有 `bg-rim border-b` 的桌邊帶。
-- **MachineNodeCard**：`<button>`，`min-h-[148px] rounded-card border p-3.5 shadow-glass`，`flex-col gap-3`，`transition-colors 150ms`、**hover 不位移**。狀態：healthy／placeholder `border-edge bg-surface/72` hover `border-etch bg-surface-strong`；warning `border-warn bg-surface/72`（hover 只轉不透明、邊框保留）；critical `border-crit bg-crit-bg/80 animate-critical-pulse`（hover `bg-crit-bg`）；selected 由 `.machine-card[data-selected]` 給 `border-accent bg-accent-wash` + 內縮 outline、停脈動；stale 疊 `border-dashed`，數值不清空。內容：16px/600 中文名｜狀態徽章 + 狀態燈；20px 高的 id 列（mono 12px id · 相對時間 → 停滯徽章 → 診斷 chip，出現與否不改高）；2×2 遙測（12px 標籤 + mono 單位、24px mono 數值 + 10×14px 三格刻度，越界時數值 `text-*-fg`、刻度 `stroke-*`）；底列 20px 佔位放異常標記，右下診斷圖示鈕。
-- **異常標記 pill**（卡片底列、`animate-latch-in` 160ms）：嚴重 `border-crit bg-crit-bg text-crit-fg`、警告 `border-warn bg-warn-bg text-warn-fg`，可點清除（hover `border-current`）；清除後 `border-edge bg-rim text-ink-3 line-through`、disabled，保留到回復後 30 秒期滿才消失。最近異常列同步劃線。
+- **MachineNodeCard**：`<button>`，`min-h-[148px] rounded-card border p-3.5 shadow-glass`，`flex-col gap-3`，`transition-colors 150ms`、**hover 不位移**。狀態：healthy／placeholder `border-edge bg-surface/72` hover `border-etch bg-surface-strong`；warning `border-warn bg-surface/72`（hover 只轉不透明、邊框保留）；critical `border-crit bg-crit-bg/80 animate-critical-pulse`（hover `bg-crit-bg`）；selected 由 `.machine-card[data-selected]` 給外側 2px `accent` outline（offset 0）並停脈動，邊框與底色維持狀態自身（僅 healthy／placeholder 另鋪 `bg-accent-wash`）；stale 疊 `border-dashed`，數值不清空。內容：16px/600 中文名｜狀態徽章 + 狀態燈；20px 高的 id 列（mono 12px id · 相對時間 → 停滯徽章 → 診斷 chip，出現與否不改高）；2×2 遙測（12px 標籤 + mono 單位、24px mono 數值 + 10×14px 三格刻度，越界時數值 `text-*-fg`、刻度 `stroke-*`）；底列 20px 佔位放異常標記，右下診斷圖示鈕。
+- **異常標記 pill**（卡片底列、`animate-latch-in` 160ms）：嚴重 `border-crit bg-crit-bg text-crit-fg`、警告 `border-warn bg-warn-bg text-warn-fg`，**不可互動**（`span`、整列 `pointer-events-none`，點在 pill 上即選台；T073 第三輪）；確認後 `border-edge bg-rim text-ink-3 line-through`，保留到回復後 30 秒期滿才消失。確認入口：rail 最近異常列的 `Check` 鈕、鍵盤 `x`、手機覆蓋層；最近異常列同步劃線。卡片 id 列為標頭第二列獨佔內容寬：id（mono）→ 相對時間（僅更新 ≥ 3 秒前或停滯時顯示，否則 sr-only）→ 停滯徽章 → 診斷 chip（4px 方角 `rounded-control` tag、無圖示：「診斷中 N%」／「AI：嚴重度」／「AI：嚴重度 · 快取」／「AI 失敗」，T073 第四輪加「AI：」前綴標示 AI 判定）；時間最先讓位、id 最後。已知限制：1366 卡寬 220px 時「停滯徽章＋快取 chip」同現會截 id。嚴重越界的三格刻度改全寬實心短柱（`fill-crit`），警告維持細線換色（色弱冗餘編碼）。
 - **內凹區塊**（原始串流面板、建議指令、比例條軌道）：`rounded-control border border-edge bg-bench`，串流面板 mono 12px `leading-relaxed text-ink-2`、max-h 320px，尾端 6×14px 深青方塊游標以 0.8s `steps(1)` 閃爍。
 - **結果骨架**：區段以 `divide-y divide-edge` 分隔、`py-3.5`；缺欄位時 10px 高 `bg-ink/20` 的靜止佔位條；串流中的欄位尾端同一種游標；頂部 2px 嚴重度色條 `bg-ok／warn／crit`。
 - **覆蓋層**（快捷鍵說明、手機異常清單）：`rounded-card border-edge bg-surface-strong shadow-sheet`，後方 `bg-scrim/50`，起於工具列以下（`top-14`）。
@@ -343,10 +364,10 @@ components:
 - **搜尋**：高 36px，玻璃配方的輸入版 `rounded-control border-edge bg-surface/72 shadow-glass`，左內距 32px 放 16px Search 圖示（ink-3），placeholder ink-3，focus `border-accent` + 2px focus ring；`type="search"`。compact 時為覆蓋在工具列上的 `bg-rim` 全寬輸入框。全站唯一的輸入欄。
 
 ### Navigation
-- 沒有側欄導航；rail 的「最近異常」列是唯一的清單式導航：列高 ≥ 36px、`rounded-control`，hover `bg-surface`，選取 `bg-accent-wash ring-1 ring-inset ring-accent`；每列 8px 狀態燈 + 14px 名稱 + 12px ink-3 時間，右側 28px 清除鈕（無標記時留等寬空位）。事件流的列（min-h 32px、`border-b border-edge/60`）同一套 hover／選取規則。
+- 沒有側欄導航；rail 的「最近異常」列是唯一的清單式導航：列高 ≥ 36px、`rounded-control`，hover `bg-surface`，選取 `bg-accent-wash ring-1 ring-inset ring-accent`；每列 8px 狀態燈 + 14px 名稱 + 12px ink-3 時間，右側 28px 清除鈕（無標記時留等寬空位）。事件流的列（min-h 32px、`border-b border-edge/60`）同一套 hover／選取規則；每列由左至右：16×2px 嚴重度短線 → mono 12px 時刻（合併列顯示起訖「HH:mm:ss–HH:mm:ss」，< sm 只留訖時、起時 sr-only；合併窗自首筆 `firstTs` 起算固定 60 秒，不隨合併滑動）→ 32px 寬嚴重度字 → 訊息 → mono「×N」。
 
 ### BackpressureStrip（signature：橫放的量筒）
-上列三組「12px 標籤在上、數值在下」的讀數：每秒訊息（24px mono，標籤前一條 ink-2 實線）→ 箭頭 → 每秒批次（標籤前一條 accent 虛線）→ 箭頭 → 比值（32px/600 深青，後綴 14px mono「:1」恆佔位；斷線時轉 ink-2）；右側走勢區 48px 高：「近 60 秒」12px 標籤 + 兩條 1.5px 折線（訊息 ink-2 實線、批次 accent 虛線 `4 3`），時間軸固定 60 格靠右對齊；狀態欄（「連線中斷」pill、「丟棄 N 筆」warn-fg）只壓縮走勢線寬度。下列是 **Graduation**：SVG 刻度 0–60 線性、1 格 = 1:1、每 5 格中格、每 10 格大格並以 HTML 絕對定位標 12px mono ink-3 數字（不用 SVG text，拉伸不變形），線色 `stroke-etch` 1px；液位線是 2px×14px 的深青短柱以 `translateX(比值/60)` 位移（`motion-safe` 500ms ease-out），比值 > 60 時釘右端並在恆佔位的 28px 格標「>60」。以容器寬度收斂：< 36rem 拿掉箭頭、< 32rem 走勢區換到下一列；手機只留每秒訊息、比值、丟棄數與 18px compact 刻度。
+上列三組「12px 標籤在上、數值在下」的讀數，三者同為近 60 秒視窗口徑（瞬時 1 秒值與累計比值放 `title`）：每秒訊息 · 近 60 秒（24px mono）→ 箭頭 → 每秒批次 · 近 60 秒 → 箭頭 → **合併比**（32px/600 深青，後綴 14px mono「:1」緊貼數字、最小寬度放整組 `md:min-w-24`；≥ md 附 ink-3 小字「· 訊息 ÷ 批次」，手機只留「合併比」；斷線時轉 ink-2）。右側走勢區 48px 高：「近 60 秒」12px 標籤 + **一條** 1.5px 深青實線畫單秒合併比（y 軸自 0 起、上限取視窗最高單秒比 × 1.25，不做 min–max 拉伸；該秒無批次時線斷開不補 0），時間軸固定 60 格靠右對齊；走勢線左側常駐一行 12px ink-3 白話「每幀合併約 N 則 · 近 60 秒最高 X」（≤ 1 時「每幀約 1 則 · 幾乎無合併」；`data-fg="ratio-plain"`；手機不顯示、改放 `title`）；狀態列（「已斷線」／「重新連線中」pill 與連線 chip 同字、「已暫停」pill（`bg-ink-2` 點，與斷線同現時只顯示斷線）、「丟棄 N 則」warn-fg）佔用走勢線寬度，手機不顯示 pill 由橫幅說明。下列是 **Graduation**：SVG 刻度 0–60 線性、1 格 = 1:1、每 5 格中格、每 10 格大格並以 HTML 絕對定位的 12px mono ink-3 數字（不用 SVG text，拒絕縮放變形），線條 `stroke-etch` 1px；**1:1 錨點**：1 格處一條 1px `stroke-ink-3` 短線往下伸進數字列（桌機 4px、compact 3px，與往上的最高水位線方向相反）並在右側 3px 標 12px mono「1:1」；**液柱**：自 0 到目前合併比的實心 `bg-accent/25`（單一實色、非漸層；不用 accent-wash 因深色主題比煙燻玻璃更暗會讀成凹洞），高同刻度列（桌機 8px、compact 6px），`scaleX` 伸縮、`motion-safe` 500ms，> 60 填滿；液位線是 2px×14px 的深青短柱疊在液面上，以 `translateX(比值/60)` 位移同步；1px `stroke-ink-3` 最高水位短線（視窗內最高比值，比大格高 3px）疊在液柱上；比值 > 60 時釘右端並在刻度列的 28px 處標「>60」。容器寬度收斂：< 36rem 隱藏箭頭、< 32rem 走勢區摺到下一列；手機保留每秒訊息、合併比、丟棄數與 18px compact 刻度（含液柱）。region `aria-label` 白話：「合併比 N 比 1，每幀平均合併 N 則訊息，近 60 秒最高 X 比 1，自載入起累計 Y 比 1」（丟棄 > 0 時加「近 60 秒丟棄 N 則」；暫停時加「已暫停畫面更新」；斷線時加「已斷線」／「重新連線中」）；比值 `title` 另附好壞參照「1:1 表示每則訊息各自重繪、沒有合併；比值越高，替畫面省下越多次重繪」。
 
 ### FlowLink（signature）
 24px 的 SVG：`stroke-etch` 底線表達管線、粗細隨下游 throughput 總和三檔變化；上層 `stroke-ink-3` 的 `6 6` 虛線以 `animate-flow`（1s 線性位移 -24）流動、三檔時長；箭頭 `fill-ink-3`。堆疊版面改為垂直短箭頭且不流動；reduced-motion 只保留粗細。
@@ -368,6 +389,7 @@ rail 版：玻璃片，標頭「機群健康」+ 「共 N 台」，2×2 計數�
 - **Do** 以邊框「換色不換寬」、底色「換 alpha 不換尺寸」表達狀態；任何徽章、讀數、標記的出現都要有恆在的佔位，不改容器高度。
 - **Do** 在 `prefers-reduced-motion: reduce` 下停掉五種循環／一次性動畫（critical-pulse、stream-caret、indeterminate、flow、latch-in）並把 transition 縮到 0.01ms；主題切換那一幀停用所有過渡。
 - **Do** 以容器寬度（container query／ResizeObserver）而非 viewport 斷點決定背壓帶、拓樸與工具列的收斂。
+- **Do** 讓切換鈕保持固定文字、以 `aria-pressed` 與墨色實底（`bg-ink text-surface-strong`）表達按下（暫停鈕、主題段）；同一視窗口徑的讀數在標籤上寫明「· 近 60 秒」，刻度上的參照（1:1 錨點、最高水位）用 1px `ink-3` 短線、液柱用 `accent/25` 單一實色。
 
 ### Don't:
 - **Don't** 在元件或 `tailwind.config.ts` 寫色值；色值只存在 `theme.css`，兩套主題同名換值（憲章硬規則）。

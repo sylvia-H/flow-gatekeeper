@@ -43,7 +43,7 @@
 - 衍生：
   - `windowRatio`（主顯示，FR-009）= 視窗內 `Σ msgsPerSec ÷ Σ batchesPerSec`；批次總和為 0 時為 `null`（顯示「—」）。
   - `cumulativeRatio`（tooltip）= 既有 `backpressure.ts` 的累計比值。
-  - `maxMsgs`（60 秒內最大值，走勢線正規化用）、`droppedInWindow`（`Σ droppedPerSec`，FR-011）。
+  - `maxMsgs`（60 秒內最大值；T073 第三輪走勢線改畫合併比後僅供 tooltip／測試，不再作正規化）、`droppedInWindow`（`Σ droppedPerSec`，FR-011）。
 - 呈現對應（FR-009a）：液位線位置 = `min(windowRatio, 60) / 60`（比值刻度 0–60，線性）；`windowRatio > 60` 時釘右端並標「>60」。走勢線不共用比值刻度。
 
 ## 4. Stage 與 FlowLink
@@ -73,7 +73,7 @@
   - `warning/critical → healthy`：`recoveredAt = receivedAt`。
 - 可見性（純函式 `isLatchVisible(latch, staleNow)`）：`recoveredAt === null` 或 `staleNow - recoveredAt < 30_000`。以 `staleNow` 判定：Pause 期間凍結顯示；恢復後 `staleNow` 回到實際時間，依實際經過時間判定（Pause 期間計入，已滿 30 秒者可能立即消失），不另記 Pause 偏移。
 - 劃線：`isLatchStruck(latch) = clearedBy === "user"`；可見期內劃線呈現，期滿與未劃線者一同消失。
-- 清除：卡片標記、`x` 快捷鍵或異常摘要列（含手機覆蓋層）呼叫 `clearLatch(machineId)` → `clearedBy = "user"`；所有入口讀寫同一 Map。
+- 確認（原稱清除）：`x` 快捷鍵或異常摘要列（含手機覆蓋層）呼叫 `clearLatch(machineId)`；卡片 pill 不可互動（T073 第三輪） → `clearedBy = "user"`；所有入口讀寫同一 Map。
 - 儲存：`shallowRef<Map<string, AnomalyLatch>>`，批次結束 `triggerRef` 一次。
 
 ## 6. AnomalySummaryItem（異常摘要列，衍生）
@@ -135,7 +135,7 @@
 | `severity` | 擴充為 `"warning" \| "critical" \| "recovered"` | 新增回復事件 |
 | `count` | `number` | 合併次數（≥ 1） |
 
-- 合併規則（`mergeEvent(list, event, windowMs = 10_000, max = 50)`）：在清單中找**同機台、同嚴重度的最近一筆**（不限頂端）；若 `|event.ts - 該筆.ts| ≤ 10_000`（閉區間；取絕對值，避免亂序時差值為負而無限期合併）→ 該筆 `count + 1`、`ts = max(該筆.ts, event.ts)`（亂序時不讓相對時間倒退），並移到頂端；否則新事件放頂端。
+- 合併規則（`mergeEvent(list, event, windowMs = EVENT_MERGE_WINDOW_MS /* 60_000 */, max = 50)`，T073 裁決 2026-10-17 由 10 秒滑動窗改為自首筆起算的固定 60 秒窗）：事件帶純前端欄位 `firstTs`（由 `deriveTransitionEvent` 帶出，契約不動）；在清單中找**同機台、同嚴重度的最近一筆**（不限頂端）；若合併後起訖跨度 `max(該筆.ts, event.ts) - min(該筆.firstTs, event.ts) ≤ 60_000`（閉區間）→ 該筆 `count + 1`、`ts = max(該筆.ts, event.ts)`（亂序時訖點不倒退）、`firstTs = min(該筆.firstTs, event.ts)`（亂序時起點往前擴），並移到頂端；否則（滿窗）新事件放頂端另起一列。事件列顯示起訖「`HH:mm:ss–HH:mm:ss · ×N`」，單筆或起訖同秒只顯示一個時間，`< 640px` 時起點與分隔符改 `sr-only`、`title` 恆為全文。
 - 不變量：清單上限 50（超過裁掉最舊）；`recovered` 事件同樣計入上限，且不阻斷前後同類異常事件的合併（例如 warning、recovered、warning 交錯時，兩筆 warning 仍合併）。
 - 訊息文案繁中：`壓製機 02 進入嚴重`、`烤爐 04 回復正常`。
 - 時鐘來源：事件 `ts` 沿用既有做法用 payload 時戳（解析失敗才退回批次 `receivedAt`），合併視窗以此計；異常標記（§5）則一律用客端 `receivedAt`。兩者的相對時間可能有些微差異，屬預期。
@@ -149,7 +149,7 @@
 | `ArrowUp/Down/Left/Right`（卡片） | 依視覺位置移焦 | 焦點在卡片 |
 | `Enter`（卡片） | 選取 | |
 | `d` | 診斷**選取**機台（不作用於僅聚焦的卡片；卡片診斷圖示的鍵盤替代為 Enter 選取後按 `d`） | 同診斷按鈕前置條件（由 `useDiagnoseTrigger` 提供） |
-| `x` | 清除（確認）聚焦卡片的異常標記 | 焦點在卡片且標記可見 |
+| `x` | 確認聚焦卡片的異常標記（劃線保留至回復後 30 秒） | 焦點在卡片且標記可見 |
 | `Escape` | 每次只關閉最上層一項：說明層 → 搜尋覆蓋 → 手機異常覆蓋層 → Copilot 面板（手機即 bottom-sheet；只設當次 `open = false`，不寫手動收合偏好）→ 取消選取 | 依序 |
 | `?` | 開關說明層 | 焦點不在輸入欄 |
 | `ArrowRight`／`ArrowLeft`（側欄把手） | 側欄寬度 +16px／−16px（200–420px） | 焦點在側欄把手 |
