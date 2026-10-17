@@ -8,12 +8,13 @@
 並把「背壓比值」與「逐字串流的 AI 推理」直接畫在同一個畫面上——
 再把整套系統做進**受監督的容器**、補齊**崩潰自癒**與**可觀測性基線**，讓它不只是能跑，而是禁得起斷線、崩潰與被監控。
 
-**現況為 1.1.0**（2026-09-28）：在 1.0.0 之後經三輪全面審查修復、技術棧升級（NestJS 11／Express 5、Vite 7、Zod 4、Pinia 3、Vitest 4、pnpm 10）
-與測試基礎建設補齊（覆蓋率門檻、真 Redis／Mongo 整合測試、跨 process e2e、變異測試）；逐項變更與升級注意事項見 [`CHANGELOG.md`](CHANGELOG.md)。
+**現況為 2.0.0**（2026-10-17）：feature 013 把監控台整體換皮為「實驗室玻璃與蝕刻刻度」、介面文案改為繁體中文，AI 預設模型改為 Gemini `gemini-3.5-flash-lite`，demo 影片以新介面重錄。
+更早的 1.1.0（2026-09-28）在 1.0.0 之後經三輪全面審查修復、技術棧升級（NestJS 11／Express 5、Vite 7、Zod 4、Pinia 3、Vitest 4、pnpm 10）
+與測試基礎建設補齊（覆蓋率門檻、真 Redis／Mongo 整合測試、跨 process e2e、變異測試）。逐項變更與升級注意事項（含 2.0.0 的不相容變更）見 [`CHANGELOG.md`](CHANGELOG.md)。
 
 <br/>
 
-![Release 1.1.0](https://img.shields.io/badge/release-1.1.0-0f6cbd)
+![Release 2.0.0](https://img.shields.io/badge/release-2.0.0-0f6cbd)
 ![asyncapi 1.2.0](https://img.shields.io/badge/asyncapi-1.2.0-6b7280)
 ![Vue 3.5](https://img.shields.io/badge/Vue-3.5-42b883?logo=vuedotjs&logoColor=white)
 ![NestJS 11](https://img.shields.io/badge/NestJS-11-e0234e?logo=nestjs&logoColor=white)
@@ -500,6 +501,8 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | **008** | [整棧容器化與一鍵 Demo](specs/008-fullstack-containerization/spec.md) | api／web 比照 007 容器化並收進 `demo` compose profile，nginx 反向代理 `/ws`、`/diagnoses` 至 api，瀏覽器**單一入口** `http://localhost:8080`；`seed` 一次性服務備妥示範資料；開發模式（host 直跑）零影響；乾淨收場（`down -v` 可重播） |
 | **009** | [可觀測性基線](specs/009-observability-baseline/spec.md) | 三端補齊「監控台自己也該可被監控」的基線：pino 結構化 JSON 日誌（含關聯鍵）、`GET /healthz` 依賴狀態探針（Redis／Mongo 二態回應）、queue 深度／WS 連線數／LLM latency／cache 命中率等關鍵指標週期入 log、dev-only **Metrics Panel**（`VITE_METRICS_PANEL`，唯讀、預設收合，production build 預設關閉）、有損寫入語意明文化（見下方「[已宣告的取捨](#已宣告的取捨)」） |
 | **1.1.0 維護**（2026-09，非 SDD） | [`CHANGELOG.md`](CHANGELOG.md)、指南 §15.6 | 四條維護分支：兩輪審查修復（第一輪 P0～P2、第二輪 Batch A～D）、技術棧升級（NestJS 11／Express 5、Vite 7、Zod 4、Pinia 3、Vitest 4、pnpm 10、`@google/genai`）、測試基礎建設（覆蓋率門檻、整合測試、e2e、變異測試）、契約升 1.2.0 與新增 `CHANGELOG.md`；第三輪審查報告與其修復留待 1.1.0 之後 |
+| **013** | [UI 全面改版（實驗室玻璃與蝕刻刻度）](specs/013-ui-redesign/spec.md) | web 監控台整體換皮：三 stage 產線拓樸取代機台網格、背壓 strip（60 秒視窗合併比＋液柱刻度）、診斷串流漸進骨架與快取耗時對比、深淺雙主題、繁中文案、≥ 1366px 推擠式／< 1366px bottom-sheet 的 AI 診斷面板；視覺真實來源改為 `apps/web/PRODUCT.md`／`DESIGN.md` |
+| **2.0.0 維護**（2026-10，非 SDD） | [`CHANGELOG.md`](CHANGELOG.md)、指南 §15.6 | 暫停鈕維持按下換字（中文「恢復」、拿掉 `aria-pressed`、暫停橫幅改 `role=status`）、預設模型改 `gemini-3.5-flash-lite`（3.x flash 送 `thinkingLevel: MEDIUM`、輸出上限預設 4096）、demo 影片重錄與錄影劇本 `record-demo.cjs`；第三輪審查報告（`docs/20260927-research-review03.md`）已併入，其修復仍待後續 |
 
 ---
 
@@ -537,7 +540,7 @@ flow-gatekeeper/
 ├── docs/              # ADR、SDD 完整實作指南、design-spec（v0.3 歷史起點，已退役）、demo 影片與截圖
 ├── scripts/           # dev-up.ps1（一鍵起全棧）、demo-reset.ps1（清 AI 快取）
 ├── asyncapi.yaml      # 即時通道契約（Spectral lint；info.version 1.2.0）
-├── CHANGELOG.md       # 產品版本（1.1.0）與 asyncapi 契約版本的變更紀錄與版本策略
+├── CHANGELOG.md       # 產品版本（2.0.0）與 asyncapi 契約版本的變更紀錄與版本策略
 ├── docker-compose.yml # Redis 7 + MongoDB 7（不帶分組）＋ demo profile：api/worker/web/seed 全棧受監督容器
 ├── docker-compose.e2e.yml # 只給 tests/e2e 用的 override（獨立專案名、18080、AI_PROVIDER=fake）
 ├── vitest.config.ts   # 只給 test:coverage：test.projects 聚合五個套件、合併覆蓋率與門檻
@@ -833,9 +836,9 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 
 | 項目 | 現況 |
 | --- | --- |
-| **產品版本** | **1.1.0**（2026-09-28；git tag `1.1.0`，指向 `develop` 併入 `main` 的 merge commit）。六份 `package.json` 的 `version` 與 tag 一致。產品 tag **不帶 `v` 前綴**——第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`（同一 commit `3e94ac2`），GitHub Release 與 demo 影片連結當時一併改指 `1.0.0`（2.0.0 起影片重錄、連結改指 `2.0.0`，見「端到端操作 Demo」版本註記） |
+| **產品版本** | **2.0.0**（2026-10-17；git tag `2.0.0`，指向 `develop` 併入 `main` 的 merge commit；前一版 1.1.0 為 2026-09-28）。六份 `package.json` 的 `version` 與 tag 一致。產品 tag **不帶 `v` 前綴**——第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`（同一 commit `3e94ac2`），GitHub Release 與 demo 影片連結當時一併改指 `1.0.0`（2.0.0 起影片重錄、連結改指 `2.0.0`，見「端到端操作 Demo」版本註記） |
 | **契約版本** | `asyncapi.yaml` `info.version` **1.2.0**，獨立於產品版本演進；每版加嚴／新增欄位／新增消費端義務都記在 `CHANGELOG.md`「asyncapi 契約版本」小節 |
-| **變更紀錄** | [`CHANGELOG.md`](CHANGELOG.md)（Keep a Changelog 格式；升級前先讀「相容性注意」）；維護分支的現況摘要見指南 §15.6 |
+| **變更紀錄** | [`CHANGELOG.md`](CHANGELOG.md)（Keep a Changelog 格式；升級前先讀「不相容變更」與「相容性注意」）；維護分支的現況摘要見指南 §15.6 |
 | **Release** | `main` 只接收發布：`develop` 以 `--no-ff` 併入 `main` → annotated tag → GitHub Release（流程見 `CLAUDE.md`「`main` 的 release 流程」）；日常開發與 feature merge 一律在 `develop` |
 
 ---
