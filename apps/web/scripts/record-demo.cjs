@@ -15,9 +15,9 @@
 // 錄影方式：CDP Page.startScreencast 逐格取 JPEG（以 node 端收到時刻為時間戳），結束後以 ffmpeg concat 轉成 30fps H.264 mp4
 //（BT.709、limited range）；比 Playwright recordVideo（即時 VP8、低位元率）清楚得多。headless 沒有游標，劇本以 addInitScript
 // 注入假游標（只存在於錄影頁面，不動產品程式碼），滑鼠以緩動分段移動。
-// 輸出：<out>/flow-gatekeeper-demo.mp4 與 <out>/flow-gatekeeper-demo-poster.jpg（取快取命中後的最後一格）；兩者都先寫在
-// 逐格暫存目錄、全部成功才複製到 <out>。對齊失準時在呼叫 LLM 之前中止；第一次診斷就命中快取、或第二次沒命中快取時中止，
-// 都不寫檔（先 demo-reset 再重錄），不自動重試，避免多打 LLM。
+// 輸出：<out>/flow-gatekeeper-demo.mp4 與 <out>/flow-gatekeeper-demo-poster.jpg（取快取命中後的最後一格）；先在逐格暫存目錄
+// 編碼完成才覆寫到 <out>，覆寫失敗（例如被播放器開著）時保留暫存成品並印出路徑，不必重錄。對齊失準或逐格寫檔失敗時
+// 在呼叫 LLM 之前中止；第一次診斷就命中快取、或第二次沒命中快取時中止，都不寫檔（先 demo-reset 再重錄），不自動重試。
 
 /* global document, window, performance, MutationObserver */
 
@@ -230,6 +230,8 @@ async function startScreencast(page, dir) {
       await cdp.send("Page.stopScreencast").catch(() => {});
       await cdp.detach().catch(() => {});
     },
+    /** 是否已有逐格寫檔失敗。 */
+    failed: () => writeError !== null,
     /** 擷取期間第一個寫檔錯誤（沒有則不拋）。 */
     throwIfFailed() {
       if (writeError) throw new Error(`逐格寫檔失敗：${writeError.message}`);
@@ -371,7 +373,8 @@ async function clickWhenSettled(page, pointer, button) {
   await pointer.click(button, { ms: 150 });
 }
 
-async function perform(page, pointer, t0) {
+/** `assertCapturing`：按「診斷」前確認逐格寫檔仍正常，寫檔已失敗就在呼叫 LLM 之前中止。 */
+async function perform(page, pointer, t0, assertCapturing) {
   const at = (ms) => sleep(Math.max(0, t0 + ms - Date.now()));
   const card = cardOf(page, MACHINE);
 
@@ -399,6 +402,7 @@ async function perform(page, pointer, t0) {
   const diagnose = page.locator('[data-fg="copilot"] button:visible', { hasText: /^\s*診斷\s*$/ }).first();
   await pointer.glideTo(diagnose, { ms: 600 });
   const before = await panelStatus(page);
+  assertCapturing();
   await clickWhenSettled(page, pointer, diagnose);
 
   // 0:08–0:11 鏡頭 2：串流骨架逐格填入 → 完成（時間點隨 LLM 回應速度浮動）
@@ -447,7 +451,43 @@ async function alignStart(page) {
   return t0;
 }
 
-async function record(opts, framesDir) {
+const BUSY_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+/** 同步重試（防毒、索引服務或播放器暫時佔用檔案時常見）：每次間隔 delayMs，共 attempts 次。 */
+function retryBusy(fn, attempts = 5, delayMs = 200) {
+  for (let i = 1; ; i += 1) {
+    try {
+      return fn();
+    } catch (err) {
+      if (!BUSY_CODES.has(err.code) || i >= attempts) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
+    }
+  }
+}
+
+/**
+ * 把暫存目錄裡的成品依序覆寫到 out。已花掉一次 LLM 呼叫的成品不能因覆寫失敗而遺失：任一檔最終仍失敗時，
+ * 標記保留暫存目錄（state.keepFrames），並在錯誤訊息列出哪些已覆寫、成品在哪裡，供手動複製。
+ * 依序覆寫，無法保證兩檔同進同退——中途失敗時可能已換掉影片、海報仍是舊的，訊息會說明。
+ */
+function publish(outputs, state) {
+  const done = [];
+  for (const [from, to] of outputs) {
+    try {
+      retryBusy(() => fs.copyFileSync(from, to));
+      done.push(to);
+    } catch (err) {
+      state.keepFrames = true;
+      const replaced = done.length > 0 ? `；已覆寫：${done.join("、")}` : "；out 內檔案均未變動";
+      throw new UserError(
+        `無法覆寫 ${to}（${err.code || err.message}，可能被播放器或看圖程式開著）${replaced}。` +
+          `成品保留在：${outputs.map(([src]) => src).join("、")}，關閉佔用的程式後手動複製即可，不必重錄`,
+      );
+    }
+  }
+}
+
+async function record(opts, framesDir, state) {
   const executablePath = findChromium();
   const { chromium } = require("playwright-core");
   log(`瀏覽器：${executablePath}`);
@@ -473,35 +513,34 @@ async function record(opts, framesDir) {
     const cast = await startScreencast(page, framesDir);
     let end;
     try {
-      await waitUntil(async () => cast.frames.length > 0, CAST_LEAD_MS + 10000, "第一格畫面");
+      // 寫檔一開始就失敗時 frames 會一直是 0：條件含 failed()，才不會被誤報成「等不到第一格」。
+      await waitUntil(async () => cast.frames.length > 0 || cast.failed(), CAST_LEAD_MS + 10000, "第一格畫面");
+      cast.throwIfFailed();
       // 第一格晚於鏡頭 0 秒時，尖峰與排程都會錯位：在呼叫 LLM 之前中止（零成本）。
       const lateMs = cast.frames[0].wall - t0;
       if (lateMs > 0) throw new Error(`第一格比鏡頭 0 秒晚 ${lateMs} ms 送達，時間軸無法對齊；請重錄`);
       await sleep(Math.max(0, t0 - Date.now()));
       log(`開錄；尖峰預計在鏡頭 ${(SPIKE_AT_MS / 1000).toFixed(1)} 秒`);
-      await perform(page, pointer, t0);
+      await perform(page, pointer, t0, () => cast.throwIfFailed());
     } finally {
       await cast.stop();
       end = Date.now();
     }
     cast.throwIfFailed();
     log(`擷取 ${cast.frames.length} 格，長度約 ${((end - t0) / 1000).toFixed(1)} 秒；編碼中…`);
-    // 先輸出到暫存目錄，影片與海報都成功才放進 out：兩檔先複製成 .tmp（任一失敗則都不動），再依序 rename 覆蓋，
-    // 不會把已追蹤的檔案換成半截檔，也不會只換掉其中一個。
+    // 先在暫存目錄編好影片、取好海報（編碼失敗不會動到 out），再直接覆寫到 out。不用「.tmp 再 rename」：
+    // Windows 上目標被播放器開著時 rename 會 EPERM，覆寫（copyFileSync）則照常成功。
     const video = path.join(framesDir, VIDEO_NAME);
     encode(opts.ffmpeg, cast.frames, t0, end, framesDir, video);
     const poster = path.join(framesDir, cast.frames[cast.frames.length - 1].name);
     fs.mkdirSync(opts.out, { recursive: true });
-    const outputs = [
-      [video, path.join(opts.out, VIDEO_NAME)],
-      [poster, path.join(opts.out, POSTER_NAME)],
-    ];
-    try {
-      for (const [from, to] of outputs) fs.copyFileSync(from, `${to}.tmp`);
-      for (const [, to] of outputs) fs.renameSync(`${to}.tmp`, to);
-    } finally {
-      for (const [, to] of outputs) fs.rmSync(`${to}.tmp`, { force: true });
-    }
+    publish(
+      [
+        [video, path.join(opts.out, VIDEO_NAME)],
+        [poster, path.join(opts.out, POSTER_NAME)],
+      ],
+      state,
+    );
     log(`寫入 ${path.join(opts.out, VIDEO_NAME)} 與海報`);
   } finally {
     await browser.close().catch(() => {});
@@ -512,9 +551,10 @@ async function main() {
   const opts = parseArgs(process.argv.slice(2));
   checkFfmpeg(opts.ffmpeg);
   const framesDir = fs.mkdtempSync(path.join(os.tmpdir(), "fg-demo-frames-"));
+  const state = { keepFrames: opts.keepFrames };
   const cleanup = () => {
-    if (opts.keepFrames) {
-      log(`保留逐格：${framesDir}`);
+    if (state.keepFrames) {
+      log(`保留逐格暫存：${framesDir}`);
       return;
     }
     // Windows 上剛寫完的 jpg 可能暫時被防毒或索引服務佔用；清不掉只警告，不蓋掉錄影本身的成敗。
@@ -530,7 +570,7 @@ async function main() {
     process.exit(130);
   });
   try {
-    await record(opts, framesDir);
+    await record(opts, framesDir, state);
   } finally {
     cleanup();
   }

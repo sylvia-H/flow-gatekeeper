@@ -692,7 +692,7 @@ node apps/web/scripts/screenshots.cjs --help
 
 `--readme` 的注意事項：worker 需有效的 `GEMINI_API_KEY`（整輪只真正呼叫一次 LLM，其餘命中快取）；「斷線」與「失敗」兩張由劇本在自己的瀏覽器分頁內攔截 `/ws` 與 `POST /diagnoses` 重現，不必關掉 api，也不影響其他連線。拍不到的截圖（例如快取沒清、第一次診斷就命中）不寫檔、保留舊檔，結束時列出缺漏並以 exit 1 結束。量測期間避免同時修改 `apps/web/src`，Vite HMR 會讓 `--viewports` 的差值無法判讀。
 
-**demo 影片**（`apps/web/scripts/record-demo.cjs`）：依上方「[端到端操作 Demo](#端到端操作-demo實機錄影)」的劇本表一鏡到底錄 1440×900，輸出 `docs/demo/flow-gatekeeper-demo.mp4` 與海報（快取命中後的最後一格）。以 CDP 逐格擷取 JPEG、再用 ffmpeg 轉 30fps H.264（比 Playwright 內建錄影的即時 VP8 清楚）；headless 沒有游標，劇本只在錄影頁面注入假游標、不動產品程式碼。開錄前量 `press-02` 的尖峰週期，讓尖峰落在鏡頭第 2 秒、兩次診斷都在回到正常後送出（第二次才會命中快取）。Chromium 的尋找規則與截圖劇本相同（共用 `apps/web/scripts/lib/browser.cjs`）。需要含 **libx264** 的 ffmpeg（Playwright 自帶的只有 VP8），以 `--ffmpeg` 或環境變數 `FFMPEG` 指定，Windows 可下載 [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) 的 essentials 建置解壓即用。對齊失準（尖峰週期量不出來、第一格晚於鏡頭 0 秒）時在呼叫 LLM 之前中止；第一次診斷就命中快取、或第二次沒命中時也中止。影片與海報先寫在暫存目錄、全部成功才覆蓋 `docs/demo/`，失敗不留半截檔，也不自動重試（避免多打 LLM）。
+**demo 影片**（`apps/web/scripts/record-demo.cjs`）：依上方「[端到端操作 Demo](#端到端操作-demo實機錄影)」的劇本表一鏡到底錄 1440×900，輸出 `docs/demo/flow-gatekeeper-demo.mp4` 與海報（快取命中後的最後一格）。以 CDP 逐格擷取 JPEG、再用 ffmpeg 轉 30fps H.264（比 Playwright 內建錄影的即時 VP8 清楚）；headless 沒有游標，劇本只在錄影頁面注入假游標、不動產品程式碼。開錄前量 `press-02` 的尖峰週期，讓尖峰落在鏡頭第 2 秒、兩次診斷都在回到正常後送出（第二次才會命中快取）。Chromium 的尋找規則與截圖劇本相同（共用 `apps/web/scripts/lib/browser.cjs`）。需要含 **libx264** 的 ffmpeg（Playwright 自帶的只有 VP8），以 `--ffmpeg` 或環境變數 `FFMPEG` 指定，Windows 可下載 [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) 的 essentials 建置解壓即用。對齊失準（尖峰週期量不出來、第一格晚於鏡頭 0 秒）時在呼叫 LLM 之前中止；第一次診斷就命中快取、或第二次沒命中時也中止。影片在暫存目錄編碼完成才覆寫 `docs/demo/`；覆寫失敗（例如影片正被播放器開著）時保留暫存成品並印出路徑，手動複製即可、不必重錄。劇本不自動重試（避免多打 LLM）。
 
 ```powershell
 docker compose --profile demo up -d --build    # 對一鍵 demo 容器錄（預設 --url http://localhost:8080/）
