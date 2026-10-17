@@ -771,7 +771,7 @@ describe("monitoring store — 背壓速率序列（013 T032、FR-009／FR-011�
     ]);
     expect(store.latestRate).toMatchObject({ msgsPerSec: 20, batchesPerSec: 2 });
     expect(store.windowRatio).toBeCloseTo(32 / 5); // 視窗 Σ訊息 ÷ Σ批次，不是逐秒比值的平均
-    expect(store.cumulativeRatio).toBe(Math.round(32 / 5)); // 累計比值（tooltip）沿用 backpressureRatio
+    expect(store.cumulativeRatio).toBeCloseTo(32 / 5); // 累計比值（tooltip）沿用 backpressureRatio，不取整
   });
 
   it("暫停一秒再恢復：暫停期間與恢復當下的樣本標無效，視窗比值、平均、最高水位都不受影響（第三輪交叉審查）", () => {
@@ -840,6 +840,28 @@ describe("monitoring store — 背壓速率序列（013 T032、FR-009／FR-011�
     vi.advanceTimersByTime(1000);
     store.tickNow();
     expect(store.rateSamples.map((s) => s.msgsPerSec)).toEqual([2]); // 視窗不混入斷線前的 5
+  });
+
+  it("視窗丟棄數含格式不符剔除：recordDropped 的 overflow 與 invalid 都算進樣本（合併門第 1 輪 medium）", () => {
+    const store = connectedStore();
+    store.applyTelemetryBatch(makeBatch(4));
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+    store.recordDropped({ overflow: 2, invalid: 3 });
+    store.applyTelemetryBatch(makeBatch(4));
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+    expect(store.latestRate?.droppedPerSec).toBe(5);
+    expect(store.droppedInWindow).toBe(5);
+  });
+
+  it("累計比值不取整：7 則 ÷ 5 批 → 1.4（顯示端一位小數，不再變成 1）", () => {
+    const store = connectedStore();
+    store.applyTelemetryBatch(makeBatch(3));
+    for (let i = 0; i < 4; i++) store.applyTelemetryBatch(makeBatch(1));
+    vi.advanceTimersByTime(1000);
+    store.tickNow();
+    expect(store.cumulativeRatio).toBeCloseTo(1.4);
   });
 
   it("尚無任何批次時累計比值為 null（顯示「—」而非 0:1）", () => {

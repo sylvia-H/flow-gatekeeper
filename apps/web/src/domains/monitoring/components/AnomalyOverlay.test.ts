@@ -176,6 +176,17 @@ describe("AnomalyOverlay 焦點", () => {
     expect(document.activeElement).toBe(bar);
   });
 
+  it("以 open=false 掛載（桌機縮到手機寬度）不把焦點搶到摘要條", async () => {
+    const bar = document.createElement("button");
+    bar.setAttribute("data-fg", "fleet-summary-bar");
+    document.body.appendChild(bar);
+    expect(document.activeElement).toBe(document.body);
+
+    mountOverlay({ open: false });
+    await nextTick();
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it("使用者已點了面板外的元素時，關閉不搶回焦點", async () => {
     const trigger = document.createElement("button");
     const outside = document.createElement("button");

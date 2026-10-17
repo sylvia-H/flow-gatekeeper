@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { ChevronUp, PanelRightOpen } from "lucide-vue-next";
 import { useResizeDrag } from "../composables/useResizeDrag.js";
-import { DESK_QUERY, hasMatchMedia, matchesMedia } from "../composables/useMediaQuery.js";
+import { DESK_QUERY, hasMatchMedia, matchesMedia, useMediaQuery } from "../composables/useMediaQuery.js";
 
 /**
  * 監控台外殼：rail（sidebar slot）／工具列（topbar slot）／主區桌面（main slot）／
@@ -96,8 +96,13 @@ function syncBottomReserve(): void {
   else return;
   if (bottomReserve.value !== next) bottomReserve.value = next;
 }
+/**
+ * 視窗跨過 desk 斷點也要重算（合併門第 1 輪 medium）：desk+ 選台後收合時留白為 0、peek 條被 `desk:hidden` 藏起；
+ * 縮到 < 1366 時 32px peek 條出現，留白不跟著重算就會蓋住事件流底部與 rail 主題鈕。
+ */
+const deskViewport = useMediaQuery(DESK_QUERY);
 watch(
-  [() => props.panelOpen, () => props.sheetEngaged, () => props.sheetCompact, peekVisible],
+  [() => props.panelOpen, () => props.sheetEngaged, () => props.sheetCompact, peekVisible, deskViewport],
   syncBottomReserve,
   { immediate: true },
 );

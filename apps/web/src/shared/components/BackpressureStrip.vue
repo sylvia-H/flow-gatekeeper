@@ -104,9 +104,8 @@ const msgsTitle = computed(() => rateTitle("則", "msgsPerSec", props.msgsPerSec
 const batchesTitle = computed(() => rateTitle("批", "batchesPerSec", props.batchesPerSec));
 const ratioText = computed(() => (props.windowRatio === null ? "—" : fmtRatio(props.windowRatio)));
 const droppedText = computed(() => props.dropped.toLocaleString("en-US"));
-const cumulativeText = computed(() =>
-  props.cumulativeRatio === null ? null : props.cumulativeRatio.toLocaleString("en-US"),
-);
+/** 累計比值與視窗比值、最高水位同用一位小數（store 給未取整的值）。 */
+const cumulativeText = computed(() => (props.cumulativeRatio === null ? null : fmtRatio(props.cumulativeRatio)));
 
 /** 比值超過刻度上限：液位線釘右端並標「>60」，數字照實顯示。 */
 const overScale = computed(() => props.windowRatio !== null && props.windowRatio > SCALE_MAX);

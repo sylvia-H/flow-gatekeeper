@@ -54,15 +54,21 @@ describe("BackpressureStrip", () => {
     expect(ratio.classes()).toContain("text-ratio");
     expect(ratio.classes()).toContain("font-mono");
     expect(text(w)).not.toContain("9:1");
-    expect(w.get('[title*="自載入起累計"]').attributes("title")).toContain("自載入起累計 9:1");
+    expect(w.get('[title*="自載入起累計"]').attributes("title")).toContain("自載入起累計 9.0:1");
   });
 
   it("根節點是 data-fg=backpressure 的 region，名稱含目前比值的白話、最高水位與累計比值", () => {
     const w = mountStrip();
     expect(w.get('[data-fg="backpressure"]').attributes("role")).toBe("region");
     expect(regionName(w)).toBe(
-      "背壓，合併比 4.2 比 1，每幀平均合併 4.2 則訊息，近 60 秒最高 4.4 比 1，自載入起累計 5 比 1",
+      "背壓，合併比 4.2 比 1，每幀平均合併 4.2 則訊息，近 60 秒最高 4.4 比 1，自載入起累計 5.0 比 1",
     );
+  });
+
+  it("累計比值與視窗值同用一位小數：1.4 顯示「1.4」而非取整成 1（合併門第 1 輪 low）", () => {
+    const w = mountStrip({ cumulativeRatio: 1.4 });
+    expect(w.get('[title*="自載入起累計"]').attributes("title")).toContain("自載入起累計 1.4:1");
+    expect(regionName(w)).toContain("自載入起累計 1.4 比 1");
   });
 
   it("尚無批次時累計比值顯示「—」，region 名稱不念累計", () => {
@@ -76,7 +82,7 @@ describe("BackpressureStrip", () => {
     expect(title).toBe(
       "近 60 秒訊息總數 ÷ 批次總數（每幀一批）：每幀平均合併 4.2 則訊息；" +
         "1:1 表示每則訊息各自重繪、沒有合併；比值越高，代表替畫面省下越多次重繪；" +
-        "近 60 秒最高 4.4:1（刻度上的細短線）；自載入起累計 5:1",
+        "近 60 秒最高 4.4:1（刻度上的細短線）；自載入起累計 5.0:1",
     );
   });
 
@@ -203,7 +209,7 @@ describe("BackpressureStrip", () => {
     expect(w.get(".bp-status").text()).toBe("已斷線");
     expect(text(w)).not.toContain("連線中斷");
     expect(regionName(w)).toBe(
-      "背壓，合併比 4.2 比 1，每幀平均合併 4.2 則訊息，近 60 秒最高 4.4 比 1，自載入起累計 5 比 1，已斷線",
+      "背壓，合併比 4.2 比 1，每幀平均合併 4.2 則訊息，近 60 秒最高 4.4 比 1，自載入起累計 5.0 比 1，已斷線",
     );
     expect(w.get('[data-fg="backpressure"]').attributes("data-stale")).toBe("true");
   });

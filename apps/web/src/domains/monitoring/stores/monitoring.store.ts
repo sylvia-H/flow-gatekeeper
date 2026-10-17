@@ -367,6 +367,7 @@ export const useMonitoringStore = defineStore("monitoring", () => {
         receivedMessages: receivedMessages.value,
         renderedBatches: renderedBatches.value,
         droppedMessages: droppedMessages.value,
+        invalidMessages: invalidMessages.value,
       },
       t,
     );

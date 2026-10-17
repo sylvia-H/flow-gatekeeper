@@ -133,9 +133,8 @@ function toggleHelp(): void {
   helpOpen.value = !helpOpen.value;
 }
 
-/** 工具列 expose 的搜尋框（`searchInput` 經 template ref 自動解包成元素）。 */
+/** 工具列（`focusSearch`、搜尋覆蓋開關與暫停鈕焦點經 expose 取得）。 */
 const topBar = useTemplateRef<InstanceType<typeof TopBar>>("topBar");
-const searchInput = (): HTMLInputElement | null => topBar.value?.searchInput ?? null;
 
 /**
  * 手機寬度（< md，rail 隱藏；斷點同 AppLayout 的 `md:` 與 TopBar 的主題切換位置）。
@@ -156,14 +155,13 @@ watch(isMobile, (mobile) => {
  * App 層鍵盤快捷鍵（T054；FR-034a～FR-034d）。composable 位於 shared/，store 與診斷入口一律由這裡注入。
  * - `d` 與卡片診斷圖示同一條路：一律交 `useDiagnoseTrigger`，copilot store 的 `diagnose()` 先展開面板，
  *   再由前置條件與去重把關（斷線或診斷中不送 POST），所以被擋下時面板仍展開並顯示停用原因。
- * - 搜尋框 Enter 由 TopBar 主處理並同步 `preventDefault`，App 層見 `defaultPrevented` 即略過。
+ * - 搜尋框 Enter 只由 TopBar 的 `onSearchEnter` 處理（三種工具列形態共用同一個 input）；搜尋框是輸入情境，App 層一律略過。
  * - `/`：交給 TopBar 的 `focusSearch`——工具列 compact（< 640px）時展開覆蓋式搜尋再聚焦，其餘直接聚焦搜尋框。
  * - Escape 分層：搜尋覆蓋讀 TopBar expose 的 `isSearchOverlayOpen`、手機異常覆蓋層讀 `anomalyOverlayOpen`。
  *   焦點在覆蓋內時由元件自己攔下 Escape；手機 bottom-sheet 內的 Escape 由 drawer 的 `useModalSheet`
  *   攔下並 emit `dismiss`，都不會到這裡。
  */
 useKeyboardShortcuts({
-  searchInput,
   handlers: {
     focusSearch: () => {
       topBar.value?.focusSearch();
@@ -175,7 +173,6 @@ useKeyboardShortcuts({
     isLatchVisible: store.latchVisible,
     toggleHelp,
     getSelectedId: () => store.selectedMachineId,
-    getSearchResultIds: () => store.visibleMachineIds,
     layers: {
       help: {
         isOpen: () => helpOpen.value,

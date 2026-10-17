@@ -4,12 +4,13 @@ import { applySavedTheme, resetThemeStateForTest, THEME_STORAGE_KEY, useTheme } 
 
 const root = (): HTMLElement => document.documentElement;
 
-/** 收集 requestAnimationFrame 回呼，手動逐幀推進。 */
-let frames: FrameRequestCallback[] = [];
+/** 收集 requestAnimationFrame 回呼（可被 cancelAnimationFrame 取消），手動逐幀推進。 */
+let frames: { id: number; cb: FrameRequestCallback }[] = [];
+let frameSeq = 0;
 function nextFrame(): void {
   const pending = frames;
   frames = [];
-  for (const cb of pending) cb(performance.now());
+  for (const { cb } of pending) cb(performance.now());
 }
 
 /**
@@ -30,8 +31,12 @@ beforeEach(() => {
   resetThemeStateForTest();
   frames = [];
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
-    frames.push(cb);
-    return frames.length;
+    frameSeq += 1;
+    frames.push({ id: frameSeq, cb });
+    return frameSeq;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+    frames = frames.filter((f) => f.id !== id);
   });
 });
 
@@ -105,6 +110,20 @@ describe("useTheme", () => {
     toggle();
     expect(theme.value).toBe("light");
     expect(storage.get(THEME_STORAGE_KEY)).toBe("light");
+  });
+
+  it("兩幀內連續切換：保護屬性等最後一次切換後滿兩幀才移除，且只留一組待執行 frame（合併門第 1 輪 low）", () => {
+    applySavedTheme();
+    const { toggle } = useTheme();
+    toggle();
+    nextFrame(); // 第一次切換已過一幀
+    toggle(); // 第二次切換：取消前一組，重新排兩幀
+    expect(frames).toHaveLength(1);
+    nextFrame();
+    expect(root().hasAttribute("data-theme-switching")).toBe(true); // 舊實作在這裡就被第一組移除
+    nextFrame();
+    expect(root().hasAttribute("data-theme-switching")).toBe(false);
+    expect(frames).toHaveLength(0);
   });
 
   it("多處呼叫共用同一份狀態", () => {

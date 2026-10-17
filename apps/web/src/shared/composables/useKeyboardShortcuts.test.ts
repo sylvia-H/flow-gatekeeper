@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { createApp, defineComponent, effectScope, h, nextTick, ref } from "vue";
+import { createApp, defineComponent, effectScope, h, nextTick } from "vue";
 import { ESCAPE_LAYERS, type EscapeLayerId } from "../lib/shortcuts.js";
 import type { GridRect } from "../lib/focus-grid.js";
 import {
@@ -13,7 +13,6 @@ import {
 /** 可變的假狀態：測試直接改它，handlers 的查詢函式讀它。 */
 interface FakeState {
   selectedId: string | null;
-  searchResults: string[];
   latchVisible: Set<string>;
   open: Record<EscapeLayerId, boolean>;
 }
@@ -58,7 +57,6 @@ function makeHandlers(): FakeHandlers {
     clearLatch: vi.fn(),
     toggleHelp: vi.fn(),
     getSelectedId: () => state.selectedId,
-    getSearchResultIds: () => state.searchResults,
     isLatchVisible: (id: string) => state.latchVisible.has(id),
     layers,
   };
@@ -94,7 +92,7 @@ function card(id: string): HTMLButtonElement {
 }
 
 function attach(extra: Partial<UseKeyboardShortcutsOptions> = {}): void {
-  detach = attachKeyboardShortcuts({ handlers, searchInput: () => searchInput, ...extra });
+  detach = attachKeyboardShortcuts({ handlers, ...extra });
 }
 
 /** 從 `target` 派發 keydown（冒泡到 window），回傳事件供斷言 `defaultPrevented`。 */
@@ -124,7 +122,7 @@ function expectNoActionCalls(): void {
 }
 
 beforeEach(() => {
-  state = { selectedId: null, searchResults: [], latchVisible: new Set(), open: allClosed() };
+  state = { selectedId: null, latchVisible: new Set(), open: allClosed() };
   handlers = makeHandlers();
   searchInput = document.createElement("input");
   document.body.appendChild(searchInput);
@@ -277,67 +275,23 @@ describe("d：診斷選取機台", () => {
   });
 });
 
-describe("搜尋框 Enter", () => {
-  it("結果恰一台：選取後焦點移到該台卡片，接著按 d 會呼叫 diagnose", async () => {
+describe("搜尋框內的按鍵（Enter 只由 TopBar.onSearchEnter 處理，合併門第 1 輪 low）", () => {
+  it("搜尋框 Enter 不由本 composable 選取、不攔截、不移焦（TopBar 為唯一處理者）", async () => {
     attach();
-    state.searchResults = ["b3"];
-    searchInput.focus();
-
-    const enter = press(searchInput, "Enter");
-    expect(enter.defaultPrevented).toBe(true);
-    expect(handlers.selectMachine).toHaveBeenCalledExactlyOnceWith("b3");
-
-    await nextTick();
-    expect(document.activeElement).toBe(card("b3"));
-
-    // 焦點已離開搜尋框，`d` 不再被輸入欄守門擋下。
-    press(card("b3"), "d");
-    expect(handlers.diagnose).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    ["0 台", []],
-    ["2 台", ["a1", "a2"]],
-  ])("結果 %s 時不選取、焦點留在搜尋框", async (_label, results) => {
-    attach();
-    state.searchResults = results;
     searchInput.focus();
     const enter = press(searchInput, "Enter");
     await nextTick();
-    expect(handlers.selectMachine).not.toHaveBeenCalled();
     expect(enter.defaultPrevented).toBe(false);
+    expectNoActionCalls();
     expect(document.activeElement).toBe(searchInput);
   });
 
-  it("已被 TopBar 處理（defaultPrevented）的搜尋框 Enter 不再選取、不重複移焦", async () => {
+  it("搜尋框內的 d／x／? 等快捷鍵字元照常輸入，不觸發任何動作", () => {
     attach();
-    state.searchResults = ["b3"];
+    state.selectedId = "a1";
     searchInput.focus();
-    const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
-    event.preventDefault();
-    searchInput.dispatchEvent(event);
-    await nextTick();
-    expect(handlers.selectMachine).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(searchInput);
-  });
-
-  it("IME 組字中的 Enter（確認選字）不選取", () => {
-    attach();
-    state.searchResults = ["a1"];
-    searchInput.focus();
-    press(searchInput, "Enter", { isComposing: true });
-    press(searchInput, "Enter", { keyCode: 229 });
-    expect(handlers.selectMachine).not.toHaveBeenCalled();
-  });
-
-  it("searchInput 可傳 ref", async () => {
-    detach = attachKeyboardShortcuts({ handlers, searchInput: ref(searchInput) });
-    state.searchResults = ["a3"];
-    searchInput.focus();
-    press(searchInput, "Enter");
-    await nextTick();
-    expect(handlers.selectMachine).toHaveBeenCalledExactlyOnceWith("a3");
-    expect(document.activeElement).toBe(card("a3"));
+    for (const key of ["d", "x", "?", "/"]) expect(press(searchInput, key).defaultPrevented).toBe(false);
+    expectNoActionCalls();
   });
 
   it("搜尋框內的 Escape 不由本 composable 處理（覆蓋式搜尋自行收回）", () => {
@@ -477,14 +431,13 @@ describe("手機異常覆蓋層開著時只處理 Escape 與 /", () => {
     expect(handlers.layers["anomaly-overlay"].close).not.toHaveBeenCalled();
   });
 
-  it("搜尋框內的 Enter 仍照常選取唯一結果（守門在輸入情境判斷之後）", () => {
+  it("搜尋框內的 Enter 不由本 composable 處理（交 TopBar），覆蓋層開著也一樣", () => {
     attach();
     state.open = { ...allClosed(), "anomaly-overlay": true };
-    state.searchResults = ["a2"];
     searchInput.focus();
     const event = press(searchInput, "Enter");
-    expect(event.defaultPrevented).toBe(true);
-    expect(handlers.selectMachine).toHaveBeenCalledWith("a2");
+    expect(event.defaultPrevented).toBe(false);
+    expect(handlers.selectMachine).not.toHaveBeenCalled();
   });
 
   it("異常覆蓋層關閉後 d 恢復作用", () => {
@@ -579,7 +532,7 @@ describe("Enter 在卡片上", () => {
 describe("生命週期", () => {
   it("dispose 後不再處理任何按鍵", () => {
     const scope = effectScope();
-    const api = scope.run(() => useKeyboardShortcuts({ handlers, searchInput: () => searchInput }));
+    const api = scope.run(() => useKeyboardShortcuts({ handlers }));
     press(document.body, "/");
     expect(handlers.focusSearch).toHaveBeenCalledTimes(1);
 
@@ -591,7 +544,7 @@ describe("生命週期", () => {
 
   it("effectScope 結束時自動拆除", () => {
     const scope = effectScope();
-    scope.run(() => useKeyboardShortcuts({ handlers, searchInput: () => searchInput }));
+    scope.run(() => useKeyboardShortcuts({ handlers }));
     scope.stop();
     press(document.body, "?");
     expect(handlers.toggleHelp).not.toHaveBeenCalled();
@@ -601,7 +554,7 @@ describe("生命週期", () => {
   function mountHost(disposeInSetup: boolean): ReturnType<typeof createApp> {
     const Host = defineComponent({
       setup() {
-        const api = useKeyboardShortcuts({ handlers, searchInput: () => searchInput });
+        const api = useKeyboardShortcuts({ handlers });
         if (disposeInSetup) api.dispose();
         return () => h("div");
       },

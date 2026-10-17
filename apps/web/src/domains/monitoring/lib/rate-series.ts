@@ -26,11 +26,19 @@
  * 本模組為就地修改的純資料操作（不碰 Vue reactive）；store 以 shallowRef／markRaw 持有並在 tick 後觸發一次。
  */
 
-/** store 的三個累計計數器（同名欄位，store 直接傳 `.value` 組成的物件即可）。 */
+/** store 的四個累計計數器（同名欄位，store 直接傳 `.value` 組成的物件即可）。 */
 export interface RateCounters {
   receivedMessages: number;
   renderedBatches: number;
+  /** 溢位合併丟棄。 */
   droppedMessages: number;
+  /** 格式不符剔除（入口型別守衛）。與溢位丟棄合計為樣本的丟棄數。 */
+  invalidMessages: number;
+}
+
+/** 丟棄數的累計量：溢位合併丟棄＋格式不符剔除（背壓 strip tooltip「溢位合併或格式不符被剔除」）。 */
+function discardedOf(counters: RateCounters): number {
+  return counters.droppedMessages + counters.invalidMessages;
 }
 
 export interface RateSample {
@@ -40,7 +48,7 @@ export interface RateSample {
   msgsPerSec: number;
   /** 這一 tick 提交的批次數（`renderedBatches` 差分）。 */
   batchesPerSec: number;
-  /** 這一 tick 捨棄的訊息數（`droppedMessages` 差分）。 */
+  /** 這一 tick 捨棄的訊息數（`droppedMessages + invalidMessages` 的差分：溢位合併丟棄＋格式不符剔除）。 */
   droppedPerSec: number;
   /** 暫停期間或恢復當下的樣本：訊息 ÷ 批次是操作造成的離群值，合併比相關計算一律排除。未設＝有效。 */
   invalid?: true;
@@ -88,7 +96,7 @@ export function pushSample(series: RateSeries, counters: RateCounters, t: number
   if (prev === null) return false;
   const msgs = counters.receivedMessages - prev.receivedMessages;
   const batches = counters.renderedBatches - prev.renderedBatches;
-  const dropped = counters.droppedMessages - prev.droppedMessages;
+  const dropped = discardedOf(counters) - discardedOf(prev);
   if (msgs < 0 || batches < 0 || dropped < 0) return false;
   const sample: RateSample = { t, msgsPerSec: msgs, batchesPerSec: batches, droppedPerSec: dropped };
   if (series.invalidPushes > 0) {

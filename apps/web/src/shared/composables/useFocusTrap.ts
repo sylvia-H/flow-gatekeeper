@@ -65,8 +65,14 @@ export function useFocusTrap(
   options: FocusTrapOptions = {},
 ): { onKeydown: (event: KeyboardEvent) => void } {
   let restoreTo: HTMLElement | null = null;
+  /**
+   * 曾經啟用過、尚未還原。只有它為真時停用才還焦點：`immediate` 的首次回呼在 `active()` 為 false 時
+   * （例如寬度跨過斷點、覆蓋層以 `open=false` 掛載）不得觸發還原——否則 `fallback` 會把焦點從使用者手上搶走。
+   */
+  let engaged = false;
 
   function restoreFocus(): void {
+    engaged = false;
     const saved = restoreTo;
     restoreTo = null;
     const target = connected(saved) ?? connected(options.fallback?.());
@@ -83,8 +89,9 @@ export function useFocusTrap(
       if (on) {
         const focused = typeof document !== "undefined" ? document.activeElement : null;
         restoreTo = focused instanceof HTMLElement && focused !== document.body ? focused : null;
+        engaged = true;
         void nextTick(() => container.value?.focus());
-      } else {
+      } else if (engaged) {
         restoreFocus();
       }
     },
@@ -92,7 +99,7 @@ export function useFocusTrap(
   );
 
   onBeforeUnmount(() => {
-    if (active()) restoreFocus();
+    if (engaged) restoreFocus();
   });
 
   function onKeydown(event: KeyboardEvent): void {

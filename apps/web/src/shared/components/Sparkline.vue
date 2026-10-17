@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { RateSample } from "../../domains/monitoring/lib/rate-series.js";
+import { totalOf, type RateSample } from "../../domains/monitoring/lib/rate-series.js";
 
 /**
  * 背壓走勢線（spec FR-010、FR-009a、research R4）：最近 60 秒每一秒的**合併比**（該秒訊息 ÷ 該秒批次）。
@@ -42,14 +42,9 @@ const ratios = computed<(number | null)[]>(() =>
 
 /** y 軸上限：max(視窗合併比 × 2, 次高單秒比) × HEADROOM，至少 1（見檔頭）。 */
 const top = computed(() => {
-  let msgs = 0;
-  let batches = 0;
-  for (const s of props.samples) {
-    if (s.invalid === true) continue;
-    msgs += s.msgsPerSec;
-    batches += s.batchesPerSec;
-  }
-  const window = batches > 0 ? msgs / batches : 0;
+  // 視窗合併比與 strip 大字同一算法（rate-series 的 `totalOf` 排除無效樣本），不在這裡另寫一份迴圈
+  const batches = totalOf(props.samples, "batchesPerSec");
+  const window = batches > 0 ? totalOf(props.samples, "msgsPerSec") / batches : 0;
   const sorted = ratios.value.filter((r): r is number => r !== null).sort((a, b) => b - a);
   const secondHighest = sorted[1] ?? sorted[0] ?? 0;
   return Math.max(Math.max(window * 2, secondHighest) * HEADROOM, 1);

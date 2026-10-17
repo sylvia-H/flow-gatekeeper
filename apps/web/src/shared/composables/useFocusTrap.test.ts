@@ -163,6 +163,39 @@ describe("useFocusTrap 啟用與還原", () => {
     expect(document.activeElement).toBe(document.body);
   });
 
+  it("以 open=false 掛載（例如寬度跨過斷點）不觸發還原：焦點在 body 或其他元素時都不被 fallback 搶走", async () => {
+    addOutsideButton("bar");
+    const other = addOutsideButton("other");
+    const fallback = () => document.getElementById("bar");
+    const first = mountOverlay(false, { fallback });
+    await nextTick();
+    expect(document.activeElement).toBe(document.body);
+    first.unmount();
+    wrapper = null;
+
+    other.focus();
+    const second = mountOverlay(false, { fallback });
+    await nextTick();
+    expect(document.activeElement).toBe(other);
+    second.unmount();
+    wrapper = null;
+    expect(document.activeElement).toBe(other);
+  });
+
+  it("開過再關閉後卸載，不再重複還原", async () => {
+    const opener = addOutsideButton("opener");
+    const other = addOutsideButton("other");
+    opener.focus();
+    const w = mountOverlay(true, { fallback: () => document.getElementById("opener") });
+    await nextTick();
+    await w.setProps({ open: false });
+    expect(document.activeElement).toBe(opener);
+    other.focus();
+    w.unmount();
+    wrapper = null;
+    expect(document.activeElement).toBe(other);
+  });
+
   it("先前焦點仍在 DOM 時優先於 fallback", async () => {
     const opener = addOutsideButton("opener");
     addOutsideButton("backup");

@@ -773,6 +773,16 @@ describe("AppLayout 外觀（純 props）", () => {
       expect(reserve(v)).toBe("51px");
     });
 
+    it("跨 desk 斷點重算：desk+ 收合（留白 0、peek 條隱藏）後縮到 < 1366 → 32px；再放大回 desk+ → 0", async () => {
+      stubViewport(DESKTOP);
+      const w = mountLayout({ panelOpen: false, peekLabel: "壓製機 02" });
+      expect(reserve(w)).toBe("0px");
+      await setViewportWidth(TABLET);
+      expect(reserve(w)).toBe("32px");
+      await setViewportWidth(DESKTOP);
+      expect(reserve(w)).toBe("0px");
+    });
+
     it("desk+（≥ 1366px）：推擠式側欄的高度不寫進留白，恆 0", async () => {
       stubViewport(DESKTOP);
       const w = mountLayout({ panelOpen: true, peekLabel: "壓製機 02", sheetCompact: true });

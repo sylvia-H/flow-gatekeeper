@@ -2404,7 +2404,7 @@ export const useMonitoringStore = defineStore('monitoring', {
 });
 ```
 
-> **已變更，現況**：比值計算已移出 store，改由 `apps/web/src/shared/lib/backpressure.ts` 的 **`backpressureRatio(received, rendered)`** 單一實作（1.1.0 由 BackpressureBadge 直接呼叫；013 起由 `BackpressureStrip` 經 `rate-series.ts` 的 60 秒視窗計算，store 不再另留 `batchRatio` getter，避免兩處定義漂移）。`receivedMessages` 以**遙測資料點**計，且**含**溢位合併丟棄的 `droppedMessages` 與格式不符的剔除筆數（它回答「網路上收到多少」），因此比值隨節拍、機台數與幀率而異、不宣稱固定值。`machines` 改為 `shallowRef`。規格當時見 design-spec v0.5 §7.2.1（013 起已退役）。013 起 BackpressureBadge 由背壓 strip 取代，主顯示改為 60 秒視窗比值、`backpressureRatio` 的累計比值只留在 tooltip，見 §15.6「013 UI 全面改版」。
+> **已變更，現況**：比值計算已移出 store，改由 `apps/web/src/shared/lib/backpressure.ts` 的 **`backpressureRatio(received, rendered)`** 單一實作（1.1.0 由 BackpressureBadge 直接呼叫；013 起由 `BackpressureStrip` 經 `rate-series.ts` 的 60 秒視窗計算，store 不再另留 `batchRatio` getter，避免兩處定義漂移；合併門第 1 輪（2026-10-17）起 `backpressureRatio()` 不取整，顯示端統一一位小數，累計 7÷5 顯示 1.4:1 而非 1:1）。`receivedMessages` 以**遙測資料點**計，且**含**溢位合併丟棄的 `droppedMessages` 與格式不符的剔除筆數（它回答「網路上收到多少」），因此比值隨節拍、機台數與幀率而異、不宣稱固定值。`machines` 改為 `shallowRef`。規格當時見 design-spec v0.5 §7.2.1（013 起已退役）。013 起 BackpressureBadge 由背壓 strip 取代，主顯示改為 60 秒視窗比值、`backpressureRatio` 的累計比值只留在 tooltip，見 §15.6「013 UI 全面改版」。
 
 ### 10.3 `useHighFrequencyWs`
 

@@ -14,8 +14,8 @@ import {
   type RateSample,
 } from "./rate-series.js";
 
-function c(receivedMessages: number, renderedBatches: number, droppedMessages = 0): RateCounters {
-  return { receivedMessages, renderedBatches, droppedMessages };
+function c(receivedMessages: number, renderedBatches: number, droppedMessages = 0, invalidMessages = 0): RateCounters {
+  return { receivedMessages, renderedBatches, droppedMessages, invalidMessages };
 }
 
 describe("rate-series 差分（data-model §3、research R4）", () => {
@@ -151,6 +151,15 @@ describe("rate-series 衍生值", () => {
     expect(droppedInWindow(s)).toBe(6);
     pushSample(s, c(0, 0, 9), 3_000); // 第一格（5）滑出
     expect(droppedInWindow(s)).toBe(4);
+  });
+
+  it("丟棄數＝溢位合併丟棄＋格式不符剔除的差分（合併門第 1 輪 medium）", () => {
+    const s = createRateSeries();
+    pushSample(s, c(0, 0, 1, 2), 0);
+    pushSample(s, c(10, 2, 4, 5), 1_000); // 溢位 +3、剔除 +3
+    pushSample(s, c(20, 4, 4, 7), 2_000); // 只有剔除 +2
+    expect(s.samples.map((x) => x.droppedPerSec)).toEqual([6, 2]);
+    expect(droppedInWindow(s)).toBe(8);
   });
 });
 

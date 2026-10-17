@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import type { DerivedEvent } from "../lib/events.js";
 import { formatClock } from "../../../shared/lib/format.js";
 import { STATE_STYLE } from "../../../shared/lib/state-style.js";
@@ -16,7 +17,7 @@ import { STATE_STYLE } from "../../../shared/lib/state-style.js";
  * 選取中的列另加 1px 內框 `ring-1 ring-inset ring-accent` 並把訊息文字加深為 `text-ink`：深色主題下 accent-wash
  * 與玻璃亮度相近，靠內框與文字辨識；內框是 box-shadow 不改尺寸，鍵盤聚焦時由 `focus-visible:ring-2 ring-focus` 覆蓋。
  */
-withDefaults(defineProps<{ events: DerivedEvent[]; height: number; selectedId?: string | null }>(), {
+const props = withDefaults(defineProps<{ events: DerivedEvent[]; height: number; selectedId?: string | null }>(), {
   selectedId: null,
 });
 
@@ -29,6 +30,12 @@ function clockRange(event: DerivedEvent): { start: string | null; end: string; f
   if (start === null || start === end) return { start: null, end, full: end };
   return { start, end, full: `${start}–${end}` };
 }
+
+/**
+ * 每列的起訖字串預先算好（合併門第 1 輪 low：template 原本每列呼叫 `clockRange` 四次、各建兩個 Date）。
+ * `events` 只在事件衍生時（批次點）換新，這裡每列只算一次。
+ */
+const rows = computed(() => props.events.map((event) => ({ event, time: clockRange(event) })));
 
 // 顏色 token 取自共用 STATE_STYLE；回復事件用中性的蝕刻色，不借用任一狀態色。
 const SEVERITY: Record<DerivedEvent["severity"], { label: string; text: string; tick: string }> = {
@@ -60,7 +67,7 @@ const SEVERITY: Record<DerivedEvent["severity"], { label: string; text: string; 
 
     <!-- 事件列項（最新在頂端；overflow 自捲） -->
     <ul v-else class="min-h-0 flex-1 overflow-auto">
-      <li v-for="event in events" :key="event.id" class="group">
+      <li v-for="{ event, time } in rows" :key="event.id" class="group">
         <button
           type="button"
           data-fg="event"
@@ -76,9 +83,9 @@ const SEVERITY: Record<DerivedEvent["severity"], { label: string; text: string; 
           <span
             data-fg="event-time"
             class="shrink-0 whitespace-nowrap font-mono text-xs tabular-nums text-ink-3"
-            :title="clockRange(event).full"
+            :title="time.full"
           >
-            <span v-if="clockRange(event).start" class="max-sm:sr-only">{{ clockRange(event).start }}–</span>{{ clockRange(event).end }}
+            <span v-if="time.start" class="max-sm:sr-only">{{ time.start }}–</span>{{ time.end }}
           </span>
           <span class="w-8 shrink-0 text-xs font-semibold" :class="SEVERITY[event.severity].text">
             {{ SEVERITY[event.severity].label }}

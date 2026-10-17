@@ -1,8 +1,15 @@
 // @vitest-environment happy-dom
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import EventStrip from "./EventStrip.vue";
 import type { DerivedEvent } from "../lib/events.js";
+import { formatClock } from "../../../shared/lib/format.js";
+
+// 包一層 spy（行為照舊），用來鎖住「每列只格式化一次」
+vi.mock("../../../shared/lib/format.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../shared/lib/format.js")>();
+  return { ...actual, formatClock: vi.fn(actual.formatClock) };
+});
 
 /**
  * EventStrip（013 T028 視覺層、T052 可點擊選台）：標題、24 小時制時間、嚴重度中文、合併次數 `×N`、
@@ -104,6 +111,15 @@ describe("EventStrip 事件列項", () => {
     const start = time.get("span");
     expect(start.text()).toBe("21:04:02–");
     expect(start.classes()).toContain("max-sm:sr-only");
+  });
+
+  it("每列的起訖只格式化一次（computed 預先算好，不在 template 重複呼叫）", () => {
+    vi.mocked(formatClock).mockClear();
+    mountStrip([
+      event({ id: "a", count: 3, firstTs: TS - 63_000 }), // 合併列：起＋訖 2 次
+      event({ id: "b" }), // 單筆：1 次
+    ]);
+    expect(vi.mocked(formatClock)).toHaveBeenCalledTimes(3);
   });
 
   it("合併列起訖落在同一秒時只顯示一個時間", () => {

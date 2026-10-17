@@ -1,12 +1,9 @@
 import {
   getCurrentInstance,
   getCurrentScope,
-  nextTick,
   onMounted,
   onScopeDispose,
   onUnmounted,
-  toValue,
-  type MaybeRefOrGetter,
 } from "vue";
 import { nextIndex, type FocusDirection, type GridRect } from "../lib/focus-grid.js";
 import {
@@ -28,11 +25,12 @@ import {
  *
  * 守門順序：
  * 1. `defaultPrevented`（已被上層元件處理，例如說明層或手機 sheet 自己的 Escape）→ 不處理。
- * 2. IME 組字中 → 不處理（含搜尋框內的 Enter：組字中的 Enter 是確認選字）。
- * 3. 搜尋框內的 Enter 且結果恰一台 → 選取並把焦點移到該台卡片（唯一放行的輸入情境按鍵）。
- * 4. 其餘輸入情境（`isTypingTarget`）→ 一律不處理，Escape 也不處理（覆蓋式搜尋自己收回）。
- * 5. 帶 Ctrl／Meta／Alt 的組合鍵 → 不處理（不搶瀏覽器與系統快捷鍵，例如 Ctrl+D）。
- * 6. 手機異常覆蓋層（aria-modal）開著 → 只處理 Escape 與 `/`（說明層開著時另於最前面只放行 `?` 與 Escape）。
+ * 2. IME 組字中 → 不處理。
+ * 3. 輸入情境（`isTypingTarget`，含搜尋框）→ 一律不處理，Escape 也不處理（覆蓋式搜尋自己收回）。
+ *    搜尋框 Enter（結果恰一台 → 選取並移焦到該台卡片）由 `TopBar.onSearchEnter` 單獨處理：工具列三種形態
+ *    （full／icons／compact 覆蓋式）共用同一個 input，App 層不再保留第二份（合併門第 1 輪 low）。
+ * 4. 帶 Ctrl／Meta／Alt 的組合鍵 → 不處理（不搶瀏覽器與系統快捷鍵，例如 Ctrl+D）。
+ * 5. 手機異常覆蓋層（aria-modal）開著 → 只處理 Escape 與 `/`（說明層開著時另於最前面只放行 `?` 與 Escape）。
  */
 
 export interface EscapeLayer {
@@ -43,7 +41,7 @@ export interface EscapeLayer {
 export interface KeyboardShortcutHandlers {
   /** `/`：聚焦搜尋。 */
   focusSearch(): void;
-  /** Enter：選取機台（搜尋唯一結果，或非原生按鈕的聚焦卡片）。 */
+  /** Enter：選取機台（非原生按鈕的聚焦卡片；搜尋框 Enter 由 TopBar 處理）。 */
   selectMachine(machineId: string): void;
   /** 取消選取（Escape 最後一層的語意；`layers.selection.close` 應等同此函式）。 */
   clearSelection(): void;
@@ -55,8 +53,6 @@ export interface KeyboardShortcutHandlers {
   toggleHelp(): void;
   /** `d` 守門：無選取時不呼叫 `diagnose`。 */
   getSelectedId(): string | null;
-  /** 搜尋框 Enter：恰一台才選取。 */
-  getSearchResultIds(): readonly string[];
   /** `x` 守門：該台標記可見才確認。 */
   isLatchVisible(machineId: string): boolean;
   /**
@@ -68,8 +64,6 @@ export interface KeyboardShortcutHandlers {
 
 export interface UseKeyboardShortcutsOptions {
   handlers: KeyboardShortcutHandlers;
-  /** 搜尋框元素（判斷「搜尋框內的 Enter」）；可為 ref、getter 或元素本身。 */
-  searchInput: MaybeRefOrGetter<HTMLInputElement | null | undefined>;
   /** 卡片清單；預設 `document.querySelectorAll('.machine-card')`，測試可注入。 */
   getCards?: () => HTMLElement[];
   /** 監聽 `keydown` 的對象；預設 `window`。 */
@@ -86,7 +80,6 @@ const KEYS = {
   focusSearch: eventKeysOf("focus-search"),
   toggleHelp: eventKeysOf("toggle-help"),
   escape: eventKeysOf("escape"),
-  searchSelect: eventKeysOf("search-select"),
   cardSelect: eventKeysOf("card-select"),
   diagnose: eventKeysOf("diagnose"),
   clearLatch: eventKeysOf("clear-latch"),
@@ -127,23 +120,6 @@ export function attachKeyboardShortcuts(options: UseKeyboardShortcutsOptions): (
     return cards.find((card) => card === active || card.contains(active)) ?? null;
   }
 
-  function focusCard(machineId: string): void {
-    const card = getCards().find((c) => c.dataset.machine === machineId);
-    card?.focus();
-  }
-
-  /** 搜尋框 Enter：選取唯一結果，DOM 更新後把焦點移到該台卡片，後續 `d` 才不被輸入欄守門擋下。 */
-  function selectFromSearch(event: KeyboardEvent): void {
-    const ids = handlers.getSearchResultIds();
-    if (ids.length !== 1) return;
-    const id = ids[0];
-    if (id === undefined) return;
-    event.preventDefault();
-    handlers.selectMachine(id);
-    // selectMachine 可能收回手機覆蓋式搜尋或重繪卡片；等 Vue 套用後再移焦。
-    void nextTick(() => focusCard(id));
-  }
-
   function moveFocus(event: KeyboardEvent, direction: FocusDirection): void {
     const cards = getCards();
     const current = focusedCard(cards);
@@ -177,11 +153,6 @@ export function attachKeyboardShortcuts(options: UseKeyboardShortcutsOptions): (
     const key = event.key;
     // 說明層（aria-modal）開著時只處理 `?` 與 Escape：`/` 會把焦點移出對話框、`d` 會在底下觸發診斷。
     if (handlers.layers.help.isOpen() && !KEYS.toggleHelp.includes(key) && !KEYS.escape.includes(key)) {
-      return;
-    }
-    const searchInput = toValue(options.searchInput) ?? null;
-    if (searchInput !== null && event.target === searchInput) {
-      if (KEYS.searchSelect.includes(key) && !event.repeat) selectFromSearch(event);
       return;
     }
     if (isTypingTarget(event)) return;

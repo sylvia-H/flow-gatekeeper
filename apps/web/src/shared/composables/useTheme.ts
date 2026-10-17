@@ -32,6 +32,11 @@ export function applySavedTheme(): Theme {
 
 /** 全站共用一份狀態（單例）：多個元件呼叫 `useTheme()` 拿到同一個 ref。 */
 let current: Ref<Theme> | null = null;
+/**
+ * 移除 `data-theme-switching` 的待執行 frame（全站只留一個）。兩幀內連續切換時先取消前一組再重排，
+ * 否則前一次切換排定的移除會在新主題繪製前就拿掉保護（合併門第 1 輪 low）。
+ */
+let pendingFrame: number | null = null;
 
 /** `theme` 為唯讀：一律經 `apply`／`toggle` 變更，才能同步 `<html>`、偏好與切換保護。 */
 export function useTheme(): {
@@ -52,8 +57,10 @@ export function useTheme(): {
     root.dataset.theme = next;
     theme.value = next;
     writePreference(THEME_STORAGE_KEY, next);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
+    if (pendingFrame !== null) cancelAnimationFrame(pendingFrame);
+    pendingFrame = requestAnimationFrame(() => {
+      pendingFrame = requestAnimationFrame(() => {
+        pendingFrame = null;
         root.removeAttribute("data-theme-switching");
       });
     });
@@ -69,4 +76,5 @@ export function useTheme(): {
 /** 僅供測試：重置單例。 */
 export function resetThemeStateForTest(): void {
   current = null;
+  pendingFrame = null;
 }
