@@ -1,5 +1,7 @@
 import "dotenv/config";
 import { GoogleGenAI } from "@google/genai";
+import { DEFAULT_GEMINI_MODEL } from "../lib/env-schema.js";
+import { thinkingConfigFor } from "./gemini-provider.js";
 
 /**
  * LLM 連通性 smoke（FR-017／指南 §8.2）——接入 queue 前的護欄。
@@ -12,7 +14,7 @@ import { GoogleGenAI } from "@google/genai";
  */
 async function main(): Promise<void> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
-  const model = process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite";
+  const model = process.env.GEMINI_MODEL?.trim() || DEFAULT_GEMINI_MODEL;
   if (!apiKey) {
     console.error("[smoke:gemini] 缺少 GEMINI_API_KEY（請於 apps/worker/.env 設定）");
     process.exit(1);
@@ -22,7 +24,8 @@ async function main(): Promise<void> {
   const response = await ai.models.generateContent({
     model,
     contents: "用一句話回覆：flow-gatekeeper worker 連線正常。",
-    config: { abortSignal: AbortSignal.timeout(30_000) },
+    // 送與 worker 相同的 thinking 設定：模型拒收（例如 3.x 收到 thinkingBudget: 0 回 400）時 smoke 就該失敗。
+    config: { abortSignal: AbortSignal.timeout(30_000), thinkingConfig: thinkingConfigFor(model) },
   });
   console.log(`[smoke:gemini] model=${model} 回覆：`, response.text);
 }

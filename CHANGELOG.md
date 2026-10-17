@@ -90,8 +90,8 @@ Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全
 - **最小功能性字級 12px**：徽章、單位、計數、時間戳等小字不再小於 12px，兩套主題下文字對比皆 ≥ 4.5:1。
 - **README 截圖**：「功能逐項展示」的截圖隨本版以新介面重拍（含深色主題與拓樸），圖說與 demo 劇本改用中文術語。
 - **AI 模型**（worker）：預設 `GEMINI_MODEL` 由 `gemini-2.5-flash` 改為 `gemini-3.5-flash-lite`。3.x 以後的 `flash`／`flash-lite` 不接受
-  `thinkingBudget: 0`（400），改送 `thinkingConfig.thinkingLevel: MEDIUM`；實測真實診斷 prompt 約 1000 個 thinking token、
-  首次診斷全程約 4.5 秒（首 token 約 2 秒為短 prompt 實測；真實 prompt 思考較多、首 token 可能更晚）。3.x 的 pro 等其他變體維持不送 thinking 設定。`leveled` 模型的 `AI_MAX_OUTPUT_TOKENS` 低於 4096 時 worker 啟動會 warn
+  `thinkingBudget: 0`（400），改送 `thinkingConfig.thinkingLevel: MEDIUM`；實測真實診斷 prompt 的 thinking token 為 0～約 1150（模型動態決定），
+  全程約 1.5～4.6 秒（思考時較長）。`AI_TEMPERATURE` 維持 0.2：Google 建議 Gemini 3 系列用 1.0，但實測 0.2／1.0 皆無截斷、0.2 結果較一致。3.x 的 pro 等其他變體維持不送 thinking 設定。`leveled` 模型的 `AI_MAX_OUTPUT_TOKENS` 低於 4096 時 worker 啟動會 warn
   （2.5 pro 等不能關 thinking 的模型門檻維持 8192）。
 
 ### Removed

@@ -90,6 +90,7 @@ export class GeminiProvider implements AiProvider {
           usage = {
             inputTokens: chunk.usageMetadata.promptTokenCount,
             outputTokens: chunk.usageMetadata.candidatesTokenCount,
+            thoughtsTokens: chunk.usageMetadata.thoughtsTokenCount,
             totalTokens: chunk.usageMetadata.totalTokenCount,
           };
         }
@@ -129,7 +130,8 @@ export function buildGenerateConfig(args: {
  * - `gemini-2.5-flash`、`gemini-2.5-flash-lite`（含其 preview 變體）：接受 0＝關閉 → 送。
  * - `gemini-2.5-pro`：thinking 不可關閉，送 0 會被拒 → 不送（沿用模型預設）。
  * - 3.x 以後的 `flash`／`flash-lite`：改用 `thinkingLevel` 語意（送 `thinkingBudget: 0` 會 400）→ 送
- *   `THINKING_LEVEL`（MEDIUM：保留少量推理，首 token 實測約 2 秒，仍在 5 秒目標內）。
+ *   `THINKING_LEVEL`（MEDIUM：保留少量推理；短 prompt 實測首 token 約 2 秒，真實診斷 prompt 思考較多、
+ *   首 token 會更晚，全程實測約 4.5 秒）。
  * - 3.x 以後的其他變體（pro 等）各自支援的等級不一 → 不送；2.0 以前的模型沒有 thinking → 不送，
  *   避免送出模型不認得的設定而整批 400。
  * 判準集中在 `lib/model-capabilities.ts`（env 啟動警告共用）；要調整新系列時改那裡。

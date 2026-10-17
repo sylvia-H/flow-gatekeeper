@@ -23,8 +23,8 @@ export const THINKING_LEVEL = "MEDIUM";
 export const MIN_OUTPUT_TOKENS_WITH_THINKING = 8192;
 
 /**
- * `leveled` 模型的同類警告門檻：`THINKING_LEVEL` 下真實診斷 prompt 實測 thoughts 約 1000＋結果約 250，
- * 4096 留約 3 倍餘裕（亦為 `AI_MAX_OUTPUT_TOKENS` 預設值）。
+ * `leveled` 模型的同類警告門檻：`THINKING_LEVEL` 下真實診斷 prompt 實測 thoughts 0～約 1150＋結果約 200～470（最壞約 1500），
+ * 4096 留 2.5 倍以上餘裕（亦為 `AI_MAX_OUTPUT_TOKENS` 預設值）。
  */
 export const MIN_OUTPUT_TOKENS_WITH_THINKING_LEVEL = 4096;
 

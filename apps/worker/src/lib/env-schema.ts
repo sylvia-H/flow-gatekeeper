@@ -30,6 +30,7 @@ import {
 export const LOCK_TTL_MARGIN_MS = 5000;
 
 /** 生成參數預設值（單一來源：env 留空時的預設，也是 `GeminiProvider` 未帶選項時的預設）。 */
+export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 export const DEFAULT_AI_MAX_OUTPUT_TOKENS = 4096;
 export const DEFAULT_AI_TEMPERATURE = 0.2;
 
@@ -80,11 +81,12 @@ export const WorkerEnvSchema = RedisEnvSchema.extend({
   MONGO_URL: stringWithDefault("mongodb://127.0.0.1:27017/flow-gatekeeper"),
   MONGO_DB: stringWithDefault("flow-gatekeeper"),
   GEMINI_API_KEY: optionalString,
-  GEMINI_MODEL: stringWithDefault("gemini-3.5-flash-lite"),
+  GEMINI_MODEL: stringWithDefault(DEFAULT_GEMINI_MODEL),
   AI_TIMEOUT_MS: positiveInt(30_000),
   /**
    * 單次輸出 token 上限（Gemini `maxOutputTokens`）。診斷 JSON 約數百 token，但 thinking token 也計入：
-   * 預設模型 `gemini-3.5-flash-lite` 以 MEDIUM 思考，實測 thoughts 約 1000＋結果約 250，預設 4096 留約 3 倍餘裕。
+   * 預設模型 `gemini-3.5-flash-lite` 以 MEDIUM 思考，真實診斷 prompt 實測 thoughts 0～約 1150（模型動態決定）＋結果約 200～470，
+   * 最壞約 1500，預設 4096 留 2.5 倍以上餘裕。
    * 設上限是為了 JSON mode 偶發的重複迴圈能由供應商以 `max_tokens` 截斷收尾，而不是拖到 AI_TIMEOUT_MS 才被中止。
    * 上限 65536 與 Gemini 2.5 系列的最大輸出一致。
    */
@@ -92,7 +94,11 @@ export const WorkerEnvSchema = RedisEnvSchema.extend({
     emptyToUndefined,
     z.coerce.number().int().positive().max(65_536).default(DEFAULT_AI_MAX_OUTPUT_TOKENS),
   ),
-  /** 取樣溫度（0–2，Gemini 接受的範圍）。結構化診斷要穩定可重現，預設偏低。 */
+  /**
+   * 取樣溫度（0–2，Gemini 接受的範圍）。結構化診斷要穩定可重現，預設偏低。
+   * Google 建議 Gemini 3 系列維持 1.0（低於 1.0 可能 looping）；2026-10-17 以 `gemini-3.5-flash-lite`＋真實診斷 prompt 實測
+   * 0.2 與 1.0 各約 10 次，兩者皆無截斷，0.2 的嚴重度較一致、回中文比例較高，故維持 0.2。若日後 log 出現 `max_tokens` 截斷，先試 1.0。
+   */
   AI_TEMPERATURE: boundedNumber(DEFAULT_AI_TEMPERATURE, 0, 2),
   AI_DEDUPE_LOCK_SECONDS: positiveInt(45),
   AI_CACHE_TTL_SECONDS: positiveInt(600),

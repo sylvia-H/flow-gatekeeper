@@ -775,8 +775,8 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 | `AI_CACHE_TTL_SECONDS` | worker | `600` | 診斷快取有效期 |
 | `AI_DEDUPE_LOCK_SECONDS` | worker | `45` | 同簽章去重鎖有效期；必須 `× 1000 ≥ AI_TIMEOUT_MS + 5000`（5 秒餘裕涵蓋結果寫入與收尾），否則 worker 拒絕啟動 |
 | `AI_TIMEOUT_MS` | worker | `30000` | 單次 AI streaming 逾時；以 `AbortSignal` 真正中止底層串流。**MUST 小於前端 45 秒無進展 watchdog** 並預留等待鎖／首 token 前的時間，否則後端仍在跑時前端已判定逾時（見「已知限制」的重派靜默）；調高時 worker `stop_grace_period`（45s）與 `AI_DEDUPE_LOCK_SECONDS` 須一併調整 |
-| `AI_MAX_OUTPUT_TOKENS` | worker | `4096` | Gemini `maxOutputTokens`；正整數、≤ 65536。thinking token 也計入此上限；輸出被截斷視為**不可重試**的 `schema_invalid`（重試同一 prompt 只會再被截斷）。預設模型以 `thinkingLevel: MEDIUM` 思考（真實診斷 prompt 實測約 1000 個 thinking token），3.x `flash`／`flash-lite` 低於 4096、不能關 thinking 的模型（`gemini-2.5-pro`、3.x pro）低於 8192 時 worker 啟動會 warn；本值與 `AI_TEMPERATURE` 都不進快取簽章 |
-| `AI_TEMPERATURE` | worker | `0.2` | Gemini 取樣溫度，範圍 0–2 |
+| `AI_MAX_OUTPUT_TOKENS` | worker | `4096` | Gemini `maxOutputTokens`；正整數、≤ 65536。thinking token 也計入此上限；輸出被截斷視為**不可重試**的 `schema_invalid`（重試同一 prompt 只會再被截斷）。預設模型以 `thinkingLevel: MEDIUM` 思考（真實診斷 prompt 實測 0～約 1150 個 thinking token，由模型動態決定），3.x `flash`／`flash-lite` 低於 4096、不能關 thinking 的模型（`gemini-2.5-pro`、3.x pro）低於 8192 時 worker 啟動會 warn；本值與 `AI_TEMPERATURE` 都不進快取簽章 |
+| `AI_TEMPERATURE` | worker | `0.2` | Gemini 取樣溫度，範圍 0–2。Google 建議 Gemini 3 系列用 1.0（低於 1.0 可能 looping）；以預設模型實測 0.2／1.0 皆無截斷、0.2 結果較一致，故維持 0.2——log 出現 `max_tokens` 截斷時可先改 1.0 |
 | `AI_PROVIDER` | worker | `gemini` | AI provider 選擇：`gemini`（正式唯一 provider）／`fake`（**測試替身**：不呼叫 LLM、不需金鑰，輸出固定假診斷並逐段串流；仍經 `DiagnosisResultSchema` 驗證、照常進 cache 與 Pub/Sub）。**`fake` 僅供跨 process e2e 與演練**——`NODE_ENV=production` 下仍允許但啟動時記一則 warn；非法值（如 `openai`）拒絕啟動 |
 | `FAKE_AI_TOKENS` | worker | `20` | fake provider 把診斷 JSON 切成幾段送出（1–1000）；`AI_PROVIDER=gemini` 時不作用 |
 | `FAKE_AI_TOKEN_DELAY_MS` | worker | `500` | fake provider 相鄰兩段的延遲（0–60000 ms，可為 0）；`(FAKE_AI_TOKENS − 1) × FAKE_AI_TOKEN_DELAY_MS ≥ AI_TIMEOUT_MS` 時啟動 warn（每筆都會逾時）。`AI_PROVIDER=gemini` 時不作用 |
