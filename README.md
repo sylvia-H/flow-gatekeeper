@@ -502,7 +502,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | **009** | [可觀測性基線](specs/009-observability-baseline/spec.md) | 三端補齊「監控台自己也該可被監控」的基線：pino 結構化 JSON 日誌（含關聯鍵）、`GET /healthz` 依賴狀態探針（Redis／Mongo 二態回應）、queue 深度／WS 連線數／LLM latency／cache 命中率等關鍵指標週期入 log、dev-only **Metrics Panel**（`VITE_METRICS_PANEL`，唯讀、預設收合，production build 預設關閉）、有損寫入語意明文化（見下方「[已宣告的取捨](#已宣告的取捨)」） |
 | **1.1.0 維護**（2026-09，非 SDD） | [`CHANGELOG.md`](CHANGELOG.md)、指南 §15.6 | 四條維護分支：兩輪審查修復（第一輪 P0～P2、第二輪 Batch A～D）、技術棧升級（NestJS 11／Express 5、Vite 7、Zod 4、Pinia 3、Vitest 4、pnpm 10、`@google/genai`）、測試基礎建設（覆蓋率門檻、整合測試、e2e、變異測試）、契約升 1.2.0 與新增 `CHANGELOG.md`；第三輪審查報告與其修復留待 1.1.0 之後 |
 | **013** | [UI 全面改版（實驗室玻璃與蝕刻刻度）](specs/013-ui-redesign/spec.md) | web 監控台整體換皮：三 stage 產線拓樸取代機台網格、背壓 strip（60 秒視窗合併比＋液柱刻度）、診斷串流漸進骨架與快取耗時對比、深淺雙主題、繁中文案、≥ 1366px 推擠式／< 1366px bottom-sheet 的 AI 診斷面板；視覺真實來源改為 `apps/web/PRODUCT.md`／`DESIGN.md` |
-| **2.0.0 維護**（2026-10，非 SDD） | [`CHANGELOG.md`](CHANGELOG.md)、指南 §15.6 | 暫停鈕維持按下換字（中文「恢復」、新增暫停橫幅）、預設模型改 `gemini-3.5-flash-lite`（3.x flash 送 `thinkingLevel: MEDIUM`、輸出上限預設 4096）、demo 影片重錄與錄影劇本 `record-demo.cjs`；第三輪審查報告（`docs/20260927-research-review03.md`）已併入，其修復仍待後續 |
+| **2.0.0 維護**（2026-10，非 SDD） | [`CHANGELOG.md`](CHANGELOG.md)、指南 §15.6 | 暫停鈕維持按下換字（中文「恢復」、拿掉 `aria-pressed`、暫停橫幅改 `role=status`）、預設模型改 `gemini-3.5-flash-lite`（3.x flash 送 `thinkingLevel: MEDIUM`、輸出上限預設 4096）、demo 影片重錄與錄影劇本 `record-demo.cjs`；第三輪審查報告（`docs/20260927-research-review03.md`）已併入，其修復仍待後續 |
 
 ---
 

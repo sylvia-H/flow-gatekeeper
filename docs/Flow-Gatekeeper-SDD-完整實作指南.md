@@ -3201,7 +3201,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 5 | `fix/20260927-review02-batch-cd` | `4c43d18` | 第二輪報告 Batch C（文件與 release 準備）、Batch D（測試基礎建設），外加 6 項 code-review findings | Batch C／D |
 | — | `docs/20260928-release-1.1.0` | `8ae83f4` | 1.1.0 release 準備（版號、CHANGELOG、文件版本註記） | — |
 | 6 | `docs/20260927-research-review03` | `3ad0e9b` | 新增第三輪審查報告 `docs/20260927-research-review03.md`（2026-10-15 併入；發現的缺陷含 P1，截至 2.0.0 未修） | — |
-| 7 | `fix/20261017-pause-toggle-label` | `b7f7780` | 暫停鈕按下後換成「恢復」（Play 圖示）、拿掉 `aria-pressed`、暫停橫幅 `role=status` | 013 UI 全面改版（「暫停」條） |
+| 7 | `fix/20261017-pause-toggle-label` | `b7f7780` | 修正 013 開發期間改成的固定「暫停」：按下後換成「恢復」（Play 圖示；1.1.0 起即換字，當時為英文 `Resume`）、拿掉 `aria-pressed`、暫停橫幅 `role=status` | 013 UI 全面改版（「暫停」條） |
 | 8 | `upgrade/20261017-gemini-3.5-flash-lite` | `7d9f9d9` | 預設 LLM 模型改 `gemini-3.5-flash-lite`、3.x flash 送 `thinkingLevel: MEDIUM`、`AI_MAX_OUTPUT_TOKENS` 預設 4096 | Gemini 3.5 flash-lite 升級 |
 | 9 | `docs/20261018-demo-video` | `84feedd` | README demo 影片以 2.0.0 介面重錄、新增錄影劇本 `record-demo.cjs` | Demo 影片重錄 |
 | — | `docs/20261017-release-2.0.0` | （以 `git log --first-parent --merges` 為準） | 2.0.0 release 準備（版號、CHANGELOG、文件版本註記） | — |
