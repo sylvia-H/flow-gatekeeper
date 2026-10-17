@@ -27,7 +27,7 @@
 
 ## [Unreleased]
 
-Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全面改版。只動前端呈現，**後端、契約與部署方式皆不變**；
+Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全面改版。013 只動前端呈現，**後端、契約與部署方式皆不變**；
 視覺方向為「實驗室玻璃與蝕刻刻度」，視覺真實來源由 `apps/web/design/design-spec.md` 改為 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`。
 另含維護分支 `upgrade/20261017-gemini-3.5-flash-lite`：worker 的預設 LLM 模型改為 `gemini-3.5-flash-lite`（契約不變）。
 
@@ -91,7 +91,7 @@ Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全
 - **README 截圖**：「功能逐項展示」的截圖隨本版以新介面重拍（含深色主題與拓樸），圖說與 demo 劇本改用中文術語。
 - **AI 模型**（worker）：預設 `GEMINI_MODEL` 由 `gemini-2.5-flash` 改為 `gemini-3.5-flash-lite`。3.x 以後的 `flash`／`flash-lite` 不接受
   `thinkingBudget: 0`（400），改送 `thinkingConfig.thinkingLevel: MEDIUM`；實測真實診斷 prompt 的 thinking token 為 0～約 1150（模型動態決定），
-  全程約 1.5～4.6 秒（思考時較長）。`AI_TEMPERATURE` 維持 0.2：Google 建議 Gemini 3 系列用 1.0，但實測 0.2／1.0 皆無截斷、0.2 結果較一致。3.x 的 pro 等其他變體維持不送 thinking 設定。`leveled` 模型的 `AI_MAX_OUTPUT_TOKENS` 低於 4096 時 worker 啟動會 warn
+  首 token 0.6～4.2 秒、全程 1.4～4.6 秒（思考時較長；003 SC-001 的 5 秒首 token 目標仍達成但餘裕有限）。`AI_TEMPERATURE` 維持 0.2：Google 建議 Gemini 3 系列用 1.0，但實測 0.2／1.0 皆無截斷、0.2 結果較一致。3.x 的 pro 等其他變體維持不送 thinking 設定。3.x `flash`／`flash-lite` 配 `AI_MAX_OUTPUT_TOKENS` 低於 4096 時 worker 啟動會 warn
   （2.5 pro 等不能關 thinking 的模型門檻維持 8192）。
 
 ### Removed
@@ -103,7 +103,7 @@ Feature 013（`013-ui-redesign`，`specs/013-ui-redesign/`）：web 監控台全
 ### 契約
 
 - **無變更**：`asyncapi.yaml` 的 `info.version` 維持 1.2.0；12 則 WS 訊息與 `POST /diagnoses` 的請求與回應皆未修改，api 無行為變更，
-  worker 只換預設模型與 thinking 設定（見上方 Changed「AI 模型」）。新呈現（背壓 strip、拓樸連線、異常標記、診斷耗時）全部由既有訊息在前端衍生。
+  worker 只換預設模型、thinking 設定與 `AI_MAX_OUTPUT_TOKENS` 預設（見上方 Changed「AI 模型」）。新呈現（背壓 strip、拓樸連線、異常標記、診斷耗時）全部由既有訊息在前端衍生。
 
 ## [1.1.0] - 2026-09-28
 

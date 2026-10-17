@@ -125,13 +125,12 @@ export function buildGenerateConfig(args: {
  * 依模型名決定 thinking 設定（純函式，可單測）。
  *
  * gemini-2.5 系列預設開啟 thinking，首個 token 前會先「思考」數秒～十數秒，拖垮「首 token ≤ 5s」
- * 的回應性目標；診斷輸出是結構化 JSON、不需長推理鏈，所以能關就關。但 `thinkingBudget: 0`
- * 並非所有模型都接受：
+ * 的回應性目標（003 SC-001）；2.5 系列因此能關就關。但 `thinkingBudget: 0` 並非所有模型都接受：
  * - `gemini-2.5-flash`、`gemini-2.5-flash-lite`（含其 preview 變體）：接受 0＝關閉 → 送。
  * - `gemini-2.5-pro`：thinking 不可關閉，送 0 會被拒 → 不送（沿用模型預設）。
  * - 3.x 以後的 `flash`／`flash-lite`：改用 `thinkingLevel` 語意（送 `thinkingBudget: 0` 會 400）→ 送
- *   `THINKING_LEVEL`（MEDIUM：保留少量推理；短 prompt 實測首 token 約 2 秒，真實診斷 prompt 思考較多、
- *   首 token 會更晚，全程實測約 4.5 秒）。
+ *   `THINKING_LEVEL`。這裡不追求最低的 MINIMAL：使用者實測後裁決保留 MEDIUM 的推理；首 token 實測最壞約 4.2 秒，
+ *   SC-001 的 5 秒餘裕有限（數字見指南 §15.6「Gemini 3.5 flash-lite 升級」）。
  * - 3.x 以後的其他變體（pro 等）各自支援的等級不一 → 不送；2.0 以前的模型沒有 thinking → 不送，
  *   避免送出模型不認得的設定而整批 400。
  * 判準集中在 `lib/model-capabilities.ts`（env 啟動警告共用）；要調整新系列時改那裡。

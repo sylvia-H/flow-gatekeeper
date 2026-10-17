@@ -102,6 +102,30 @@ describe("classifyGeminiError", () => {
   });
 });
 
+describe("GeminiProvider 串流與 usage", () => {
+  it("逐段送 token，usage 帶入 thinking token（max_tokens 截斷時據此判斷是誰吃掉上限）", async () => {
+    const provider = new GeminiProvider("k", "gemini-3.5-flash-lite");
+    async function* chunks() {
+      yield { text: '{"summary":' };
+      yield {
+        text: '"ok"}',
+        candidates: [{ finishReason: "STOP" }],
+        usageMetadata: { promptTokenCount: 638, candidatesTokenCount: 232, thoughtsTokenCount: 1061, totalTokenCount: 1931 },
+      };
+    }
+    // 換掉延遲建立的 SDK client，不打真的 API。
+    Reflect.set(provider, "client", { models: { generateContentStream: () => Promise.resolve(chunks()) } });
+    const onToken = vi.fn();
+    const out = await provider.streamDiagnosis({ prompt: "p", signal: new AbortController().signal, onToken });
+    expect(onToken.mock.calls.map(([t]) => t)).toEqual(['{"summary":', '"ok"}']);
+    expect(out).toEqual({
+      text: '{"summary":"ok"}',
+      finishReason: "stop",
+      usage: { inputTokens: 638, outputTokens: 232, thoughtsTokens: 1061, totalTokens: 1931 },
+    });
+  });
+});
+
 describe("GeminiProvider 缺金鑰", () => {
   it("空金鑰：不建 SDK client、直接丟不可重試的 AiProviderError（含前端可比對的關鍵字）", async () => {
     const provider = new GeminiProvider("", "gemini-2.5-flash");

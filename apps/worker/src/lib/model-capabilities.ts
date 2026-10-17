@@ -23,13 +23,13 @@ export const THINKING_LEVEL = "MEDIUM";
 export const MIN_OUTPUT_TOKENS_WITH_THINKING = 8192;
 
 /**
- * `leveled` 模型的同類警告門檻：`THINKING_LEVEL` 下真實診斷 prompt 實測 thoughts 0～約 1150＋結果約 200～470（最壞約 1500），
+ * `leveled` 模型的同類警告門檻：`THINKING_LEVEL` 下真實診斷 prompt 實測 thoughts 0～約 1150＋結果約 200～470（單次合計最多約 1460，上界相加約 1620），
  * 4096 留 2.5 倍以上餘裕（亦為 `AI_MAX_OUTPUT_TOKENS` 預設值）。
  */
 export const MIN_OUTPUT_TOKENS_WITH_THINKING_LEVEL = 4096;
 
 /**
- * 只依名稱判定：`gemini-flash-lite-latest` 這類別名、或大小寫不同的名稱判為 `none`（不送設定、不警告），請在 env 寫完整模型名。
+ * 只依名稱判定：`gemini-flash-lite-latest` 這類別名、或大小寫不同的名稱判為 `none`（不送設定；`*-latest` 別名由 env-schema 啟動 warn），請在 env 寫完整模型名。
  * 3.x 的 `flash-*` 一律歸 `leveled`，含 image／live 等非文字變體——診斷不使用這類模型，若改用需另行確認是否接受 `thinkingLevel`。
  */
 export function thinkingCapability(model: string): ThinkingCapability {

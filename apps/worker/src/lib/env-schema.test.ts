@@ -113,6 +113,19 @@ describe("parseWorkerEnv", () => {
     expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-3.5-flash-lite", AI_MAX_OUTPUT_TOKENS: "2048" })).toBe(true);
     expect(hasThinkingWarning({ GEMINI_MODEL: "gemini-3.5-flash-lite", AI_MAX_OUTPUT_TOKENS: "4096" })).toBe(false);
   });
+
+  it("別名（*-latest）判不出 thinking 系列 → warning；完整模型名或 fake provider 不 warn", () => {
+    const hasAliasWarning = (raw: Record<string, string>): boolean => {
+      const r = parseWorkerEnv({ GEMINI_API_KEY: "k", ...raw });
+      if (!r.ok) throw new Error(r.error);
+      return r.warnings.some((w) => w.includes("別名"));
+    };
+    expect(hasAliasWarning({ GEMINI_MODEL: "gemini-flash-lite-latest" })).toBe(true);
+    expect(hasAliasWarning({ GEMINI_MODEL: "models/gemini-flash-latest" })).toBe(true);
+    expect(hasAliasWarning({ GEMINI_MODEL: "gemini-3.5-flash-lite" })).toBe(false);
+    expect(hasAliasWarning({ GEMINI_MODEL: "my-custom-model" })).toBe(false);
+    expect(hasAliasWarning({ AI_PROVIDER: "fake", GEMINI_MODEL: "gemini-flash-latest" })).toBe(false);
+  });
 });
 
 describe("parseRedisEnv", () => {

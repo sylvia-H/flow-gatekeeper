@@ -3358,13 +3358,15 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   （實測 400），改送 `thinkingConfig.thinkingLevel: MEDIUM`（`THINKING_LEVEL` 常數）；3.x 的 pro 等其他變體維持 `always-on`、不送設定；2.5 flash 系列仍送 `thinkingBudget: 0`。
   等級由使用者在實測後裁決（`gemini-3.5-flash-lite` 短 prompt：HIGH 首 token 約 2.5 s／thoughts 約 600；MEDIUM 約 2 s／450；LOW、MINIMAL 不到 1 s 但不思考）。
 - **輸出上限**：thinking token 計入 `maxOutputTokens`。真實診斷 prompt 實測 MEDIUM 的 thinking token 為 0～約 1150（模型動態決定，多數為 0）、
-  結果約 200～470 token，最壞約 1500；`AI_MAX_OUTPUT_TOKENS` 預設因此由 2048 改為 4096（2.5 倍以上餘裕）；`leveled` 模型低於 4096 時 worker 啟動會 warn，
+  結果約 200～470 token，單次實測合計最多約 1460（兩個上界相加約 1620）；`AI_MAX_OUTPUT_TOKENS` 預設因此由 2048 改為 4096（2.5 倍以上餘裕）；`leveled` 模型低於 4096 時 worker 啟動會 warn，
   `always-on` 模型的 8192 門檻不變。usage log 另記 `thoughtsTokens`，截斷時可判斷是 thinking 還是回覆吃掉上限。
 - **temperature 維持 0.2**：Google 的 Gemini 3 開發指南建議所有 Gemini 3 模型維持 1.0（低於 1.0 可能 looping 或品質下降）。合併門第 1 輪提出後，
   以真實診斷 prompt 交替實測 0.2 與 1.0（各 10 次，其中 3 次撞 429 不計）：兩者皆 0 次截斷、全部通過 schema；0.2 嚴重度 8／9 一致、回中文 9／9，
   1.0 為 6／8 與 6／8。使用者裁決維持 0.2；若日後 log 出現 `max_tokens` 截斷，先試 1.0。
 - **smoke 與預設值單一來源**：`smoke:gemini` 改送與 worker 相同的 `thinkingConfigFor(model)`（模型拒收 thinking 設定時 smoke 就會失敗）；預設模型名改由
-  `env-schema.ts` 的 `DEFAULT_GEMINI_MODEL` 單一來源。
+  `env-schema.ts` 的 `DEFAULT_GEMINI_MODEL` 單一來源。模型判定只依名稱：`gemini-flash-lite-latest` 這類 `*-latest` 別名判不出系列（不送 thinking 設定、不檢查上限），啟動時 warn 建議寫完整模型名。
+- **回應性（003 SC-001「首 token ≤ 5 s」）**：真實 prompt 實測首 token 0.6～4.2 s、全程 1.4～4.6 s（不思考時約 1 s 內出首 token，思考約 1000 token 時約 3～4 s）。
+  仍在 5 s 內但**餘裕有限**：context 變長或思考變多時可能超標；這是保留 MEDIUM 推理的已知取捨，超標時先評估改 LOW／MINIMAL。
 - **實機**（一鍵 demo 容器，2026-10-17）：首次診斷全程約 4.5 s、快取命中約 200 ms，回覆為繁體中文（2.5 flash 時約四分之三回英文；prompt 未指定語言，屬模型行為、非保證）。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[Unreleased]`）：

@@ -10,7 +10,8 @@ import { thinkingConfigFor } from "./gemini-provider.js";
  *
  * 一次性 CLI 腳本，依 Feature 009 FR-004／SC-001 範圍界定不納入結構化日誌、維持人類可讀
  * `console.error` 輸出（`specs/009-observability-baseline/contracts/log-fields.md §8`）。
- * 刻意直接用 SDK、不經 AiProvider：目的是隔離「金鑰／模型／網路」與 worker 邏輯兩類問題。
+ * 刻意直接用 SDK、不經 AiProvider：目的是隔離「金鑰／模型／網路」與 worker 邏輯兩類問題；
+ * 只共用 thinking 判定（純函式 `thinkingConfigFor`），模型拒收該設定時 smoke 就會失敗。
  */
 async function main(): Promise<void> {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
