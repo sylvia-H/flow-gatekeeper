@@ -368,8 +368,9 @@ async function waitDiagnosisDone(page, beforeJob) {
 }
 
 /** 游標已在按鈕上：等 press-02 穩定為正常再按（滑行期間若碰上尖峰開始，快取簽章會不同）。 */
-async function clickWhenSettled(page, pointer, button) {
+async function clickWhenSettled(page, pointer, button, beforeClick = () => {}) {
   await waitUntil(() => settledHealthy(page, MACHINE), SPIKE_WAIT_MS, `${MACHINE} 回到正常`);
+  beforeClick();
   await pointer.click(button, { ms: 150 });
 }
 
@@ -402,8 +403,8 @@ async function perform(page, pointer, t0, assertCapturing) {
   const diagnose = page.locator('[data-fg="copilot"] button:visible', { hasText: /^\s*診斷\s*$/ }).first();
   await pointer.glideTo(diagnose, { ms: 600 });
   const before = await panelStatus(page);
-  assertCapturing();
-  await clickWhenSettled(page, pointer, diagnose);
+  // 等狀態穩定可能長達 SPIKE_WAIT_MS，寫檔檢查放在真正按下之前一刻。
+  await clickWhenSettled(page, pointer, diagnose, assertCapturing);
 
   // 0:08–0:11 鏡頭 2：串流骨架逐格填入 → 完成（時間點隨 LLM 回應速度浮動）
   await sleep(400);
@@ -478,10 +479,17 @@ function publish(outputs, state) {
       done.push(to);
     } catch (err) {
       state.keepFrames = true;
-      const replaced = done.length > 0 ? `；已覆寫：${done.join("、")}` : "；out 內檔案均未變動";
+      const busy = BUSY_CODES.has(err.code);
+      // 佔用類錯誤發生在開檔階段，目標確實沒動；其他錯誤（如磁碟滿）可能已截斷目標。
+      const status = busy
+        ? done.length > 0
+          ? `已覆寫：${done.join("、")}；其餘未變動`
+          : "out 內檔案均未變動"
+        : `${to} 可能已損毀，可用 git checkout -- docs/demo 還原`;
+      const pending = outputs.filter(([, dest]) => !done.includes(dest)).map(([src, dest]) => `${src} → ${dest}`);
       throw new UserError(
-        `無法覆寫 ${to}（${err.code || err.message}，可能被播放器或看圖程式開著）${replaced}。` +
-          `成品保留在：${outputs.map(([src]) => src).join("、")}，關閉佔用的程式後手動複製即可，不必重錄`,
+        `無法覆寫 ${to}（${err.code || err.message}${busy ? "，可能被播放器或看圖程式開著" : ""}）；${status}。` +
+          `成品保留在暫存目錄，關閉佔用的程式後依下列對應手動複製即可，不必重錄：${pending.join("；")}`,
       );
     }
   }
@@ -529,7 +537,8 @@ async function record(opts, framesDir, state) {
     cast.throwIfFailed();
     log(`擷取 ${cast.frames.length} 格，長度約 ${((end - t0) / 1000).toFixed(1)} 秒；編碼中…`);
     // 先在暫存目錄編好影片、取好海報（編碼失敗不會動到 out），再直接覆寫到 out。不用「.tmp 再 rename」：
-    // Windows 上目標被播放器開著時 rename 會 EPERM，覆寫（copyFileSync）則照常成功。
+    // Windows 上 rename 需要目標的刪除權限，目標被開著（未給 FILE_SHARE_DELETE）就 EPERM；copyFileSync 只需寫入權限，
+    // 對方允許共用寫入就能覆寫，不允許時（例如只共用讀取）走 retryBusy，最後保留暫存成品。
     const video = path.join(framesDir, VIDEO_NAME);
     encode(opts.ffmpeg, cast.frames, t0, end, framesDir, video);
     const poster = path.join(framesDir, cast.frames[cast.frames.length - 1].name);
