@@ -8,8 +8,8 @@ import { AppConfigService } from "../config/config.service.js";
 import { MonitoringGateway } from "./monitoring.gateway.js";
 import { AiStreamRelayService } from "./ai-stream-relay.service.js";
 import { getAppLogger } from "../../logging/app-logger.js";
-import { attachThrottledErrorLog } from "../../lib/connection-error-throttle.js";
-import type { ConnectionEvents } from "../../lib/connection-error-throttle.js";
+import { attachThrottledErrorLog, bullmqConnection } from "../../lib/connection-error-throttle.js";
+import { closeWithDeadline } from "./relay-close.js";
 
 /** 孤兒綁定回收安全期（QueueEvents 異常時避免 Map 洩漏，FR-002）。 */
 const ORPHAN_TTL_MS = 10 * 60_000;
@@ -25,14 +25,23 @@ export const DELAYED_KEEPALIVE_MS = 15_000;
  * 這種情況交回前端 watchdog 判定，而不是無限補送把死掉的 worker 掩蓋成「排隊中」。
  */
 const DELAYED_GRACE_MS = 5_000;
+/**
+ * `completed` 送出後綁定再保留多久才刪（AR-5）。worker 先 publish `ai/done` 才讓 BullMQ 標 completed，
+ * 但兩者在 api 端分走 subscriber 與 QueueEvents 兩條連線，到達先後沒有保證；立刻刪綁定，晚到的
+ * `ai/done` 會查無對象被丟掉，前端停在「已完成卻沒有結果」。10 s 遠大於同機 Redis 的跨連線時間差，
+ * 又短到不讓綁定 Map 因大量完成的 job 明顯累積。`failed` 不給寬限：最終失敗的 `ai/error` 由本服務在
+ * 刪綁定前自己補送（見 `handleFailed`），順序已由單一行程保證。
+ */
+export const COMPLETED_BINDING_GRACE_MS = 10_000;
 
 /**
  * Job 生命週期轉發（通道 B，憲章 IV）：以**獨立 blocking 連線**建 `QueueEvents`，把
  * waiting/active/completed/failed/progress 組成 `job/status` → `gateway.send`；`delayed` 以 `waiting`
  * 轉發，並在延後期間定期補送（見 `DELAYED_KEEPALIVE_MS`）。
  *
- * **綁定清理單一 owner**：僅在 `completed`/`failed`（最終終態，晚於 `ai/done`）刪綁定，確保
- * 終態 `job/status` 一定送得出去（F1）；另以 `boundAt` 定期回收孤兒綁定。
+ * **綁定清理單一 owner**：僅在 `completed`/`failed`（最終終態）刪綁定，確保終態 `job/status` 一定送得
+ * 出去（F1）；`completed` 另保留 `COMPLETED_BINDING_GRACE_MS` 寬限才刪，讓跨連線晚到的 `ai/done` 仍
+ * 轉發得到（AR-5）；另以 `boundAt` 定期回收孤兒綁定。
  *
  * **最終失敗的 `ai/error(worker_failed)` 是安全網**：worker 在最終嘗試或不可重試的錯誤時，會在
  * throw 之前先 publish 帶具體 code 的 `ai/error`（例如 `schema_invalid`），那則通常先到、前端以
@@ -50,6 +59,8 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
   private keepaliveTimer?: ReturnType<typeof setInterval>;
   /** 目前處於 delayed 的 job → 預計恢復排隊的時間戳（ms）。 */
   private readonly delayedUntil = new Map<string, number>();
+  /** `completed` 後等待寬限期滿才刪綁定的 job → 其計時器（見 `COMPLETED_BINDING_GRACE_MS`）。 */
+  private readonly completedGraceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     private readonly config: AppConfigService,
@@ -76,10 +87,7 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
         this.emit(jobId, "active", typeof data === "number" ? data : undefined),
       );
       this.queueEvents.on("delayed", ({ jobId, delay }) => this.handleDelayed(jobId, Number(delay)));
-      this.queueEvents.on("completed", ({ jobId }) => {
-        this.emit(jobId, "completed");
-        this.relay.deleteBinding(jobId);
-      });
+      this.queueEvents.on("completed", ({ jobId }) => this.handleCompleted(jobId));
       // `failed` 只在「不會再重試」時才發：依 bullmq 5.79 原始碼，`Job.moveToFailed` 先以
       // `shouldRetryJob` 判斷（`attemptsMade + 1 < attempts` 且非 `UnrecoverableError`），需重試者走
       // `moveToDelayed`／`retryJob`，事件流只寫 `delayed`／`waiting`；唯有最終失敗才走
@@ -90,7 +98,7 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
         void this.handleFailed(jobId, failedReason);
       });
       // 轉態節流：Redis 斷線時 QueueEvents 隨底層連線重連反覆發 error，逐則記錄會洗版。
-      attachThrottledErrorLog(queueEventsConnection(this.queueEvents), {
+      attachThrottledErrorLog(bullmqConnection(this.queueEvents), {
         error: (err, suppressed) =>
           this.logger.warn(
             `QueueEvents error: ${err.message}` +
@@ -107,10 +115,45 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * 停計時器並關閉 QueueEvents（API-12）：`close()` 會先等底層 blocking 連線 ready，Redis 不可達或
+   * 密碼錯時永不 resolve，故以 `RELAY_CLOSE_DEADLINE_MS` 為限，逾時改 `disconnect()` 強制斷線。
+   * 寬限中的綁定不再等期滿：行程即將結束，綁定隨記憶體一起消失。
+   */
   async onModuleDestroy(): Promise<void> {
     if (this.sweepTimer) clearInterval(this.sweepTimer);
     if (this.keepaliveTimer) clearInterval(this.keepaliveTimer);
-    await this.queueEvents?.close().catch(() => undefined);
+    for (const timer of this.completedGraceTimers.values()) clearTimeout(timer);
+    this.completedGraceTimers.clear();
+    const queueEvents = this.queueEvents;
+    if (!queueEvents) return;
+    await closeWithDeadline(
+      () => queueEvents.close(),
+      () => queueEvents.disconnect(),
+      (ms) => this.logger.warn(`QueueEvents close() 逾 ${ms} ms 未完成，改以 disconnect() 強制斷線`),
+    );
+  }
+
+  /**
+   * 完成：送 `job/status: completed`，綁定保留 `COMPLETED_BINDING_GRACE_MS` 後才刪（AR-5）。
+   *
+   * 寬限內綁定帶 `completedAt`：`ai/*` 照常轉發，但 `JobsService` 對同 jobId 的重送回 409「已使用過」。
+   * 計時器 `unref()`：不應為了等寬限而延後行程結束。期滿時只刪「completed 當下那一份」綁定——
+   * 期間若被孤兒回收或其他路徑刪掉後又以同一 jobId 重新綁定，新綁定不屬於這次完成，不得誤刪。
+   */
+  private handleCompleted(jobId: string): void {
+    this.emit(jobId, "completed");
+    // 標記已結束：寬限內同 jobId 重送由 JobsService 回 409（與綁定立即刪除時的行為一致）。
+    const binding = this.relay.markCompleted(jobId);
+    if (!binding) return; // 純後端 smoke 或已清理：沒有可保留的綁定
+    const previous = this.completedGraceTimers.get(jobId);
+    if (previous) clearTimeout(previous);
+    const timer = setTimeout(() => {
+      this.completedGraceTimers.delete(jobId);
+      if (this.relay.getBinding(jobId) === binding) this.relay.deleteBinding(jobId);
+    }, COMPLETED_BINDING_GRACE_MS);
+    timer.unref();
+    this.completedGraceTimers.set(jobId, timer);
   }
 
   /**
@@ -195,33 +238,4 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
       }
     }
   }
-}
-
-/**
- * 把 QueueEvents 轉成節流器要的 `error`／`ready` 事件介面。QueueEvents 本身只轉發 `error`、
- * 不發 `ready`，恢復訊號取自其底層 ioredis 連線（重連成功時發 `ready`）。`client` 要等第一次
- * `ready` 才 resolve，掛上監聽時那一次已經發過——此時連線若已是 ready 就補觸發一次，否則開機
- * 期間的故障永遠記不到恢復。取連線失敗（例如關閉中）時只是收不到恢復訊號——節流仍以間隔放行，
- * 不影響 error 監聽本身。
- */
-export function queueEventsConnection(
-  queueEvents: Pick<QueueEvents, "on" | "client">,
-): ConnectionEvents {
-  return {
-    on(event: "error" | "ready", listener: ((err: Error) => void) | (() => void)) {
-      if (event === "error") {
-        queueEvents.on("error", listener);
-      } else {
-        const onReady = listener as () => void;
-        queueEvents.client.then(
-          (client) => {
-            client.on("ready", onReady);
-            if (client.status === "ready") onReady();
-          },
-          () => undefined,
-        );
-      }
-      return undefined;
-    },
-  };
 }

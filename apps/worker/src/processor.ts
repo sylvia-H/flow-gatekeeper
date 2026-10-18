@@ -18,7 +18,7 @@ import { DIAGNOSIS_RESULT_JSON_SCHEMA } from "./lib/zod-json-schema.js";
 /**
  * 診斷 job processor（自 main.ts 抽出，以依賴注入讓並發／重試語意可單元測試）。
  *
- * 流程：context → signature → cache 命中直接 ai/done(cached:true)；未命中取 `ai-lock` 去重
+ * 流程：context → signature → cache 命中寫 trigger 後回 ai/done(cached:true)；未命中取 `ai-lock` 去重
  *   → 取鎖後**再查一次 cache**（等待者搶到鎖時，前一個持鎖者多半已寫好結果）→ LLM 限流窗
  *   → AiProvider 串流（token → Pub/Sub `ai-stream:<jobId>`，逾時以 AbortSignal 真正中止）
  *   → parseResult → 寫 diagnoses → 寫 cache → 寫 trigger → ai/done(cached:false)。
@@ -26,6 +26,8 @@ import { DIAGNOSIS_RESULT_JSON_SCHEMA } from "./lib/zod-json-schema.js";
  * 重試語意：非最終嘗試的失敗只記 log 後 throw（交給 BullMQ 退避重試），**不** publish
  * `ai/error`——否則前端收到錯誤即轉 failed，之後重試即使成功畫面也停在錯誤。最終嘗試（或
  * 不可重試的錯誤）才 publish `ai/error`。所有事件都帶 `attempt`，前端據此在換輪時清空 token。
+ * 終態事件（`ai/done`、`ai/error`）一律 await 到 PUBLISH 完成才收尾，`ai/token` 維持 fire-and-forget
+ * （見 `publishTerminalEvent`）。
  * worker 不直接 emit WebSocket（憲章 IV）：一律經 Redis Pub/Sub 由 Gateway 轉發。
  */
 
@@ -87,10 +89,18 @@ export const NO_CONTEXT_CODE = "no_context";
 export const NO_CONTEXT_MESSAGE = "此機台近期沒有遙測、異常事件或維修紀錄，無資料可供診斷（未呼叫 AI）";
 
 /**
+ * 是否為空脈絡短路的終態失敗（main.ts failed handler 據此降為 warn）。以訊息比對而非自訂子類別：
+ * 子類別會改掉 `name`，BullMQ 的 `err.name == 'UnrecoverableError'` 後備判斷就失效。
+ */
+export function isNoContextFailure(err: Error): boolean {
+  return err.message === NO_CONTEXT_MESSAGE;
+}
+
+/**
  * 發布 AI 串流事件到 Redis Pub/Sub。參數型別是契約的 `AiStreamEvent`，漏帶 `attempt`
  * 之類的必填欄位會在 typecheck 就被擋下。
  *
- * fire-and-forget，但在源頭接住 publish 失敗並記 log：單筆 token 發布失敗不該拖垮整個 worker
+ * fire-and-forget（只給 `ai/token` 用），但在源頭接住 publish 失敗並記 log：單筆 token 發布失敗不該拖垮整個 worker
  * ——若放任成浮空 rejection，會觸發全域致命守門（let it crash → exit(1) 重啟），把 job 級
  * 小故障放大成行程級重啟。真正的 Redis 中斷會由後續被 await 的 cache 指令拋出，走錯誤路徑收尾。
  */
@@ -98,6 +108,26 @@ export function publishEvent(publisher: Publisher, event: AiStreamEvent, jl: Pro
   void publisher.publish(`ai-stream:${event.jobId}`, JSON.stringify(event)).catch((err: unknown) => {
     jl.warn({ eventType: event.type, err }, "publish 失敗");
   });
+}
+
+/**
+ * 發布終態事件（`ai/done`、`ai/error`）：await 到 PUBLISH 完成才 resolve。
+ *
+ * fire-and-forget 時 processor 可能先 return／throw，BullMQ 隨即把 job 標成 completed／failed，api 的
+ * QueueEvents 收到後解除 jobId 綁定——此時才落地的 PUBLISH 會被 relay 丟棄，前端停在「已完成卻沒結果」，
+ * 或只收到泛用的 `worker_failed` 而看不到具體錯誤碼。await 保證終態事件先於 BullMQ 狀態轉移送出。
+ * publish 失敗只記 warn、不拋：診斷結果已落地，不能因通知失敗把成功的 job 轉成失敗重試（會重複寫入）。
+ */
+export async function publishTerminalEvent(
+  publisher: Publisher,
+  event: AiStreamEvent,
+  jl: ProcessorLogger,
+): Promise<void> {
+  try {
+    await publisher.publish(`ai-stream:${event.jobId}`, JSON.stringify(event));
+  } catch (err) {
+    jl.warn({ eventType: event.type, err }, "終態事件 publish 失敗（job 結果不變）");
+  }
 }
 
 /**
@@ -143,6 +173,7 @@ export function createProcessor(deps: ProcessorDeps) {
     // 長流程以 child logger 綁定一次（contracts/log-fields.md §2 規則 3）。
     const jl = logger.child({ jobId, machineId, attempt });
     const emit = (event: AiStreamEvent): void => publishEvent(publisher, event, jl);
+    const emitTerminal = (event: AiStreamEvent): Promise<void> => publishTerminalEvent(publisher, event, jl);
     const slot = randomUUID();
     const touch = (): void => liveness?.touch(slot);
     liveness?.begin(slot);
@@ -157,12 +188,13 @@ export function createProcessor(deps: ProcessorDeps) {
     /**
      * 失敗收尾：最終嘗試或不可重試才 publish ai/error；否則只記 log，交給 BullMQ 重試。
      * 不可重試者轉 `UnrecoverableError`，BullMQ 就不會再退避重試同一個必然失敗的請求。
+     * async：終態 ai/error 必須 await 送出後才 throw，具體錯誤碼才會先於 BullMQ `failed` 到達前端。
      */
-    const fail = (code: string, message: string, retryable: boolean, cause: unknown): never => {
+    const fail = async (code: string, message: string, retryable: boolean, cause: unknown): Promise<never> => {
       const terminal = !retryable || isFinalAttempt;
       if (terminal) {
         jl.error({ err: cause, code, retryable }, "AI 診斷失敗（終態，通知前端）");
-        emit({ type: "ai/error", jobId, attempt, code, message });
+        await emitTerminal({ type: "ai/error", jobId, attempt, code, message });
       } else {
         jl.warn({ err: cause, code }, "AI 診斷失敗（將重試，不通知前端）");
       }
@@ -185,7 +217,7 @@ export function createProcessor(deps: ProcessorDeps) {
       // 快取命中率不計這筆（沒有做 cache 查詢），與 context 讀取失敗等 LLM 前的失敗同一語意。
       if (isEmptyContext(context)) {
         jl.warn({ code: NO_CONTEXT_CODE }, "空脈絡，不呼叫 LLM（終態，通知前端）");
-        emit({ type: "ai/error", jobId, attempt, code: NO_CONTEXT_CODE, message: NO_CONTEXT_MESSAGE });
+        await emitTerminal({ type: "ai/error", jobId, attempt, code: NO_CONTEXT_CODE, message: NO_CONTEXT_MESSAGE });
         throw new UnrecoverableError(NO_CONTEXT_MESSAGE);
       }
       const sig = buildDiagnosisSignature({
@@ -222,15 +254,17 @@ export function createProcessor(deps: ProcessorDeps) {
       /**
        * cache 命中：回 ai/done(cached:true)、記 trigger、**不**寫 diagnoses——diagnoses 只收
        * 真正由 LLM 產生的結果（避免同一份結果被複製成多筆），但每次觸發仍要留稽核紀錄。
+       * 順序與 LLM 路徑一致：先寫 trigger、進度 100，最後才 await ai/done——寫入失敗時照常 throw
+       * 走重試，前端不會先收到 ai/done、之後又看到同一個 job 失敗。
        */
       const replyCached = async (): Promise<boolean> => {
         const result = await readCache();
         if (!result) return false;
         // 命中在此計、未命中在真正呼叫 LLM 前計：等待迴圈每輪都會查 cache，於此計未命中會失真。
         if (isFirstAttempt) metrics.recordCacheHit();
-        emit({ type: "ai/done", jobId, attempt, cached: true, result });
         await repo.insertTrigger({ machineId, jobId, requestedBy, cached: true });
         await job.updateProgress(100);
+        await emitTerminal({ type: "ai/done", jobId, attempt, cached: true, result });
         jl.info({ sig }, "cache hit");
         return true;
       };
@@ -267,11 +301,11 @@ export function createProcessor(deps: ProcessorDeps) {
           );
         } catch (err) {
           if (signal.aborted) {
-            return fail("ai_timeout", `AI streaming timeout after ${config.aiTimeoutMs}ms`, true, err);
+            return await fail("ai_timeout", `AI streaming timeout after ${config.aiTimeoutMs}ms`, true, err);
           }
           const pe = err instanceof AiProviderError ? err : null;
           const message = err instanceof Error ? err.message : String(err);
-          return fail(pe?.code ?? "provider_error", message, pe?.retryable ?? true, err);
+          return await fail(pe?.code ?? "provider_error", message, pe?.retryable ?? true, err);
         }
         const latencyMs = now() - startedAt;
         jl.info({ finishReason: out.finishReason, usage: out.usage }, "LLM stream finished");
@@ -281,10 +315,10 @@ export function createProcessor(deps: ProcessorDeps) {
         // 截斷代表同一輸入在同一 AI_MAX_OUTPUT_TOKENS 下多半陷入重複輸出，退避重試只會再燒兩次
         // 上限額度的 token、延後使用者看到失敗。
         if (out.finishReason === "safety") {
-          return fail("schema_invalid", "AI 回應遭供應商安全機制攔截（finishReason=safety）", false, null);
+          return await fail("schema_invalid", "AI 回應遭供應商安全機制攔截（finishReason=safety）", false, null);
         }
         if (out.finishReason === "max_tokens") {
-          return fail("schema_invalid", "AI 回應達輸出上限被截斷（finishReason=max_tokens）", false, null);
+          return await fail("schema_invalid", "AI 回應達輸出上限被截斷（finishReason=max_tokens）", false, null);
         }
         // 延遲只記完整回應的樣本：截斷／安全攔截的時間長短取決於在哪裡被切，混進來會扭曲 avg／p95。
         metrics.recordLatency(latencyMs);
@@ -293,7 +327,7 @@ export function createProcessor(deps: ProcessorDeps) {
         try {
           result = parseResult(out.text);
         } catch (err) {
-          return fail("schema_invalid", err instanceof Error ? err.message : String(err), true, err);
+          return await fail("schema_invalid", err instanceof Error ? err.message : String(err), true, err);
         }
         await firstTokenProgress;
         await job.updateProgress(80);
@@ -304,7 +338,7 @@ export function createProcessor(deps: ProcessorDeps) {
         await store.setWithTtl(cacheKey, JSON.stringify(result), config.cacheTtlSeconds);
         await repo.insertTrigger({ machineId, jobId, requestedBy, cached: false });
         await job.updateProgress(100);
-        emit({ type: "ai/done", jobId, attempt, cached: false, result });
+        await emitTerminal({ type: "ai/done", jobId, attempt, cached: false, result });
         jl.info("job completed");
       };
 

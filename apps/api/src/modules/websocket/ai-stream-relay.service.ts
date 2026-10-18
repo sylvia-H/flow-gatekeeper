@@ -7,9 +7,16 @@ import { AppConfigService } from "../config/config.service.js";
 import { MonitoringGateway } from "./monitoring.gateway.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 import { attachThrottledErrorLog } from "../../lib/connection-error-throttle.js";
+import { closeWithDeadline } from "./relay-close.js";
 
-/** jobId → 發起連線綁定（記憶體，重連失效——已知限制，spec Assumptions）。 */
-export type JobBinding = { clientId: string; machineId: string; boundAt: number };
+/**
+ * jobId → 發起連線綁定（記憶體，重連失效——已知限制，spec Assumptions）。
+ *
+ * `completedAt`：job 已 `completed`、綁定只是在寬限期內保留給晚到的 `ai/done`（AR-5）時才有值。
+ * `JobsService` 據此把同 jobId 的重送判為「已使用過」回 409，而不是當成進行中的冪等重送回 200 waiting——
+ * 那個 job 已結束，之後不會再有任何 `job/status`。
+ */
+export type JobBinding = { clientId: string; machineId: string; boundAt: number; completedAt?: number };
 
 /**
  * AI 串流轉發（通道 A，憲章 IV）：專用 subscriber `psubscribe('ai-stream:*')`，把 worker
@@ -17,7 +24,10 @@ export type JobBinding = { clientId: string; machineId: string; boundAt: number 
  *
  * **只轉發、不刪綁定**：worker 先 publish `ai/done`、才由 BullMQ 標 `completed`；若此處在
  * `ai/done` 就刪綁定，通道 B（T020）的終態 `job/status:completed` 會查不到對象（F1）。綁定的
- * 建立由 `JobsService` 呼叫 `bindJobToClient`，清理由 job-status relay 單一負責。
+ * 建立由 `JobsService` 呼叫 `bindJobToClient`，清理由 job-status relay 單一負責。反過來也不成立：
+ * 兩個訊號分走不同 Redis 連線（本服務的 subscriber 與 QueueEvents 的 XREAD），api 端收到的先後沒有
+ * 保證，`ai/done` 可能晚於 `completed` 才到——故 job-status relay 在 `completed` 後把綁定保留
+ * `COMPLETED_BINDING_GRACE_MS` 才刪（AR-5），本服務查的就是同一份綁定，寬限內遲到的 `ai/done` 照常轉發。
  * subscriber 連線 MUST NOT 跑一般 command（憲章 IV）。
  *
  * **轉發前必驗**：channel 上的字串來自任何能對 Redis `PUBLISH` 的一方，不只是 worker；未經
@@ -29,6 +39,8 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
   // jobId 為 SC-002 跨行程串接的關聯鍵，MUST 為獨立結構化欄位（FR-002）。
   private readonly plog = getAppLogger().child({ context: AiStreamRelayService.name });
   private subscriber?: Redis;
+  /** 已進入關閉流程：之後 subscriber 的 close／reconnecting 屬預期，不記成斷線。 */
+  private closing = false;
   private readonly jobRooms = new Map<string, JobBinding>();
 
   constructor(
@@ -50,23 +62,50 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
         this.handleMessage(channel, message),
       );
       // 轉態節流：斷線時 ioredis 每 100–270 ms 重連一次、每次都發 error，逐則記錄會洗版。
-      attachThrottledErrorLog(this.subscriber, {
+      const throttle = attachThrottledErrorLog(this.subscriber, {
         error: (err, suppressed) =>
           this.logger.warn(
             `subscriber error: ${err.message}` +
               (suppressed > 0 ? `（期間另有 ${suppressed} 則同類錯誤未記）` : ""),
           ),
         recovered: (suppressed) =>
-          this.logger.log(`subscriber connection recovered（故障期間共壓掉 ${suppressed} 則錯誤）`),
+          this.logger.log(`subscriber connection recovered（故障期間共壓掉 ${suppressed} 則錯誤／斷線事件）`),
       });
+      // AR-6：對端關閉連線（Redis 重啟、`CLIENT KILL TYPE pubsub`、閒置逾時）時 ioredis 只發
+      // `close`／`reconnecting`、不發 error——不聽這兩個事件，斷線期間 worker publish 的 `ai/*` 會無聲
+      // 遺失（Pub/Sub 不補送），前端只看到收了 `completed` 卻等不到 `ai/done`。兩者併入同一個轉態節流器：
+      // 與 error 共用「故障中」狀態，整段故障只記第一則 warn，恢復由上面既有的 ready 記錄（含壓掉的則數）。
+      const onConnectionLost = (event: "close" | "reconnecting"): void => {
+        if (this.closing) return; // 優雅關閉時 quit()／disconnect() 本來就會發 close，不是故障
+        const decision = throttle.onError(Date.now());
+        if (decision.log) {
+          this.logger.warn(
+            `subscriber connection lost (${event})：斷線期間的 ai/* 事件會遺失，ioredis 自動重連並重新訂閱` +
+              (decision.suppressed > 0 ? `（期間另有 ${decision.suppressed} 則同類事件未記）` : ""),
+          );
+        }
+      };
+      this.subscriber.on("close", () => onConnectionLost("close"));
+      this.subscriber.on("reconnecting", () => onConnectionLost("reconnecting"));
       this.logger.log("ai-stream relay subscribed to 'ai-stream:*'");
     } catch (err) {
       this.logger.error(`ai-stream relay init failed: ${(err as Error).message}`);
     }
   }
 
+  /**
+   * 關閉 subscriber（API-12）：`quit()` 在 Redis 不可達時排在 offline queue、永不 resolve，故以
+   * `RELAY_CLOSE_DEADLINE_MS` 為限，逾時改 `disconnect()` 強制斷線（同時清掉 offline queue）。
+   */
   async onModuleDestroy(): Promise<void> {
-    await this.subscriber?.quit().catch(() => undefined);
+    const subscriber = this.subscriber;
+    if (!subscriber) return;
+    this.closing = true;
+    await closeWithDeadline(
+      () => subscriber.quit(),
+      () => subscriber.disconnect(),
+      (ms) => this.logger.warn(`subscriber quit() 逾 ${ms} ms 未完成，改以 disconnect() 強制斷線`),
+    );
   }
 
   /** 建 job 時綁定發起連線（`socketId` 即 WS `clientId`，data-model §4）。 */
@@ -76,6 +115,19 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
 
   getBinding(jobId: string): JobBinding | undefined {
     return this.jobRooms.get(jobId);
+  }
+
+  /**
+   * 標記綁定所屬的 job 已 completed（由 job-status relay 在送出 completed 時呼叫，AR-5）：綁定仍保留、
+   * 照常轉發寬限內晚到的 `ai/*`，只是不再接受同 jobId 的冪等重送。以新物件取代舊綁定並回傳它，
+   * 供呼叫端在寬限期滿時比對「刪的仍是這一份」；無綁定時回 undefined。
+   */
+  markCompleted(jobId: string, now: number = Date.now()): JobBinding | undefined {
+    const binding = this.jobRooms.get(jobId);
+    if (!binding) return undefined;
+    const completed: JobBinding = { ...binding, completedAt: now };
+    this.jobRooms.set(jobId, completed);
+    return completed;
   }
 
   /** 綁定清理——僅由 job-status relay 於終態呼叫（單一 owner，F1）。 */

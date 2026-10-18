@@ -39,6 +39,9 @@ export type ClientPresence = Pick<MonitoringGateway, "isAuthorized">;
  */
 const KNOWN_MACHINE_IDS: ReadonlySet<string> = new Set(MACHINE_IDS);
 
+/** 同 jobId 的 job 已結束（佇列查得到，或綁定已標 completed）時的 409 訊息。 */
+const JOB_ID_USED_MESSAGE = "jobId 已使用過，請以新的 jobId 重新發起診斷";
+
 class EnqueueTimeoutError extends Error {
   constructor() {
     super(`enqueue timed out after ${ENQUEUE_TIMEOUT_MS}ms`);
@@ -112,6 +115,12 @@ export class JobsService {
 
     const existing = this.relay.getBinding(jobId);
     if (existing) {
+      // 已 completed、綁定只是寬限保留（AR-5，見 `JobBinding.completedAt`）：job 已結束、不會再有
+      // job/status，不能當冪等重送回 200 waiting。回應與綁定已刪時 `enqueueOnce` 查到既有 job 的 409 相同，
+      // 且不碰綁定——寬限內晚到的 ai/done 仍要送給原連線。
+      if (existing.completedAt !== undefined) {
+        throw new ConflictException(JOB_ID_USED_MESSAGE);
+      }
       if (existing.machineId !== machineId) {
         throw new ConflictException("jobId 已用於另一台機台的診斷");
       }
@@ -166,7 +175,7 @@ export class JobsService {
    */
   private async enqueueOnce(payload: DiagnosisJobPayload): Promise<void> {
     if (await this.queue.getJob(payload.jobId)) {
-      throw new ConflictException("jobId 已使用過，請以新的 jobId 重新發起診斷");
+      throw new ConflictException(JOB_ID_USED_MESSAGE);
     }
     await this.queue.add("diagnose-machine", payload, {
       jobId: payload.jobId,

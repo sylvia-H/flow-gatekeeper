@@ -127,6 +127,9 @@ importers:
       vue:
         specifier: ~3.5.43
         version: 3.5.43(typescript@5.9.3)
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
     devDependencies:
       '@vitejs/plugin-vue':
         specifier: ^6.0.9

@@ -141,6 +141,19 @@ describe("JobsService.createDiagnosis", () => {
     expect(bindings.map.has(JOB_ID)).toBe(false);
   });
 
+  it("綁定仍在但已標 completed（AR-5 寬限保留中）→ 409「已使用過」，不查佇列、不入列、綁定原樣保留", async () => {
+    const queue = makeQueue();
+    const { service, bindings } = makeService(queue);
+    const original: JobBinding = { clientId: SOCKET_A, machineId: "mixer-01", boundAt: 1, completedAt: 2 };
+    bindings.map.set(JOB_ID, original);
+    const attempt = service.createDiagnosis({ jobId: JOB_ID, machineId: "mixer-01", socketId: SOCKET_B });
+    await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+    await expect(attempt).rejects.toMatchObject({ message: expect.stringContaining("已使用過") });
+    expect(queue.getJob).not.toHaveBeenCalled();
+    expect(queue.add).not.toHaveBeenCalled();
+    expect(bindings.map.get(JOB_ID)).toBe(original); // 寬限內晚到的 ai/done 仍要送給原連線
+  });
+
   it("Redis 不可用（add reject）→ 503 並解除綁定", async () => {
     const queue = makeQueue({
       add: async () => {

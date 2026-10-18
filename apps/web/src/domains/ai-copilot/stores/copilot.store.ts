@@ -3,7 +3,9 @@ import { computed, reactive, ref, shallowRef, triggerRef } from "vue";
 import { readPreference, writePreference } from "../../../shared/composables/useLocalPreference.js";
 import { AiDoneSchema } from "@flow-gatekeeper/contracts";
 import {
+  UNDELIVERED_ERROR,
   copilotReducer,
+  isUndeliveredFailure,
   startActiveState,
   type CopilotEvent,
   type CopilotJobState,
@@ -40,6 +42,14 @@ export interface DiagnoseOptions {
 
 /** Copilot 面板手動收合偏好的 localStorage key（ui-contract §2；只存 `{"manuallyCollapsed":boolean}`）。 */
 export const PANEL_PREFERENCE_KEY = "fg.copilot-panel";
+
+/**
+ * 收到 `job/status: completed` 後等 `ai/done` 的寬限期（AR-6，2026-10-18 使用者裁決 2 s）。
+ * worker 先送出 ai/done 才讓 BullMQ 回報完成，兩者走不同通道、抵達順序不保證，但正常情況相差
+ * 毫秒級；超過寬限仍沒到，就由 `checkStalls` 轉成「結果未送達」失敗。App 每秒 tick 呼叫一次
+ * `checkStalls`，所以實際在完成後 2–3 s 之間轉失敗。
+ */
+export const UNDELIVERED_GRACE_MS = 2_000;
 
 /** 解析面板偏好；格式不符就拋錯，讓 `readPreference` 退回預設。 */
 function parsePanelPreference(raw: string): boolean {
@@ -91,11 +101,26 @@ export const useCopilotStore = defineStore("copilot", () => {
    * 每台 active 任務「最後一次有進展」的時刻（進度/串流 token 抵達即更新）。
    * 供 `checkStalls` 的前端逾時 watchdog 判定：後端事件久久不來時自動收尾為 failed，
    * 避免 drawer 永遠卡在 active 又無從脫身（純呈現層，不新增通訊契約）。
+   *
+   * 刻意用 plain Map、不包 ref（WEB-17）：每個 `ai/token` 都會寫一次，而唯一的讀者是
+   * `checkStalls`（App 每秒 tick 呼叫，不在任何 computed／render 裡），包成 reactive 只是白付追蹤成本。
    */
-  const lastActivityAt = ref<Map<string, number>>(new Map());
+  const lastActivityAt = new Map<string, number>();
+  /**
+   * 每台「收到後端 `job/status: completed`、但還沒等到 `ai/done`」的時刻（AR-6）。
+   * 帶 jobId 比對，只認當前任務；離開 active 即清掉。同樣只有 `checkStalls` 讀，用 plain Map。
+   * `at` 是單調時鐘（`performance.now()`）：寬限只有 2 s，牆上時鐘被 NTP 校時或手動調整往前跳 ≥ 2 s
+   * 就會誤判成未送達；單調時鐘不受影響。
+   */
+  const backendCompletedAt = new Map<string, { jobId: string; at: number }>();
   /** 記某台目前有進展（開始診斷、或收到屬於當前 job 的事件時呼叫）。 */
   function touch(machineId: string): void {
-    lastActivityAt.value.set(machineId, Date.now());
+    lastActivityAt.set(machineId, Date.now());
+  }
+  /** 某台離開 active（完成／失敗／中止）：清掉兩個 watchdog 計時。 */
+  function clearWatch(machineId: string): void {
+    lastActivityAt.delete(machineId);
+    backendCompletedAt.delete(machineId);
   }
   /**
    * POST /diagnoses 往返中的機台。TopBar、卡片 icon、drawer 三個入口共用 `canDiagnose`，
@@ -290,7 +315,7 @@ export const useCopilotStore = defineStore("copilot", () => {
           // 已知失敗帶可讀中文；其他未預期例外（理論上只剩網路層）給固定句，不露出英文原文。
           error: failureMessage(err, options),
         });
-        lastActivityAt.value.delete(machineId);
+        clearWatch(machineId);
         dropPendingTiming(machineId);
       }
     } finally {
@@ -326,10 +351,20 @@ export const useCopilotStore = defineStore("copilot", () => {
     jobs.value.set(machineId, next);
     // watchdog 計時：只有「屬於當前 job 且仍 active」的事件才算有進展並重置逾時；
     // 離開 active（completed/failed）即清掉該台計時。
-    if (next.status === "active" && event.jobId === next.jobId) touch(machineId);
-    else if (next.status !== "active") lastActivityAt.value.delete(machineId);
-    // 耗時量測：只在這一則事件讓任務「離開 active」時收尾（reducer 對非 active 一律原樣回傳）。
-    if (prev.status !== "active") return;
+    if (next.status === "active" && event.jobId === next.jobId) {
+      touch(machineId);
+      // 後端已回報完成：記下首次收到的時刻，`checkStalls` 據此等 `ai/done` 的寬限期（AR-6）。
+      if (
+        event.type === "job/status" &&
+        event.status === "completed" &&
+        backendCompletedAt.get(machineId)?.jobId !== next.jobId
+      ) {
+        backendCompletedAt.set(machineId, { jobId: next.jobId, at: performance.now() });
+      }
+    } else if (next.status !== "active") clearWatch(machineId);
+    // 耗時量測：只在這一則事件讓任務「離開 active」時收尾（reducer 對非 active 一律原樣回傳），
+    // 或「結果未送達」失敗被遲到的 ai/done 救回時（該失敗刻意保留 pending，見 `checkStalls`）。
+    if (prev.status !== "active" && !(isUndeliveredFailure(prev) && next.status === "completed")) return;
     if (next.status === "completed") {
       const timing = timings.value.get(machineId);
       if (timing) putTiming(machineId, settleTiming(timing, next.jobId, next.cached, performance.now()));
@@ -346,7 +381,7 @@ export const useCopilotStore = defineStore("copilot", () => {
    */
   function cancel(machineId: string): void {
     jobs.value.set(machineId, { status: "idle", machineId });
-    lastActivityAt.value.delete(machineId);
+    clearWatch(machineId);
     dropPendingTiming(machineId);
   }
 
@@ -354,11 +389,33 @@ export const useCopilotStore = defineStore("copilot", () => {
    * 前端逾時 watchdog（問題修正）：掃描仍 active 的台，若距最後一次進展超過 `thresholdMs`
    * 未有任何進度/串流更新，判定卡住並收尾為 failed（可讀訊息 + 沿用現成 Retry）。
    * 由 App 每隔數秒帶當前時間呼叫；純呈現層自癒，不依賴後端補送事件。
+   *
+   * 另一種卡住（AR-6）：後端已回報 `job/status: completed`，但超過 `UNDELIVERED_GRACE_MS` 仍沒收到
+   * `ai/done`（例如 Pub/Sub 訂閱斷線期間 ai/done 遺失）。不必等滿 `thresholdMs`——後端不會再有任何進展——
+   * 直接轉成「結果未送達」失敗。這種失敗**保留**耗時量測的 pending：同 jobId 的 `ai/done` 若只是晚到，
+   * reducer 會改回 completed，store 照常結算耗時與完成時刻，與準時抵達的路徑一致。
+   *
+   * 兩種判定用不同時鐘：2 s 寬限比 `monoNowMs`（單調時鐘，預設當下 `performance.now()`，測試可傳入）；
+   * 45 s watchdog 維持既有的牆上時鐘 `nowMs`（門檻寬、語意不變，本次不改）。
    */
-  function checkStalls(nowMs: number, thresholdMs: number): void {
+  function checkStalls(nowMs: number, thresholdMs: number, monoNowMs: number = performance.now()): void {
     for (const [machineId, state] of jobs.value) {
       if (state.status !== "active") continue;
-      const last = lastActivityAt.value.get(machineId) ?? nowMs;
+      const done = backendCompletedAt.get(machineId);
+      if (done !== undefined && done.jobId === state.jobId && monoNowMs - done.at > UNDELIVERED_GRACE_MS) {
+        jobs.value.set(machineId, {
+          status: "failed",
+          machineId,
+          jobId: state.jobId,
+          streamText: state.streamText,
+          error: UNDELIVERED_ERROR,
+          reason: "undelivered",
+          attempt: state.attempt,
+        });
+        clearWatch(machineId);
+        continue;
+      }
+      const last = lastActivityAt.get(machineId) ?? nowMs;
       if (nowMs - last > thresholdMs) {
         jobs.value.set(machineId, {
           status: "failed",
@@ -367,7 +424,7 @@ export const useCopilotStore = defineStore("copilot", () => {
           streamText: state.streamText,
           error: "診斷逾時或無回應，請重試",
         });
-        lastActivityAt.value.delete(machineId);
+        clearWatch(machineId);
         dropPendingTiming(machineId);
       }
     }
@@ -390,7 +447,7 @@ export const useCopilotStore = defineStore("copilot", () => {
           streamText: state.streamText,
           error: "連線中斷，請重試",
         });
-        lastActivityAt.value.delete(machineId);
+        clearWatch(machineId);
         dropPendingTiming(machineId);
       }
     }

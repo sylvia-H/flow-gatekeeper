@@ -45,18 +45,17 @@ import { STATE_STYLE } from "../../../shared/lib/state-style.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(here, "../../../..");
-const toGlob = (p: string): string => p.replace(/\\/g, "/");
+const configPath = join(webRoot, "tailwind.config.ts");
 
 let root: Root;
 let config: ReturnType<typeof loadConfig>;
 
 beforeAll(async () => {
-  config = loadConfig(join(webRoot, "tailwind.config.ts"));
-  // content 改成絕對路徑，不依 vitest 的 cwd；掃描範圍與正式 build 相同（整個 src）。
-  const plugin = tailwindcss({
-    ...config,
-    content: [toGlob(join(webRoot, "index.html")), toGlob(join(webRoot, "src/**/*.{vue,ts}"))],
-  });
+  config = loadConfig(configPath);
+  // 以設定檔「路徑」建 plugin，掃描真實的 content 設定（WEB-15 排除測試檔、TQ-23 `content.relative`）：
+  // 傳路徑時 tailwind 才知道設定檔位置，`relative: true` 的 glob 以它為基準、不依 vitest 的 cwd。
+  // 本測試因此與正式 build 編出同一份 CSS；設定若退回掃描測試檔，下方「不含只在測試出現的 class」會轉紅。
+  const plugin = tailwindcss(configPath);
   const cssPath = join(webRoot, "src/styles/tailwind.css");
   const result = await postcss([plugin]).process(readFileSync(cssPath, "utf8"), { from: cssPath });
   root = result.root;
@@ -292,6 +291,25 @@ describe("WEB-1：MachineNodeCard 選取態勝過狀態 class", () => {
     expect(vue).toContain("CARD_ROOT_CLASS");
     // 選取不可再用一般 utility（輸出順序會輸給狀態 class）
     expect(vue).not.toMatch(/selected \? '[^']*border-accent/);
+  });
+
+  it("tailwind content 以設定檔位置解析（TQ-23）並排除測試檔（WEB-15）", () => {
+    const content: unknown = config.content;
+    expect(content).toMatchObject({ relative: true });
+    const files = (content as { files?: unknown }).files;
+    expect(files).toContain("!./src/**/*.test.ts");
+  });
+
+  it("編出的 CSS 不含只在測試檔出現的 class（WEB-15：測試字串不得進 production CSS），正式碼的 class 照常輸出", () => {
+    const selectors = new Set<string>();
+    root.walkRules((rule) => {
+      for (const s of rule.selectors) selectors.add(s);
+    });
+    // `.blur`／`.shadow` 只出現在測試檔（含本檔的註解與字串）；正式碼用的是 `bg-scrim/50`、`shadow-glass`。
+    expect(selectors.has(".blur")).toBe(false);
+    expect(selectors.has(".shadow")).toBe(false);
+    expect(selectors.has(".bg-scrim\\/50")).toBe(true);
+    expect(selectors.has(".shadow-glass")).toBe(true);
   });
 
   it("tailwind 未開 `future.hoverOnlyWhenSupported`（開了 `hover:` 會被包進 @media，迷你 cascade 忽略它，hover 案例失真）", () => {

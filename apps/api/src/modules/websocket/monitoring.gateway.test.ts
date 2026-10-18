@@ -20,11 +20,15 @@ import { MockTelemetryService } from "../telemetry/mock-telemetry.service.js";
 import { JobsService } from "../jobs/jobs.service.js";
 import {
   MonitoringGateway,
+  WS_INBOUND_BURST,
+  WS_INBOUND_RATE_PER_SEC,
   WS_MAX_PAYLOAD_BYTES,
   WS_MAX_VIOLATIONS,
   WS_SLOW_CONSUMER_TICKS,
   authGraceSweepIntervalMs,
+  fullInboundBucket,
   isBackpressureDroppable,
+  takeInboundToken,
   unauthorizedConnectionCap,
 } from "./monitoring.gateway.js";
 
@@ -57,6 +61,8 @@ type GatewayOpts = {
   sendHighWaterBytes?: number;
   maxConnections?: number;
   authGraceMs?: number;
+  /** 入站 token bucket 的單調時鐘；速率測試注入可控時鐘（未指定時用 performance.now）。 */
+  monotonicNow?: () => number;
 };
 
 const running: Harness[] = [];
@@ -77,6 +83,7 @@ async function startGateway(opts: GatewayOpts = {}): Promise<Harness> {
     ...(opts.sendHighWaterBytes !== undefined ? { sendHighWaterBytes: opts.sendHighWaterBytes } : {}),
     ...(opts.maxConnections !== undefined ? { maxConnections: opts.maxConnections } : {}),
     ...(opts.authGraceMs !== undefined ? { authGraceMs: opts.authGraceMs } : {}),
+    ...(opts.monotonicNow !== undefined ? { monotonicNow: opts.monotonicNow } : {}),
   });
   if (opts.init) gateway.onModuleInit();
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -150,7 +157,10 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 /** Gateway 內部的單一連線狀態（僅測試用：模擬慢讀者需要改寫 server 端 socket 的 bufferedAmount）。 */
 type GatewayInternals = {
-  clients: Map<string, { socket: WebSocket; alive: boolean; connectedAt: number; closeTimer?: unknown }>;
+  clients: Map<
+    string,
+    { socket: WebSocket; alive: boolean; connectedAt: number; closeTimer?: unknown; violations: number }
+  >;
   sweepDeadConnections(): void;
   sweepAuthGrace(): void;
   unauthorizedCount: number;
@@ -699,7 +709,7 @@ describe("MonitoringGateway：出口閘門（背壓、授權、違規、連線�
     expect(authGraceSweepIntervalMs(5_000, 10_000)).toBe(5_000);
   });
 
-  it("背壓只略過遙測批次：慢讀者仍收到 ai/done、ai/error、job/status 終態與 system/metrics", async () => {
+  it("背壓只略過高頻流（遙測、ai/token）：慢讀者仍收到 ai/done、ai/error、job/status 終態與 system/metrics", async () => {
     const { port, gateway } = await startGateway({ sendHighWaterBytes: 64 * 1024 });
     const slow = await openClient(port);
     Object.defineProperty(serverSocket(gateway, slow.clientId), "bufferedAmount", {
@@ -728,11 +738,19 @@ describe("MonitoringGateway：出口閘門（背壓、授權、違規、連線�
     slow.ws.close();
   });
 
-  it("unauthorizedConnectionCap：max(10, floor(20% × 上限))", () => {
+  it("unauthorizedConnectionCap：max(1, min(上限 - 1, max(10, floor(20% × 上限))))", () => {
     expect(unauthorizedConnectionCap(500)).toBe(100);
     expect(unauthorizedConnectionCap(20)).toBe(10);
-    expect(unauthorizedConnectionCap(1)).toBe(10);
     expect(unauthorizedConnectionCap(59)).toBe(11);
+    expect(unauthorizedConnectionCap(100_000)).toBe(20_000);
+    // API-14：上限 ≤ 10 時至少留一格不讓未授權者佔住。
+    expect(unauthorizedConnectionCap(11)).toBe(10);
+    expect(unauthorizedConnectionCap(10)).toBe(9);
+    expect(unauthorizedConnectionCap(5)).toBe(4);
+    expect(unauthorizedConnectionCap(2)).toBe(1);
+    // 上限 1：子上限不能為 0（每條新連線都先是未授權，為 0 就沒有人連得上）。
+    expect(unauthorizedConnectionCap(1)).toBe(1);
+    for (let max = 2; max <= 60; max += 1) expect(unauthorizedConnectionCap(max)).toBeLessThan(max);
   });
 
   /** 嘗試 upgrade，回傳 HTTP 狀態碼（成功開啟回 101 並立即關閉）。 */
@@ -770,6 +788,37 @@ describe("MonitoringGateway：出口閘門（背壓、授權、違規、連線�
     await vi.waitFor(() => expect(gateway.connectionCount).toBe(cap));
     const again = await openClient(port);
     for (const c of [...idle, again]) c.ws.close();
+  });
+
+  it("API-14：上限 5（≤10）且有密鑰 → 未授權連線最多 4 條、不能單獨佔滿全域；第 5 條新連線（即使持 token）仍經未授權池而回 503", async () => {
+    const { port, gateway } = await startGateway({ secret: "s3cret", maxConnections: 5 });
+    const idle: Client[] = [];
+    for (let i = 0; i < 4; i += 1) idle.push(await openClient(port));
+    expect(await tryUpgrade(port)).toBe(503); // 全域 5 未滿，擋下的是未授權子上限
+    expect(gateway.connectionCount).toBe(4);
+
+    // 其中一條通過 token、騰出未授權池後，新連線可進來並授權；全域滿 5 條後才由全域上限拒絕。
+    const first = idle[0];
+    if (!first) throw new Error("no client");
+    expect(await subscribe(first, [], "s3cret")).toMatchObject({ type: "machine/subscribed" });
+    const late = await openClient(port);
+    expect(await subscribe(late, [], "s3cret")).toMatchObject({ type: "machine/subscribed" });
+    expect(gateway.connectionCount).toBe(5);
+    expect(await tryUpgrade(port)).toBe(503);
+    for (const c of [...idle, late]) c.ws.close();
+  });
+
+  it("API-14：上限 1 且有密鑰 → 唯一一格仍開放給未授權的新連線（否則無人能授權），第二條 503", async () => {
+    const { port, gateway } = await startGateway({ secret: "s3cret", maxConnections: 1 });
+    const only = await openClient(port);
+    expect(await tryUpgrade(port)).toBe(503);
+    expect(await subscribe(only, ["mixer-01"], "s3cret")).toEqual({
+      type: "machine/subscribed",
+      machineIds: ["mixer-01"],
+    });
+    expect(gateway.isAuthorized(only.clientId)).toBe(true);
+    expect(await tryUpgrade(port)).toBe(503); // 全域上限
+    only.ws.close();
   });
 
   it("未設密鑰時沒有未授權子上限（連上即授權）", async () => {
@@ -910,5 +959,162 @@ describe("MonitoringGateway：出口閘門（背壓、授權、違規、連線�
     expect(warn).not.toHaveBeenCalledWith(expect.anything(), "close frame not received, terminating");
     expect(info).not.toHaveBeenCalledWith(expect.objectContaining({ reason: "close-not-honoured" }), expect.anything());
     expect(vi.getTimerCount()).toBe(pendingBefore);
+  });
+});
+
+describe("MonitoringGateway：入站放大口（API-13：每連線 token bucket、不自動回協定層 ping）", () => {
+  const isPong = (f: unknown): boolean => (f as Msg).type === "pong";
+
+  it("送出緩衝超過高水位時仍回應用層 pong（擁塞但健康的連線不該被 web 判斷線），且不計入 droppedSendCount", async () => {
+    const { port, gateway } = await startGateway({ sendHighWaterBytes: 64 * 1024 });
+    const client = await openClient(port);
+    Object.defineProperty(serverSocket(gateway, client.clientId), "bufferedAmount", {
+      get: () => 10 * 1024 * 1024,
+    });
+    client.ws.send(JSON.stringify({ type: "ping" }));
+    expect(await client.next()).toMatchObject({ type: "pong" });
+    expect(gateway.droppedSendCount).toBe(0);
+    expect(gateway.isOnline(client.clientId)).toBe(true);
+    client.ws.close();
+  });
+
+  it("pingflood（緩衝超標＋狂送應用層 ping）：pong 至多桶容量那麼多，超速部分計違規、以 1008 關閉", async () => {
+    // 凍結的單調時鐘：桶不補充，回出的 pong 數恰為桶容量。
+    const { port, gateway } = await startGateway({ sendHighWaterBytes: 64 * 1024, monotonicNow: () => 0 });
+    const flooder = await openClient(port);
+    Object.defineProperty(serverSocket(gateway, flooder.clientId), "bufferedAmount", {
+      get: () => 10 * 1024 * 1024,
+    });
+    const closed = waitClose(flooder.ws);
+    const ping = JSON.stringify({ type: "ping" });
+    for (let i = 0; i < 500; i += 1) flooder.ws.send(ping);
+    expect(await closed).toBe(1008);
+    expect(flooder.frames.filter(isPong)).toHaveLength(WS_INBOUND_BURST);
+    await expectServerHealthy(port);
+  });
+
+  it("協定層 ping flood（暫停讀取＋狂送 ws.ping()）：server 不自動回 pong、送出緩衝不成長；server 自己的探活照常", async () => {
+    const { port, gateway } = await startGateway();
+    const client = await openClient(port);
+    const server = serverSocket(gateway, client.clientId);
+    let received = 0;
+    server.on("ping", () => {
+      received += 1;
+    });
+    let pongs = 0;
+    client.ws.on("pong", () => {
+      pongs += 1;
+    });
+    // 暫停讀取：若 server 會回 pong，回覆只能堆在 server 端送出緩衝（實測 40k 則 → 4.7 MB）。
+    const rawSocket = (client.ws as unknown as { _socket: Socket })._socket;
+    rawSocket.pause();
+    const PINGS = 40_000;
+    const payload = Buffer.alloc(125); // control frame 上限
+    for (let i = 0; i < PINGS; i += 1) client.ws.ping(payload);
+    await vi.waitFor(() => expect(received).toBe(PINGS), { timeout: 10_000 });
+    expect(server.bufferedAmount).toBe(0);
+    expect(internals(gateway).clients.get(client.clientId)?.violations).toBe(0);
+
+    rawSocket.resume();
+    // server 探活不受影響：server 送 ping、client（ws 預設 autoPong）回帶 nonce 的 pong 仍算存活。
+    const state = internals(gateway).clients.get(client.clientId);
+    if (!state) throw new Error("missing state");
+    internals(gateway).sweepDeadConnections();
+    await vi.waitFor(() => expect(state.alive).toBe(true));
+    expect(await sendThenProbe(client, JSON.stringify({ type: "ping" }))).toEqual([]);
+    expect(pongs).toBe(0); // 一則協定層 pong 都沒收到
+    client.ws.close();
+  });
+
+  it("超過入站速率：桶內 WS_INBOUND_BURST 則照常處理，之後每則超速各計一次違規，滿 WS_MAX_VIOLATIONS 以 1008 關閉", async () => {
+    // 注入凍結的單調時鐘：桶不補充，速率判定完全決定論；socket I/O 與計時器仍走真實。
+    const { port } = await startGateway({ monotonicNow: () => 0 });
+    const client = await openClient(port);
+    const closed = waitClose(client.ws);
+    const ping = JSON.stringify({ type: "ping" });
+    for (let i = 0; i < WS_INBOUND_BURST + WS_MAX_VIOLATIONS; i += 1) client.ws.send(ping);
+    expect(await closed).toBe(1008);
+    expect(client.frames.filter(isPong)).toHaveLength(WS_INBOUND_BURST);
+    await expectServerHealthy(port);
+  });
+
+  it("超速未達違規上限：多出的訊息被丟棄（不回應），桶補充後恢復正常", async () => {
+    let clock = 0;
+    const { port, gateway } = await startGateway({ monotonicNow: () => clock });
+    const client = await openClient(port);
+    const ping = JSON.stringify({ type: "ping" });
+    for (let i = 0; i < WS_INBOUND_BURST + 3; i += 1) client.ws.send(ping);
+    const state = internals(gateway).clients.get(client.clientId);
+    if (!state) throw new Error("missing state");
+    await vi.waitFor(() => expect(state.violations).toBe(3));
+    expect(client.frames.filter(isPong)).toHaveLength(WS_INBOUND_BURST);
+
+    clock += 1_000; // 補 WS_INBOUND_RATE_PER_SEC 則
+    client.ws.send(ping);
+    await vi.waitFor(() => expect(client.frames.filter(isPong)).toHaveLength(WS_INBOUND_BURST + 1));
+    expect(client.ws.readyState).toBe(WebSocket.OPEN);
+    expect(state.violations).toBe(3);
+    client.ws.close();
+  });
+
+  it("web 前端的實際頻率不會誤觸：連上即 subscribe＋ping、之後每 15 s ping，數輪重連皆零違規", async () => {
+    let clock = 0;
+    const { port, gateway } = await startGateway({ monotonicNow: () => clock });
+    for (let reconnect = 0; reconnect < 3; reconnect += 1) {
+      const client = await openClient(port);
+      const state = internals(gateway).clients.get(client.clientId);
+      if (!state) throw new Error("missing state");
+      // useHighFrequencyWs：open 後立即 ping（WEB-16），onConnected 送 machine/subscribe。
+      client.ws.send(JSON.stringify({ type: "ping" }));
+      expect(await subscribe(client, ["mixer-01"])).toMatchObject({ type: "machine/subscribed" });
+      for (let beat = 0; beat < 20; beat += 1) {
+        clock += 15_000;
+        client.ws.send(JSON.stringify({ type: "ping" }));
+        expect(await client.next()).toMatchObject({ type: "pong" });
+      }
+      expect(state.violations).toBe(0);
+      client.ws.close();
+    }
+  });
+
+  it("預設用單調時鐘：牆上時鐘倒退 1 小時，耗盡的桶仍依實際經過時間補充（不會卡住、把正常 ping 判超速）", async () => {
+    const { port, gateway } = await startGateway(); // 不注入：走 performance.now()
+    const client = await openClient(port);
+    const state = internals(gateway).clients.get(client.clientId);
+    if (!state) throw new Error("missing state");
+    const ping = JSON.stringify({ type: "ping" });
+    for (let i = 0; i < WS_INBOUND_BURST; i += 1) client.ws.send(ping);
+    await vi.waitFor(() => expect(client.frames.filter(isPong)).toHaveLength(WS_INBOUND_BURST));
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() - 3_600_000); // 牆上時鐘倒退 1 小時
+    await new Promise<void>((resolve) => setTimeout(resolve, 150)); // 真實經過 ≥ 3 則的補充量
+    client.ws.send(ping);
+    await vi.waitFor(() => expect(client.frames.filter(isPong)).toHaveLength(WS_INBOUND_BURST + 1));
+    expect(state.violations).toBe(0);
+    vi.useRealTimers();
+    client.ws.close();
+  });
+
+  it("takeInboundToken：滿桶可一次取 WS_INBOUND_BURST 則，之後依經過時間連續補充；穩態恰為上限速率不被拒", () => {
+    const t0 = 1_000_000;
+    const bucket = fullInboundBucket(t0);
+    for (let i = 0; i < WS_INBOUND_BURST; i += 1) expect(takeInboundToken(bucket, t0)).toBe(true);
+    expect(takeInboundToken(bucket, t0)).toBe(false);
+    const perTokenMs = 1_000 / WS_INBOUND_RATE_PER_SEC;
+    expect(takeInboundToken(bucket, t0 + perTokenMs - 1)).toBe(false);
+    expect(takeInboundToken(bucket, t0 + perTokenMs)).toBe(true);
+
+    // 以恰好的上限速率持續 60 s：一則都不拒。
+    const steady = fullInboundBucket(t0);
+    for (let i = 1; i <= WS_INBOUND_RATE_PER_SEC * 60; i += 1) {
+      expect(takeInboundToken(steady, t0 + i * perTokenMs)).toBe(true);
+    }
+    // 閒置再久也只補到容量上限。
+    const idle = fullInboundBucket(t0);
+    for (let i = 0; i < WS_INBOUND_BURST; i += 1) takeInboundToken(idle, t0);
+    let granted = 0;
+    while (takeInboundToken(idle, t0 + 3_600_000)) granted += 1;
+    expect(granted).toBe(WS_INBOUND_BURST);
   });
 });

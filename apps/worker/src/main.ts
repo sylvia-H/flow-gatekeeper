@@ -13,6 +13,7 @@ import { FakeAiProvider } from "./ai/fake-provider.js";
 import { createRedisStore } from "./cache/redis-store.js";
 import { buildDiagnosisContext } from "./context/context-builder.js";
 import { createMongoDiagnosisRepository, ensureDiagnosisIndexes } from "./diagnosis-repository.js";
+import type { DiagnosisRepository } from "./diagnosis-repository.js";
 import { armChaos, parseChaosAllowInProduction, parseChaosConfig, shouldArmChaos } from "./lib/chaos.js";
 import { parseWorkerEnv } from "./lib/env-schema.js";
 import type { WorkerEnv } from "./lib/env-schema.js";
@@ -22,7 +23,8 @@ import { createLivenessTracker } from "./lib/liveness.js";
 import { createThrottledErrorReporter } from "./lib/log-throttle.js";
 import { createMetricsCollector } from "./lib/metrics-collector.js";
 import { heartbeatKey, resolveInstanceId, workerMetricsKey } from "./lib/redis-keys.js";
-import { createProcessor, isTerminalFailure } from "./processor.js";
+import { createProcessor, isNoContextFailure, isTerminalFailure, NO_CONTEXT_CODE } from "./processor.js";
+import type { ProcessorJob, ProcessorLogger } from "./processor.js";
 
 /**
  * apps/worker entry（003）——BullMQ Worker 消化診斷 job（憲章 IV worker isolation）。
@@ -118,13 +120,17 @@ export async function bootstrap(): Promise<void> {
     stallMs: env.AI_TIMEOUT_MS + 30_000,
   });
 
-  let closing = false;
+  // processor 與 failed handler 共用同一個 repository（無狀態，只包 collection）。
+  const repo = createMongoDiagnosisRepository(db);
+
+  // 關閉旗標：processor 的 dedupe 等待迴圈讀、buildShutdown 收到訊號時設（見 buildShutdown）。
+  const closingState = createClosingState();
   const worker = new Worker<DiagnosisJobPayload>(
     DIAGNOSIS_QUEUE,
     createProcessor({
       store: createRedisStore(cache),
       publisher: pub,
-      repo: createMongoDiagnosisRepository(db),
+      repo,
       ai,
       buildContext: ({ machineId, windowMinutes }) => buildDiagnosisContext({ mongo: db, machineId, windowMinutes }),
       logger: processorLogger,
@@ -135,7 +141,7 @@ export async function bootstrap(): Promise<void> {
         cacheTtlSeconds: env.AI_CACHE_TTL_SECONDS,
         aiRpm: env.AI_RPM,
       },
-      isClosing: () => closing,
+      isClosing: closingState.isClosing,
       liveness,
     }),
     {
@@ -184,33 +190,199 @@ export async function bootstrap(): Promise<void> {
 
   // 失敗處理：對前端的最終通知由 api 經 QueueEvents `failed` 送 `ai/error(worker_failed)`——
   // worker 在這裡 publish 已到不了前端（api 收到 failed 即解除 jobId 綁定，此時才 PUBLISH 會被丟棄）。
-  // AI 管線自身的終態錯誤已由 processor 在 throw 前送出。這裡只負責補寫最終失敗的 trigger。
-  worker.on("failed", (job, err) => {
+  // AI 管線自身的終態錯誤已由 processor 在 throw 前 await 送出。這裡只負責補寫最終失敗的 trigger。
+  worker.on("failed", createFailedHandler({ logger: processorLogger, repo }));
+
+  // 優雅關閉：組裝（步驟順序、旗標、總時限）見 buildShutdown，訊號語意見 createShutdown。
+  const shutdown = buildShutdown({
+    env,
+    closing: closingState,
+    worker,
+    stopHeartbeat,
+    metrics,
+    cache,
+    pub,
+    mongoClient,
+    instanceId,
+    logger: shutdownLogger,
+    exit: (code) => process.exit(code),
+  });
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+
+  bootLogger.info(
+    { provider: ai.id, model: ai.model, concurrency: env.WORKER_CONCURRENCY, aiRpm: env.AI_RPM },
+    "flow-gatekeeper worker (003) bootstrapped",
+  );
+}
+
+/** failed handler 用到的 BullMQ Job 子集（沿用 processor 的定義；`Job<DiagnosisJobPayload>` 結構上相容）。 */
+export type FailedJobLike = Pick<ProcessorJob, "data" | "attemptsMade" | "opts">;
+
+/**
+ * worker `failed` handler（抽出供單測）：終態失敗補寫 trigger(cached:false)，非終態只記 warn。
+ *
+ * 空脈絡（no_context）是預期內的使用者情境（查無資料的機台），不是系統故障：記 warn、不帶 err
+ * （省掉無意義的 stack），避免 error 級告警被正常操作淹沒；trigger 照常補寫，稽核不缺筆。
+ * 其他終態失敗維持 error 帶 err。
+ */
+export function createFailedHandler(deps: {
+  logger: ProcessorLogger;
+  repo: Pick<DiagnosisRepository, "insertTrigger">;
+}): (job: FailedJobLike | undefined, err: Error) => void {
+  const { logger, repo } = deps;
+  return (job, err) => {
     if (!job) return;
     const { jobId, machineId, requestedBy } = job.data;
-    const jl = processorLogger.child({ jobId, machineId, attempt: job.attemptsMade });
+    const jl = logger.child({ jobId, machineId, attempt: job.attemptsMade });
     if (isTerminalFailure(job, err)) {
-      jl.error({ err }, "job failed (final)");
+      if (isNoContextFailure(err)) {
+        jl.warn({ code: NO_CONTEXT_CODE }, "job failed (final, no_context)");
+      } else {
+        jl.error({ err }, "job failed (final)");
+      }
       // 失敗（含重試用盡、不可重試）也是一次觸發，補寫輕量稽核（cached:false），使每次觸發皆可追溯。
-      void createMongoDiagnosisRepository(db)
+      void repo
         .insertTrigger({ machineId, jobId, requestedBy, cached: false })
         .catch((e: unknown) => jl.error({ err: e }, "failure trigger write failed"));
     } else {
       jl.warn({ err }, "job attempt failed (will retry)");
     }
-  });
+  };
+}
 
-  // 優雅關閉：worker.close → mongo.close → redis quit，確保崩潰/關閉不殘留、可被 BullMQ 重派。
-  const shutdown = async (signal: string): Promise<void> => {
-    shutdownLogger.info({ signal }, "received signal, shutting down worker");
-    // 先立旗標：dedupe 等待中的 job 看到後立刻交回佇列，worker.close() 只需等真正在打 LLM 的 job。
-    closing = true;
+/**
+ * 優雅關閉總時限中，LLM 逾時以外的餘裕：在途 job 串流結束後寫 diagnoses／cache／trigger、送 ai/done，
+ * 以及 mongo／redis 收尾，合計上限約 10 秒。
+ */
+export const SHUTDOWN_WRITE_MARGIN_MS = 10_000;
+
+/**
+ * 優雅關閉總時限＝`AI_TIMEOUT_MS + SHUTDOWN_WRITE_MARGIN_MS`（預設 30s＋10s＝40s）。
+ *
+ * `worker.close()` 要等「正在打 LLM」的 job 收尾，最長就是一次 AI 逾時加上結果寫入，所以時限跟著
+ * AI_TIMEOUT_MS 走；寫死的話，調高 AI_TIMEOUT_MS 後正常收尾中的 job 會先被自己的時限砍掉。
+ * compose 的 `stop_grace_period` 應為 `AI_TIMEOUT_MS + 15s`（預設 45s），比本時限多留 5 秒，讓 worker
+ * 自己逾時記 warn 並 exit(0)、先於 SIGKILL——被 SIGKILL 時日誌停在半途、看不出卡在哪一步（exit code 137）。
+ */
+export function shutdownDeadlineMs(aiTimeoutMs: number): number {
+  return aiTimeoutMs + SHUTDOWN_WRITE_MARGIN_MS;
+}
+
+/**
+ * 同名訊號的去重窗：第一次訊號後這段時間內再收到**同名**訊號視為重複送達、忽略。
+ * macOS／Linux 以 `tsx watch` 執行時，按一次 Ctrl+C 會收到兩次 SIGINT（終端機對前景行程群組送一次、
+ * tsx 的 relaySignal 再轉送一次），不去重的話第二次會被當成「再按一次」而跳過優雅關閉。
+ * 人為的第二次 Ctrl+C 間隔遠大於轉送延遲（毫秒級），1 秒足以區分。
+ */
+export const DUPLICATE_SIGNAL_WINDOW_MS = 1000;
+
+/**
+ * 建立關閉函式（抽出供單測）：
+ * - 第一次訊號：`onSignal` → 執行 `run`；`run` 完成、拋錯（記 error）或超過總時限（記 warn）後一律 exit(0)。
+ *   逾時不等 `run` 收尾：卡住的多半是 `worker.close()` 等長串流或 Redis 指令排在離線佇列，再等只會被 SIGKILL。
+ * - 第一次訊號後 `DUPLICATE_SIGNAL_WINDOW_MS` 內的**同名**訊號：視為同一次按鍵的重複送達，忽略（記 info）。
+ * - 其餘的後續訊號（同名但已超過去重窗，或不同名——例如監督者送 SIGTERM 後使用者再按 Ctrl+C）：
+ *   立即 exit(0)，不重跑收尾步驟（重入會對已關閉的連線重複 quit 而拋錯）。不同名訊號不去重：
+ *   重複送達只會產生同名訊號，不同名必然來自另一個來源，代表有人明確要求立刻結束。
+ * 一律 exit(0)，且 `exit` 至多呼叫一次（逾時、收尾完成與第二次訊號不重複退出）：優雅關閉不該觸發
+ * `restart: on-failure`；在途 job 由 BullMQ stalled 機制重派。
+ */
+export function createShutdown(deps: {
+  logger: Pick<ProcessorLogger, "info" | "warn" | "error">;
+  run: () => Promise<void>;
+  exit: (code: number) => void;
+  onSignal?: () => void;
+  /** 總時限（毫秒），由 `shutdownDeadlineMs(env.AI_TIMEOUT_MS)` 推導；必填，避免漏傳時退回與設定脫鉤的預設。 */
+  deadlineMs: number;
+  /** 時間來源（測試注入）；預設單調時鐘 performance.now()：系統時鐘往回跳時去重窗不會被拉長。 */
+  now?: () => number;
+}): (signal: string) => Promise<void> {
+  const { logger, run, onSignal, deadlineMs } = deps;
+  const now = deps.now ?? (() => performance.now());
+  let first: { signal: string; at: number } | undefined;
+  let exited = false;
+  const exitOnce = (): void => {
+    if (exited) return;
+    exited = true;
+    deps.exit(0);
+  };
+  return async (signal) => {
+    if (first) {
+      if (signal === first.signal && now() - first.at < DUPLICATE_SIGNAL_WINDOW_MS) {
+        logger.info({ signal }, "忽略去重窗內重複送達的同名訊號");
+        return;
+      }
+      logger.warn({ signal }, "關閉途中再次收到訊號，立即結束");
+      exitOnce();
+      return;
+    }
+    first = { signal, at: now() };
+    logger.info({ signal }, "received signal, shutting down worker");
+    onSignal?.();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<"timeout">((r) => {
+      timer = setTimeout(() => r("timeout"), deadlineMs);
+    });
     try {
+      const outcome = await Promise.race([run().then(() => "done" as const), deadline]);
+      if (outcome === "timeout") {
+        logger.warn({ signal, deadlineMs }, "優雅關閉超過總時限，強制結束");
+      }
+    } catch (err) {
+      logger.error({ err }, "shutdown error");
+    } finally {
+      clearTimeout(timer);
+    }
+    exitOnce();
+  };
+}
+
+/** 關閉旗標：processor 的 `isClosing` 讀、`buildShutdown` 收到訊號時設。 */
+export interface ClosingState {
+  // 以函式屬性宣告（不依賴 this）：可直接拆出來當 `isClosing` 依賴傳給 processor。
+  readonly isClosing: () => boolean;
+  readonly markClosing: () => void;
+}
+
+export function createClosingState(): ClosingState {
+  let closing = false;
+  return {
+    isClosing: () => closing,
+    markClosing: () => {
+      closing = true;
+    },
+  };
+}
+
+/**
+ * 組裝 worker 的關閉函式（自 bootstrap 抽出，依賴可注入供單測）：決定旗標、收尾步驟順序與總時限，
+ * 訊號語意交給 `createShutdown`。
+ */
+export function buildShutdown(deps: {
+  env: Pick<WorkerEnv, "AI_TIMEOUT_MS">;
+  closing: Pick<ClosingState, "markClosing">;
+  worker: { close(): Promise<void> };
+  stopHeartbeat: () => void;
+  metrics: { stop(): void };
+  cache: { del(...keys: string[]): Promise<unknown>; quit(): Promise<unknown> };
+  pub: { quit(): Promise<unknown> };
+  mongoClient: { close(): Promise<void> };
+  instanceId: string;
+  logger: Pick<ProcessorLogger, "info" | "warn" | "error">;
+  exit: (code: number) => void;
+}): (signal: string) => Promise<void> {
+  const { env, closing, worker, metrics, cache, pub, mongoClient, instanceId, logger } = deps;
+  return createShutdown({
+    logger,
+    // 先立旗標：dedupe 等待中的 job 看到後立刻交回佇列，worker.close() 只需等真正在打 LLM 的 job。
+    onSignal: () => closing.markClosing(),
+    run: async () => {
       // 先 drain 在途 job 再停心跳：worker.close() 會等在途 job（含長串流）收尾，期間仍需
       // 持續寫 heartbeat，否則 key 於 TTL 過期、healthcheck 在正常優雅關閉途中誤翻 unhealthy。
       // 致命路徑不走這裡、不清 timer，key 靠 TTL 過期（data-model E2）。
       await worker.close();
-      stopHeartbeat();
+      deps.stopHeartbeat();
       // 指標 timer 與心跳同時停：關閉時**不輸出未滿一窗的殘窗摘要**——優雅關閉的日誌尾端
       // 出現一則低值摘要會被誤讀為系統異常（data-model E3）。
       metrics.stop();
@@ -219,22 +391,15 @@ export async function bootstrap(): Promise<void> {
       // api 端的過期快照過濾兜底。
       await cache
         .del(heartbeatKey(instanceId), workerMetricsKey(instanceId))
-        .catch((err: unknown) => shutdownLogger.warn({ err }, "刪除本實例 heartbeat／metrics key 失敗"));
+        .catch((err: unknown) => logger.warn({ err }, "刪除本實例 heartbeat／metrics key 失敗"));
       await mongoClient.close();
       await pub.quit();
       await cache.quit();
-    } catch (err) {
-      shutdownLogger.error({ err }, "shutdown error");
-    }
-    process.exit(0);
-  };
-  process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  process.on("SIGINT", () => void shutdown("SIGINT"));
-
-  bootLogger.info(
-    { provider: ai.id, model: ai.model, concurrency: env.WORKER_CONCURRENCY, aiRpm: env.AI_RPM },
-    "flow-gatekeeper worker (003) bootstrapped",
-  );
+    },
+    exit: deps.exit,
+    // 跟著已驗證的 AI_TIMEOUT_MS 走：調高 LLM 逾時，關閉時限一起變長，不會在串流途中先被自己的時限砍掉。
+    deadlineMs: shutdownDeadlineMs(env.AI_TIMEOUT_MS),
+  });
 }
 
 /**

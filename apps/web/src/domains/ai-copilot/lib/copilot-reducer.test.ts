@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { DiagnosisResult } from "@flow-gatekeeper/contracts";
 import {
+  UNDELIVERED_ERROR,
   copilotReducer,
   humanizeError,
   isStaleJobEvent,
+  isUndeliveredFailure,
   progressLabel,
   startActiveState,
   type CopilotJobState,
@@ -18,16 +20,17 @@ const RESULT: DiagnosisResult = {
 };
 
 function active(jobId = "job-1", over: Partial<Extract<CopilotJobState, { status: "active" }>> = {}) {
-  return { status: "active", machineId: "mixer-01", jobId, attempt: 1, progress: null, streamText: "", ...over } as CopilotJobState;
+  return { status: "active", machineId: "mixer-01", jobId, attempt: 1, lastSeq: -1, progress: null, streamText: "", ...over } as CopilotJobState;
 }
 
 describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
-  it("startActiveState：新 active、progress=null、streamText 空（FR-004）", () => {
+  it("startActiveState：新 active、progress=null、streamText 空、尚無 token（lastSeq -1）（FR-004）", () => {
     expect(startActiveState("mixer-01", "job-1")).toEqual({
       status: "active",
       machineId: "mixer-01",
       jobId: "job-1",
       attempt: 1,
+      lastSeq: -1,
       progress: null,
       streamText: "",
     });
@@ -78,6 +81,36 @@ describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
     s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "重跑" });
     s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 1, text: "完整" });
     expect(s).toMatchObject({ status: "active", attempt: 1, streamText: "重跑完整" });
+  });
+
+  it("同一輪 seq 回頭（<= lastSeq）即視為新的一次執行：重播的 seq 0 遺失也不拼接（AR-S8）", () => {
+    let s = active("job-1");
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "崩潰前" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 1, text: "半截" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 2, text: "再半截" });
+    expect(s).toMatchObject({ lastSeq: 2 });
+    // 重播的 seq 0 在 Pub/Sub 上遺失，第一個到的是 seq 1
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 1, text: "重跑" });
+    expect(s).toMatchObject({ streamText: "重跑", lastSeq: 1 });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 2, text: "完整" });
+    expect(s).toMatchObject({ status: "active", attempt: 1, streamText: "重跑完整", lastSeq: 2 });
+  });
+
+  it("seq 跳號但仍遞增（中間 token 遺失）：照常 append，不誤判為新執行", () => {
+    let s = active("job-1");
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "前" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 3, text: "後" });
+    expect(s).toMatchObject({ streamText: "前後", lastSeq: 3 });
+  });
+
+  it("換輪時 lastSeq 跟著新一輪重算：新一輪的 seq 0、1 正常接續", () => {
+    let s = active("job-1");
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "a" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 7, text: "b" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 2, seq: 0, text: "新" });
+    expect(s).toMatchObject({ attempt: 2, lastSeq: 0, streamText: "新" });
+    s = copilotReducer(s, { type: "ai/token", jobId: "job-1", attempt: 2, seq: 1, text: "輪" });
+    expect(s).toMatchObject({ attempt: 2, lastSeq: 1, streamText: "新輪" });
   });
 
   it("第 1 輪 token → 第 2 輪直接 done：completed 不保留舊輪文字", () => {
@@ -177,6 +210,67 @@ describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
       result: RESULT,
     };
     expect(copilotReducer(done, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 1, text: "y" })).toBe(done);
+  });
+});
+
+describe("copilotReducer — 結果未送達失敗的保險（AR-6）", () => {
+  const undelivered: CopilotJobState = {
+    status: "failed",
+    machineId: "mixer-01",
+    jobId: "job-1",
+    streamText: "推理過程",
+    error: UNDELIVERED_ERROR,
+    reason: "undelivered",
+    attempt: 1,
+  };
+
+  it("文案固定為使用者裁決那一句", () => {
+    expect(UNDELIVERED_ERROR).toBe("診斷已在後端完成，但結果未送達畫面，請重試");
+  });
+
+  it("isUndeliveredFailure 只認帶 reason 的失敗", () => {
+    expect(isUndeliveredFailure(undelivered)).toBe(true);
+    expect(isUndeliveredFailure({ status: "failed", machineId: "mixer-01", jobId: "job-1", streamText: "", error: "x" })).toBe(false);
+    expect(isUndeliveredFailure(active())).toBe(false);
+  });
+
+  it("同 jobId 遲到的 ai/done → 改回 completed（保留串流文字、帶 cached）", () => {
+    const s = copilotReducer(undelivered, { type: "ai/done", jobId: "job-1", attempt: 1, cached: true, result: RESULT });
+    expect(s).toEqual({
+      status: "completed",
+      machineId: "mixer-01",
+      jobId: "job-1",
+      cached: true,
+      streamText: "推理過程",
+      result: RESULT,
+    });
+  });
+
+  it("遲到的 ai/done 來自更新一輪（重試那輪命中快取）→ 救回但不保留舊輪文字", () => {
+    const s = copilotReducer(undelivered, { type: "ai/done", jobId: "job-1", attempt: 2, cached: true, result: RESULT });
+    expect(s).toMatchObject({ status: "completed", cached: true, streamText: "" });
+  });
+
+  it("其他 jobId 的 ai/done、或同 jobId 的其他事件 → 原樣忽略", () => {
+    expect(copilotReducer(undelivered, { type: "ai/done", jobId: "job-2", attempt: 1, cached: false, result: RESULT })).toBe(undelivered);
+    expect(copilotReducer(undelivered, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 9, text: "x" })).toBe(undelivered);
+    expect(
+      copilotReducer(undelivered, { type: "ai/error", jobId: "job-1", attempt: 1, code: "worker_failed", message: "x" }),
+    ).toBe(undelivered);
+    expect(
+      copilotReducer(undelivered, { type: "job/status", jobId: "job-1", machineId: "mixer-01", status: "completed", progress: 100 }),
+    ).toBe(undelivered);
+  });
+
+  it("其他原因的 failed 收到同 jobId 遲到的 ai/done 仍忽略", () => {
+    const failed: CopilotJobState = {
+      status: "failed",
+      machineId: "mixer-01",
+      jobId: "job-1",
+      streamText: "",
+      error: "診斷逾時或無回應，請重試",
+    };
+    expect(copilotReducer(failed, { type: "ai/done", jobId: "job-1", attempt: 1, cached: false, result: RESULT })).toBe(failed);
   });
 });
 

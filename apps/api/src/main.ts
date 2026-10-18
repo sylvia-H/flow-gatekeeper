@@ -1,11 +1,11 @@
 import "reflect-metadata";
-import type { Server as HttpServer } from "node:http";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Logger } from "@nestjs/common";
-import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module.js";
+import { createHttpApp } from "./http/http-exception.filter.js";
 import { loadApiDotenv } from "./lib/env-file.js";
+import { createShutdownHandler } from "./lib/graceful-shutdown.js";
 import { getAppLogger } from "./logging/app-logger.js";
 import { PinoLoggerService } from "./logging/pino-logger.service.js";
 import { fatalExit, installFatalHandlers } from "./logging/fatal.js";
@@ -34,7 +34,11 @@ export async function bootstrap(): Promise<void> {
   // abortOnError: false——Nest 預設在建構／初始化失敗時呼叫 process.abort()（exit 134、無結構化
   // 錯誤），設定錯誤（例如環境變數驗證失敗）因此不會以 rejection 回到這裡。關掉後錯誤照常拋出，
   // 由 entry 的 catch 走 fatalExit：印出可讀的 fatal JSON、以 exit 1 交給監督者。
-  const app = await NestFactory.create(AppModule, {
+  //
+  // createHttpApp 關掉 Nest 自動掛的 body parser，改以 16 kb 上限自行掛，並在其後接上 body-parser
+  // 錯誤正規化、全域 ExceptionFilter 與 `disable("x-powered-by")`（API-7／API-17，見
+  // http/http-exception.filter.ts）。兩步綁在同一個 helper 裡，不會只做一半而沒有 body parser。
+  const app = await createHttpApp(AppModule, {
     logger: new PinoLoggerService(getAppLogger()),
     abortOnError: false,
   });
@@ -45,8 +49,8 @@ export async function bootstrap(): Promise<void> {
   const gateway = app.get(MonitoringGateway);
   // Origin 白名單、背壓高水位、連線數上限與授權期限一樣走 AppConfigService（單一設定來源），
   // Gateway 內不再各自讀 process.env。
-  // Nest 的 getHttpServer() 型別為 any；platform-express 下實際就是 node:http Server。
-  gateway.attach(app.getHttpServer() as HttpServer, {
+  // createHttpApp 回傳 NestExpressApplication，getHttpServer() 的型別即 node:http Server。
+  gateway.attach(app.getHttpServer(), {
     allowedOrigins: config.wsAllowedOrigins,
     sendHighWaterBytes: config.wsSendHighWaterBytes,
     maxConnections: config.maxWsConnections,
@@ -80,27 +84,29 @@ export async function bootstrap(): Promise<void> {
   //
   // 寫入語意：關閉路徑會先停 producer 並（有時限地）flush telemetry buffer，正常關閉不再丟資料；
   // ADR-002 §6.4 接受的有損寫入現在只剩「崩潰」與「flush 逾時」兩種情形。
-  let shuttingDown = false;
-  const shutdown = async (signal: string): Promise<void> => {
-    if (shuttingDown) return; // 重入防護：第二個訊號不再另起一輪 close
-    shuttingDown = true;
-    logger.log(`received ${signal}, shutting down api...`);
-    try {
+  //
+  // 總時限與第二次訊號（API-12，裁決 5）：flush＋app.close() 合計至多 12 秒，逾時記 warn 後仍
+  // exit(0)——Redis 不可達時 relay 的 close 可能卡住，不設總時限會吃光 compose 的 15 秒 grace 而被
+  // SIGKILL（137，非零退出會被 on-failure 誤判為崩潰）。關閉中再收到訊號則立即 exit(0)，但第一次
+  // 訊號後 1 秒內的同名訊號視為重送而忽略（終端機與 watch 工具會各送一次 SIGINT）。
+  // 收尾失敗也不是崩潰：記 log 後仍以 0 退出（contracts §3）。見 lib/graceful-shutdown.ts。
+  const shutdown = createShutdownHandler({
+    close: async () => {
       // 關閉順序：先停 producer（不再產生新點）→ flush telemetry buffer → app.close()。
       // app.close() 依模組距離呼叫 onModuleDestroy、不保證 Gateway 先於 HistoryModule，
       // 若直接 close，Mongo 可能先關而 producer 仍在跑，最後一批會撞上已關閉的連線。
-      // flush 設上限（由 HistoryService 內部計時）：Mongo 不可達或寫入卡住時也不讓它吃光
-      // stop_grace_period 而被 SIGKILL——非零退出會被 on-failure 誤判為崩潰。
+      // flush 另有自己的上限（由 HistoryService 內部計時），不讓它單獨吃掉總時限。
       gateway.stopProducer();
       await app.get(HistoryService).flush({ deadlineMs: SHUTDOWN_FLUSH_DEADLINE_MS });
       await app.close();
-    } catch (err) {
-      // 收尾失敗不是崩潰：記 log 後仍以 0 退出。若以非零退出，監督者會誤判為崩潰而重啟
-      // 一個正要停止的服務（contracts §3）。
-      logger.error(`shutdown error: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    process.exit(0);
-  };
+    },
+    exit: (code) => process.exit(code),
+    log: {
+      info: (message) => logger.log(message),
+      warn: (message) => logger.warn(message),
+      error: (message) => logger.error(message),
+    },
+  });
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
 }

@@ -198,7 +198,8 @@ describe("useHighFrequencyWs — rAF 批次（憲章 IV／硬規則 1）", () =>
     const thrower = vi.fn<UseHighFrequencyWsOptions["onBatch"]>(() => {
       throw new TypeError("boom");
     });
-    mount({ onBatch: thrower });
+    // 本案跨 10 秒但不測心跳：open 即送的 ping 沒人回 pong，預設 5 秒就會判斷線，故把心跳拉長到測試範圍外。
+    mount({ onBatch: thrower, heartbeatMs: 60_000, pongTimeoutMs: 60_000 });
     const ws = FakeWebSocket.latest();
     ws.serverOpen();
     for (let i = 0; i < 5; i += 1) {
@@ -366,15 +367,29 @@ describe("useHighFrequencyWs — 非遙測訊息分流（TQ-3）", () => {
 });
 
 describe("useHighFrequencyWs — 心跳與重連", () => {
-  it("pong 逾時 → close → 退避後重連", () => {
+  it("open 當下立即送第一次 ping（WEB-16），之後每 heartbeatMs 一次", () => {
+    mount({ heartbeatMs: 1_000, pongTimeoutMs: 500 });
+    const ws = FakeWebSocket.latest();
+    ws.serverOpen();
+    expect(ws.sent).toEqual([{ type: "ping" }]); // 不等第一個週期
+    vi.advanceTimersByTime(100);
+    ws.serverSend({ type: "pong", ts: 0 });
+    vi.advanceTimersByTime(899);
+    expect(ws.sent).toEqual([{ type: "ping" }]);
+    vi.advanceTimersByTime(1); // t=1000：第二次 ping
+    expect(ws.sent).toEqual([{ type: "ping" }, { type: "ping" }]);
+  });
+
+  it("pong 逾時 → close → 退避後重連（open 即送的 ping 在 pongTimeoutMs 內就能發現斷線）", () => {
     const { spies } = mount({ heartbeatMs: 1_000, pongTimeoutMs: 500 });
     const first = FakeWebSocket.latest();
     first.serverOpen();
     first.serverSend({ type: "system/connected", clientId: "c1" });
-
-    vi.advanceTimersByTime(1_000);
     expect(first.sent).toContainEqual({ type: "ping" });
-    vi.advanceTimersByTime(500); // 未回 pong
+
+    vi.advanceTimersByTime(499);
+    expect(first.readyState).toBe(FakeWebSocket.OPEN);
+    vi.advanceTimersByTime(1); // 未回 pong：open 後 pongTimeoutMs 即判斷線，不必等 heartbeatMs
     expect(first.readyState).toBe(FakeWebSocket.CLOSED);
     expect(spies.onStatus).toHaveBeenLastCalledWith("reconnecting");
 
@@ -393,7 +408,7 @@ describe("useHighFrequencyWs — 心跳與重連", () => {
     });
     expect(spies.onStatus).toHaveBeenLastCalledWith("connected");
 
-    vi.advanceTimersByTime(1_000 + 500); // ping 後未回 pong
+    vi.advanceTimersByTime(500); // open 即送的 ping 未回 pong
     expect(first.close).toHaveBeenCalled();
     expect(spies.onStatus).toHaveBeenLastCalledWith("reconnecting"); // 不等 close 事件
     expect(FakeWebSocket.instances).toHaveLength(1);
@@ -422,13 +437,15 @@ describe("useHighFrequencyWs — 心跳與重連", () => {
     const onLatency = vi.fn();
     mount({ heartbeatMs: 1_000, pongTimeoutMs: 500, onLatency });
     const ws = FakeWebSocket.latest();
-    ws.serverOpen();
-    vi.advanceTimersByTime(1_000);
+    ws.serverOpen(); // 立即送第一次 ping
     vi.advanceTimersByTime(30);
+    ws.serverSend({ type: "pong", ts: 0 });
+    expect(onLatency).toHaveBeenLastCalledWith(30); // 一連上就有 RTT，不必等一個週期
+    vi.advanceTimersByTime(970 + 40); // t=1000 第二次 ping
     ws.serverSend({ type: "pong", ts: 0 });
     vi.advanceTimersByTime(1_000);
     expect(ws.readyState).toBe(FakeWebSocket.OPEN);
-    expect(onLatency).toHaveBeenCalledWith(30);
+    expect(onLatency).toHaveBeenLastCalledWith(40);
   });
 
   it("重連後收到新的 system/connected → 再次 onConnected，App 據此重訂閱", () => {
@@ -538,7 +555,7 @@ describe("useHighFrequencyWs — 心跳與重連", () => {
     vi.spyOn(first, "close").mockImplementation(() => {
       first.readyState = FakeWebSocket.CLOSING;
     });
-    vi.advanceTimersByTime(1_000 + 500); // ping 後未回 pong → 呼叫 close()，但事件未到
+    vi.advanceTimersByTime(500); // open 即送的 ping 未回 pong → 呼叫 close()，但事件未到
     expect(first.readyState).toBe(FakeWebSocket.CLOSING);
 
     windowTarget.dispatchEvent(new Event("online"));
