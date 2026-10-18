@@ -288,7 +288,7 @@ describe("createShutdown", () => {
     expect(exit).toHaveBeenCalledExactlyOnceWith(0);
   });
 
-  it("關閉途中再收到訊號：立即 exit(0)，不重跑 onSignal／run", async () => {
+  it("關閉途中收到不同名訊號：即使在去重窗內也立即 exit(0)，不重跑 onSignal／run；exit 只呼叫一次", async () => {
     const d = deferredRun();
     const { shutdown, exit, onSignal, calls } = setup(d.run);
     const first = shutdown("SIGTERM");
@@ -299,8 +299,154 @@ describe("createShutdown", () => {
     expect(onSignal).toHaveBeenCalledTimes(1);
     expect(calls).toContainEqual(expect.objectContaining({ level: "warn", obj: { signal: "SIGINT" } }));
 
+    // 第一輪收尾之後才完成：不重複 exit
     d.finish();
     await first;
-    expect(exit).toHaveBeenCalledTimes(2); // 真實環境第一次 exit 即結束行程；fake exit 不會，故第一輪收尾仍會呼叫
+    expect(exit).toHaveBeenCalledTimes(1);
+  });
+
+  it("去重窗：1 秒內的同名訊號忽略（tsx watch 一次 Ctrl+C 送兩次 SIGINT），優雅關閉照常進行", async () => {
+    vi.useFakeTimers();
+    expect(mod.DUPLICATE_SIGNAL_WINDOW_MS).toBe(1000);
+    const d = deferredRun();
+    const { shutdown, exit, onSignal, calls } = setup(d.run);
+    const first = shutdown("SIGINT");
+
+    await shutdown("SIGINT"); // 幾乎同時的轉送
+    await vi.advanceTimersByTimeAsync(mod.DUPLICATE_SIGNAL_WINDOW_MS - 1);
+    await shutdown("SIGINT"); // 窗的最後 1 ms 仍算重複
+    expect(exit).not.toHaveBeenCalled();
+    expect(d.run).toHaveBeenCalledTimes(1);
+    expect(onSignal).toHaveBeenCalledTimes(1);
+    expect(calls.filter((c) => c.msg === "忽略去重窗內重複送達的同名訊號")).toHaveLength(2);
+
+    d.finish();
+    await first;
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it("去重窗過後的同名訊號：視為使用者再按一次，立即 exit(0)", async () => {
+    vi.useFakeTimers();
+    const d = deferredRun();
+    const { shutdown, exit, calls } = setup(d.run);
+    void shutdown("SIGINT");
+
+    await vi.advanceTimersByTimeAsync(mod.DUPLICATE_SIGNAL_WINDOW_MS);
+    expect(exit).not.toHaveBeenCalled();
+    await shutdown("SIGINT");
+    expect(exit).toHaveBeenCalledExactlyOnceWith(0);
+    expect(calls).toContainEqual(expect.objectContaining({ level: "warn", msg: "關閉途中再次收到訊號，立即結束" }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bootstrap 的關閉組裝（buildShutdown）
+// ---------------------------------------------------------------------------
+
+describe("buildShutdown", () => {
+  function setup(env: Record<string, string> = {}) {
+    const parsed = parseWorkerEnv(env);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const order: string[] = [];
+    const closing = mod.createClosingState();
+    const { logger, calls } = recordingLogger();
+    const exit = vi.fn<(code: number) => void>();
+    let closeWorker: () => void = () => {};
+    const deps = {
+      env: parsed.env,
+      closing,
+      worker: {
+        // 記下 close 被呼叫時旗標的狀態：旗標必須先立，dedupe 等待中的 job 才會交回佇列、不拖住 close。
+        close: vi.fn(() => {
+          order.push(`worker.close(closing=${String(closing.isClosing())})`);
+          return new Promise<void>((r) => {
+            closeWorker = r;
+          });
+        }),
+      },
+      stopHeartbeat: vi.fn(() => {
+        order.push("stopHeartbeat");
+      }),
+      metrics: {
+        stop: vi.fn(() => {
+          order.push("metrics.stop");
+        }),
+      },
+      cache: {
+        del: vi.fn((...keys: string[]) => {
+          order.push(`cache.del(${keys.join(",")})`);
+          return Promise.resolve(2);
+        }),
+        quit: vi.fn(() => {
+          order.push("cache.quit");
+          return Promise.resolve("OK");
+        }),
+      },
+      pub: {
+        quit: vi.fn(() => {
+          order.push("pub.quit");
+          return Promise.resolve("OK");
+        }),
+      },
+      mongoClient: {
+        close: vi.fn(() => {
+          order.push("mongo.close");
+          return Promise.resolve();
+        }),
+      },
+      instanceId: "w1",
+      logger,
+      exit,
+    };
+    const shutdown = mod.buildShutdown(deps);
+    return { shutdown, deps, order, closing, calls, exit, closeWorker: () => closeWorker() };
+  }
+
+  it("收到訊號後旗標先立（isClosing() 為 true），再依序 worker.close → 停心跳 → 停指標 → 刪 key → mongo → pub → cache", async () => {
+    const s = setup();
+    expect(s.closing.isClosing()).toBe(false);
+    const done = s.shutdown("SIGTERM");
+    expect(s.closing.isClosing()).toBe(true);
+
+    s.closeWorker();
+    await done;
+    expect(s.order).toEqual([
+      "worker.close(closing=true)",
+      "stopHeartbeat",
+      "metrics.stop",
+      "cache.del(worker:heartbeat:w1,metrics:worker:w1)",
+      "mongo.close",
+      "pub.quit",
+      "cache.quit",
+    ]);
+    expect(s.exit).toHaveBeenCalledExactlyOnceWith(0);
+  });
+
+  it("刪 key 失敗只記 warn，後續收尾照常進行", async () => {
+    const s = setup();
+    s.deps.cache.del.mockImplementationOnce(() => Promise.reject(new Error("redis down")));
+    const done = s.shutdown("SIGTERM");
+    s.closeWorker();
+    await done;
+    expect(s.order.slice(-3)).toEqual(["mongo.close", "pub.quit", "cache.quit"]);
+    expect(s.calls).toContainEqual(expect.objectContaining({ level: "warn", msg: "刪除本實例 heartbeat／metrics key 失敗" }));
+  });
+
+  it.each([
+    ["預設 env", {}, 40_000],
+    ["AI_TIMEOUT_MS=60000", { AI_TIMEOUT_MS: "60000", AI_DEDUPE_LOCK_SECONDS: "65" }, 70_000],
+  ] as const)("%s：總時限跟著 AI_TIMEOUT_MS 推導（worker.close 卡住時在該時限 exit）", async (_label, env, expected) => {
+    vi.useFakeTimers();
+    const s = setup(env);
+    const done = s.shutdown("SIGTERM");
+
+    await vi.advanceTimersByTimeAsync(expected - 1);
+    expect(s.exit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await done;
+    expect(s.exit).toHaveBeenCalledExactlyOnceWith(0);
+    expect(s.calls).toContainEqual(expect.objectContaining({ level: "warn", obj: { signal: "SIGTERM", deadlineMs: expected } }));
+    // 逾時時 worker.close 還沒完成：後續步驟都沒跑
+    expect(s.order).toEqual(["worker.close(closing=true)"]);
   });
 });

@@ -123,7 +123,8 @@ export async function bootstrap(): Promise<void> {
   // processor 與 failed handler 共用同一個 repository（無狀態，只包 collection）。
   const repo = createMongoDiagnosisRepository(db);
 
-  let closing = false;
+  // 關閉旗標：processor 的 dedupe 等待迴圈讀、buildShutdown 收到訊號時設（見 buildShutdown）。
+  const closingState = createClosingState();
   const worker = new Worker<DiagnosisJobPayload>(
     DIAGNOSIS_QUEUE,
     createProcessor({
@@ -140,7 +141,7 @@ export async function bootstrap(): Promise<void> {
         cacheTtlSeconds: env.AI_CACHE_TTL_SECONDS,
         aiRpm: env.AI_RPM,
       },
-      isClosing: () => closing,
+      isClosing: closingState.isClosing,
       liveness,
     }),
     {
@@ -192,36 +193,19 @@ export async function bootstrap(): Promise<void> {
   // AI 管線自身的終態錯誤已由 processor 在 throw 前 await 送出。這裡只負責補寫最終失敗的 trigger。
   worker.on("failed", createFailedHandler({ logger: processorLogger, repo }));
 
-  // 優雅關閉：worker.close → mongo.close → redis quit，確保崩潰/關閉不殘留、可被 BullMQ 重派。
-  // 重入保護見 createShutdown，總時限見 shutdownDeadlineMs。
-  const shutdown = createShutdown({
+  // 優雅關閉：組裝（步驟順序、旗標、總時限）見 buildShutdown，訊號語意見 createShutdown。
+  const shutdown = buildShutdown({
+    env,
+    closing: closingState,
+    worker,
+    stopHeartbeat,
+    metrics,
+    cache,
+    pub,
+    mongoClient,
+    instanceId,
     logger: shutdownLogger,
-    // 先立旗標：dedupe 等待中的 job 看到後立刻交回佇列，worker.close() 只需等真正在打 LLM 的 job。
-    onSignal: () => {
-      closing = true;
-    },
-    run: async () => {
-      // 先 drain 在途 job 再停心跳：worker.close() 會等在途 job（含長串流）收尾，期間仍需
-      // 持續寫 heartbeat，否則 key 於 TTL 過期、healthcheck 在正常優雅關閉途中誤翻 unhealthy。
-      // 致命路徑不走這裡、不清 timer，key 靠 TTL 過期（data-model E2）。
-      await worker.close();
-      stopHeartbeat();
-      // 指標 timer 與心跳同時停：關閉時**不輸出未滿一窗的殘窗摘要**——優雅關閉的日誌尾端
-      // 出現一則低值摘要會被誤讀為系統異常（data-model E3）。
-      metrics.stop();
-      // 主動刪掉本實例的 key：優雅縮減副本時，healthcheck／api 不必再等 TTL 才發現這個實例已離開，
-      // 殘留快照也不會被 api 加總。失敗只記 warn、不中斷後續收尾；崩潰路徑刪不到，由 TTL 與
-      // api 端的過期快照過濾兜底。
-      await cache
-        .del(heartbeatKey(instanceId), workerMetricsKey(instanceId))
-        .catch((err: unknown) => shutdownLogger.warn({ err }, "刪除本實例 heartbeat／metrics key 失敗"));
-      await mongoClient.close();
-      await pub.quit();
-      await cache.quit();
-    },
     exit: (code) => process.exit(code),
-    // 跟著已驗證的 AI_TIMEOUT_MS 走：調高 LLM 逾時，關閉時限一起變長，不會在串流途中先被自己的時限砍掉。
-    deadlineMs: shutdownDeadlineMs(env.AI_TIMEOUT_MS),
   });
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGINT", () => void shutdown("SIGINT"));
@@ -286,12 +270,23 @@ export function shutdownDeadlineMs(aiTimeoutMs: number): number {
 }
 
 /**
+ * 同名訊號的去重窗：第一次訊號後這段時間內再收到**同名**訊號視為重複送達、忽略。
+ * macOS／Linux 以 `tsx watch` 執行時，按一次 Ctrl+C 會收到兩次 SIGINT（終端機對前景行程群組送一次、
+ * tsx 的 relaySignal 再轉送一次），不去重的話第二次會被當成「再按一次」而跳過優雅關閉。
+ * 人為的第二次 Ctrl+C 間隔遠大於轉送延遲（毫秒級），1 秒足以區分。
+ */
+export const DUPLICATE_SIGNAL_WINDOW_MS = 1000;
+
+/**
  * 建立關閉函式（抽出供單測）：
  * - 第一次訊號：`onSignal` → 執行 `run`；`run` 完成、拋錯（記 error）或超過總時限（記 warn）後一律 exit(0)。
  *   逾時不等 `run` 收尾：卡住的多半是 `worker.close()` 等長串流或 Redis 指令排在離線佇列，再等只會被 SIGKILL。
- * - 關閉途中再收到訊號（使用者連按 Ctrl+C、監督者重送 SIGTERM）：立即 exit(0)，不重跑收尾步驟
- *   （重入會對已關閉的連線重複 quit 而拋錯）。
- * 一律 exit(0)：優雅關閉不該觸發 `restart: on-failure`；在途 job 由 BullMQ stalled 機制重派。
+ * - 第一次訊號後 `DUPLICATE_SIGNAL_WINDOW_MS` 內的**同名**訊號：視為同一次按鍵的重複送達，忽略（記 info）。
+ * - 其餘的後續訊號（同名但已超過去重窗，或不同名——例如監督者送 SIGTERM 後使用者再按 Ctrl+C）：
+ *   立即 exit(0)，不重跑收尾步驟（重入會對已關閉的連線重複 quit 而拋錯）。不同名訊號不去重：
+ *   重複送達只會產生同名訊號，不同名必然來自另一個來源，代表有人明確要求立刻結束。
+ * 一律 exit(0)，且 `exit` 至多呼叫一次（逾時、收尾完成與第二次訊號不重複退出）：優雅關閉不該觸發
+ * `restart: on-failure`；在途 job 由 BullMQ stalled 機制重派。
  */
 export function createShutdown(deps: {
   logger: Pick<ProcessorLogger, "info" | "warn" | "error">;
@@ -300,16 +295,29 @@ export function createShutdown(deps: {
   onSignal?: () => void;
   /** 總時限（毫秒），由 `shutdownDeadlineMs(env.AI_TIMEOUT_MS)` 推導；必填，避免漏傳時退回與設定脫鉤的預設。 */
   deadlineMs: number;
+  /** 時間來源（測試注入；預設 Date.now）。 */
+  now?: () => number;
 }): (signal: string) => Promise<void> {
-  const { logger, run, exit, onSignal, deadlineMs } = deps;
-  let started = false;
+  const { logger, run, onSignal, deadlineMs } = deps;
+  const now = deps.now ?? Date.now;
+  let first: { signal: string; at: number } | undefined;
+  let exited = false;
+  const exitOnce = (): void => {
+    if (exited) return;
+    exited = true;
+    deps.exit(0);
+  };
   return async (signal) => {
-    if (started) {
+    if (first) {
+      if (signal === first.signal && now() - first.at < DUPLICATE_SIGNAL_WINDOW_MS) {
+        logger.info({ signal }, "忽略去重窗內重複送達的同名訊號");
+        return;
+      }
       logger.warn({ signal }, "關閉途中再次收到訊號，立即結束");
-      exit(0);
+      exitOnce();
       return;
     }
-    started = true;
+    first = { signal, at: now() };
     logger.info({ signal }, "received signal, shutting down worker");
     onSignal?.();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -326,8 +334,72 @@ export function createShutdown(deps: {
     } finally {
       clearTimeout(timer);
     }
-    exit(0);
+    exitOnce();
   };
+}
+
+/** 關閉旗標：processor 的 `isClosing` 讀、`buildShutdown` 收到訊號時設。 */
+export interface ClosingState {
+  // 以函式屬性宣告（不依賴 this）：可直接拆出來當 `isClosing` 依賴傳給 processor。
+  readonly isClosing: () => boolean;
+  readonly markClosing: () => void;
+}
+
+export function createClosingState(): ClosingState {
+  let closing = false;
+  return {
+    isClosing: () => closing,
+    markClosing: () => {
+      closing = true;
+    },
+  };
+}
+
+/**
+ * 組裝 worker 的關閉函式（自 bootstrap 抽出，依賴可注入供單測）：決定旗標、收尾步驟順序與總時限，
+ * 訊號語意交給 `createShutdown`。
+ */
+export function buildShutdown(deps: {
+  env: Pick<WorkerEnv, "AI_TIMEOUT_MS">;
+  closing: Pick<ClosingState, "markClosing">;
+  worker: { close(): Promise<void> };
+  stopHeartbeat: () => void;
+  metrics: { stop(): void };
+  cache: { del(...keys: string[]): Promise<unknown>; quit(): Promise<unknown> };
+  pub: { quit(): Promise<unknown> };
+  mongoClient: { close(): Promise<void> };
+  instanceId: string;
+  logger: Pick<ProcessorLogger, "info" | "warn" | "error">;
+  exit: (code: number) => void;
+}): (signal: string) => Promise<void> {
+  const { env, closing, worker, metrics, cache, pub, mongoClient, instanceId, logger } = deps;
+  return createShutdown({
+    logger,
+    // 先立旗標：dedupe 等待中的 job 看到後立刻交回佇列，worker.close() 只需等真正在打 LLM 的 job。
+    onSignal: () => closing.markClosing(),
+    run: async () => {
+      // 先 drain 在途 job 再停心跳：worker.close() 會等在途 job（含長串流）收尾，期間仍需
+      // 持續寫 heartbeat，否則 key 於 TTL 過期、healthcheck 在正常優雅關閉途中誤翻 unhealthy。
+      // 致命路徑不走這裡、不清 timer，key 靠 TTL 過期（data-model E2）。
+      await worker.close();
+      deps.stopHeartbeat();
+      // 指標 timer 與心跳同時停：關閉時**不輸出未滿一窗的殘窗摘要**——優雅關閉的日誌尾端
+      // 出現一則低值摘要會被誤讀為系統異常（data-model E3）。
+      metrics.stop();
+      // 主動刪掉本實例的 key：優雅縮減副本時，healthcheck／api 不必再等 TTL 才發現這個實例已離開，
+      // 殘留快照也不會被 api 加總。失敗只記 warn、不中斷後續收尾；崩潰路徑刪不到，由 TTL 與
+      // api 端的過期快照過濾兜底。
+      await cache
+        .del(heartbeatKey(instanceId), workerMetricsKey(instanceId))
+        .catch((err: unknown) => logger.warn({ err }, "刪除本實例 heartbeat／metrics key 失敗"));
+      await mongoClient.close();
+      await pub.quit();
+      await cache.quit();
+    },
+    exit: deps.exit,
+    // 跟著已驗證的 AI_TIMEOUT_MS 走：調高 LLM 逾時，關閉時限一起變長，不會在串流途中先被自己的時限砍掉。
+    deadlineMs: shutdownDeadlineMs(env.AI_TIMEOUT_MS),
+  });
 }
 
 /**
