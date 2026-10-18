@@ -1,5 +1,5 @@
 import { ApiError, FinishReason, GoogleGenAI, ThinkingLevel } from "@google/genai";
-import type { GenerateContentConfig, ThinkingConfig } from "@google/genai";
+import type { GenerateContentConfig, GoogleGenAIOptions, ThinkingConfig } from "@google/genai";
 import { DEFAULT_AI_MAX_OUTPUT_TOKENS, DEFAULT_AI_TEMPERATURE } from "../lib/env-schema.js";
 import { THINKING_LEVEL, thinkingCapability } from "../lib/model-capabilities.js";
 import { AiProviderError } from "./provider.js";
@@ -16,8 +16,9 @@ import type { AiFinishReason, AiProvider, AiStreamRequest, AiStreamResult, AiUsa
  * 舊版還需要 `result.response.catch()` 吞掉背景彙總 promise 的 rejection；新 SDK 的串流是單一
  * AsyncGenerator，錯誤只會從 for-await 拋出，該 workaround 已不需要。
  *
- * 不設 SDK 內建重試（`httpOptions.retryOptions` 預設即關閉）：重試由 BullMQ attempts 統一負責，
- * 兩層重試疊加會讓一次失敗放大成 attempts × SDK 重試次數的 LLM 呼叫。
+ * 明確關閉 SDK 內建重試（`httpOptions.retryOptions.attempts: 1`，見 `buildClientOptions`）：重試由 BullMQ
+ * attempts 統一負責，兩層重試疊加會讓一次失敗放大成 attempts × SDK 重試次數的 LLM 呼叫。SDK 2.24 未傳
+ * `retryOptions` 時雖不重試，但型別註解寫「未指定 attempts 預設 5」——不賭預設值，日後升版改了預設也不會悄悄疊加。
  */
 /** 缺金鑰時的錯誤訊息（匯出供測試比對）。 */
 export const MISSING_API_KEY_MESSAGE =
@@ -66,7 +67,7 @@ export class GeminiProvider implements AiProvider {
         code: "provider_error",
       });
     }
-    this.client ??= new GoogleGenAI({ apiKey: this.apiKey });
+    this.client ??= new GoogleGenAI(buildClientOptions(this.apiKey));
     const ai = this.client;
     const config = buildGenerateConfig({ model: this.model, signal, responseJsonSchema, ...this.generation });
 
@@ -101,6 +102,11 @@ export class GeminiProvider implements AiProvider {
     if (signal.aborted) throw classifyGeminiError(signal.reason, signal);
     return { text, finishReason, usage };
   }
+}
+
+/** 組 SDK client 的建構參數（純函式，可單測）：`attempts: 1`＝只送原始請求、不重試。 */
+export function buildClientOptions(apiKey: string): GoogleGenAIOptions {
+  return { apiKey, httpOptions: { retryOptions: { attempts: 1 } } };
 }
 
 /** 組 `generateContentStream` 的 config（純函式，可單測）。 */

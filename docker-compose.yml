@@ -114,7 +114,9 @@ services:
     # SIGTERM → SIGKILL 寬限：worker.close() 只需等「正在打 LLM」的 job——上限 AI_TIMEOUT_MS 30s
     # ＋結果寫入 ≤10s ≈ 40s，再留 5s 緩衝（research D7）。dedupe 等待迴圈（最長約 80s）不計入：
     # 它會觀察關閉訊號、提早把 job 交回佇列，不再拖住關閉（審查 §3.2 已修）。
-    # 若調高 AI_TIMEOUT_MS，本值 MUST 同步調高，否則收尾中的 job 會被 SIGKILL、只能靠 stalled 重派。
+    # worker 內部另有總時限＝AI_TIMEOUT_MS＋10s（apps/worker/src/main.ts `shutdownDeadlineMs`），逾時記 warn
+    # 後自行 exit(0)；本值要比它多留 5s，讓 worker 先自己結束、不被 SIGKILL（被砍時日誌停在半途）。
+    # 若調高 AI_TIMEOUT_MS，本值 MUST 同步調為 AI_TIMEOUT_MS＋15s，否則收尾中的 job 會被 SIGKILL、只能靠 stalled 重派。
     stop_grace_period: 45s
     # 祕密與調參於執行時注入（憲章 VI：不烘入 image）；容器內連線位址由 environment 覆蓋
     env_file: apps/worker/.env

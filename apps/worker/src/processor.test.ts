@@ -11,7 +11,7 @@ import { buildDiagnosisSignature } from "./cache/signature.js";
 import type { DiagnosisContext } from "./context/context-builder.js";
 import type { DiagnosisRepository } from "./diagnosis-repository.js";
 import type { LivenessTracker } from "./lib/liveness.js";
-import { createProcessor, isTerminalFailure, NO_CONTEXT_CODE, NO_CONTEXT_MESSAGE } from "./processor.js";
+import { createProcessor, isNoContextFailure, isTerminalFailure, NO_CONTEXT_CODE, NO_CONTEXT_MESSAGE } from "./processor.js";
 import type { ProcessorConfig, ProcessorJob, ProcessorLogger } from "./processor.js";
 
 // ---------------------------------------------------------------------------
@@ -83,10 +83,16 @@ class FakeStore implements ProcessorStore {
 
 class FakePublisher {
   readonly events: AiStreamEvent[] = [];
-  async publish(_channel: string, message: string) {
+  /** 自訂 PUBLISH 的落定方式（延遲／失敗）；未設定時立即成功。事件於呼叫當下就記入 `events`。 */
+  respond: ((event: AiStreamEvent) => Promise<unknown>) | undefined;
+  /** 呼叫順序紀錄（與 repo／job 共用時可斷言跨元件的先後）。 */
+  order: string[] | undefined;
+  publish(_channel: string, message: string): Promise<unknown> {
     // 送出的每則事件都必須通過契約（含必填 attempt）。
-    this.events.push(AiStreamEventSchema.parse(JSON.parse(message)));
-    return 1;
+    const event = AiStreamEventSchema.parse(JSON.parse(message));
+    this.events.push(event);
+    this.order?.push(`publish:${event.type}`);
+    return this.respond ? this.respond(event) : Promise.resolve(1);
   }
   ofType<T extends AiStreamEvent["type"]>(type: T) {
     return this.events.filter((e): e is Extract<AiStreamEvent, { type: T }> => e.type === type);
@@ -103,10 +109,14 @@ interface TriggerDoc {
 class FakeRepo implements DiagnosisRepository {
   readonly diagnoses: { machineId: string; jobId: string; result: DiagnosisResult }[] = [];
   readonly triggers: TriggerDoc[] = [];
+  failInsertTrigger = false;
+  order: string[] | undefined;
   async insertDiagnosis(doc: { machineId: string; jobId: string; result: DiagnosisResult }) {
     this.diagnoses.push(doc);
   }
   async insertTrigger(doc: TriggerDoc) {
+    this.order?.push("insertTrigger");
+    if (this.failInsertTrigger) throw new Error("mongo down");
     this.triggers.push(doc);
   }
 }
@@ -212,6 +222,19 @@ const silentLogger: ProcessorLogger = {
   child: () => silentLogger,
 };
 
+/** 記下 warn／error 的 fake logger（斷言 publish 失敗有留紀錄）。 */
+function recordingLogger() {
+  const warns: { obj: unknown; msg?: string }[] = [];
+  const errors: { obj: unknown; msg?: string }[] = [];
+  const logger: ProcessorLogger = {
+    info: () => {},
+    warn: (obj, msg) => warns.push({ obj, msg }),
+    error: (obj, msg) => errors.push({ obj, msg }),
+    child: () => logger,
+  };
+  return { logger, warns, errors };
+}
+
 const CONTEXT: DiagnosisContext = {
   machineId: "press-02",
   windowMinutes: 5,
@@ -265,7 +288,10 @@ function makeLiveness() {
   };
 }
 
-/** 活性槽必須成對：begin、end 各恰好一次且是同一個槽，touch 也只打在該槽上。 */
+/**
+ * 活性槽必須成對：begin、end 各恰好一次且是同一個槽，touch 也只打在該槽上。
+ * 只檢查一致性：touch 從未被呼叫時 `every` 恆真，「有沒有 touch」由各測試另行斷言。
+ */
 function expectLivenessPaired(liveness: ReturnType<typeof makeLiveness>) {
   expect(liveness.begin).toHaveBeenCalledTimes(1);
   const slot = liveness.begin.mock.calls[0]?.[0];
@@ -303,6 +329,7 @@ function setup(
     buildContext?: () => Promise<DiagnosisContext>;
     liveness?: LivenessTracker;
     clock?: FakeClock;
+    logger?: ProcessorLogger;
   } = {},
 ) {
   const store = new FakeStore();
@@ -316,6 +343,7 @@ function setup(
     buildContext = async () => context,
     liveness,
     clock = new FakeClock(CLOCK_START),
+    logger = silentLogger,
     ...config
   } = overrides;
   const processor = createProcessor({
@@ -324,7 +352,7 @@ function setup(
     repo,
     ai,
     buildContext,
-    logger: silentLogger,
+    logger,
     metrics,
     config: { ...CONFIG, ...config },
     isClosing,
@@ -423,6 +451,8 @@ describe("createProcessor：去重", () => {
     expect(metrics.recordCacheHit).toHaveBeenCalledTimes(1);
     expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
     expectLivenessPaired(liveness);
+    // context 後 1 次＋等待迴圈每輪開頭 1 次（輪詢 1 輪 → 迴圈跑 2 輪）：漏掉迴圈內的 touch 會少計
+    expect(liveness.touch).toHaveBeenCalledTimes(1 + (clock.sleeps.length + 1));
   });
 
   it("持鎖者失敗後，等待者接手重算", async () => {
@@ -501,6 +531,8 @@ describe("createProcessor：dedupe 等待 deadline（注入時間）", () => {
     expect(publisher.events).toEqual([]);
     expect(store.data.get(lockKey)).toBe("stuck-holder");
     expectLivenessPaired(liveness);
+    // context 後 1 次＋等待迴圈每輪開頭 1 次（sleep 4 次 → 迴圈跑 5 輪）：touch 次數須隨輪詢輪數增加
+    expect(liveness.touch).toHaveBeenCalledTimes(1 + (clock.sleeps.length + 1));
   });
 });
 
@@ -528,6 +560,8 @@ describe("createProcessor：全欄位斷言（進度／trigger／metrics／活�
     expect(metrics.recordLatency).toHaveBeenCalledTimes(1);
     expect(metrics.recordLatency).toHaveBeenCalledWith(1234);
     expectLivenessPaired(liveness);
+    // context 後 1 次＋取鎖迴圈 1 次＋每個 token 1 次：漏掉 onToken 或迴圈內的 touch 都會少計
+    expect(liveness.touch).toHaveBeenCalledTimes(1 + 1 + publisher.ofType("ai/token").length);
 
     const { cacheKey, lockKey } = keysFor(CONTEXT);
     expect(store.ttlsOf("cache")).toEqual([{ op: "cache", key: cacheKey, ttlSeconds: CONFIG.cacheTtlSeconds }]);
@@ -554,6 +588,8 @@ describe("createProcessor：全欄位斷言（進度／trigger／metrics／活�
     expect(metrics.recordLatency).not.toHaveBeenCalled();
     expect(store.ttls).toEqual([]); // 不取鎖、不寫 cache、不吃限流額度
     expectLivenessPaired(liveness);
+    // 命中於迴圈前：只有 context 後那 1 次
+    expect(liveness.touch).toHaveBeenCalledTimes(1);
   });
 
   it("重試（非第一次嘗試）不重複計 hit／miss，但成功的 LLM 呼叫仍記延遲樣本", async () => {
@@ -585,6 +621,8 @@ describe("createProcessor：全欄位斷言（進度／trigger／metrics／活�
     expect(metrics.recordCacheMiss).toHaveBeenCalledTimes(1);
     expect(metrics.recordLatency).not.toHaveBeenCalled();
     expectLivenessPaired(liveness);
+    // context 後 1 次＋取鎖迴圈 1 次（失敗前沒有 token）
+    expect(liveness.touch).toHaveBeenCalledTimes(2);
   });
 
   it("buildContext 拋錯（最早的失敗點）：活性槽仍成對釋放、不計 hit／miss", async () => {
@@ -602,6 +640,7 @@ describe("createProcessor：全欄位斷言（進度／trigger／metrics／活�
     expect(metrics.recordCacheHit).not.toHaveBeenCalled();
     expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
     expectLivenessPaired(liveness);
+    expect(liveness.touch).not.toHaveBeenCalled(); // 拋在第一次 touch 之前
   });
 });
 
@@ -619,6 +658,28 @@ describe("createProcessor：重試語意", () => {
     expect(publisher.ofType("ai/error")).toEqual([]);
     // token 仍帶 attempt，前端可據以換輪清空
     expect(publisher.ofType("ai/token").every((e) => e.attempt === 1)).toBe(true);
+  });
+
+  it("非最終嘗試的 ai_timeout：丟一般 Error（非 UnrecoverableError，交給 BullMQ 重試）且不送 ai/error", async () => {
+    const { publisher, processor } = setup([async () => new Promise<AiStreamResult>(() => {})], { aiTimeoutMs: 30 });
+    const err = await processor(makeJob("t", { attemptsMade: 0, attempts: 3 })).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(UnrecoverableError);
+    expect((err as Error).message).toBe("AI streaming timeout after 30ms");
+    expect(publisher.ofType("ai/error")).toEqual([]);
+  });
+
+  it("非 AiProviderError 的一般錯誤：第一次嘗試視為可重試（不送 ai/error、非 UnrecoverableError）", async () => {
+    const { publisher, processor } = setup([
+      async () => {
+        throw new TypeError("fetch failed");
+      },
+    ]);
+    const err = await processor(makeJob("g", { attemptsMade: 0, attempts: 3 })).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(UnrecoverableError);
+    expect((err as Error).message).toBe("fetch failed");
+    expect(publisher.ofType("ai/error")).toEqual([]);
   });
 
   it("最終嘗試的 schema 錯誤：送 ai/error(schema_invalid) 並帶 attempt", async () => {
@@ -733,6 +794,8 @@ describe("createProcessor：空脈絡短路", () => {
     expect(job.progress).toEqual([0, 20]);
     // 短路路徑同樣成對釋放活性槽：漏 end 會讓槽永遠被佔，最終被判定為卡死
     expectLivenessPaired(liveness);
+    // 短路於 cache／迴圈前：只有 context 後那 1 次
+    expect(liveness.touch).toHaveBeenCalledTimes(1);
   });
 
   it.each<[string, Partial<DiagnosisContext>]>([
@@ -852,6 +915,197 @@ describe("createProcessor：LLM 限流與關閉", () => {
 
     holder.release();
     await expect(holding).resolves.toBeUndefined();
+  });
+});
+
+/** 可由測試放行的 PUBLISH 回應（模擬 Redis 回覆尚未到達）。 */
+function gatedPublish() {
+  let open: () => void = () => {};
+  const gate = new Promise<number>((r) => {
+    open = () => r(1);
+  });
+  return { gate, release: () => open() };
+}
+
+describe("createProcessor：終態事件 await 送出（AR-5／WK-14）", () => {
+  it("LLM 路徑：ai/done 的 PUBLISH 未完成前 processor 不 resolve；ai/token 不被等待", async () => {
+    const { publisher, repo, processor } = setup([okScript()]);
+    const done = gatedPublish();
+    // token 的 PUBLISH 永不完成：若被 await，processor 會永遠卡住。
+    publisher.respond = (e) => (e.type === "ai/done" ? done.gate : new Promise(() => {}));
+    const run = track(processor(makeJob("a")));
+    await flush();
+
+    expect(publisher.events.map((e) => e.type)).toEqual(["ai/token", "ai/token", "ai/done"]);
+    expect(repo.triggers).toHaveLength(1); // 落地已完成，只差終態通知
+    expect(run.state.settled).toBe(false);
+
+    done.release();
+    await expect(run.promise).resolves.toBeUndefined();
+  });
+
+  it("cache 命中路徑：ai/done 的 PUBLISH 未完成前 processor 不 resolve", async () => {
+    const { store, publisher, processor } = setup([okScript()]);
+    store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
+    const done = gatedPublish();
+    publisher.respond = () => done.gate;
+    const run = track(processor(makeJob("hit")));
+    await flush();
+    expect(publisher.ofType("ai/done")).toHaveLength(1);
+    expect(run.state.settled).toBe(false);
+
+    done.release();
+    await expect(run.promise).resolves.toBeUndefined();
+  });
+
+  it("終態 ai/error（最終嘗試）：PUBLISH 完成前不 throw——具體錯誤先於 BullMQ failed", async () => {
+    const { publisher, processor } = setup([
+      async () => {
+        throw new AiProviderError("API key not valid", { retryable: false, code: "provider_error", status: 400 });
+      },
+    ]);
+    const pending = gatedPublish();
+    publisher.respond = () => pending.gate;
+    const run = track(processor(makeJob("e")));
+    await flush();
+    expect(publisher.ofType("ai/error")).toHaveLength(1);
+    expect(run.state.settled).toBe(false);
+
+    pending.release();
+    await expect(run.promise).rejects.toBeInstanceOf(UnrecoverableError);
+  });
+
+  it("no_context：ai/error 的 PUBLISH 完成前不 throw", async () => {
+    const { publisher, processor } = setup([okScript()], { context: EMPTY_CONTEXT });
+    const pending = gatedPublish();
+    publisher.respond = () => pending.gate;
+    const run = track(processor(makeJob("ghost")));
+    await flush();
+    expect(publisher.ofType("ai/error")).toEqual([expect.objectContaining({ code: NO_CONTEXT_CODE })]);
+    expect(run.state.settled).toBe(false);
+
+    pending.release();
+    await expect(run.promise).rejects.toBeInstanceOf(UnrecoverableError);
+  });
+
+  it("ai/done 的 PUBLISH 失敗：記 warn，job 仍成功（不轉失敗重試、不重複落地）", async () => {
+    const { logger, warns } = recordingLogger();
+    const { publisher, repo, store, processor } = setup([okScript()], { logger });
+    const boom = new Error("redis down");
+    publisher.respond = (e) => (e.type === "ai/done" ? Promise.reject(boom) : Promise.resolve(1));
+
+    await expect(processor(makeJob("a"))).resolves.toBeUndefined();
+    expect(repo.diagnoses).toHaveLength(1);
+    expect(repo.triggers).toHaveLength(1);
+    expect(store.cacheKeys()).toHaveLength(1);
+    expect(warns).toEqual([{ obj: { eventType: "ai/done", err: boom }, msg: "終態事件 publish 失敗（job 結果不變）" }]);
+  });
+
+  it("cache 命中時 ai/done 的 PUBLISH 失敗：記 warn，job 仍成功", async () => {
+    const { logger, warns } = recordingLogger();
+    const { store, publisher, repo, processor } = setup([okScript()], { logger });
+    store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
+    publisher.respond = () => Promise.reject(new Error("redis down"));
+
+    await expect(processor(makeJob("hit"))).resolves.toBeUndefined();
+    expect(repo.triggers).toEqual([expect.objectContaining({ jobId: "hit", cached: true })]);
+    expect(warns).toEqual([expect.objectContaining({ obj: expect.objectContaining({ eventType: "ai/done" }) })]);
+  });
+
+  it("終態 ai/error 的 PUBLISH 失敗：記 warn，原本的錯誤照常拋出（不被通知失敗蓋掉）", async () => {
+    const { logger, warns, errors } = recordingLogger();
+    const { publisher, processor } = setup([async () => ({ text: "", finishReason: "safety" })], { logger });
+    publisher.respond = () => Promise.reject(new Error("redis down"));
+
+    const err = await processor(makeJob("s")).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnrecoverableError);
+    expect((err as Error).message).toContain("finishReason=safety");
+    expect(errors).toEqual([expect.objectContaining({ msg: "AI 診斷失敗（終態，通知前端）" })]);
+    expect(warns).toEqual([expect.objectContaining({ obj: expect.objectContaining({ eventType: "ai/error" }) })]);
+  });
+
+  it("no_context 的 PUBLISH 失敗：仍拋 UnrecoverableError（failed handler 照常補寫 trigger）", async () => {
+    const { logger, warns } = recordingLogger();
+    const { publisher, processor } = setup([okScript()], { context: EMPTY_CONTEXT, logger });
+    publisher.respond = () => Promise.reject(new Error("redis down"));
+
+    await expect(processor(makeJob("ghost"))).rejects.toBeInstanceOf(UnrecoverableError);
+    expect(warns).toContainEqual(expect.objectContaining({ obj: expect.objectContaining({ eventType: "ai/error" }) }));
+  });
+
+  it("ai/token 的 PUBLISH 失敗：記 warn、不中斷串流，ai/done 照常送出", async () => {
+    const { logger, warns } = recordingLogger();
+    const { publisher, processor } = setup([okScript()], { logger });
+    publisher.respond = (e) => (e.type === "ai/token" ? Promise.reject(new Error("redis down")) : Promise.resolve(1));
+
+    await expect(processor(makeJob("a"))).resolves.toBeUndefined();
+    await flush(); // token 的 catch 是 fire-and-forget，等它落定
+    expect(publisher.ofType("ai/done")).toHaveLength(1);
+    expect(warns.filter((w) => w.msg === "publish 失敗")).toHaveLength(2);
+  });
+});
+
+describe("createProcessor：cache 命中路徑順序（AR-A12）", () => {
+  it("先寫 trigger、再進度 100，最後才送 ai/done（與 LLM 路徑一致）", async () => {
+    const order: string[] = [];
+    const { store, publisher, repo, processor } = setup([okScript()]);
+    store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
+    publisher.order = order;
+    repo.order = order;
+    const job = makeJob("hit");
+    const updateProgress = job.updateProgress.bind(job);
+    job.updateProgress = async (p: number) => {
+      order.push(`progress:${p}`);
+      await updateProgress(p);
+    };
+
+    await processor(job);
+    expect(order).toEqual(["progress:0", "progress:20", "insertTrigger", "progress:100", "publish:ai/done"]);
+  });
+
+  it("LLM 路徑同樣是 trigger → 進度 100 → ai/done", async () => {
+    const order: string[] = [];
+    const { publisher, repo, processor } = setup([okScript()]);
+    publisher.order = order;
+    repo.order = order;
+    const job = makeJob("m");
+    const updateProgress = job.updateProgress.bind(job);
+    job.updateProgress = async (p: number) => {
+      order.push(`progress:${p}`);
+      await updateProgress(p);
+    };
+
+    await processor(job);
+    expect(order.slice(-3)).toEqual(["insertTrigger", "progress:100", "publish:ai/done"]);
+  });
+
+  it("cache 命中但 trigger 寫入失敗：不送 ai/done，丟可重試錯誤走既有重試路徑", async () => {
+    const { store, publisher, repo, processor } = setup([okScript()]);
+    store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
+    repo.failInsertTrigger = true;
+    const job = makeJob("hit", { attemptsMade: 0, attempts: 3 });
+
+    const err = await processor(job).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(UnrecoverableError);
+    expect((err as Error).message).toBe("mongo down");
+    expect(publisher.events).toEqual([]);
+    expect(job.progress).toEqual([0, 20]);
+  });
+
+  it("LLM 路徑 trigger 寫入失敗：同樣不送 ai/done", async () => {
+    const { publisher, repo, processor } = setup([okScript()]);
+    repo.failInsertTrigger = true;
+    await expect(processor(makeJob("m"))).rejects.toThrow("mongo down");
+    expect(publisher.ofType("ai/done")).toEqual([]);
+  });
+});
+
+describe("isNoContextFailure", () => {
+  it("只認空脈絡短路的訊息", () => {
+    expect(isNoContextFailure(new UnrecoverableError(NO_CONTEXT_MESSAGE))).toBe(true);
+    expect(isNoContextFailure(new UnrecoverableError("API key not valid"))).toBe(false);
+    expect(isNoContextFailure(new UnrecoverableError("job stalled more than allowable limit"))).toBe(false);
   });
 });
 
