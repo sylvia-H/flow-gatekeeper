@@ -3187,7 +3187,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 ### 15.6 1.0.0 之後的現況摘要
 
-本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；表中第 1～5 列與其後的 1.1.0 release 準備列於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第 6～9 列、2.0.0 release 準備列與 SDD feature 013 於 2026-10-17 以產品版本 **2.0.0**（tag `2.0.0`）發布；第 10 列起尚未發布（版號待定，`CHANGELOG.md` 記於 `[Unreleased]`）。只改版號與文件的 release 準備分支、及直接 commit 以「—」列出、不編號。變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
+本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；表中第 1～5 列與其後的 1.1.0 release 準備列於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第 6～9 列、2.0.0 release 準備列與 SDD feature 013 於 2026-10-17 以產品版本 **2.0.0**（tag `2.0.0`）發布；第 10 列與 2.1.0 release 準備列於 2026-10-18 以產品版本 **2.1.0**（tag `2.1.0`）發布。只改版號與文件的 release 準備分支、及直接 commit 以「—」列出、不編號。變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
 但改動了多處跨 feature 的行為；各章 reference code 保留，另以「已變更」註記指回本節。依 `develop` 的 merge 順序
 （`git log --oneline --first-parent --merges 3e94ac2..HEAD` 核對）：
 
@@ -3206,6 +3206,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 9 | `docs/20261018-demo-video` | `84feedd` | README demo 影片以 2.0.0 介面重錄、新增錄影劇本 `record-demo.cjs` | Demo 影片重錄 |
 | — | `docs/20261017-release-2.0.0` | （以 `git log --first-parent --merges` 為準） | 2.0.0 release 準備（版號、CHANGELOG、文件版本註記） | — |
 | 10 | `fix/20261018-review03-quickfix` | （以 `git log --first-parent --merges` 為準） | 第三輪審查報告 §6 Batch E（quick-fix）：P1 與日誌遮蔽、HTTP 錯誤回應、relay 與 Gateway 入站限速、worker 終態事件順序、關閉總時限、web 結果未送達收尾、測試門檻 ratchet；契約升 1.3.0 | 第三輪審查 quick-fix |
+| — | `docs/20261018-release-2.1.0` | （以 `git log --first-parent --merges` 為準） | 2.1.0 release 準備（版號、CHANGELOG、文件版本註記；版號由原規劃的 2.0.1 改為 2.1.0，見下方「第三輪審查 quick-fix」裁決 14） | — |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」），但不列入本表。
 
@@ -3385,7 +3386,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   輸出 BT.709／limited range 並標記色彩；先在暫存目錄編碼完成才覆寫 `docs/demo/`（不用 .tmp＋rename：Windows 上目標被播放器開著時 rename 會失敗），覆寫失敗時保留暫存成品並印出路徑；逐格寫檔失敗或對齊失準皆在呼叫 LLM 前中止；Chromium 尋找與面板狀態對照抽成 `apps/web/scripts/lib/browser.cjs`，與截圖劇本共用。
   使用者裁決：輸出 mp4（ffmpeg 用下載解壓即用的可攜版，不安裝到系統）、注入假游標、對 demo 容器錄。
 
-**第三輪審查 quick-fix**（`fix/20261018-review03-quickfix`，merge 以 `git log --first-parent --merges` 為準，2026-10-18；報告 `docs/20260927-research-review03.md` §6 Batch E；主要 commit：`7cd7a3f`（api）、`5e538bb`（relay／Gateway）、`d1384f6`（worker）、`b8d5bc0`（web）、`819391f`（coverage 門檻與報告目錄，TQ-15／TQ-20）、`3d45c3e`（契約 1.3.0 與文件回補）；合併門各輪修正另見該分支的 `git log --first-parent`；變更明細見 `CHANGELOG.md` `[Unreleased]`，backlog 見 ADR-002 §6.5.1 的 review03 列）：
+**第三輪審查 quick-fix**（`fix/20261018-review03-quickfix`，merge 以 `git log --first-parent --merges` 為準，2026-10-18；報告 `docs/20260927-research-review03.md` §6 Batch E；主要 commit：`7cd7a3f`（api）、`5e538bb`（relay／Gateway）、`d1384f6`（worker）、`b8d5bc0`（web）、`819391f`（coverage 門檻與報告目錄，TQ-15／TQ-20）、`3d45c3e`（契約 1.3.0 與文件回補）；合併門各輪修正另見該分支的 `git log --first-parent`；變更明細見 `CHANGELOG.md` `[2.1.0]`，backlog 見 ADR-002 §6.5.1 的 review03 列）：
 
 - **做了什麼**：
   - api 日誌與 HTTP：P1（API-1）producer `Queue` 在建構時掛節流 `error` listener，Redis 認證失敗不再經 BullMQ `console.error` 把 `REDIS_PASSWORD` 明文寫進 stderr；
@@ -3417,6 +3418,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   11. （合併門第 2 輪）api 與 worker 收到第一次訊號後，1 秒內（< 1000 ms）再收到同名訊號就忽略並記 info；第 1000 ms 起的同名訊號、或任何不同名的訊號立即 `exit(0)`，exit 至多一次。起因：POSIX dev 的 watch 工具會把一次 Ctrl+C 送成兩次 SIGINT。
   12. （合併門第 2 輪）WEB-17 剩下的部分——`jobs` 逐 token 寫 reactive、partial-json 每則 token 重新解析——接受，留在 backlog（ADR-002 §6.5.1）。
   13. （合併門第 2 輪）送出緩衝超過高水位時應用層 pong 照回，放大只靠入站 token bucket 擋；協定層 ping frame 改為不自動回應（`autoPong: false`）。屬 wire 行為變更，因 1.3.0 尚未發布，直接併入 1.3.0、不再升版。
+  14. （release，推翻紀錄：原規劃 2.0.1）產品版號定為 **2.1.0**：本批含對外可見的相容性變更（HTTP 400 形狀、body 上限、WS 入站限速、日誌形狀）且契約升 1.3.0，依 1.1.0 前例升 minor，避免被當成可直接升級的 patch；發版前先以 GitHub Actions（ubuntu）手動跑一次 CI，補「覆蓋率門檻只在 Windows 量過」的證據。
 - **行為變更（對外可見）**：
   - HTTP：壞 JSON 由 `400 {message: <解析錯誤原文>, error: "Bad Request", statusCode}` 改為 `400 {statusCode, message: "Invalid JSON body"}`（不再回顯本文片段、少 `error` 欄位）；body > 16 kb 回 `413 {statusCode, message: "Payload too large"}`（原上限 100 kb、message 為 body-parser 原文）；body-parser 其他 4xx 改回 reason phrase（charset／encoding 的 415 由 `unsupported charset "X"` 等原文改為 `Unsupported Media Type`，`request.aborted`／`request.size.invalid` 的 400 為 `Bad Request`）；非 `HttpException` 的 5xx 除 500 外回標準 reason phrase；回應不帶 `X-Powered-By`。
     `POST /diagnoses` 由 controller／service 回的 201／400（契約不符）／404／409／415（Content-Type）／503 不變；web 的錯誤文案只採用含中文的後端 message，畫面不變。

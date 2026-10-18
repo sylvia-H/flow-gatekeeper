@@ -8,13 +8,14 @@
 並把「背壓比值」與「逐字串流的 AI 推理」直接畫在同一個畫面上——
 再把整套系統做進**受監督的容器**、補齊**崩潰自癒**與**可觀測性基線**，讓它不只是能跑，而是禁得起斷線、崩潰與被監控。
 
-**現況為 2.0.0**（2026-10-17）：feature 013 把監控台整體換皮為「實驗室玻璃與蝕刻刻度」、介面文案改為繁體中文，AI 預設模型改為 Gemini `gemini-3.5-flash-lite`，demo 影片以新介面重錄。
+**現況為 2.1.0**（2026-10-18）：修掉 2.0.0 已公開的 P1（Redis 認證失敗時密碼經 BullMQ 明文進 api stderr）與第三輪審查 quick-fix，契約升 asyncapi 1.3.0；有對外可見的相容性變更，升級前請讀 [`CHANGELOG.md`](CHANGELOG.md) `[2.1.0]` 的「相容性注意」。
+更早的 2.0.0（2026-10-17）：feature 013 把監控台整體換皮為「實驗室玻璃與蝕刻刻度」、介面文案改為繁體中文，AI 預設模型改為 Gemini `gemini-3.5-flash-lite`，demo 影片以新介面重錄。
 更早的 1.1.0（2026-09-28）在 1.0.0 之後經三輪全面審查修復、技術棧升級（NestJS 11／Express 5、Vite 7、Zod 4、Pinia 3、Vitest 4、pnpm 10）
-與測試基礎建設補齊（覆蓋率門檻、真 Redis／Mongo 整合測試、跨 process e2e、變異測試）。逐項變更與升級注意事項（含 2.0.0 的不相容變更）見 [`CHANGELOG.md`](CHANGELOG.md)。
+與測試基礎建設補齊（覆蓋率門檻、真 Redis／Mongo 整合測試、跨 process e2e、變異測試）。逐項變更與升級注意事項（含 2.0.0 的不相容變更與 2.1.0 的相容性注意）見 [`CHANGELOG.md`](CHANGELOG.md)。
 
 <br/>
 
-![Release 2.0.0](https://img.shields.io/badge/release-2.0.0-0f6cbd)
+![Release 2.1.0](https://img.shields.io/badge/release-2.1.0-0f6cbd)
 ![asyncapi 1.3.0](https://img.shields.io/badge/asyncapi-1.3.0-6b7280)
 ![Vue 3.5](https://img.shields.io/badge/Vue-3.5-42b883?logo=vuedotjs&logoColor=white)
 ![NestJS 11](https://img.shields.io/badge/NestJS-11-e0234e?logo=nestjs&logoColor=white)
@@ -59,7 +60,7 @@
 
 > 錄製方式（2.0.0，2026-10-17）：本機清空 `ai-cache:*`／`ai-lock:*` 後，以錄影劇本 `apps/web/scripts/record-demo.cjs`（Playwright 驅動 headless Chromium、CDP 逐格擷取再以 ffmpeg 轉 H.264，畫面上的游標是劇本注入的假游標）對著跑在容器裡的真實全棧（api／worker／web／Redis／MongoDB，AI 由 Gemini `gemini-3.5-flash-lite` 即時回覆）一鏡到底錄影，全程無手動剪輯或字卡。想自己重現，見下方「[快速開始](#快速開始)」的「截圖劇本」段末。1.0.0 影片同樣是對容器全棧腳本化操作、無剪輯，當時以 Playwright 內建錄影（即時 VP8、無游標），AI 為 Gemini 2.5 Flash。
 
-> **版本註記**：影片與海報為 **2.0.0** 的畫面（2026-10-17 重錄，feature 013 UI 全面改版之後的繁中介面），下載連結指向 2.0.0 release 的資產；1.0.0 的舊介面影片仍留在 1.0.0 release，不再代表現況（1.1.0 未重錄、沿用 1.0.0）。下方「功能逐項展示」的 14 張截圖於 2026-10-17 由截圖劇本 `apps/web/scripts/screenshots.cjs --readme` 單輪重拍（用法見「[快速開始](#快速開始)」的「截圖劇本」）。影片刻意**同時**放在 git（`docs/demo/`）與 GitHub Release：Release 供上方連結直接下載，git 內一份供 clone 後離線閱讀 README，兩者維持現狀。
+> **版本註記**：影片與海報為 **2.0.0** 的畫面（2026-10-17 重錄，feature 013 UI 全面改版之後的繁中介面），下載連結指向 2.0.0 release 的資產；1.0.0 的舊介面影片仍留在 1.0.0 release，不再代表現況（1.1.0 未重錄、沿用 1.0.0；2.1.0 介面只多一句失敗訊息與一個串流標題，未重錄、沿用 2.0.0）。下方「功能逐項展示」的 14 張截圖於 2026-10-17 由截圖劇本 `apps/web/scripts/screenshots.cjs --readme` 單輪重拍（用法見「[快速開始](#快速開始)」的「截圖劇本」）。影片刻意**同時**放在 git（`docs/demo/`）與 GitHub Release：Release 供上方連結直接下載，git 內一份供 clone 後離線閱讀 README，兩者維持現狀。
 
 ---
 
@@ -502,7 +503,8 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | **009** | [可觀測性基線](specs/009-observability-baseline/spec.md) | 三端補齊「監控台自己也該可被監控」的基線：pino 結構化 JSON 日誌（含關聯鍵）、`GET /healthz` 依賴狀態探針（Redis／Mongo 二態回應）、queue 深度／WS 連線數／LLM latency／cache 命中率等關鍵指標週期入 log、dev-only **Metrics Panel**（`VITE_METRICS_PANEL`，唯讀、預設收合，production build 預設關閉）、有損寫入語意明文化（見下方「[已宣告的取捨](#已宣告的取捨)」） |
 | **1.1.0 維護**（2026-09，非 SDD） | [`CHANGELOG.md`](CHANGELOG.md)、指南 §15.6 | 四條維護分支：兩輪審查修復（第一輪 P0～P2、第二輪 Batch A～D）、技術棧升級（NestJS 11／Express 5、Vite 7、Zod 4、Pinia 3、Vitest 4、pnpm 10、`@google/genai`）、測試基礎建設（覆蓋率門檻、整合測試、e2e、變異測試）、契約升 1.2.0 與新增 `CHANGELOG.md`；第三輪審查報告與其修復留待 1.1.0 之後 |
 | **013** | [UI 全面改版（實驗室玻璃與蝕刻刻度）](specs/013-ui-redesign/spec.md) | web 監控台整體換皮：三 stage 產線拓樸取代機台網格、背壓 strip（60 秒視窗合併比＋液柱刻度）、診斷串流漸進骨架與快取耗時對比、深淺雙主題、繁中文案、≥ 1366px 推擠式／< 1366px bottom-sheet 的 AI 診斷面板；視覺真實來源改為 `apps/web/PRODUCT.md`／`DESIGN.md` |
-| **2.0.0 維護**（2026-10，非 SDD） | [`CHANGELOG.md`](CHANGELOG.md)、指南 §15.6 | 暫停鈕維持按下換字（中文「恢復」、拿掉 `aria-pressed`、暫停橫幅改 `role=status`）、預設模型改 `gemini-3.5-flash-lite`（3.x flash 送 `thinkingLevel: MEDIUM`、輸出上限預設 4096）、demo 影片重錄與錄影劇本 `record-demo.cjs`；第三輪審查報告（`docs/20260927-research-review03.md`）已併入，其修復仍待後續 |
+| **2.0.0 維護**（2026-10，非 SDD） | [`CHANGELOG.md`](CHANGELOG.md)、指南 §15.6 | 暫停鈕維持按下換字（中文「恢復」、拿掉 `aria-pressed`、暫停橫幅改 `role=status`）、預設模型改 `gemini-3.5-flash-lite`（3.x flash 送 `thinkingLevel: MEDIUM`、輸出上限預設 4096）、demo 影片重錄與錄影劇本 `record-demo.cjs`；第三輪審查報告（`docs/20260927-research-review03.md`）已併入，其修復見下一列 |
+| **2.1.0 維護**（2026-10-18，非 SDD） | [`CHANGELOG.md`](CHANGELOG.md)、指南 §15.6 | 第三輪審查 quick-fix：P1 Redis 密碼外洩、日誌全深度遮蔽、HTTP 錯誤回應與 16 kb 上限、Gateway 入站限速與協定層 ping、worker 終態事件順序、關閉總時限、web 結果未送達收尾、覆蓋率門檻 89／85；契約升 1.3.0 |
 
 ---
 
@@ -540,7 +542,7 @@ flow-gatekeeper/
 ├── docs/              # ADR、SDD 完整實作指南、design-spec（v0.3 歷史起點，已退役）、demo 影片與截圖
 ├── scripts/           # dev-up.ps1（一鍵起全棧）、demo-reset.ps1（清 AI 快取）
 ├── asyncapi.yaml      # 即時通道契約（Spectral lint；info.version 1.3.0）
-├── CHANGELOG.md       # 產品版本（2.0.0）與 asyncapi 契約版本的變更紀錄與版本策略
+├── CHANGELOG.md       # 產品版本（2.1.0）與 asyncapi 契約版本的變更紀錄與版本策略
 ├── docker-compose.yml # Redis 7 + MongoDB 7（不帶分組）＋ demo profile：api/worker/web/seed 全棧受監督容器
 ├── docker-compose.e2e.yml # 只給 tests/e2e 用的 override（獨立專案名、18080、AI_PROVIDER=fake）
 ├── vitest.config.ts   # 只給 test:coverage：test.projects 聚合五個套件、合併覆蓋率與門檻
@@ -836,7 +838,7 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 
 | 項目 | 現況 |
 | --- | --- |
-| **產品版本** | **2.0.0**（2026-10-17；git tag `2.0.0`，指向 `develop` 併入 `main` 的 merge commit；前一版 1.1.0 為 2026-09-28）。六份 `package.json` 的 `version` 與 tag 一致。產品 tag **不帶 `v` 前綴**——第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`（同一 commit `3e94ac2`），GitHub Release 與 demo 影片連結當時一併改指 `1.0.0`（2.0.0 起影片重錄、連結改指 `2.0.0`，見「端到端操作 Demo」版本註記） |
+| **產品版本** | **2.1.0**（2026-10-18；git tag `2.1.0`，指向 `develop` 併入 `main` 的 merge commit；前一版 2.0.0 為 2026-10-17）。六份 `package.json` 的 `version` 與 tag 一致。產品 tag **不帶 `v` 前綴**——第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`（同一 commit `3e94ac2`），GitHub Release 與 demo 影片連結當時一併改指 `1.0.0`（2.0.0 起影片重錄、連結改指 `2.0.0`，見「端到端操作 Demo」版本註記） |
 | **契約版本** | `asyncapi.yaml` `info.version` **1.3.0**，獨立於產品版本演進；每版加嚴／新增欄位／新增消費端義務都記在 `CHANGELOG.md`「asyncapi 契約版本」小節 |
 | **變更紀錄** | [`CHANGELOG.md`](CHANGELOG.md)（Keep a Changelog 格式；升級前先讀「不相容變更」與「相容性注意」）；維護分支的現況摘要見指南 §15.6 |
 | **Release** | `main` 只接收發布：`develop` 以 `--no-ff` 併入 `main` → annotated tag → GitHub Release（流程見 `CLAUDE.md`「`main` 的 release 流程」）；日常開發與 feature merge 一律在 `develop` |
@@ -893,7 +895,7 @@ specify → clarify → plan → checklist → tasks → analyze → implement �
 - **REST 診斷入口開發階段免授權**：`POST /diagnoses` 無身分驗證；rate limit 只在一鍵 demo 的 nginx 入口（每來源 IP 10 r/m、burst 5，超限回 `429`；Docker Desktop 下實為全體共用一桶，見「注意事項」），開發模式直連 api 時沒有（已有 Zod 輸入驗證、只收 `application/json` 以強制跨站請求先過 CORS preflight、jobId 冪等）；即時通道訂閱仍走 `WS_AUTH_SECRET`（本身也只是靜態共享字串，非正式 JWT/OIDC），另有可選的 Origin 白名單。正式環境的 REST 認證與握手階段驗證升級不在範圍，見 [ADR-002 §6.3](docs/adr-002-productionization-scope.md)。
 - **telemetry 丟棄計數**：已以 `system/metrics` 的 optional `persist: { dropped, failed }`（api 啟動以來累計）廣播；逐類明細（`droppedPoints`／`failedPoints`／`droppedErrorLogs`）仍只出現在（30 秒節流的）api error log。
 - **示範機台固定為 5 台**：`mixer-01`、`press-02`、`pack-03`、`oven-04`、`sorter-05`；遙測由 mock producer 以決定性規律產生（含週期性 warning/critical 尖峰），以滿足可重播驗收。
-- **第三輪審查（2026-09-28，審 `4c43d18`）的現況**：quick-fix（報告 §6 Batch E，維護分支 `fix/20261018-review03-quickfix`）已修——P1（api 端 BullMQ producer `Queue` 未掛 `error` listener，Redis 認證失敗時密碼經 `console.error` 明文進 stderr）、`ai/done` 與 `completed` 的順序與送達（worker await 終態事件、relay 對 `completed` 保留綁定 10 秒、web 2 秒未送達收尾並可救回遲到結果）、Pub/Sub 訂閱中斷無日誌、`pong` 不受背壓與入站無速率上限、Redis 不可達時 `app.close()` 卡到被 SIGKILL，細節見 `CHANGELOG.md` `[Unreleased]`。**仍未修**：同簽章請求失敗時不去重（持鎖者失敗即放鎖，等待者接著各自打 LLM）；失敗終態沒有 relay 寬限——`ai/error` 與 `failed` 分走兩條 Redis 連線，先送 `ai/error` 只是實務上成立（使用者 2026-10-18 裁決接受）；web 串流 `jobs` 逐 token 寫 reactive、partial-json 每則 token 重新解析（WEB-17 餘項，使用者裁決 12 接受、留在 backlog）；45 秒 watchdog 仍用牆上時鐘（系統時鐘往前跳 ≥ 45 秒時可能誤判逾時）；持 token 的新連線在未授權池滿時仍拿 503（要在攻擊下仍可連入，需在 upgrade 階段驗 token）。完整清單、實測證據與修法見第三輪審查報告 `docs/20260927-research-review03.md`（1.1.0 之後併入 `develop`）與 ADR-002 §6.5.1。
+- **第三輪審查（2026-09-28，審 `4c43d18`）的現況**：quick-fix（報告 §6 Batch E，維護分支 `fix/20261018-review03-quickfix`）已修——P1（api 端 BullMQ producer `Queue` 未掛 `error` listener，Redis 認證失敗時密碼經 `console.error` 明文進 stderr）、`ai/done` 與 `completed` 的順序與送達（worker await 終態事件、relay 對 `completed` 保留綁定 10 秒、web 2 秒未送達收尾並可救回遲到結果）、Pub/Sub 訂閱中斷無日誌、`pong` 不受背壓與入站無速率上限、Redis 不可達時 `app.close()` 卡到被 SIGKILL，細節見 `CHANGELOG.md` `[2.1.0]`。**仍未修**：同簽章請求失敗時不去重（持鎖者失敗即放鎖，等待者接著各自打 LLM）；失敗終態沒有 relay 寬限——`ai/error` 與 `failed` 分走兩條 Redis 連線，先送 `ai/error` 只是實務上成立（使用者 2026-10-18 裁決接受）；web 串流 `jobs` 逐 token 寫 reactive、partial-json 每則 token 重新解析（WEB-17 餘項，使用者裁決 12 接受、留在 backlog）；45 秒 watchdog 仍用牆上時鐘（系統時鐘往前跳 ≥ 45 秒時可能誤判逾時）；持 token 的新連線在未授權池滿時仍拿 503（要在攻擊下仍可連入，需在 upgrade 階段驗 token）。完整清單、實測證據與修法見第三輪審查報告 `docs/20260927-research-review03.md`（1.1.0 之後併入 `develop`）與 ADR-002 §6.5.1。
 - **可觀測性僅止於基線**：只有結構化日誌 + `/healthz` + 指標入 log／廣播，沒有 Prometheus/Grafana 儀表板、沒有 tracing、沒有告警規則——這些刻意不做，理由見 [ADR-002 §7](docs/adr-002-productionization-scope.md)。
 
 ---

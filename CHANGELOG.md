@@ -25,7 +25,9 @@
 - 1.0.0 時五份套件 `package.json`（apps ×3、packages ×2）的 `version` 一直停在 `0.1.0`，root `package.json` 則沒有 `version` 欄位，
   與 tag 沒有單一來源（第二輪審查 DOC-D14）；自 1.1.0 起五份套件由 `0.1.0` 對齊為 `1.1.0`、root 新增 `version`，六份與 tag 對齊。
 
-## [Unreleased]
+## [2.1.0] - 2026-10-18
+
+次版號升級：修掉 2.0.0 已公開的 P1（設了 `REDIS_PASSWORD` 而 Redis 認證失敗時，密碼經 BullMQ `console.error` 明文進 api stderr）與第三輪審查 Batch E；因下方「相容性注意」有對外可見的行為變更、契約升 asyncapi **1.3.0**，依 1.1.0 前例升 minor（使用者 2026-10-18 裁決 2.1.0，原規劃為 2.0.1）。demo 影片未重錄，README 下載連結仍指向 2.0.0 release 的資產。
 
 第三輪審查（`docs/20260927-research-review03.md`）§6 Batch E 的 quick-fix，維護分支 `fix/20261018-review03-quickfix`（自 `develop` `45b1460`）；
 現況摘要見指南 §15.6「第三輪審查 quick-fix」，未修與新增 backlog 見 ADR-002 §6.5.1 的 review03 列。括號內為報告的 finding ID。
@@ -83,6 +85,7 @@
 
 - 三支 `main.test` 改為檔頂 import，避免並行負載下冷載入逾時（TQ-14）；processor liveness 斷言改精確次數、不再對空陣列恆真（TQ-16）；補非最終嘗試 `ai_timeout` 與一般 Error 的重試語意測試（TQ-17）。
 - Gateway 註解與實作對齊（孤兒 JSDoc、背壓略過含 `ai/token`、慢讀者回收時序、pong 與入站速率；API-15）。
+- `ThemeToggle.test.ts` 在 `afterEach` 清掉主題偏好（`fg.theme`）：2.1.0 發版前首次以 GitHub Actions（ubuntu、Node 22）跑 CI 時，前一支測試寫入的深色偏好洩漏到下一支而失敗；本機 Node 26 的實驗性 `localStorage` 遮蔽 happy-dom 的實作、寫入無效，所以一直沒被發現（013 起即存在，非本批引入）。同一次 CI 的覆蓋率為 lines 92.35％／branches 88.4％，與 Windows 隔離實測一致。
 
 ### 契約
 
@@ -116,7 +119,7 @@ worker 預設模型與輸出上限的變更見下方不相容變更。demo 影�
 
 ### 相容性注意（升級前必讀）
 
-- **第三輪審查發現的缺陷在 2.0.0 仍未修**：含一項 P1——api 端 BullMQ producer `Queue` 未掛 `error` listener，設了 `REDIS_PASSWORD` 而 Redis 認證失敗時，密碼會經 BullMQ 的 `console.error` 明文進 stderr（pino 路徑已遮蔽）。
+- **第三輪審查發現的缺陷在 2.0.0 仍未修**（P1 與 Batch E 已於 2.1.0 修復，見上方 `[2.1.0]`）：含一項 P1——api 端 BullMQ producer `Queue` 未掛 `error` listener，設了 `REDIS_PASSWORD` 而 Redis 認證失敗時，密碼會經 BullMQ 的 `console.error` 明文進 stderr（pino 路徑已遮蔽）。
   部署時請留意 api 的 stderr 收集範圍；細節與其他未修項見 `docs/20260927-research-review03.md` 與 README「已宣告的取捨」。
 - **新增 localStorage key**：`fg.theme`（`"light"`｜`"dark"`，主題選擇）與 `fg.copilot-panel`（`{"manuallyCollapsed":boolean}`，AI 診斷面板的手動收合偏好）；
   讀寫失敗（私密視窗、封鎖儲存）時回到預設、不顯示錯誤。既有的 `flow-gatekeeper:sidebar-width`、`flow-gatekeeper:event-strip-height` 沿用、不改名，升級後原有尺寸保留。
@@ -293,12 +296,12 @@ worker 預設模型與輸出上限的變更見下方不相容變更。demo 影�
 `asyncapi.yaml` 的 `info.version` 獨立於產品版本（見「版本策略」）。本節同時記錄 HTTP（`POST /diagnoses`）的契約變化，
 核對來源為 `git log -p -- asyncapi.yaml` 與 `packages/contracts/src/`。
 
-### 1.3.0（隨 `fix/20261018-review03-quickfix` 落地，首次發布的產品版號見本檔頂端對應條目）
+### 1.3.0（產品 2.1.0 起）
 
 asyncapi `info.version` 1.3.0，向後相容的 minor（第三輪審查 quick-fix，`fix/20261018-review03-quickfix`）。**schema 沒有改動**（12 則 message 的結構、asyncapi↔Zod 漂移比對皆不變），變的是 wire 行為與描述：
 
 - **runtime 接受範圍收窄（WS 入站限速，API-13）**：`machine/subscribe` 與 `ping` 共用每連線 token bucket，穩態 20 則／秒、容量 40；桶空時到達的訊息不解析即丟棄，每則計一次違規，與畸形訊息、schema 不符、錯誤 token 共用違規計數，達 `WS_MAX_VIOLATIONS`（10）以 close code `1008` 關閉。描述寫在 `machine/subscribe` 與 `ping` channel。
-- **語意變更（協定層 ping，API-13，使用者裁決 13）**：client 送來的協定層 ping frame（opcode 0x9）不再自動回 pong（`autoPong: false`）；消費端判活 MUST 用應用層 `ping`／`pong` 訊息。應用層 `pong` 不受背壓影響、送出緩衝超過高水位時照回，放大量由入站 token bucket 限制。伺服器探活（server 送協定層 ping、client 回 pong）不變。`ping`／`pong` 描述同步改寫（1.3.0 尚未發布，本項直接併入 1.3.0、不另升版）。
+- **語意變更（協定層 ping，API-13，使用者裁決 13）**：client 送來的協定層 ping frame（opcode 0x9）不再自動回 pong（`autoPong: false`）；消費端判活 MUST 用應用層 `ping`／`pong` 訊息。應用層 `pong` 不受背壓影響、送出緩衝超過高水位時照回，放大量由入站 token bucket 限制。伺服器探活（server 送協定層 ping、client 回 pong）不變。`ping`／`pong` 描述同步改寫（合併門第 2 輪時 1.3.0 尚未發布，本項直接併入 1.3.0、不另升版）。
 - **消費端義務更新（AR-S8）**：`ai/token`／`ai/done`／`ai/error` 的 `attempt` 說明——同一次執行內 `seq` 嚴格遞增，同一 `attempt` 內收到未遞增的 `seq`（`seq <= 上一個 seq`）即 MUST 視為新一次執行並清空已累積的串流文字。1.2.0 只要求「同一 attempt 內再收到 `seq` 0」時重置；新規則涵蓋它（`seq` 0 必然不大於上一個），並補上新執行的 `seq` 0 在 Pub/Sub 遺失的情形。
 - **HTTP 契約（API-7／API-17）**：`POST /diagnoses` 的 body 上限由 express 預設 100 kb 收窄為 16 kb，超過回 **413** `{"statusCode":413,"message":"Payload too large"}`；body 不是合法 JSON 的 400 改為固定的 `{"statusCode":400,"message":"Invalid JSON body"}`（原為 `{message: <JSON 解析錯誤原文>, error: "Bad Request", statusCode}`，不再回顯本文、少了 `error` 欄位）。body-parser 自己產生的其他 4xx 改為固定 reason phrase（charset／encoding 不支援的 415 為 `Unsupported Media Type`，`request.aborted`／`request.size.invalid` 的 400 為 `Bad Request`），非 `HttpException` 的 5xx 除 500 回 `Internal server error` 外回標準 reason phrase。契約不符的 400（`issues[]`）與 controller／service 回的 404、409、415、503 及 201 回應不變；回應標頭不再帶 `X-Powered-By`。
 
