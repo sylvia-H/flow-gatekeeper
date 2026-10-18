@@ -170,7 +170,8 @@ commit**，不需逐次徵詢；流程為：
    契約有變更時 `asyncapi.yaml` 的 `info.version` 已升版且 `CHANGELOG.md` 契約小節有紀錄；六份 `package.json`（root、
    `apps/{api,worker,web}`、`packages/{contracts,shared}`）的 `version` 已升到目標版本，並與 `CHANGELOG.md` 頂端條目一致
    （把 `[Unreleased]` 改為該版本與發布日期）。
-   另外 MUST 列出最新審查報告（`docs/2026*-research-review*.md`）中仍未修的 **P1／P2**，逐條確認：已修（附 commit），
+   另外 MUST 列出最新審查報告（`docs/*-research-review*.md` 中日期最新者）中仍未修的 **P1／P2**，以及該報告明示沿用、
+   不再重列的前輪未修 P1／P2（ADR-002 §6.5／§6.5.1 的 backlog；2.1.0 之後的發版起適用），逐條確認：已修（附 commit），
    或由使用者明確裁決「帶著發布」——後者 MUST 寫進 `CHANGELOG.md` 該版的「相容性注意」，寫明觸發條件與影響，不得只留在報告裡
    （2026-10-18 定案；起因：第三輪審查的 P1 標為「release 前必做」，卻隨 1.1.0、2.0.0 兩次發版出去。使用者層級 CLAUDE.md
    「發版前的未修 findings」有同一條，改其中一份時 grep 另一份同步）。
