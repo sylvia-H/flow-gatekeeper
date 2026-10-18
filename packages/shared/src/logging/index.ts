@@ -38,24 +38,44 @@ export const REDACT_PATHS: readonly string[] = [
 
 type SerializedError = ReturnType<typeof pino.stdSerializers.err>;
 
+/** pino 標準 err serializer 產物的原型：序列化後的 error 也要走訪其屬性。 */
+const SERIALIZED_ERR_PROTO: unknown = Object.getPrototypeOf(pino.stdSerializers.err(new Error("probe")));
+
+/**
+ * 原樣保留、不走訪的物件：有 `toJSON` 的（Date、Buffer、URL、ObjectId…，JSON 化走它自己的形狀，
+ * 複製會破壞它）與靠內部 slot 存資料的內建型別（複製成同原型的空殼沒有意義；這些型別 JSON 化本來就
+ * 只輸出自有可列舉屬性或 `{}`）。
+ */
+function isOpaque(value: object): boolean {
+  if (typeof (value as { toJSON?: unknown }).toJSON === "function") return true;
+  return (
+    ArrayBuffer.isView(value) ||
+    value instanceof ArrayBuffer ||
+    value instanceof Map ||
+    value instanceof Set ||
+    value instanceof WeakMap ||
+    value instanceof WeakSet ||
+    value instanceof RegExp ||
+    value instanceof Promise
+  );
+}
+
 /**
  * 回傳剝掉 `command.args` 的**新**結構，只保留 `command.name`——命令名有助判讀（如 `auth`、
  * `evalsha`），參數可能是密碼或大量 Lua 參數。
  *
- * 走訪序列化結果的**所有**自有可列舉屬性，不只 `cause`／`aggregateErrors`：ioredis 的
+ * 走訪**所有**自有可列舉屬性、任意深度，不只 `cause`／`aggregateErrors`：ioredis 的
  * `ClusterAllFailedError.lastNodeError` 這類巢狀 error 屬性同樣帶 `command.args`。
  *
  * 不改動任何既有物件：std serializer 會把 error 上的可列舉屬性（例如 plain object 的 `cause`）
- * 以**原參考**放進結果，就地修改會改到呼叫端的物件，故一律複製後再改。只複製陣列、plain object
- * 與序列化 error（`cloneable` 判定），原生 Error 先經標準序列化；Date、Buffer 等其他類別實例原樣保留
- * （複製會破壞其 `toJSON`）。
+ * 以**原參考**放進結果，就地修改會改到呼叫端的物件，故一律複製後再改。
+ * - 陣列、plain object、序列化 error：複製後遞迴處理。
+ * - 原生 Error：先經標準序列化轉成 plain 形狀再處理。
+ * - 一般 class instance：複製成同原型的物件（JSON 化只看自有可列舉屬性，輸出形狀不變），遞迴處理。
+ * - `isOpaque` 的物件（有 `toJSON` 或內建型別）：原樣保留。
  * `seen` 記錄已處理的物件→副本，循環參考沿用同一副本，不會無窮遞迴。
  */
-function stripCommandArgs(
-  value: unknown,
-  cloneable: (proto: unknown) => boolean,
-  seen: Map<object, unknown>,
-): unknown {
+function stripCommandArgs(value: unknown, seen: Map<object, unknown>): unknown {
   if (typeof value !== "object" || value === null) return value;
   const done = seen.get(value);
   if (done !== undefined) return done;
@@ -63,7 +83,7 @@ function stripCommandArgs(
   if (Array.isArray(value)) {
     const copy: unknown[] = [];
     seen.set(value, copy);
-    for (const item of value) copy.push(stripCommandArgs(item, cloneable, seen));
+    for (const item of value) copy.push(stripCommandArgs(item, seen));
     return copy;
   }
   // 陣列或 plain object 裡的原生 Error（std serializer 只轉換 error 自身的直接屬性）：JSON 化時
@@ -71,35 +91,70 @@ function stripCommandArgs(
   if (value instanceof Error) {
     const serialized: unknown = pino.stdSerializers.err(value);
     seen.set(value, serialized);
-    const result = stripCommandArgs(serialized, cloneable, seen);
+    const result = stripCommandArgs(serialized, seen);
     seen.set(value, result);
     return result;
   }
   const proto: unknown = Object.getPrototypeOf(value);
-  if (!cloneable(proto)) return value;
+  const plain = proto === Object.prototype || proto === null || proto === SERIALIZED_ERR_PROTO;
+  if (!plain && isOpaque(value)) return value;
 
   const copy = Object.create(proto as object | null) as Record<string, unknown>;
   seen.set(value, copy);
-  for (const [key, child] of Object.entries(value)) {
-    if (key === "command" && typeof child === "object" && child !== null && !Array.isArray(child)) {
-      const name = (child as Record<string, unknown>).name;
-      copy[key] = typeof name === "string" ? { name } : {};
-    } else {
-      copy[key] = stripCommandArgs(child, cloneable, seen);
-    }
-  }
+  stripEntries(value, copy, seen);
   return copy;
 }
 
-/** pino 標準 err serializer 之上剝掉 `command.args`（標準版會複製 error 上所有可列舉屬性）。 */
+/**
+ * 把 `source` 的自有可列舉屬性逐一寫進 `target`：`command` 物件只留 `name`，其餘遞迴處理。
+ * `keep` 指定的鍵原樣保留（`formatters.log` 用它把 `err` 鍵留給 serializer）。
+ */
+function stripEntries(source: object, target: Record<string, unknown>, seen: Map<object, unknown>, keep?: string): void {
+  for (const [key, child] of Object.entries(source)) {
+    if (key === keep) {
+      target[key] = child;
+    } else if (key === "command" && typeof child === "object" && child !== null && !Array.isArray(child)) {
+      const name = (child as Record<string, unknown>).name;
+      target[key] = typeof name === "string" ? { name } : {};
+    } else {
+      target[key] = stripCommandArgs(child, seen);
+    }
+  }
+}
+
+/**
+ * pino 標準 err serializer 之上剝掉 `command.args`（標準版會複製 error 上所有可列舉屬性）。
+ * `err` 鍵的值不是 Error-like 時（例如 `{ stack }` 或包著 error 的 plain object），標準 serializer
+ * 原樣回傳；這裡同樣全深度處理（複製後再改，不動呼叫端物件），不只靠一層的 redact 路徑。
+ */
 function serializeError(err: Error): SerializedError {
-  const serialized = pino.stdSerializers.err(err);
-  // 非 Error-like 的輸入會被原樣回傳；不去改呼叫端自己的物件，交給 redact 路徑遮蔽。
-  if (serialized === (err as unknown)) return serialized;
-  const errProto: unknown = Object.getPrototypeOf(serialized);
-  const cloneable = (proto: unknown): boolean =>
-    proto === Object.prototype || proto === null || proto === errProto;
-  return stripCommandArgs(serialized, cloneable, new Map()) as SerializedError;
+  const serialized: unknown = pino.stdSerializers.err(err);
+  return stripCommandArgs(serialized, new Map()) as SerializedError;
+}
+
+/**
+ * `formatters.log`：對整個 log 物件（任意鍵名、任意深度、陣列內）剝掉 `command.args`，並把夾在
+ * 其中的原生 Error 轉成標準序列化形狀（CT-13）。REDACT_PATHS 只涵蓋一層萬用字元、serializer 只處理
+ * `err` 鍵，`{ ctx: { error } }`、`{ extra: [err] }` 這類寫法原本會把 `REDIS_PASSWORD` 明文寫進日誌。
+ *
+ * - `err` 鍵原樣留給 `serializers.err`：pino 先跑 `formatters.log` 再跑 serializer，這裡先序列化會讓
+ *   serializer 再序列化一次，把 `type` 改成 `Object`。
+ * - 不改動呼叫端物件（pino 傳進來的就是呼叫端那個物件），一律複製。
+ * - **child bindings 不經此函式**：pino 建立 child 時就序列化 bindings，只走 serializer 與 redact。
+ *   bindings 只放 context 與關聯鍵，不要放 error 或命令物件；那條路徑的防線仍是 REDACT_PATHS。
+ */
+function stripLogObject(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  stripEntries(obj, out, new Map(), "err");
+  return out;
+}
+
+/**
+ * 給必須把任意值轉成字串的呼叫端（例如 api 的 Nest logger adapter 把非字串 message
+ * `JSON.stringify` 成 msg）：回傳剝掉 `command.args`、Error 已轉成標準序列化形狀的副本。
+ */
+export function sanitizeForLog(value: unknown): unknown {
+  return stripCommandArgs(value, new Map());
 }
 
 /**
@@ -126,8 +181,10 @@ export function createLogger(
     // message/stack 非可列舉屬性，不設此 serializer 會被預設 JSON 化成空物件 `{}`。
     // 在標準序列化之上再剝掉 `command.args`（見 serializeError）。
     serializers: { err: serializeError },
-    // 第二道防線：不經 `err` 鍵、而以其他鍵名或巢狀物件記下的 ioredis 錯誤／命令物件，
-    // 其 `command.args` 一樣遮蔽（serializer 只作用在 `err` 鍵）。
+    // 其他鍵名、巢狀與陣列裡的 error／命令物件：整個 log 物件全深度剝掉 `command.args`（CT-13）。
+    formatters: { log: stripLogObject },
+    // 最後一道防線：child bindings 不經 `formatters.log`，其中的 `command.args` 由 redact 遮蔽。
+    // log 物件本身已先由 `formatters.log` 剝掉，到這裡通常已無 `args` 可遮。
     redact: { paths: [...REDACT_PATHS], censor: REDACTED },
     ...(pretty
       ? {

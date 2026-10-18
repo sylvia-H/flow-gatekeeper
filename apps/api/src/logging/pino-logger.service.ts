@@ -1,5 +1,7 @@
 import { Injectable, type LoggerService } from "@nestjs/common";
+import { sanitizeForLog } from "@flow-gatekeeper/shared/logging";
 import type { FlowLogger } from "@flow-gatekeeper/shared/logging";
+import { withoutRequestBody } from "./without-request-body.js";
 
 type UnknownArgs = readonly unknown[];
 
@@ -99,9 +101,30 @@ export class PinoLoggerService implements LoggerService {
     const [rawMessage, ...extraMessages] = messages;
     const bindings: Record<string, unknown> = {};
     if (context) bindings.context = context;
-    if (stack) bindings.err = { stack };
-    if (extraMessages.length > 0) bindings.extra = extraMessages;
-    const msg = typeof rawMessage === "string" ? rawMessage : JSON.stringify(rawMessage);
+    // Error 物件導到 `err` 鍵（API-11）：走標準 serializer（保留 type／message／stack、剝掉
+    // `command.args`），不再 `JSON.stringify` 成 msg（message／stack 是不可列舉屬性，stringify 只剩
+    // `{}`，可列舉的 `command.args`、body-parser 的 `body` 反而原樣進 msg）。
+    // `err` 的優先序：message 本身是 Error → extra 裡第一個 Error → stack 字串。
+    let err: unknown;
+    let msg: string;
+    if (rawMessage instanceof Error) {
+      // msg 取去掉本文後的 message：JSON 解析錯誤的原訊息會引用請求本文片段。
+      const safe = withoutRequestBody(rawMessage);
+      err = safe;
+      msg = safe.message;
+    } else {
+      // 非字串的 message（Nest 內部偶爾傳物件）仍 JSON 化當 msg，但先剝掉其中的 `command.args`
+      // 並把夾帶的 Error 轉成序列化形狀——msg 是字串，不會再經過 pino 的 serializer／redact。
+      msg = typeof rawMessage === "string" ? rawMessage : JSON.stringify(sanitizeForLog(rawMessage));
+    }
+    const extra: unknown[] = [];
+    for (const item of extraMessages) {
+      if (item instanceof Error && err === undefined) err = withoutRequestBody(item);
+      else extra.push(item instanceof Error ? withoutRequestBody(item) : item);
+    }
+    if (err === undefined && stack) err = { stack };
+    if (err !== undefined) bindings.err = err;
+    if (extra.length > 0) bindings.extra = extra;
     this.logger[level](bindings, msg);
   }
 }

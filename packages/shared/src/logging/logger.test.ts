@@ -68,13 +68,70 @@ describe("createLogger 祕密遮蔽（ioredis err.command.args）", () => {
     expect(out.raw()).not.toContain(SECRET);
   });
 
-  it("不經 err 鍵（其他鍵名或巢狀）的 command.args 由 redact 路徑遮蔽", () => {
+  it("不經 err 鍵（其他鍵名或巢狀）的 command 物件：formatters.log 剝掉 args、只留 name", () => {
     const out = capture();
     const logger = createLogger("api", env, out.stream);
     logger.warn({ reply: { command: { name: "auth", args: [SECRET] } } }, "other key");
     logger.warn({ job: { err: { command: { name: "auth", args: [SECRET] } } } }, "nested err");
+    logger.warn({ command: { name: "auth", args: [SECRET] } }, "top-level command");
+    expect(out.raw()).not.toContain(SECRET);
+    const [reply, job, top] = out.lines();
+    expect((reply?.reply as { command: unknown }).command).toEqual({ name: "auth" });
+    expect((job?.job as { err: { command: unknown } }).err.command).toEqual({ name: "auth" });
+    expect(top?.command).toEqual({ name: "auth" });
+  });
+
+  it("child bindings 不經 formatters.log：其中的 command.args 仍由 redact 路徑遮蔽", () => {
+    const out = capture();
+    const logger = createLogger("api", env, out.stream);
+    logger.child({ reply: { command: { name: "auth", args: [SECRET] } } }).warn("binding");
     expect(out.raw()).not.toContain(SECRET);
     expect(out.raw()).toContain(REDACTED);
+  });
+
+  // CT-13：REDACT_PATHS 只涵蓋一層萬用字元、serializer 只處理 `err` 鍵，以下寫法原本都會外洩。
+  it("巢狀兩層的 error（{ ctx: { error } }）不外洩密碼，且保留 message 與 command.name", () => {
+    const out = capture();
+    createLogger("api", env, out.stream).warn({ ctx: { error: authError() } }, "nested two levels");
+    expect(out.raw()).not.toContain(SECRET);
+    const [line] = out.lines();
+    const error = (line?.ctx as { error: { message: string; type: string; command: unknown } }).error;
+    expect(error.message).toContain("WRONGPASS");
+    expect(error.type).toBe("Error");
+    expect(error.command).toEqual({ name: "auth" });
+  });
+
+  it("陣列裡的 error（{ extra: [err] }）不外洩密碼，且轉成標準序列化形狀", () => {
+    const out = capture();
+    createLogger("api", env, out.stream).warn({ extra: ["x", authError()] }, "array");
+    expect(out.raw()).not.toContain(SECRET);
+    const [line] = out.lines();
+    const [first, second] = line?.extra as [string, { message: string; stack: string }];
+    expect(first).toBe("x");
+    expect(second.message).toContain("WRONGPASS");
+    expect(second.stack).toContain("WRONGPASS");
+  });
+
+  it("更深層（三層以上、陣列中的物件）與帶 command 的 plain object 也不外洩", () => {
+    const out = capture();
+    const logger = createLogger("worker", env, out.stream);
+    logger.error({ a: { b: { c: [{ d: authError() }] } } }, "deep");
+    logger.error({ a: { b: { reply: { command: { name: "auth", args: [SECRET] } } } } }, "deep plain");
+    expect(out.raw()).not.toContain(SECRET);
+    expect(out.raw()).toContain('"name":"auth"');
+  });
+
+  it("formatters.log 不改動呼叫端物件，也不重複序列化 err 鍵（type 維持原 class 名）", () => {
+    const out = capture();
+    const ctx = { error: authError() as Error & { command: { args: string[] } } };
+    class ReplyError extends Error {}
+    const replyErr = Object.assign(new ReplyError("NOAUTH"), { command: { name: "auth", args: [SECRET] } });
+    createLogger("api", env, out.stream).warn({ ctx, err: replyErr }, "both");
+    expect(out.raw()).not.toContain(SECRET);
+    expect(ctx.error.command.args).toEqual([SECRET]);
+    expect(replyErr.command.args).toEqual([SECRET]);
+    const [line] = out.lines();
+    expect((line?.err as { type: string }).type).toBe("ReplyError");
   });
 
   it("不改動呼叫端的原始 error 物件", () => {
@@ -105,6 +162,44 @@ describe("createLogger 祕密遮蔽（ioredis err.command.args）", () => {
     createLogger("api", env, out.stream).error({ err }, "plain cause");
     expect(out.raw()).not.toContain(SECRET);
     expect(plainCause.command.args).toEqual([SECRET]);
+  });
+
+  it("err 鍵的值不是 Error（包著 error 或命令的 plain object）：三層以上也剝掉，呼叫端物件不變", () => {
+    const out = capture();
+    const logger = createLogger("api", env, out.stream);
+    const wrapped = { a: { b: authError() } };
+    const plain = { a: { b: { command: { name: "auth", args: [SECRET] } } } };
+    logger.warn({ err: wrapped }, "err wraps error");
+    logger.warn({ err: plain }, "err wraps command");
+    expect(out.raw()).not.toContain(SECRET);
+    const [first, second] = out.lines();
+    const b = ((first?.err as { a: { b: { message: string; command: unknown } } }).a).b;
+    expect(b.message).toContain("WRONGPASS");
+    expect(b.command).toEqual({ name: "auth" });
+    expect((second?.err as { a: { b: { command: unknown } } }).a.b.command).toEqual({ name: "auth" });
+    expect(plain.a.b.command.args).toEqual([SECRET]);
+  });
+
+  it("沒有 toJSON 的 class instance 也往下走訪；Date／Map 等原樣保留", () => {
+    const out = capture();
+    class Holder {
+      inner = { deep: { e: authError() } };
+      label = "h";
+    }
+    const holder = new Holder();
+    const at = new Date("2026-10-18T00:00:00.000Z");
+    createLogger("api", env, out.stream).warn(
+      { ctx: { h: holder }, at, tags: new Map([["k", 1]]) },
+      "class instance",
+    );
+    expect(out.raw()).not.toContain(SECRET);
+    const [line] = out.lines();
+    const h = (line?.ctx as { h: { label: string; inner: { deep: { e: { command: unknown } } } } }).h;
+    expect(h.label).toBe("h");
+    expect(h.inner.deep.e.command).toEqual({ name: "auth" });
+    expect(line?.at).toBe("2026-10-18T00:00:00.000Z");
+    expect(line?.tags).toEqual({});
+    expect((holder.inner.deep.e as Error & { command: { args: string[] } }).command.args).toEqual([SECRET]);
   });
 
   it("循環參考不致無窮遞迴", () => {

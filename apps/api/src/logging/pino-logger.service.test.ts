@@ -1,6 +1,8 @@
+import { Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { overrideNestLogger } from "../test-support/nest-logger.js";
 import { Logger } from "@nestjs/common";
+import { createLogger } from "@flow-gatekeeper/shared/logging";
 import type { FlowLogger } from "@flow-gatekeeper/shared/logging";
 import { PinoLoggerService } from "./pino-logger.service.js";
 
@@ -159,5 +161,128 @@ describe("PinoLoggerService 參數拆解（TQ-9）", () => {
       bindings: { extra: [{ code: 1 }, { code: 2 }] },
       msg: "boom",
     });
+  });
+});
+
+/**
+ * API-11：Error 物件導到 `err` 鍵、不再 `JSON.stringify` 成 msg。以真 pino（同一份 `createLogger`）
+ * 捕捉實際輸出，涵蓋審查報告列的外洩形狀。
+ */
+describe("PinoLoggerService 的 Error 處理與祕密遮蔽（API-11）", () => {
+  const SECRET = "SECRET";
+
+  function realSetup() {
+    const chunks: string[] = [];
+    const stream = new Writable({
+      write(chunk: Buffer | string, _enc, cb) {
+        chunks.push(chunk.toString());
+        cb();
+      },
+    });
+    const logger = createLogger("api", { LOG_LEVEL: "info", LOG_PRETTY: "false" }, stream);
+    const service = new PinoLoggerService(logger);
+    const raw = () => chunks.join("");
+    const lines = () => chunks.map((l) => JSON.parse(l) as Record<string, unknown>);
+    return { service, raw, lines };
+  }
+
+  /** 模擬 ioredis `ReplyError`：AUTH 失敗時整條命令（含密碼）掛在 error 上。 */
+  function replyError(): Error {
+    class ReplyError extends Error {}
+    return Object.assign(new ReplyError("WRONGPASS invalid username-password pair"), {
+      command: { name: "auth", args: [SECRET] },
+    });
+  }
+
+  /** 模擬 body-parser 的 `entity.parse.failed`：原始請求本文掛在 `err.body`。 */
+  function bodyParserError(): Error {
+    return Object.assign(new SyntaxError("Unexpected token 'S', \"SECRET\" is not valid JSON"), {
+      status: 400,
+      statusCode: 400,
+      expose: true,
+      type: "entity.parse.failed",
+      body: `{"password":"${SECRET}"`,
+    });
+  }
+
+  it(".error(err)：msg 取 err.message、err 走標準序列化（type／stack 保留），command.args 不外洩", () => {
+    const { service, raw, lines } = realSetup();
+    service.error(replyError());
+    expect(raw()).not.toContain(SECRET);
+    const [line] = lines();
+    expect(line?.msg).toBe("WRONGPASS invalid username-password pair");
+    expect(line?.err).toMatchObject({ type: "ReplyError", command: { name: "auth" } });
+    expect((line?.err as { stack: string }).stack).toContain("WRONGPASS");
+  });
+
+  it(".warn(msg, err)：extra 裡的 Error 導到 err 鍵，不留在 extra", () => {
+    const { service, raw, lines } = realSetup();
+    service.warn("redis down", replyError(), { attempt: 2 });
+    expect(raw()).not.toContain(SECRET);
+    const [line] = lines();
+    expect(line?.msg).toBe("redis down");
+    expect(line?.err).toMatchObject({ type: "ReplyError", command: { name: "auth" } });
+    expect(line?.extra).toEqual([{ attempt: 2 }]);
+  });
+
+  it("extra 裡第二個以後的 Error 仍留在 extra，但同樣序列化且不外洩", () => {
+    const { service, raw, lines } = realSetup();
+    service.warn("two errors", replyError(), replyError());
+    expect(raw()).not.toContain(SECRET);
+    const [line] = lines();
+    const [second] = line?.extra as [{ message: string; command: unknown }];
+    expect(second.message).toContain("WRONGPASS");
+    expect(second.command).toEqual({ name: "auth" });
+  });
+
+  it(".log({ err })：物件 message 裡的 Error 在 JSON 化前已剝掉 command.args", () => {
+    const { service, raw, lines } = realSetup();
+    service.log({ err: replyError(), nested: { reply: { command: { name: "auth", args: [SECRET] } } } });
+    expect(raw()).not.toContain(SECRET);
+    const parsed = JSON.parse(lines()[0]?.msg as string) as { err: { message: string } };
+    expect(parsed.err.message).toContain("WRONGPASS");
+  });
+
+  it("body-parser 解析錯誤：err.body 與引用本文的 message／stack 都不進日誌（SECRET 完全不出現），原物件不被改動", () => {
+    const { service, raw, lines } = realSetup();
+    const err = bodyParserError() as Error & { body: string };
+    const originalMessage = err.message;
+    service.error(err);
+    service.warn("parse failed", err);
+    service.warn("as extra", "x", err);
+    expect(raw()).not.toContain(SECRET);
+    expect(raw()).not.toContain(`"body"`);
+    const [first, second, third] = lines();
+    expect(first?.msg).toBe("request body could not be parsed");
+    expect(first?.err).toMatchObject({
+      type: "SyntaxError",
+      message: "request body could not be parsed",
+      status: 400,
+      expose: true,
+    });
+    expect((first?.err as { stack: string }).stack).toContain("request body could not be parsed");
+    expect(second?.err).toMatchObject({ message: "request body could not be parsed" });
+    expect(third?.err).toMatchObject({ message: "request body could not be parsed" });
+    expect(third?.extra).toEqual(["x"]);
+    expect(err.body).toContain(SECRET);
+    expect(err.message).toBe(originalMessage);
+  });
+
+  it("Nest BaseExceptionFilter 對非 HttpException 的 `logger.error(exception)`：msg 不再是 `{}`", () => {
+    const { service, raw, lines } = realSetup();
+    withNestLogger(service, () => {
+      new Logger("ExceptionsHandler").error(replyError());
+    });
+    expect(raw()).not.toContain(SECRET);
+    const [line] = lines();
+    expect(line?.msg).toBe("WRONGPASS invalid username-password pair");
+    expect(line?.context).toBe("ExceptionsHandler");
+    expect(line?.err).toMatchObject({ type: "ReplyError" });
+  });
+
+  it("error(message, stack)：沒有 Error 物件時照舊把 stack 字串放進 err.stack", () => {
+    const { service, lines } = realSetup();
+    service.error("boom", STACK);
+    expect(lines()[0]?.err).toEqual({ stack: STACK });
   });
 });
