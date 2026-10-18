@@ -1364,7 +1364,7 @@ app.get(MonitoringGateway).attach(app.getHttpServer());
 > **現況註記（Gateway 韌性，上方 `MonitoringGateway` 為起草時的 reference）**：
 > - **授權**：有設 `WS_AUTH_SECRET` 時，`ai/*`、`job/status`、`system/metrics` 只送通過 `machine/subscribe` token 的連線；未設時連上即授權。錯誤 token 仍回 `system/unauthorized`。
 > - **違規關閉**：同一連線畸形訊息（無法解析、schema 不符）或錯誤 token 累計 10 次，以 close code `1008` 關閉（**已變更**：2026-10-18 起超過每連線入站速率也計違規，見 §15.6「第三輪審查 quick-fix」）；有設 `WS_AUTH_SECRET` 時，連線在 `WS_AUTH_GRACE_MS`（預設 10000）內未通過 token 也以 `1008` 關閉（由獨立的授權 sweep 檢查，間隔 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，實際關閉時間 ≤ grace + 該間隔）。
-> - **心跳**：伺服器端探活改為帶 nonce 的協定層 ping，pong 必須原樣帶回才算存活；未經請求或 nonce 不符的 pong 不算（瀏覽器與 `ws` 自動回應）。應用層 `ping`→`pong` 訊息仍保留供前端量 RTT（**已變更**：2026-10-18 起該連線送出緩衝超過高水位時不回 pong、web 連上即送第一次 ping，見 §15.6「第三輪審查 quick-fix」）。
+> - **心跳**：伺服器端探活改為帶 nonce 的協定層 ping，pong 必須原樣帶回才算存活；未經請求或 nonce 不符的 pong 不算（瀏覽器與 `ws` 自動回應）。應用層 `ping`→`pong` 訊息仍保留供前端量 RTT（**已變更**：2026-10-18 起 web 連上即送第一次 ping；Gateway 關閉協定層 `autoPong`，client 送來的協定層 ping frame 不回應，應用層 pong 在送出緩衝超過高水位時照回，見 §15.6「第三輪審查 quick-fix」）。
 > - **慢 client 與連線上限**：`bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES`（預設 1 MiB）即略過高頻流推送（遙測批次與 `ai/token`；`ai/done`／`ai/error`／`job/status` 等終態與控制訊息照送，漏掉的 token 由 `ai/done` 補齊），連續 3 個心跳 tick 超標則 terminate；連線數達 `MAX_WS_CONNECTIONS`（預設 500）時 upgrade 回 HTTP 503；有設 `WS_AUTH_SECRET` 時，未授權連線另有子上限 `max(10, floor(20% × MAX_WS_CONNECTIONS))`，達到亦回 503（限制未授權者可佔的總名額，持 token 的新連線池滿時同樣 503；**已變更**：2026-10-18 起子上限為 `max(1, min(MAX − 1, max(10, floor(20% × MAX))))`，見 §15.6「第三輪審查 quick-fix」）。
 > - **relay 日誌**：Redis／QueueEvents 錯誤日誌改為轉態節流——轉態（正常↔故障）時各記一則，故障期間每 30 秒至多一則，斷線期間不刷屏。
 > - 見 §15.6「第二輪審查修復」。
@@ -1856,7 +1856,7 @@ export class GeminiProvider implements AiProvider {
 > - **逾時**：`AbortSignal.timeout(AI_TIMEOUT_MS)` 交給 provider，真正中止底層串流；逾時後的殭屍串流不再送 token。
 > - **重試語意**：非最終嘗試的失敗只記 log 後 throw（交 BullMQ 退避），**不** publish `ai/error`；最終嘗試或不可重試錯誤才送。所有 `ai/*` 事件帶 `attempt`，前端換輪清空串流文字；stalled 重派時 `attempt` 不變、`seq` 從 0 重播，前端以同輪 `seq` 0 判定重播並清空（**已變更**：2026-10-18 起改以同輪 `seq <= lastSeq` 判定，見 §15.6「第三輪審查 quick-fix」）。
 > - **寫入順序**：先 insert `diagnoses`（`jobId` unique index，建立衝突時退回非 unique 並記 error；重啟時若只剩退回留下的同鍵非 unique 索引擋路，會先探測重複資料是否已清——已清才移除並重建 unique，未清則保留既有索引只記 error；多副本同時啟動互相踩到 drop／重建時視為目的已達成，不會退回）再寫 cache，最後寫 `diagnosisTriggers`（TTL 30 天）；cache 讀回一律 `safeParse`，不合 schema 即刪除並視為 miss。
-> - **關閉**：收到 SIGTERM 先立旗標，dedupe 等待中的 job 立即交回佇列，`worker.close()` 只需等真正在打 LLM 的 job（`stop_grace_period` 45s 維持；**已變更**：2026-10-18 起另有行程內總時限 `AI_TIMEOUT_MS`＋10 s、第二次訊號立即退出，見 §15.6「第三輪審查 quick-fix」）。heartbeat 依處理槽進度判斷卡死。
+> - **關閉**：收到 SIGTERM 先立旗標，dedupe 等待中的 job 立即交回佇列，`worker.close()` 只需等真正在打 LLM 的 job（`stop_grace_period` 45s 維持；**已變更**：2026-10-18 起另有行程內總時限 `AI_TIMEOUT_MS`＋10 s；第二次訊號立即退出，但第一次訊號後 1 秒內的同名訊號視為重送、忽略，見 §15.6「第三輪審查 quick-fix」）。heartbeat 依處理槽進度判斷卡死。
 > - **env fail-fast**：以 Zod 驗證（`apps/worker/src/lib/env-schema.ts`），留空套預設、非法即 exit 1；`GEMINI_API_KEY` 任何環境皆可留空。
 
 `apps/worker/src/main.ts`（起草時的 reference）：
@@ -3261,7 +3261,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - redis `--maxmemory 256mb --maxmemory-policy noeviction`（BullMQ 要求 noeviction）；host shell 或 repo 根 `.env` 設
     `REDIS_PASSWORD` 即以 `--requirepass` 啟用認證（探針同步帶密碼），此時 `apps/api/.env(.demo)` 與 `apps/worker/.env` 必須同值。
   - `stop_grace_period`：worker 45s（AI 逾時 30s＋寫入 ≤10s＋緩衝；dedupe 等待迴圈會交回佇列、不計入；調高 `AI_TIMEOUT_MS`
-    MUST 一併調高）、api 15s（stopProducer → flush 5s → `app.close()`）。**已變更**（2026-10-18）：兩端另有行程內關閉總時限——api 12 s、worker `AI_TIMEOUT_MS`＋10 s，逾時記 warn 後 `exit(0)`，見下方「第三輪審查 quick-fix」。
+    MUST 一併調高）、api 15s（stopProducer → flush 5s → `app.close()`）。**已變更**（2026-10-18）：兩端另有行程內關閉總時限——api 12 s、worker `AI_TIMEOUT_MS`＋10 s，逾時記 warn 後 `exit(0)`；兩端都對第一次訊號後 1 秒內的同名訊號視為重送而忽略，見下方「第三輪審查 quick-fix」。
   - base image tag＋digest 雙釘（`node:22.23.3-alpine`、`nginxinc/nginx-unprivileged:1.31.6-alpine`、`redis:7.4.11-alpine`、
     `mongo:7.0.43`）；升版流程：`docker buildx imagetools inspect <image>:<tag>` 取新 digest，tag 與 digest 一起改。
   - 建置：BuildKit `RUN --mount=type=cache`＋`pnpm fetch`＋`pnpm install --offline --filter <app>...`；`pnpm deploy --legacy --prefer-offline`
@@ -3385,43 +3385,46 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   輸出 BT.709／limited range 並標記色彩；先在暫存目錄編碼完成才覆寫 `docs/demo/`（不用 .tmp＋rename：Windows 上目標被播放器開著時 rename 會失敗），覆寫失敗時保留暫存成品並印出路徑；逐格寫檔失敗或對齊失準皆在呼叫 LLM 前中止；Chromium 尋找與面板狀態對照抽成 `apps/web/scripts/lib/browser.cjs`，與截圖劇本共用。
   使用者裁決：輸出 mp4（ffmpeg 用下載解壓即用的可攜版，不安裝到系統）、注入假游標、對 demo 容器錄。
 
-**第三輪審查 quick-fix**（`fix/20261018-review03-quickfix`，merge 以 `git log --first-parent --merges` 為準，2026-10-18；報告 `docs/20260927-research-review03.md` §6 Batch E；commit `7cd7a3f`（api）、`5e538bb`（relay／Gateway）、`d1384f6`（worker）、`b8d5bc0`（web）、`819391f`（coverage 門檻與報告目錄，TQ-15／TQ-20）、`3d45c3e`（契約 1.3.0 與文件回補）；變更明細見 `CHANGELOG.md` `[Unreleased]`，backlog 見 ADR-002 §6.5.1 的 review03 列）：
+**第三輪審查 quick-fix**（`fix/20261018-review03-quickfix`，merge 以 `git log --first-parent --merges` 為準，2026-10-18；報告 `docs/20260927-research-review03.md` §6 Batch E；主要 commit：`7cd7a3f`（api）、`5e538bb`（relay／Gateway）、`d1384f6`（worker）、`b8d5bc0`（web）、`819391f`（coverage 門檻與報告目錄，TQ-15／TQ-20）、`3d45c3e`（契約 1.3.0 與文件回補）；合併門各輪修正另見該分支的 `git log --first-parent`；變更明細見 `CHANGELOG.md` `[Unreleased]`，backlog 見 ADR-002 §6.5.1 的 review03 列）：
 
 - **做了什麼**：
   - api 日誌與 HTTP：P1（API-1）producer `Queue` 在建構時掛節流 `error` listener，Redis 認證失敗不再經 BullMQ `console.error` 把 `REDIS_PASSWORD` 明文寫進 stderr；
     共用 logger 以 `formatters.log` 對整個 log 物件任意深度剝 `command.args`（CT-13）；`PinoLoggerService` 收到 Error 時導到 `err` 鍵、剝掉 body-parser 錯誤的 `body`（API-11）；
     全域 `HttpExceptionFilter`（API-7／API-17）——body-parser 的 4xx 回固定英文 `{statusCode, message}`、記 warn 並依 `status:type` 節流，`HttpException` 維持 Nest 原行為，body-parser 其他 4xx 回該狀態碼的 reason phrase（charset／encoding 的 415 為 `Unsupported Media Type`、`request.aborted`／`request.size.invalid` 的 400 為 `Bad Request`），非 `HttpException` 的 5xx 除 500 回 `Internal server error` 外回標準 reason phrase，皆保留 error 日誌；停用 `X-Powered-By`，json／urlencoded 上限 16 kb。
   - relay 與 Gateway：送出 `completed` 後綁定保留 10 s（AR-5，`failed` 不加寬限）；ai-stream subscriber 加掛 `close`／`reconnecting`，整段斷線只記一則 warn（AR-6）；
-    兩支 relay 的 Redis 連線關閉各限 3 s、逾時 best-effort `disconnect()`（API-12）；送出緩衝超過高水位時不回 pong，每連線入站 token bucket 穩態 20 則／秒、容量 40，超速計違規（API-13）；
+    兩支 relay 的 Redis 連線關閉各限 3 s、逾時 best-effort `disconnect()`（API-12）；每連線入站 token bucket 穩態 20 則／秒、容量 40，超速計違規；`WebSocketServer` 設 `autoPong: false`，client 送來的協定層 ping frame 不再自動回 pong（原本繞過 token bucket、違規計數與背壓，實測 2 s 把送出緩衝推到高水位 72 倍）；應用層 pong 不受背壓略過、超過高水位照回（API-13，使用者裁決 13）；
     未授權子上限改為 `max(1, min(MAX − 1, max(10, floor(MAX × 0.2))))`（API-14）；Gateway 註解漂移（API-15）。
   - worker：`ai/done`／`ai/error`（含 `no_context`）經 `publishTerminalEvent` await 送出才結束 job，失敗只記 warn、不改 job 結果，`ai/token` 維持 fire-and-forget（AR-5／WK-14）；
     快取命中改為 `insertTrigger` → `updateProgress(100)` → `ai/done`，與 LLM 路徑一致（AR-A12）；`no_context` 終態記 warn 不帶 stack（WK-19）；
     關閉加重入保護與總時限，Gemini SDK 明確傳 `retryOptions.attempts: 1`（WK-21）。
-  - web：收到 `completed` 後 2 s 無 `ai/done` 即轉「結果未送達」失敗，只對這種失敗允許同 jobId 遲到的 `ai/done` 救回完成（AR-6）；reducer 以 `seq <= lastSeq` 判新一次執行（AR-S8）；
-    WS 連上即送第一次 ping（WEB-16）；`lastActivityAt` 改 plain Map、串流捲到底每幀至多一次（WEB-17，**部分修復**：`jobs` 仍逐 token 寫入 reactive，屬已接受的既有行為——Gemini 每秒約 10–20 則 token、代價小，改成每幀合併會動到 reducer 主路徑與它和 2 s 救回、`ai/done` 的順序；backlog 見 ADR-002 §6.5.1）；web 直接依賴 `zod`、`src/zod-config.ts`（`jitless`）作為 `main.ts` 第一個 import（WEB-13）；
+  - web：收到 `completed` 後 2 s（單調時鐘 `performance.now()`）無 `ai/done` 即轉「結果未送達」失敗、串流標題為「原始串流」，只對這種失敗允許同 jobId 遲到的 `ai/done` 救回完成——上限為後端完成後約 10 s 內（relay 綁定寬限）且中間沒有重連（AR-6）；reducer 以 `seq <= lastSeq` 判新一次執行（AR-S8）；
+    WS 連上即送第一次 ping（WEB-16）；`lastActivityAt` 改 plain Map、串流捲到底每幀至多一次，且只有捲到比程式上次捲動的位置更上方才算使用者上捲、回到底部即恢復跟隨（WEB-17，**部分修復**：`jobs` 仍逐 token 寫入 reactive、partial-json 每則 token 重新解析，依使用者裁決 12 接受、留在 backlog——Gemini 每秒約 10–20 則 token、代價小，改成每幀合併會動到 reducer 主路徑與它和 2 s 救回、`ai/done` 的順序；backlog 見 ADR-002 §6.5.1）；web 直接依賴 `zod`、`src/zod-config.ts`（`jitless`）作為 `main.ts` 第一個 import（WEB-13）；
     tailwind content 排除測試檔、postcss 以絕對路徑指向設定（WEB-15／TQ-23）。
   - 測試：三支 `main.test` 改檔頂 import（TQ-14）、liveness 斷言精確次數（TQ-16）、兩支重試語意測試（TQ-17）；coverage 輸出目錄可用 `COVERAGE_DIR` 覆寫，Stryker 報告目錄可用 `MUTATION_REPORT_DIR` 覆寫（TQ-15；Stryker 的 sandbox 每次以 mkdtemp 獨立建立，並行時只有報告會互相覆寫）；
-    門檻改為隔離實測 −3：全域 lines 89／branches 85（實測 lines 92.03、branches 88.36–88.37——兩次隔離實測差 1 個分支，137 檔 1965 支），十個核心檔以 glob 設逐檔下限（TQ-20，數值見 `vitest.config.ts`）。
+    門檻改為隔離實測 −3：全域 lines 89／branches 85（合併門第 2 輪修正後於 HEAD 隔離實測 lines 92.33、branches 88.40，137 檔 1988 支；job-status-relay 與 shared logging 因重構重量下修 branches 下限，見 `vitest.config.ts`），十個核心檔以 glob 設逐檔下限（TQ-20，數值見 `vitest.config.ts`）。
   - WEB-4 補強與 WEB-22 已由 013 解決，不改碼（ADR-002 §6.5 WEB-4 列）。
 - **使用者裁決（2026-10-18）**：
   1. 2 s 未送達收尾的文案為「診斷已在後端完成，但結果未送達畫面，請重試」，沿用重試鈕；只有此種失敗可被遲到的 `ai/done` 救回。
   2. 覆蓋率門檻＝實測 −3（全域與十個核心檔），取整數往下（報告原建議 78／73）。
   3. WS open 時立即送第一次 ping，再起 interval。
   4. 快取命中路徑改「先寫 trigger → `updateProgress(100)` → await `ai/done`」。
-  5. 關閉總時限 api 12 s、worker `AI_TIMEOUT_MS`＋10 s（預設 40 s；交叉審查後由固定 40 s 改為隨 `AI_TIMEOUT_MS` 推導），逾時 warn 後 `exit(0)`；第二次訊號立即 `exit(0)`。
+  5. 關閉總時限 api 12 s、worker `AI_TIMEOUT_MS`＋10 s（預設 40 s；交叉審查後由固定 40 s 改為隨 `AI_TIMEOUT_MS` 推導），逾時 warn 後 `exit(0)`；第二次訊號立即 `exit(0)`（第 2 輪起依裁決 11 排除 1 秒內的同名重送）。
   6. HTTP 錯誤回應維持 `{statusCode, message}` 形狀、固定英文 message、不回顯輸入、body 不進日誌；停用 `X-Powered-By`；body 上限 16 kb。
   7. web 加 `zod` 直接依賴（與 contracts 同 `^4.6.5`）並以 `jitless` 設定檔作為第一個 import。
   8. Gemini SDK 不自行重試（重試交給 BullMQ）。
   9. 範圍外納入 API-15、API-14、WEB-17、TQ-23；relay 10 s 寬限只用在 `completed`，失敗終態的跨連線順序依實務成立、接受不加寬限（ADR-002 §6.5.1）。
   10. 契約升 **1.3.0**（minor），`asyncapi.yaml` 描述改為現況；review03 roadmap 的契約版號各順延一號（見下方「roadmap 版號順延」）。
+  11. （合併門第 2 輪）api 與 worker 收到第一次訊號後，1 秒內（< 1000 ms）再收到同名訊號就忽略並記 info；第 1000 ms 起的同名訊號、或任何不同名的訊號立即 `exit(0)`，exit 至多一次。起因：POSIX dev 的 watch 工具會把一次 Ctrl+C 送成兩次 SIGINT。
+  12. （合併門第 2 輪）WEB-17 剩下的部分——`jobs` 逐 token 寫 reactive、partial-json 每則 token 重新解析——接受，留在 backlog（ADR-002 §6.5.1）。
+  13. （合併門第 2 輪）送出緩衝超過高水位時應用層 pong 照回，放大只靠入站 token bucket 擋；協定層 ping frame 改為不自動回應（`autoPong: false`）。屬 wire 行為變更，因 1.3.0 尚未發布，直接併入 1.3.0、不再升版。
 - **行為變更（對外可見）**：
   - HTTP：壞 JSON 由 `400 {message: <解析錯誤原文>, error: "Bad Request", statusCode}` 改為 `400 {statusCode, message: "Invalid JSON body"}`（不再回顯本文片段、少 `error` 欄位）；body > 16 kb 回 `413 {statusCode, message: "Payload too large"}`（原上限 100 kb、message 為 body-parser 原文）；body-parser 其他 4xx 改回 reason phrase（charset／encoding 的 415 由 `unsupported charset "X"` 等原文改為 `Unsupported Media Type`，`request.aborted`／`request.size.invalid` 的 400 為 `Bad Request`）；非 `HttpException` 的 5xx 除 500 外回標準 reason phrase；回應不帶 `X-Powered-By`。
     `POST /diagnoses` 由 controller／service 回的 201／400（契約不符）／404／409／415（Content-Type）／503 不變；web 的錯誤文案只採用含中文的後端 message，畫面不變。
-  - WS：入站每連線 20 則／秒（容量 40），超速每則計一次違規，累計 10 次以 `1008` 關閉——web 前端穩態遠低於 1 則／秒，只影響自寫腳本；送出緩衝超過 `WS_SEND_HIGH_WATER_BYTES` 時不回 pong。Zod schema 與訊息結構不變，契約版本因 wire 行為改變升 1.3.0（見下方「契約 1.3.0」）。
+  - WS：入站每連線 20 則／秒（容量 40），超速每則計一次違規，累計 10 次以 `1008` 關閉——web 前端穩態遠低於 1 則／秒，只影響自寫腳本；client 送的協定層 ping frame 不回應（`autoPong: false`），應用層 pong 在送出緩衝超過 `WS_SEND_HIGH_WATER_BYTES` 時照回。Zod schema 與訊息結構不變，契約版本因 wire 行為改變升 1.3.0（見下方「契約 1.3.0」）。
   - 時序：`ai/done`／`ai/error` 從 worker 送出一定早於 BullMQ 的 `completed`／`failed`；`completed` 後綁定保留 10 s，寬限內同 jobId 重送仍回 409。
   - 關閉：api 12 s、worker `AI_TIMEOUT_MS`＋10 s 內必定自行 `exit(0)`；compose `stop_grace_period`（api 15s、worker 45s）不變，調高 `AI_TIMEOUT_MS` 時 worker 的 grace MUST 同步調為 `AI_TIMEOUT_MS`＋15 s。
 - **契約 1.3.0**（使用者 2026-10-18 裁決，向後相容的 minor）：`asyncapi.yaml` 的 `info.version` 已升 **1.3.0**。schema 沒有改動，變的是 wire 行為與描述——
-  `machine/subscribe`／`ping` 描述每連線入站限速（20 則／秒、容量 40，超速計違規，達 `WS_MAX_VIOLATIONS` 以 1008 關閉）；`ping`／`pong` 描述超過送出高水位時不回 pong；
+  `machine/subscribe`／`ping` 描述每連線入站限速（20 則／秒、容量 40，超速計違規，達 `WS_MAX_VIOLATIONS` 以 1008 關閉）；`ping`／`pong` 描述 client 送的協定層 ping frame 不回應、應用層 pong 不受背壓影響（裁決 13 併入 1.3.0）；
   `ai/*` 的 `attempt` 描述改為同一 attempt 內 `seq` 未遞增（`seq <= 上一個 seq`）即視為新一次執行；`POST /diagnoses` 新增 413、壞 JSON 400 的 body 改為固定形狀、body 上限 16 kb。明細見 `CHANGELOG.md`「asyncapi 契約版本」1.3.0。
 - **roadmap 版號順延**：第三輪審查 roadmap（報告 §5.4：quick-fix → 012-lite → 010-lite → 011）原定 012-lite＝契約 1.3.0、010-lite＝1.4.0、011＝1.5.0；1.3.0 已由本 quick-fix 使用，三者各順延一號為 **012-lite＝1.4.0、010-lite＝1.5.0、011＝1.6.0**（報告本身凍結不改）。
 

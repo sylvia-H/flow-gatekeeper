@@ -83,9 +83,10 @@ channels:
       operationId: ping
       summary: Client application-level heartbeat request.
       description: >-
-        Client sends an application-level heartbeat; server replies with pong unless the connection's send
-        buffer (bufferedAmount) is above WS_SEND_HIGH_WATER_BYTES, in which case the ping gets no reply and the
-        client is expected to treat the pong timeout as a disconnect and reconnect. Subject to the per-connection
+        Client sends an application-level heartbeat; server replies with pong, including while the connection's
+        send buffer is above WS_SEND_HIGH_WATER_BYTES (amplification is bounded by the inbound rate limit). This is
+        the only client-initiated liveness check: protocol-level ping frames (opcode 0x9) sent by the client are not
+        answered (the server WebSocket has autoPong disabled). Subject to the per-connection
         inbound rate limit described on machine/subscribe (20 messages per second, burst 40; excess counts as a
         violation, WS_MAX_VIOLATIONS closes with 1008).
       message:
@@ -112,9 +113,9 @@ channels:
       operationId: pong
       summary: Server reply to an application-level ping.
       description: >-
-        Server replies with pong (carrying a timestamp) to a client application-level ping. No pong is sent while
-        the connection's send buffer (bufferedAmount) is above WS_SEND_HIGH_WATER_BYTES; clients detect this as a
-        pong timeout and reconnect.
+        Server replies with pong (carrying a timestamp) to a client application-level ping, regardless of send-buffer
+        backpressure. Protocol-level ping frames sent by the client get no protocol-level pong; clients must use the
+        application-level ping message to check liveness.
       message:
         $ref: "#/components/messages/Pong"
 

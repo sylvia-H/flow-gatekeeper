@@ -69,13 +69,13 @@ flow-gatekeeper 是一個即時流程監控與 AI 診斷面板，有三個與本
 | 放棄的東西 | 如何承擔 |
 | --- | --- |
 | 自動 reconnect / 退避 | 在 `useHighFrequencyWs` 手刻指數退避 + 抖動 |
-| Heartbeat | 應用層 `ping`/`pong` + 逾時主動 `close` 觸發重連（web 連上即送第一次 ping，2026-10-18 第三輪審查 WEB-16）；該連線送出緩衝超過高水位時 Gateway 不回 pong（API-13），由前端 pong 逾時自行重連 |
+| Heartbeat | 應用層 `ping`/`pong` + 逾時主動 `close` 觸發重連（web 連上即送第一次 ping，2026-10-18 第三輪審查 WEB-16）；應用層 pong 在送出緩衝超過高水位時照回，client 送來的協定層 ping frame 不回應（`autoPong: false`，API-13，使用者裁決 13）——server 端探活仍是「server 送協定層 ping、client 回 pong」 |
 | Rooms / 廣播分組 | Gateway 自管 `clientId -> Set<machineId>` 訂閱表 |
 | jobId → client 對應 | relay 自管 `Map<jobId, clientId>`，終態清理；`completed` 後綁定再保留 10 s，讓走另一條 Redis 連線的 `ai/done` 晚到仍送得到（2026-10-18 第三輪審查 AR-5；`failed` 即刪） |
 | Transport fallback | 不支援；目標環境（現代瀏覽器 + 直連）不需要 |
 | 多實例水平擴展 | 目前單實例；要擴展時用既有的 Redis Pub/Sub 自己廣播 |
 | ack callback | 不需要；telemetry 是單向高頻推送，診斷結果走 job 狀態 |
-| 輸入驗證與連線防護（Socket.IO 亦不代勞，但自管協定更需要明寫） | 2026-09 審查修復補上：客戶端控制訊息以 `ClientControlMessageSchema` `safeParse`、`ws` 的 `maxPayload` 16 KiB、每條連線掛 `error` listener、`machineIds` 與名冊取交集、可選 Origin 白名單 `WS_ALLOWED_ORIGINS`——畸形訊息只會被拒絕，不會讓 Gateway 崩潰。2026-10-18（第三輪審查 API-13）另加每連線入站速率上限（token bucket，穩態 20 則／秒、容量 40），超速訊息不解析即丟棄並計違規，累計達上限以 1008 關閉 |
+| 輸入驗證與連線防護（Socket.IO 亦不代勞，但自管協定更需要明寫） | 2026-09 審查修復補上：客戶端控制訊息以 `ClientControlMessageSchema` `safeParse`、`ws` 的 `maxPayload` 16 KiB、每條連線掛 `error` listener、`machineIds` 與名冊取交集、可選 Origin 白名單 `WS_ALLOWED_ORIGINS`——畸形訊息只會被拒絕，不會讓 Gateway 崩潰。2026-10-18（第三輪審查 API-13）另加每連線入站速率上限（token bucket，穩態 20 則／秒、容量 40），超速訊息不解析即丟棄並計違規，累計達上限以 1008 關閉；並關閉協定層 `autoPong`，client 的協定層 ping frame 無法繞過入站限速、違規計數與背壓換到 pong |
 
 **風險自覺**：原生 ws 的價值是有條件的——只有在這些手刻部分**做得正確**（涵蓋重連、心跳逾時、清理、背壓上限）時才成立。做得草率反而會傳達「重造輪子又造壞」的反訊號。因此這些細節在 `useHighFrequencyWs` 與 Gateway 都有明確處理，並列入 feature 驗收。
 
