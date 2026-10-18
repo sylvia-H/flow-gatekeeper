@@ -3419,6 +3419,8 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   12. （合併門第 2 輪）WEB-17 剩下的部分——`jobs` 逐 token 寫 reactive、partial-json 每則 token 重新解析——接受，留在 backlog（ADR-002 §6.5.1）。
   13. （合併門第 2 輪）送出緩衝超過高水位時應用層 pong 照回，放大只靠入站 token bucket 擋；協定層 ping frame 改為不自動回應（`autoPong: false`）。屬 wire 行為變更，因 1.3.0 尚未發布，直接併入 1.3.0、不再升版。
   14. （release，推翻紀錄：原規劃 2.0.1）產品版號定為 **2.1.0**：本批含對外可見的相容性變更（HTTP 400 形狀、body 上限、WS 入站限速、日誌形狀）且契約升 1.3.0，依 1.1.0 前例升 minor，避免被當成可直接升級的 patch；發版前先以 GitHub Actions（ubuntu）手動跑一次 CI，補「覆蓋率門檻只在 Windows 量過」的證據。執行結果：run `39136629429`（`develop` `09d5a7e`，ubuntu、Node 22）因 `ThemeToggle.test.ts` 測試間洩漏主題偏好而紅燈——本機 Node 26 的實驗性 `localStorage` 遮蔽 happy-dom、寫入無效，所以本機看不出來；同一次量得 Linux 覆蓋率 lines 92.35％／branches 88.4％，與 Windows 一致。修正後於打 tag 前在 `develop` 重跑。
+  15. （release）第三輪審查仍未修／部分修的 P2（AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治、DOC-18／TQ-19／INF-14、CT-14、CT-15、TQ-18、WEB-24，以及 §3.9 文件類）全部帶著發布，逐條寫進 `CHANGELOG.md` `[2.1.0]` 相容性注意（依本次新增的 release 流程第 1 步「未修 P1／P2 逐條確認」）；GitHub Release 頁面以精簡版列出部署者看得到影響的項目並連到 CHANGELOG。
+  16. （release）發布日期沿用 2026-10-18，即使實際打 tag 時已跨午夜（同 2.0.0 前例）。
 - **行為變更（對外可見）**：
   - HTTP：壞 JSON 由 `400 {message: <解析錯誤原文>, error: "Bad Request", statusCode}` 改為 `400 {statusCode, message: "Invalid JSON body"}`（不再回顯本文片段、少 `error` 欄位）；body > 16 kb 回 `413 {statusCode, message: "Payload too large"}`（原上限 100 kb、message 為 body-parser 原文）；body-parser 其他 4xx 改回 reason phrase（charset／encoding 的 415 由 `unsupported charset "X"` 等原文改為 `Unsupported Media Type`，`request.aborted`／`request.size.invalid` 的 400 為 `Bad Request`）；非 `HttpException` 的 5xx 除 500 外回標準 reason phrase；回應不帶 `X-Powered-By`。
     `POST /diagnoses` 由 controller／service 回的 201／400（契約不符）／404／409／415（Content-Type）／503 不變；web 的錯誤文案只採用含中文的後端 message，畫面不變。
