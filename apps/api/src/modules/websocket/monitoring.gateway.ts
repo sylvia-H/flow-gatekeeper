@@ -39,12 +39,13 @@ export const WS_MAX_PAYLOAD_BYTES = 16 * 1024;
 
 /**
  * 慢讀者判定：心跳 tick 時 `bufferedAmount` 仍超過高水位的**連續**次數達此值即 terminate。
- * 單一 tick 超標可能只是瞬間網路抖動（期間的高頻流與 pong 已被略過、不會繼續堆積）；連續 3 輪仍消化
+ * 單一 tick 超標可能只是瞬間網路抖動（期間的高頻流已被略過、不會繼續堆積）；連續 3 輪仍消化
  * 不掉，代表對端讀得太慢，留著只會佔記憶體。從開始超標起算，這條路徑約在
  * `(WS_SLOW_CONSUMER_TICKS - 1)`～`WS_SLOW_CONSUMER_TICKS` 個 `WS_HEARTBEAT_MS` 後回收（預設 30～45 秒）。
  * 完全停止讀取的對端通常更早被回收：它讀不到排在緩衝後面的協定層 ping、回不了帶 nonce 的 pong，
  * 下一輪心跳就以 heartbeat-timeout terminate（見 `sweepDeadConnections`）；本常數兜底的是「有在讀、
- * 但讀得比送得慢」的對端。
+ * 但讀得比送得慢」的對端，以及不讀推送卻持續送應用層 ping 的對端（超標時 pong 照回，入站量由 token
+ * bucket 壓在每秒 20 則以內，見 `WS_INBOUND_RATE_PER_SEC`）。
  */
 export const WS_SLOW_CONSUMER_TICKS = 3;
 
@@ -98,8 +99,8 @@ export function unauthorizedConnectionCap(maxConnections: number): number {
 
 /**
  * 背壓可略過的推送：遙測批次與 `ai/token`（每筆 LLM token 一則的高頻流）。其餘皆為低頻控制／終態訊息，
- * 慢讀者仍須收到（漏送終態會讓前端卡在 streaming）。`pong` 不經此判斷：它是對入站 ping 的回應，超過
- * 高水位時在 `dispatch` 直接不回（API-13，見該處）。
+ * 慢讀者仍須收到（漏送終態會讓前端卡在 streaming）。應用層 `pong` 也照送：它的數量由入站 ping 決定，
+ * 已由入站 token bucket 限量（API-13，見 `WS_INBOUND_RATE_PER_SEC`）。
  */
 export function isBackpressureDroppable(payload: ServerMessage): boolean {
   return Array.isArray(payload) || payload.type === "ai/token";
@@ -201,6 +202,8 @@ export function takeInboundToken(bucket: InboundBucket, now: number): boolean {
  * - 訂閱：machine/subscribe 取代式 + 授權（FR-002/FR-003）；未訂閱者不收遙測（FR-004）。
  * - 心跳：應用層 ping→pong（FR-007a）+ 伺服器端探活回收半死連線（FR-007b/SC-005）；協定層
  *   ping 帶每輪隨機 nonce，pong 必須原樣帶回才算存活——暫停讀取、只顧主動送 pong 的對端騙不過。
+ *   協定層只有「server 送 ping、client 回 pong」這個方向：client 送來的協定層 ping 不自動回應
+ *   （`autoPong: false`，見 attach）。
  * - 落地：全量同步進 HistoryService buffer，由其每秒批次落庫（FR-009/FR-010）。
  * - 記錄：連線/斷線/授權失敗/逾時回收（FR-017）；同類 warn 以 LogThrottle 節流——**授權失敗、
  *   畸形訊息、Origin 拒絕、連線數拒絕等日誌為 30 秒抽樣**（key 為事件種類、全域共用，每 30 秒
@@ -209,11 +212,11 @@ export function takeInboundToken(bucket: InboundBucket, now: number): boolean {
  *   listener、maxPayload 16 KiB、Origin 白名單、連線數上限、授權期限（有密鑰時連線須在
  *   `WS_AUTH_GRACE_MS` 內通過 token，否則 1008——不讓不訂閱的連線佔住名額；未授權連線另有子上限
  *   `unauthorizedConnectionCap`）、machineIds 與已知機台取交集、
- *   token 常數時間比較、每連線入站速率（token bucket，`WS_INBOUND_RATE_PER_SEC`）、每連線違規計數
+ *   token 常數時間比較、每連線入站訊息速率（token bucket，`WS_INBOUND_RATE_PER_SEC`）、每連線違規計數
  *   （畸形訊息、錯誤 token、超速各計一次，達 `WS_MAX_VIOLATIONS` 以 1008 關閉）。任何畸形輸入
  *   都只影響該則訊息（或該條連線），不得讓行程結束。
  * - 出口閘門：所有推送經 `deliver()` 做背壓（`bufferedAmount` 超過高水位時略過高頻流——遙測批次與
- *   `ai/token`——其餘控制／終態訊息照送；應用層 `pong` 則在超標時直接不回，見 `dispatch`）；連續
+ *   `ai/token`——其餘控制／終態訊息與應用層 `pong` 照送，`pong` 的量由入站 token bucket 壓住）；連續
  *   `WS_SLOW_CONSUMER_TICKS` 個心跳 tick 超標則 terminate；對外的 `send()` 另只送已授權連線。
  */
 @Injectable()
@@ -294,6 +297,13 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
       path: "/ws",
       maxPayload: WS_MAX_PAYLOAD_BYTES,
       verifyClient: this.upgradeVerifier(allowedOrigins),
+      // API-13：ws 預設 `autoPong: true`，收到 client 的協定層 ping frame（opcode 0x9）就自動回 pong——
+      // 這條路不經 `message` 事件，繞過入站 token bucket、違規計數與任何背壓判斷：暫停讀取、狂送
+      // `ws.ping()` 的連線實測 2 秒把送出緩衝推到高水位的 72 倍、違規數 0。關掉不影響任何合法路徑：
+      // 瀏覽器 WebSocket API 不會送協定層 ping（web 心跳走應用層 `ping` 訊息），server 的探活是「server
+      // 送 ping、client 回 pong」，只吃 client 端的 autoPong 與本端的 'pong' 事件。不回應的協定層 ping
+      // 只花接收端解析（control frame 上限 125 bytes），不會讓送出緩衝成長。
+      autoPong: false,
     });
     this.wss.on("connection", (socket) => this.handleConnection(socket));
     // 授權期限另開獨立 interval，不掛在心跳 sweep 上：`WS_HEARTBEAT_MS` 可設到 2^31-1，掛在心跳上
@@ -428,18 +438,10 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
     if (!state) return;
     switch (msg.type) {
       case "ping":
-        // API-13：送出緩衝已超過高水位時不回 pong。ping 不需授權、每則都換來一則 pong，對不讀回應的
-        // client 而言等於讓 server 替它無限堆積緩衝；略過不影響正常連線——web 的 pong 逾時（5 s）會
-        // 自行重連，而真的讀不動的連線本就該由心跳 sweep 回收。不計入 `droppedSendCount`：該計數只反映
-        // 高頻資料流（遙測、`ai/token`）被略過的量。
-        if (state.socket.bufferedAmount > this.sendHighWaterBytes) {
-          this.throttledWarn(
-            "pong-skipped",
-            { clientId, bufferedAmount: state.socket.bufferedAmount },
-            "pong skipped: buffered amount over high water mark",
-          );
-          break;
-        }
+        // 超過高水位時照回 pong（不受背壓略過）：擁塞但健康的連線若收不到 pong，web 5 s 後會判為斷線
+        // 重連、進行中的診斷被標成中斷。ping 不需授權、每則換一則 pong，放大量已由入站 token bucket
+        // 壓在每秒 `WS_INBOUND_RATE_PER_SEC` 則以內（API-13）；真的不讀的對端交給心跳 sweep——連續
+        // `WS_SLOW_CONSUMER_TICKS` 個 tick 超過高水位即 terminate。
         this.deliver(clientId, { type: "pong", ts: Date.now() } satisfies Pong);
         break;
 
@@ -622,8 +624,8 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * 因背壓（`bufferedAmount` 超過高水位）被略過的高頻推送累計數——遙測批次與 `ai/token`，不含略過的
-   * `pong`（counter，不歸零）。
+   * 因背壓（`bufferedAmount` 超過高水位）被略過的高頻推送累計數——遙測批次與 `ai/token`（counter，
+   * 不歸零）。
    */
   get droppedSendCount(): number {
     return this.droppedSends;
@@ -671,10 +673,10 @@ export class MonitoringGateway implements OnModuleInit, OnModuleDestroy {
    * `bufferedAmount` 已超過高水位時略過該則並計數——對端讀不動時繼續 `send()` 只會讓 api 記憶體無上限
    * 成長；漏掉的遙測下一 tick 就有新值補上，漏掉的 token 由 `ai/done` 帶完整結果收尾。終態與控制訊息
    * （`ai/done`／`ai/error`／`job/status`、`system/*`、`machine/subscribed`）一律照送：它們低頻、體積小，
-   * 且漏送終態會讓前端卡在 streaming 直到 watchdog 逾時。`pong` 是例外但不在這裡判斷——它由入站 ping
-   * 觸發、數量由對端決定，超標時 `dispatch` 直接不回（API-13）；入站總量另受 token bucket 限制。記憶體
-   * 上限由心跳 sweep 保證——不回 pong 者下一輪以 heartbeat-timeout 回收，連續 `WS_SLOW_CONSUMER_TICKS`
-   * 個 tick 超標者以 slow-consumer 回收。
+   * 且漏送終態會讓前端卡在 streaming 直到 watchdog 逾時。應用層 `pong` 同樣照送：它由入站 ping 觸發、
+   * 數量由對端決定，但入站總量受 token bucket 限制（API-13），放大有上限；client 送來的協定層 ping 則
+   * 根本不回（`autoPong: false`）。記憶體上限由心跳 sweep 保證——不回協定層 pong 者下一輪以
+   * heartbeat-timeout 回收，連續 `WS_SLOW_CONSUMER_TICKS` 個 tick 超標者以 slow-consumer 回收。
    */
   private deliver(clientId: ClientId, payload: ServerMessage): void {
     const state = this.clients.get(clientId);

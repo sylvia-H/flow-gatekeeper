@@ -962,30 +962,25 @@ describe("MonitoringGateway：出口閘門（背壓、授權、違規、連線�
   });
 });
 
-describe("MonitoringGateway：入站放大口（API-13：pong 受高水位、每連線 token bucket）", () => {
+describe("MonitoringGateway：入站放大口（API-13：每連線 token bucket、不自動回協定層 ping）", () => {
   const isPong = (f: unknown): boolean => (f as Msg).type === "pong";
 
-  it("送出緩衝超過高水位時不回 pong（machine/subscribed 等控制訊息照送、不計入 droppedSendCount）；回落後恢復", async () => {
+  it("送出緩衝超過高水位時仍回應用層 pong（擁塞但健康的連線不該被 web 判斷線），且不計入 droppedSendCount", async () => {
     const { port, gateway } = await startGateway({ sendHighWaterBytes: 64 * 1024 });
     const client = await openClient(port);
-    let buffered = 10 * 1024 * 1024;
-    Object.defineProperty(serverSocket(gateway, client.clientId), "bufferedAmount", { get: () => buffered });
-
-    client.ws.send(JSON.stringify({ type: "ping" }));
-    client.ws.send(JSON.stringify({ type: "machine/subscribe", token: "", machineIds: ["mixer-01"] }));
-    // 訊息依序處理：收到 subscribed 時，前面那則 ping 已處理完，且沒有回 pong。
-    expect(await client.next()).toEqual({ type: "machine/subscribed", machineIds: ["mixer-01"] });
-    expect(client.frames.filter(isPong)).toEqual([]);
-    expect(gateway.droppedSendCount).toBe(0);
-
-    buffered = 0;
+    Object.defineProperty(serverSocket(gateway, client.clientId), "bufferedAmount", {
+      get: () => 10 * 1024 * 1024,
+    });
     client.ws.send(JSON.stringify({ type: "ping" }));
     expect(await client.next()).toMatchObject({ type: "pong" });
+    expect(gateway.droppedSendCount).toBe(0);
+    expect(gateway.isOnline(client.clientId)).toBe(true);
     client.ws.close();
   });
 
-  it("pingflood（不讀回應＋狂送 ping）：緩衝超標期間一則 pong 都不回，超速部分計違規、以 1008 關閉", async () => {
-    const { port, gateway } = await startGateway({ sendHighWaterBytes: 64 * 1024 });
+  it("pingflood（緩衝超標＋狂送應用層 ping）：pong 至多桶容量那麼多，超速部分計違規、以 1008 關閉", async () => {
+    // 凍結的單調時鐘：桶不補充，回出的 pong 數恰為桶容量。
+    const { port, gateway } = await startGateway({ sendHighWaterBytes: 64 * 1024, monotonicNow: () => 0 });
     const flooder = await openClient(port);
     Object.defineProperty(serverSocket(gateway, flooder.clientId), "bufferedAmount", {
       get: () => 10 * 1024 * 1024,
@@ -994,8 +989,41 @@ describe("MonitoringGateway：入站放大口（API-13：pong 受高水位、每
     const ping = JSON.stringify({ type: "ping" });
     for (let i = 0; i < 500; i += 1) flooder.ws.send(ping);
     expect(await closed).toBe(1008);
-    expect(flooder.frames.filter(isPong)).toEqual([]);
+    expect(flooder.frames.filter(isPong)).toHaveLength(WS_INBOUND_BURST);
     await expectServerHealthy(port);
+  });
+
+  it("協定層 ping flood（暫停讀取＋狂送 ws.ping()）：server 不自動回 pong、送出緩衝不成長；server 自己的探活照常", async () => {
+    const { port, gateway } = await startGateway();
+    const client = await openClient(port);
+    const server = serverSocket(gateway, client.clientId);
+    let received = 0;
+    server.on("ping", () => {
+      received += 1;
+    });
+    let pongs = 0;
+    client.ws.on("pong", () => {
+      pongs += 1;
+    });
+    // 暫停讀取：若 server 會回 pong，回覆只能堆在 server 端送出緩衝（實測 40k 則 → 4.7 MB）。
+    const rawSocket = (client.ws as unknown as { _socket: Socket })._socket;
+    rawSocket.pause();
+    const PINGS = 40_000;
+    const payload = Buffer.alloc(125); // control frame 上限
+    for (let i = 0; i < PINGS; i += 1) client.ws.ping(payload);
+    await vi.waitFor(() => expect(received).toBe(PINGS), { timeout: 10_000 });
+    expect(server.bufferedAmount).toBe(0);
+    expect(internals(gateway).clients.get(client.clientId)?.violations).toBe(0);
+
+    rawSocket.resume();
+    // server 探活不受影響：server 送 ping、client（ws 預設 autoPong）回帶 nonce 的 pong 仍算存活。
+    const state = internals(gateway).clients.get(client.clientId);
+    if (!state) throw new Error("missing state");
+    internals(gateway).sweepDeadConnections();
+    await vi.waitFor(() => expect(state.alive).toBe(true));
+    expect(await sendThenProbe(client, JSON.stringify({ type: "ping" }))).toEqual([]);
+    expect(pongs).toBe(0); // 一則協定層 pong 都沒收到
+    client.ws.close();
   });
 
   it("超過入站速率：桶內 WS_INBOUND_BURST 則照常處理，之後每則超速各計一次違規，滿 WS_MAX_VIOLATIONS 以 1008 關閉", async () => {
