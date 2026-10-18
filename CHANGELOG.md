@@ -25,7 +25,9 @@
 - 1.0.0 時五份套件 `package.json`（apps ×3、packages ×2）的 `version` 一直停在 `0.1.0`，root `package.json` 則沒有 `version` 欄位，
   與 tag 沒有單一來源（第二輪審查 DOC-D14）；自 1.1.0 起五份套件由 `0.1.0` 對齊為 `1.1.0`、root 新增 `version`，六份與 tag 對齊。
 
-## [Unreleased]
+## [2.1.0] - 2026-10-18
+
+次版號升級：修掉 2.0.0 已公開的 P1（設了 `REDIS_PASSWORD` 而 Redis 認證失敗時，密碼經 BullMQ `console.error` 明文進 api stderr）與第三輪審查 Batch E；因下方「相容性注意」有對外可見的行為變更、契約升 asyncapi **1.3.0**，依 1.1.0 前例升 minor（使用者 2026-10-18 裁決 2.1.0，原規劃為 2.0.1）。demo 影片未重錄，README 下載連結仍指向 2.0.0 release 的資產。
 
 第三輪審查（`docs/20260927-research-review03.md`）§6 Batch E 的 quick-fix，維護分支 `fix/20261018-review03-quickfix`（自 `develop` `45b1460`）；
 現況摘要見指南 §15.6「第三輪審查 quick-fix」，未修與新增 backlog 見 ADR-002 §6.5.1 的 review03 列。括號內為報告的 finding ID。
@@ -48,6 +50,20 @@
 - **未授權連線子上限新公式**（API-14）：`max(1, min(MAX_WS_CONNECTIONS − 1, max(10, floor(20% × MAX_WS_CONNECTIONS))))`；只影響 `MAX_WS_CONNECTIONS ≤ 10` 且有設 `WS_AUTH_SECRET` 的部署（例如上限 5 時子上限由 10 變 4），預設 500 不變（仍為 100）。
 - **自寫 WS client 的串流重置規則**（契約 1.3.0，AR-S8）：同一 `attempt` 內收到未遞增的 `seq`（`seq <= 上一個 seq`）即須視為新一次執行並清空累積文字；只認 `seq` 0 的實作在新執行的 seq 0 遺失時會把兩次執行的文字接在一起。
 - **調高 `AI_TIMEOUT_MS` 時 worker `stop_grace_period` MUST 設為 `AI_TIMEOUT_MS`＋15 秒**（WK-21）：worker 行程內關閉總時限＝`AI_TIMEOUT_MS`＋10 秒，compose grace 要比它多 5 秒才不會被 SIGKILL；預設 30 s／45s 不需調整。
+- **第三輪審查仍未修的 P2（本版帶著發布，使用者 2026-10-18 裁決）**：以下未在 2.1.0 修復，也都存在於 2.0.0（2.1.0 未使其變糟）；實測證據與修法見 `docs/20260927-research-review03.md`，括號內為 finding ID 與 roadmap 歸屬：
+  - **Redis 停頓超過 30 秒時同一診斷會跑兩次**（AR-4，012-lite）：WS 會先後收到兩則 `ai/done`（內建畫面只採用第一則，自寫 client 要能處理重複）、觸發紀錄多一筆、快取命中統計重複；快取尚未寫成功時會再打一次 LLM，並用掉唯一一次 stalled 額度。
+  - **worker 被強制終止後約 92 秒無事件**（AR-S7，012-lite）：BullMQ lock／stalled 參數為預設 30 s／30 s／1，45 秒 watchdog 會先把任務判失敗，重派後的結果需按重試才看得到。
+  - **LLM 供應商故障時同簽章請求不去重**（WK-13，012-lite）：多人同時對同一機台同一狀態按診斷，每個請求各自重打 LLM（請求數 × 3 次嘗試），全部計費並消耗 `AI_RPM`；最後一個等待者最長要等 N × `AI_TIMEOUT_MS`。
+  - **MongoDB 寫入診斷失敗時每次重試都重打 LLM**（WK-4 補強，012-lite；AR-A12 已修）：3 次嘗試全部計費、不送具體錯誤碼——前端只收到 api 補送的 `ai/error`（`worker_failed`），畫面顯示 Mongo 原始錯誤訊息（短訊息）或通用句「診斷失敗，請重試。」，訊息含逾時或連線字樣時會被誤報為「AI 診斷逾時」或「無法連線 AI 服務」；LLM 結果已寫快取後 trigger 才失敗而重試時，結果會被誤標「快取」。
+  - **完成語意仍只靠 Pub/Sub 的 `ai/done`**（AR-5 根治部分，012-lite）：Pub/Sub 斷線時畫面 2～3 秒內顯示「結果未送達，請重試」而非結果；失敗終態沒有綁定寬限，`failed` 先到時前端收到籠統的 `ai/error`（`worker_failed`）、看不到 worker 送的具體失敗原因（使用者 2026-10-18 裁決接受）。
+  - **CI 不自動觸發**（DOC-18／TQ-19／INF-14，待決策）：`ci.yml` 只保留手動觸發，push／PR 不會跑 CI（只在 Linux／Node 22 才出現的回歸要等人手動跑才發現，2.1.0 的 ThemeToggle 即一例）；nightly mutation 不論 `develop` 有無變更每日照跑。
+  - **測試與契約閘門缺口**（CT-14、CT-15、TQ-18、WEB-24，Batch F／G）：asyncapi channels 寫錯、契約變更未升版、Gateway 關閉邏輯或 App 層重連接線被改壞時，測試都不會失敗；不影響目前執行行為。
+  - **文件與流程類**（報告 §3.9，不影響執行行為）：
+    - **版號不保證可直接升級**（DOC-15）：本檔宣稱依 SemVer，但尚未宣告「公開介面」、也未定義何謂相容；能否直接升級請以各版「相容性注意」為準，不要只看版號。
+    - **backlog 不是完整清單**（DOC-17／WK-18）：ADR-002 §6.5.1 尚未移入第一輪報告 §3.1 a／c／d／f 等殘留項，C.9 #12／#13 的內容已遺失但未標記；查未修項時要同時看前兩輪報告。
+    - **後續 feature 藍圖未寫進指南**（DOC-16）：012-lite／010-lite 的範圍只在第三輪報告 §5.4，起草時須回報告原文。
+    - **變更紀錄有兩份**（DOC-20）：指南 §15.6 與本檔重複記錄維護分支，改一處要同步另一處，否則會不一致。
+    - **merge hash 的回填規則未寫進 CLAUDE.md**（DOC-13）、**SDD 收尾清單未定**（DOC-21）：文件表格的 hash 回填與 feature 收尾的回補步驟目前靠人記得。
 
 ### Security
 
@@ -83,6 +99,7 @@
 
 - 三支 `main.test` 改為檔頂 import，避免並行負載下冷載入逾時（TQ-14）；processor liveness 斷言改精確次數、不再對空陣列恆真（TQ-16）；補非最終嘗試 `ai_timeout` 與一般 Error 的重試語意測試（TQ-17）。
 - Gateway 註解與實作對齊（孤兒 JSDoc、背壓略過含 `ai/token`、慢讀者回收時序、pong 與入站速率；API-15）。
+- `ThemeToggle.test.ts` 在 `afterEach` 清掉主題偏好（`fg.theme`）：2.1.0 發版前首次以 GitHub Actions（ubuntu、Node 22）跑 CI 時，前一支測試寫入的深色偏好洩漏到下一支而失敗；本機 Node 26 的實驗性 `localStorage` 遮蔽 happy-dom 的實作、寫入無效，所以一直沒被發現（013 起即存在，非本批引入）。該次 CI 因這一支失敗而紅燈，但覆蓋率照常量得 lines 92.35％／branches 88.4％（Linux），與 Windows 隔離實測一致；修正後於打 tag 前在 `develop` 重跑 CI。
 
 ### 契約
 
@@ -116,7 +133,7 @@ worker 預設模型與輸出上限的變更見下方不相容變更。demo 影�
 
 ### 相容性注意（升級前必讀）
 
-- **第三輪審查發現的缺陷在 2.0.0 仍未修**：含一項 P1——api 端 BullMQ producer `Queue` 未掛 `error` listener，設了 `REDIS_PASSWORD` 而 Redis 認證失敗時，密碼會經 BullMQ 的 `console.error` 明文進 stderr（pino 路徑已遮蔽）。
+- **第三輪審查發現的缺陷在 2.0.0 仍未修**（P1 與 Batch E 已於 2.1.0 修復，見上方 `[2.1.0]`）：含一項 P1——api 端 BullMQ producer `Queue` 未掛 `error` listener，設了 `REDIS_PASSWORD` 而 Redis 認證失敗時，密碼會經 BullMQ 的 `console.error` 明文進 stderr（pino 路徑已遮蔽）。
   部署時請留意 api 的 stderr 收集範圍；細節與其他未修項見 `docs/20260927-research-review03.md` 與 README「已宣告的取捨」。
 - **新增 localStorage key**：`fg.theme`（`"light"`｜`"dark"`，主題選擇）與 `fg.copilot-panel`（`{"manuallyCollapsed":boolean}`，AI 診斷面板的手動收合偏好）；
   讀寫失敗（私密視窗、封鎖儲存）時回到預設、不顯示錯誤。既有的 `flow-gatekeeper:sidebar-width`、`flow-gatekeeper:event-strip-height` 沿用、不改名，升級後原有尺寸保留。
@@ -293,12 +310,12 @@ worker 預設模型與輸出上限的變更見下方不相容變更。demo 影�
 `asyncapi.yaml` 的 `info.version` 獨立於產品版本（見「版本策略」）。本節同時記錄 HTTP（`POST /diagnoses`）的契約變化，
 核對來源為 `git log -p -- asyncapi.yaml` 與 `packages/contracts/src/`。
 
-### 1.3.0（隨 `fix/20261018-review03-quickfix` 落地，首次發布的產品版號見本檔頂端對應條目）
+### 1.3.0（產品 2.1.0 起）
 
 asyncapi `info.version` 1.3.0，向後相容的 minor（第三輪審查 quick-fix，`fix/20261018-review03-quickfix`）。**schema 沒有改動**（12 則 message 的結構、asyncapi↔Zod 漂移比對皆不變），變的是 wire 行為與描述：
 
 - **runtime 接受範圍收窄（WS 入站限速，API-13）**：`machine/subscribe` 與 `ping` 共用每連線 token bucket，穩態 20 則／秒、容量 40；桶空時到達的訊息不解析即丟棄，每則計一次違規，與畸形訊息、schema 不符、錯誤 token 共用違規計數，達 `WS_MAX_VIOLATIONS`（10）以 close code `1008` 關閉。描述寫在 `machine/subscribe` 與 `ping` channel。
-- **語意變更（協定層 ping，API-13，使用者裁決 13）**：client 送來的協定層 ping frame（opcode 0x9）不再自動回 pong（`autoPong: false`）；消費端判活 MUST 用應用層 `ping`／`pong` 訊息。應用層 `pong` 不受背壓影響、送出緩衝超過高水位時照回，放大量由入站 token bucket 限制。伺服器探活（server 送協定層 ping、client 回 pong）不變。`ping`／`pong` 描述同步改寫（1.3.0 尚未發布，本項直接併入 1.3.0、不另升版）。
+- **語意變更（協定層 ping，API-13，使用者裁決 13）**：client 送來的協定層 ping frame（opcode 0x9）不再自動回 pong（`autoPong: false`）；消費端判活 MUST 用應用層 `ping`／`pong` 訊息。應用層 `pong` 不受背壓影響、送出緩衝超過高水位時照回，放大量由入站 token bucket 限制。伺服器探活（server 送協定層 ping、client 回 pong）不變。`ping`／`pong` 描述同步改寫（合併門第 2 輪時 1.3.0 尚未發布，本項直接併入 1.3.0、不另升版）。
 - **消費端義務更新（AR-S8）**：`ai/token`／`ai/done`／`ai/error` 的 `attempt` 說明——同一次執行內 `seq` 嚴格遞增，同一 `attempt` 內收到未遞增的 `seq`（`seq <= 上一個 seq`）即 MUST 視為新一次執行並清空已累積的串流文字。1.2.0 只要求「同一 attempt 內再收到 `seq` 0」時重置；新規則涵蓋它（`seq` 0 必然不大於上一個），並補上新執行的 `seq` 0 在 Pub/Sub 遺失的情形。
 - **HTTP 契約（API-7／API-17）**：`POST /diagnoses` 的 body 上限由 express 預設 100 kb 收窄為 16 kb，超過回 **413** `{"statusCode":413,"message":"Payload too large"}`；body 不是合法 JSON 的 400 改為固定的 `{"statusCode":400,"message":"Invalid JSON body"}`（原為 `{message: <JSON 解析錯誤原文>, error: "Bad Request", statusCode}`，不再回顯本文、少了 `error` 欄位）。body-parser 自己產生的其他 4xx 改為固定 reason phrase（charset／encoding 不支援的 415 為 `Unsupported Media Type`，`request.aborted`／`request.size.invalid` 的 400 為 `Bad Request`），非 `HttpException` 的 5xx 除 500 回 `Internal server error` 外回標準 reason phrase。契約不符的 400（`issues[]`）與 controller／service 回的 404、409、415、503 及 201 回應不變；回應標頭不再帶 `X-Powered-By`。
 
