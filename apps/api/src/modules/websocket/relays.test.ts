@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Job } from "bullmq";
 import { AiStreamRelayService } from "./ai-stream-relay.service.js";
-import { JobStatusRelayService, queueEventsConnection } from "./job-status-relay.service.js";
-import { attachThrottledErrorLog } from "../../lib/connection-error-throttle.js";
+import { JobStatusRelayService } from "./job-status-relay.service.js";
+import { attachThrottledErrorLog, bullmqConnection } from "../../lib/connection-error-throttle.js";
 
 const JOB_ID = "0e6c2b7a-1f3d-4d8e-a9b0-c1d2e3f4a5b6";
 const OTHER_JOB_ID = "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a";
@@ -180,7 +180,7 @@ describe("JobStatusRelayService delayed keepalive", () => {
   });
 });
 
-describe("queueEventsConnection：QueueEvents 接上連線錯誤節流", () => {
+describe("bullmqConnection：QueueEvents 接上連線錯誤節流（與 producer Queue 共用同一份實作）", () => {
   it("error 掛在 QueueEvents、ready 取自底層連線；持續故障只放行第一則，恢復後重置", async () => {
     const qeListeners = new Map<string, (err: Error) => void>();
     const clientListeners = new Map<string, () => void>();
@@ -192,7 +192,7 @@ describe("queueEventsConnection：QueueEvents 接上連線錯誤節流", () => {
     const errors: number[] = [];
     const recovered: number[] = [];
     attachThrottledErrorLog(
-      queueEventsConnection(queueEvents as never),
+      bullmqConnection(queueEvents as never),
       { error: (_err, suppressed) => errors.push(suppressed), recovered: (n) => recovered.push(n) },
       { now: () => 0 },
     );
@@ -211,7 +211,7 @@ describe("queueEventsConnection：QueueEvents 接上連線錯誤節流", () => {
 
   it("取底層連線失敗 → 只是收不到恢復訊號，不產生浮空 rejection", async () => {
     const queueEvents = { on: vi.fn(), client: Promise.reject(new Error("closing")) };
-    const conn = queueEventsConnection(queueEvents as never);
+    const conn = bullmqConnection(queueEvents);
     conn.on("ready", () => undefined);
     await new Promise((r) => setTimeout(r, 10));
     expect(queueEvents.on).not.toHaveBeenCalled();
@@ -227,7 +227,7 @@ describe("queueEventsConnection：QueueEvents 接上連線錯誤節流", () => {
     const errors: number[] = [];
     const recovered: number[] = [];
     attachThrottledErrorLog(
-      queueEventsConnection(queueEvents as never),
+      bullmqConnection(queueEvents),
       { error: (_err, suppressed) => errors.push(suppressed), recovered: (n) => recovered.push(n) },
       { now: () => 0 },
     );

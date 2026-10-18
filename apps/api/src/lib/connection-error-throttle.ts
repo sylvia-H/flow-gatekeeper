@@ -34,6 +34,9 @@ export type BullmqEmitter = {
  * `Queue` 尤其 MUST 掛上 error 監聽：bullmq 的 `QueueBase.emit` 在沒有監聽者時直接
  * `console.error(err)`，ioredis 的 `ReplyError` 會把 `command.args`（AUTH 時即 `REDIS_PASSWORD`）
  * 明文寫進 stderr，完全繞過 pino 的遮蔽（API-1）。
+ *
+ * 使用者：`DiagnosisQueueErrorLog`（producer Queue）與 `JobStatusRelayService`（QueueEvents）共用這一份，
+ * 不要再各自複製一份實作。
  */
 export function bullmqConnection(emitter: BullmqEmitter): ConnectionEvents {
   return {

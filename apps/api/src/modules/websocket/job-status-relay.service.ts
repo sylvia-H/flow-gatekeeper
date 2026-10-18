@@ -8,8 +8,7 @@ import { AppConfigService } from "../config/config.service.js";
 import { MonitoringGateway } from "./monitoring.gateway.js";
 import { AiStreamRelayService } from "./ai-stream-relay.service.js";
 import { getAppLogger } from "../../logging/app-logger.js";
-import { attachThrottledErrorLog } from "../../lib/connection-error-throttle.js";
-import type { ConnectionEvents } from "../../lib/connection-error-throttle.js";
+import { attachThrottledErrorLog, bullmqConnection } from "../../lib/connection-error-throttle.js";
 import { closeWithDeadline } from "./relay-close.js";
 
 /** 孤兒綁定回收安全期（QueueEvents 異常時避免 Map 洩漏，FR-002）。 */
@@ -99,7 +98,7 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
         void this.handleFailed(jobId, failedReason);
       });
       // 轉態節流：Redis 斷線時 QueueEvents 隨底層連線重連反覆發 error，逐則記錄會洗版。
-      attachThrottledErrorLog(queueEventsConnection(this.queueEvents), {
+      attachThrottledErrorLog(bullmqConnection(this.queueEvents), {
         error: (err, suppressed) =>
           this.logger.warn(
             `QueueEvents error: ${err.message}` +
@@ -239,33 +238,4 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
       }
     }
   }
-}
-
-/**
- * 把 QueueEvents 轉成節流器要的 `error`／`ready` 事件介面。QueueEvents 本身只轉發 `error`、
- * 不發 `ready`，恢復訊號取自其底層 ioredis 連線（重連成功時發 `ready`）。`client` 要等第一次
- * `ready` 才 resolve，掛上監聽時那一次已經發過——此時連線若已是 ready 就補觸發一次，否則開機
- * 期間的故障永遠記不到恢復。取連線失敗（例如關閉中）時只是收不到恢復訊號——節流仍以間隔放行，
- * 不影響 error 監聽本身。
- */
-export function queueEventsConnection(
-  queueEvents: Pick<QueueEvents, "on" | "client">,
-): ConnectionEvents {
-  return {
-    on(event: "error" | "ready", listener: ((err: Error) => void) | (() => void)) {
-      if (event === "error") {
-        queueEvents.on("error", listener);
-      } else {
-        const onReady = listener as () => void;
-        queueEvents.client.then(
-          (client) => {
-            client.on("ready", onReady);
-            if (client.status === "ready") onReady();
-          },
-          () => undefined,
-        );
-      }
-      return undefined;
-    },
-  };
 }
