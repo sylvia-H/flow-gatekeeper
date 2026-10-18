@@ -85,7 +85,7 @@
 
 - 三支 `main.test` 改為檔頂 import，避免並行負載下冷載入逾時（TQ-14）；processor liveness 斷言改精確次數、不再對空陣列恆真（TQ-16）；補非最終嘗試 `ai_timeout` 與一般 Error 的重試語意測試（TQ-17）。
 - Gateway 註解與實作對齊（孤兒 JSDoc、背壓略過含 `ai/token`、慢讀者回收時序、pong 與入站速率；API-15）。
-- `ThemeToggle.test.ts` 在 `afterEach` 清掉主題偏好（`fg.theme`）：2.1.0 發版前首次以 GitHub Actions（ubuntu、Node 22）跑 CI 時，前一支測試寫入的深色偏好洩漏到下一支而失敗；本機 Node 26 的實驗性 `localStorage` 遮蔽 happy-dom 的實作、寫入無效，所以一直沒被發現（013 起即存在，非本批引入）。同一次 CI 的覆蓋率為 lines 92.35％／branches 88.4％，與 Windows 隔離實測一致。
+- `ThemeToggle.test.ts` 在 `afterEach` 清掉主題偏好（`fg.theme`）：2.1.0 發版前首次以 GitHub Actions（ubuntu、Node 22）跑 CI 時，前一支測試寫入的深色偏好洩漏到下一支而失敗；本機 Node 26 的實驗性 `localStorage` 遮蔽 happy-dom 的實作、寫入無效，所以一直沒被發現（013 起即存在，非本批引入）。該次 CI 因這一支失敗而紅燈，但覆蓋率照常量得 lines 92.35％／branches 88.4％（Linux），與 Windows 隔離實測一致；修正後於打 tag 前在 `develop` 重跑 CI。
 
 ### 契約
 

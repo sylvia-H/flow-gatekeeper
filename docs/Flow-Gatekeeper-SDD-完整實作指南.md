@@ -3204,8 +3204,8 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 7 | `fix/20261017-pause-toggle-label` | `b7f7780` | 修正 013 開發期間改成的固定「暫停」：按下後換成「恢復」（Play 圖示；1.1.0 起即換字，當時為英文 `Resume`）、拿掉 `aria-pressed`、暫停橫幅 `role=status` | 013 UI 全面改版（「暫停」條） |
 | 8 | `upgrade/20261017-gemini-3.5-flash-lite` | `7d9f9d9` | 預設 LLM 模型改 `gemini-3.5-flash-lite`、3.x flash 送 `thinkingLevel: MEDIUM`、`AI_MAX_OUTPUT_TOKENS` 預設 4096 | Gemini 3.5 flash-lite 升級 |
 | 9 | `docs/20261018-demo-video` | `84feedd` | README demo 影片以 2.0.0 介面重錄、新增錄影劇本 `record-demo.cjs` | Demo 影片重錄 |
-| — | `docs/20261017-release-2.0.0` | （以 `git log --first-parent --merges` 為準） | 2.0.0 release 準備（版號、CHANGELOG、文件版本註記） | — |
-| 10 | `fix/20261018-review03-quickfix` | （以 `git log --first-parent --merges` 為準） | 第三輪審查報告 §6 Batch E（quick-fix）：P1 與日誌遮蔽、HTTP 錯誤回應、relay 與 Gateway 入站限速、worker 終態事件順序、關閉總時限、web 結果未送達收尾、測試門檻 ratchet；契約升 1.3.0 | 第三輪審查 quick-fix |
+| — | `docs/20261017-release-2.0.0` | `45b1460` | 2.0.0 release 準備（版號、CHANGELOG、文件版本註記） | — |
+| 10 | `fix/20261018-review03-quickfix` | `09d5a7e` | 第三輪審查報告 §6 Batch E（quick-fix）：P1 與日誌遮蔽、HTTP 錯誤回應、relay 與 Gateway 入站限速、worker 終態事件順序、關閉總時限、web 結果未送達收尾、測試門檻 ratchet；契約升 1.3.0 | 第三輪審查 quick-fix |
 | — | `docs/20261018-release-2.1.0` | （以 `git log --first-parent --merges` 為準） | 2.1.0 release 準備（版號、CHANGELOG、文件版本註記；版號由原規劃的 2.0.1 改為 2.1.0，見下方「第三輪審查 quick-fix」裁決 14） | — |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」），但不列入本表。
@@ -3330,7 +3330,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 - **Batch C（文件與 release 準備）**：
   - 契約：`asyncapi.yaml` 的 `info.version` 當時升為 **1.2.0**（其後升 1.3.0，見下方「第三輪審查 quick-fix」；明細見上方第二輪修復段與 `CHANGELOG.md`「asyncapi 契約版本」）；新增 repo 根 `CHANGELOG.md`（版本策略：產品版本與契約版本兩條獨立演進）。
-  - 產品版本：六份 `package.json`（root 新增 `version`、五套件由 `0.1.0` 對齊）為 **1.1.0**，已於 2026-09-28 與 tag `1.1.0`、CHANGELOG 條目一致發布（產品 tag 自此不帶 `v` 前綴；**已變更**：2026-10-17 六份升為 2.0.0、tag `2.0.0`）。
+  - 產品版本：六份 `package.json`（root 新增 `version`、五套件由 `0.1.0` 對齊）為 **1.1.0**，已於 2026-09-28 與 tag `1.1.0`、CHANGELOG 條目一致發布（產品 tag 自此不帶 `v` 前綴；**已變更**：2026-10-17 六份升為 2.0.0、tag `2.0.0`；2026-10-18 升為 2.1.0、tag `2.1.0`）。
   - 憲章升 **1.5.0**：Principle III「型別來源分層」改為全部 WS message 與 `POST /diagnoses` 一律 Zod＋`z.infer`；Governance 新增「跨 feature／跨分支決策 MUST 回補真實來源（涵蓋維護分支）」與「契約變更 MUST 升 `info.version` 並記 CHANGELOG」。`CLAUDE.md` 補「維護分支」小節。
   - 本節由「2026-09 修復摘要」改名為「1.0.0 之後的現況摘要」（原「v1.0.0 之後」，隨 tag 更名）並加上維護分支表；ADR-002 新增 §6.5「已知未做與延後項」表。
   - specs 001–008 補狀態與「已變更」橫幅；第一輪報告數字更正後凍結為歷史快照。
@@ -3386,7 +3386,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   輸出 BT.709／limited range 並標記色彩；先在暫存目錄編碼完成才覆寫 `docs/demo/`（不用 .tmp＋rename：Windows 上目標被播放器開著時 rename 會失敗），覆寫失敗時保留暫存成品並印出路徑；逐格寫檔失敗或對齊失準皆在呼叫 LLM 前中止；Chromium 尋找與面板狀態對照抽成 `apps/web/scripts/lib/browser.cjs`，與截圖劇本共用。
   使用者裁決：輸出 mp4（ffmpeg 用下載解壓即用的可攜版，不安裝到系統）、注入假游標、對 demo 容器錄。
 
-**第三輪審查 quick-fix**（`fix/20261018-review03-quickfix`，merge 以 `git log --first-parent --merges` 為準，2026-10-18；報告 `docs/20260927-research-review03.md` §6 Batch E；主要 commit：`7cd7a3f`（api）、`5e538bb`（relay／Gateway）、`d1384f6`（worker）、`b8d5bc0`（web）、`819391f`（coverage 門檻與報告目錄，TQ-15／TQ-20）、`3d45c3e`（契約 1.3.0 與文件回補）；合併門各輪修正另見該分支的 `git log --first-parent`；變更明細見 `CHANGELOG.md` `[2.1.0]`，backlog 見 ADR-002 §6.5.1 的 review03 列）：
+**第三輪審查 quick-fix**（`fix/20261018-review03-quickfix`，merge `09d5a7e`，2026-10-18；報告 `docs/20260927-research-review03.md` §6 Batch E；主要 commit：`7cd7a3f`（api）、`5e538bb`（relay／Gateway）、`d1384f6`（worker）、`b8d5bc0`（web）、`819391f`（coverage 門檻與報告目錄，TQ-15／TQ-20）、`3d45c3e`（契約 1.3.0 與文件回補）；合併門各輪修正另見該分支的 `git log --first-parent`；變更明細見 `CHANGELOG.md` `[2.1.0]`，backlog 見 ADR-002 §6.5.1 的 review03 列）：
 
 - **做了什麼**：
   - api 日誌與 HTTP：P1（API-1）producer `Queue` 在建構時掛節流 `error` listener，Redis 認證失敗不再經 BullMQ `console.error` 把 `REDIS_PASSWORD` 明文寫進 stderr；
