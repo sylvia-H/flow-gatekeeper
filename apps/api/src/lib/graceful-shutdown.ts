@@ -36,10 +36,13 @@ export function createShutdownHandler(opts: {
   log: ShutdownLog;
   deadlineMs?: number;
   duplicateWindowMs?: number;
+  /** 時間來源（毫秒），預設 `performance.now()`（單調時鐘）；測試可注入。 */
   now?: () => number;
 }): (signal: string) => Promise<void> {
   const duplicateWindowMs = opts.duplicateWindowMs ?? DUPLICATE_SIGNAL_WINDOW_MS;
-  const now = opts.now ?? Date.now;
+  // 預設用單調時鐘：系統時鐘往回調（NTP 校正、手動改時間）時，Date.now 的差值會變小甚至為負，
+  // 去重窗就會被拉長、真正的第二次訊號被誤當成重送而忽略。
+  const now = opts.now ?? (() => performance.now());
   let first: { signal: string; at: number } | undefined;
   const deadlineMs = opts.deadlineMs ?? SHUTDOWN_TOTAL_DEADLINE_MS;
   let shuttingDown = false;

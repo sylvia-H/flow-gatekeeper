@@ -295,11 +295,11 @@ export function createShutdown(deps: {
   onSignal?: () => void;
   /** 總時限（毫秒），由 `shutdownDeadlineMs(env.AI_TIMEOUT_MS)` 推導；必填，避免漏傳時退回與設定脫鉤的預設。 */
   deadlineMs: number;
-  /** 時間來源（測試注入；預設 Date.now）。 */
+  /** 時間來源（測試注入）；預設單調時鐘 performance.now()：系統時鐘往回跳時去重窗不會被拉長。 */
   now?: () => number;
 }): (signal: string) => Promise<void> {
   const { logger, run, onSignal, deadlineMs } = deps;
-  const now = deps.now ?? Date.now;
+  const now = deps.now ?? (() => performance.now());
   let first: { signal: string; at: number } | undefined;
   let exited = false;
   const exitOnce = (): void => {

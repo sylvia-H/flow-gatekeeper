@@ -150,6 +150,33 @@ describe("createLogger 祕密遮蔽（ioredis err.command.args）", () => {
     expect(line?.buf).toEqual(JSON.parse(JSON.stringify(buf)));
   });
 
+  it("toJSON 拋錯：logger 不拋出，該行照常輸出", () => {
+    const out = capture();
+    const logger = createLogger("api", env, out.stream);
+    const bad = {
+      toJSON(): never {
+        throw new Error("x");
+      },
+    };
+    expect(() => logger.warn({ x: bad, ok: 1 }, "m")).not.toThrow();
+    const [line] = out.lines();
+    expect(line).toMatchObject({ msg: "m", ok: 1 });
+  });
+
+  it("toJSON 回傳自己：照 pino 原樣處理（輸出自有屬性），不會變成 [Circular]", () => {
+    const out = capture();
+    const self = {
+      a: 1,
+      toJSON() {
+        return this;
+      },
+    };
+    createLogger("api", env, out.stream).warn({ x: self }, "m");
+    expect(out.raw()).not.toContain("[Circular]");
+    const [line] = out.lines();
+    expect(line?.x).toEqual({ a: 1 });
+  });
+
   it("command 是陣列（命令列形狀）時只留命令名", () => {
     const out = capture();
     const logger = createLogger("api", env, out.stream);

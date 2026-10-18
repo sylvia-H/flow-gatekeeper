@@ -197,7 +197,8 @@ describe("createShutdown", () => {
     const { logger, calls } = recordingLogger();
     const exit = vi.fn<(code: number) => void>();
     const onSignal = vi.fn();
-    const shutdown = mod.createShutdown({ logger, run, exit, onSignal, deadlineMs });
+    // 注入 now：fake timer 推進的 Date.now 驅動去重窗（預設的 performance.now 不一定被 fake timer 接管）。
+    const shutdown = mod.createShutdown({ logger, run, exit, onSignal, deadlineMs, now: () => Date.now() });
     return { shutdown, exit, onSignal, calls };
   }
 
