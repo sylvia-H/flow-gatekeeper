@@ -112,6 +112,19 @@ describe("JobStatusRelayService.handleFailed", () => {
     expect(gateway.send.mock.calls[0]?.[1]).toMatchObject({ type: "ai/error", attempt: 1 });
   });
 
+  it("failed 不給寬限（AR-5 寬限只用在 completed）：刪綁定後遲到的 ai/* 不再轉發", async () => {
+    vi.spyOn(Job, "fromId").mockResolvedValue({ attemptsMade: 1 } as never);
+    const { gateway, aiRelay, handleFailed } = makeStatusRelay();
+    await handleFailed("boom");
+    expect(aiRelay.getBinding(JOB_ID)).toBeUndefined();
+    gateway.send.mockClear();
+    (aiRelay as unknown as AiRelayInternals).handleMessage(
+      `ai-stream:${JOB_ID}`,
+      JSON.stringify({ type: "ai/error", jobId: JOB_ID, attempt: 1, code: "provider_error", message: "late" }),
+    );
+    expect(gateway.send).not.toHaveBeenCalled();
+  });
+
   it("job 已被清除（fromId 回 undefined）→ attempt 回退 1", async () => {
     vi.spyOn(Job, "fromId").mockResolvedValue(undefined);
     const { gateway, handleFailed } = makeStatusRelay();

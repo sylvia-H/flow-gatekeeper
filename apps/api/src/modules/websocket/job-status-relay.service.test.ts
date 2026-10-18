@@ -16,7 +16,8 @@ class FakeRedisClient extends EventEmitter {
 class FakeQueueEvents extends EventEmitter {
   readonly fakeClient = new FakeRedisClient();
   readonly client: Promise<FakeRedisClient> = Promise.resolve(this.fakeClient);
-  readonly close = vi.fn(() => Promise.resolve());
+  readonly close = vi.fn((): Promise<void> => Promise.resolve());
+  readonly disconnect = vi.fn((): Promise<void> => Promise.resolve());
   constructor(
     readonly name: string,
     readonly opts: unknown,
@@ -48,7 +49,14 @@ vi.mock("../../logging/app-logger.js", () => ({
 
 const { Job } = await import("bullmq");
 const { AiStreamRelayService } = await import("./ai-stream-relay.service.js");
-const { JobStatusRelayService, DELAYED_KEEPALIVE_MS } = await import("./job-status-relay.service.js");
+const { JobStatusRelayService, DELAYED_KEEPALIVE_MS, COMPLETED_BINDING_GRACE_MS } = await import(
+  "./job-status-relay.service.js"
+);
+const { RELAY_CLOSE_DEADLINE_MS } = await import("./relay-close.js");
+const { JobsService } = await import("../jobs/jobs.service.js");
+
+/** ai-stream relay 的私有入口（由 Redis pmessage 驅動，測試直接呼叫）。 */
+type AiRelayInternals = { handleMessage(channel: string, message: string): void };
 
 const JOB_ID = "0e6c2b7a-1f3d-4d8e-a9b0-c1d2e3f4a5b6";
 const OTHER_JOB_ID = "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a";
@@ -106,7 +114,7 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
     await relay.onModuleDestroy();
   });
 
-  it("waiting → active → progress(數值) → completed：依序轉發 job/status，progress 保留數值，completed 後刪綁定", async () => {
+  it("waiting → active → progress(數值) → completed：依序轉發 job/status，progress 保留數值，寬限期滿才刪綁定", async () => {
     const { qe, aiRelay, sent, relay } = setup();
     qe.emit("waiting", { jobId: JOB_ID });
     qe.emit("active", { jobId: JOB_ID });
@@ -122,11 +130,89 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
       { clientId: CLIENT_ID, payload: { ...base, status: "active" } },
       { clientId: CLIENT_ID, payload: { ...base, status: "completed" } },
     ]);
+    // AR-5：completed 後綁定仍保留，直到寬限期滿（恰差 1 ms 仍在）。
+    vi.advanceTimersByTime(COMPLETED_BINDING_GRACE_MS - 1);
+    expect(aiRelay.getBinding(JOB_ID)).toBeDefined();
+    vi.advanceTimersByTime(1);
     expect(aiRelay.getBinding(JOB_ID)).toBeUndefined();
 
     // 綁定已清：之後同一 job 的遲到事件不再轉發。
     qe.emit("active", { jobId: JOB_ID });
     expect(sent).toHaveLength(5);
+    await relay.onModuleDestroy();
+  });
+
+  it("AR-5：completed 先於 ai/done 到達（跨連線無順序保證）→ 寬限內遲到的 ai/done 仍轉發給原 client，期滿後不再轉發", async () => {
+    const { qe, aiRelay, sent, relay } = setup();
+    const aiDone = {
+      type: "ai/done",
+      jobId: JOB_ID,
+      attempt: 1,
+      cached: false,
+      result: { summary: "s", severity: "ok", likelyCauses: [], suggestedActions: [], evidence: [] },
+    };
+    const publishAiDone = () =>
+      (aiRelay as unknown as AiRelayInternals).handleMessage(`ai-stream:${JOB_ID}`, JSON.stringify(aiDone));
+
+    qe.emit("completed", { jobId: JOB_ID });
+    vi.advanceTimersByTime(COMPLETED_BINDING_GRACE_MS - 1);
+    publishAiDone();
+    expect(sent.map((s) => [s.clientId, s.payload.type])).toEqual([
+      [CLIENT_ID, "job/status"],
+      [CLIENT_ID, "ai/done"],
+    ]);
+    expect(sent[1]?.payload).toEqual(aiDone);
+
+    vi.advanceTimersByTime(1);
+    publishAiDone(); // 寬限已過：綁定已刪，不再轉發
+    expect(sent).toHaveLength(2);
+    await relay.onModuleDestroy();
+  });
+
+  it("AR-5：寬限內同 jobId 重送 POST /diagnoses → 409「已使用過」（不是 200 waiting），且不影響遲到 ai/done 的轉發", async () => {
+    const { qe, aiRelay, sent, relay } = setup();
+    const queue = { getJob: vi.fn(async () => undefined), add: vi.fn(async () => ({})) };
+    const jobs = new JobsService(queue as never, aiRelay, { isAuthorized: () => true });
+    aiRelay.bindJobToClient(JOB_ID, CLIENT_ID, "mixer-01"); // JobsService 先查名冊，須是已知機台
+
+    qe.emit("completed", { jobId: JOB_ID });
+    expect(aiRelay.getBinding(JOB_ID)?.completedAt).toBeDefined();
+    await expect(
+      jobs.createDiagnosis({ jobId: JOB_ID, machineId: "mixer-01", socketId: CLIENT_ID }),
+    ).rejects.toMatchObject({ status: 409, message: expect.stringContaining("已使用過") });
+    expect(queue.add).not.toHaveBeenCalled();
+
+    // 重送被拒後綁定原樣保留：寬限內晚到的 ai/done 照常送給原 client。
+    const aiDone = {
+      type: "ai/done",
+      jobId: JOB_ID,
+      attempt: 1,
+      cached: true,
+      result: { summary: "s", severity: "ok", likelyCauses: [], suggestedActions: [], evidence: [] },
+    };
+    (aiRelay as unknown as AiRelayInternals).handleMessage(`ai-stream:${JOB_ID}`, JSON.stringify(aiDone));
+    expect(sent.at(-1)).toEqual({ clientId: CLIENT_ID, payload: aiDone });
+    await relay.onModuleDestroy();
+  });
+
+  it("寬限計時器 unref、不阻止行程結束；期間綁定被刪後又以同 jobId 重新綁定 → 期滿不誤刪新綁定", async () => {
+    const graceTimers: Array<ReturnType<typeof setTimeout>> = [];
+    const fakeSetTimeout = globalThis.setTimeout;
+    const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn: () => void, ms?: number) => {
+      const t = fakeSetTimeout(fn, ms);
+      if (ms === COMPLETED_BINDING_GRACE_MS) graceTimers.push(t);
+      return t;
+    });
+    const { qe, aiRelay, relay } = setup();
+    qe.emit("completed", { jobId: JOB_ID });
+    spy.mockRestore();
+    expect(graceTimers).toHaveLength(1);
+    expect(graceTimers[0]?.hasRef()).toBe(false);
+
+    aiRelay.deleteBinding(JOB_ID); // 例如孤兒回收
+    aiRelay.bindJobToClient(JOB_ID, "another-client", "cnc-02");
+    vi.advanceTimersByTime(COMPLETED_BINDING_GRACE_MS);
+    expect(aiRelay.getBinding(JOB_ID)).toMatchObject({ clientId: "another-client" });
     await relay.onModuleDestroy();
   });
 
@@ -221,15 +307,52 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
     await relay.onModuleDestroy();
   });
 
-  it("onModuleDestroy 停止計時器並關閉 QueueEvents：之後推時間不再回收或補送", async () => {
+  it("onModuleDestroy 停止計時器（含 completed 寬限）並關閉 QueueEvents：之後推時間不再回收或補送", async () => {
     const { qe, aiRelay, gateway, relay } = setup();
     qe.emit("delayed", { jobId: JOB_ID, delay: Date.now() + ORPHAN_TTL_MS * 2 });
+    aiRelay.bindJobToClient(OTHER_JOB_ID, CLIENT_ID, "cnc-02");
+    qe.emit("completed", { jobId: OTHER_JOB_ID });
     gateway.send.mockClear();
     await relay.onModuleDestroy();
     expect(qe.close).toHaveBeenCalledTimes(1);
+    expect(qe.disconnect).not.toHaveBeenCalled(); // 如期關閉：不需強制斷線
+    expect(vi.getTimerCount()).toBe(0);
 
     vi.advanceTimersByTime(ORPHAN_TTL_MS + SWEEP_INTERVAL_MS);
     expect(gateway.send).not.toHaveBeenCalled();
     expect(aiRelay.getBinding(JOB_ID)).toBeDefined();
+    expect(aiRelay.getBinding(OTHER_JOB_ID)).toBeDefined();
+  });
+
+  it("API-12：QueueEvents.close() 卡住（Redis 不可達）→ 逾 RELAY_CLOSE_DEADLINE_MS 改 disconnect()，destroy 如期返回", async () => {
+    const { qe, relay } = setup();
+    qe.close.mockImplementation(() => new Promise<void>(() => undefined)); // 永不 resolve
+    let returned = false;
+    const destroying = relay.onModuleDestroy().then(() => {
+      returned = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(RELAY_CLOSE_DEADLINE_MS - 1);
+    expect(returned).toBe(false);
+    expect(qe.disconnect).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await destroying;
+    expect(returned).toBe(true);
+    expect(qe.disconnect).toHaveBeenCalledTimes(1);
+    const warns = vi.mocked(Logger.prototype.warn).mock.calls.map(([m]) => String(m));
+    expect(warns.some((m) => m.includes("QueueEvents close()") && m.includes(`${RELAY_CLOSE_DEADLINE_MS} ms`))).toBe(
+      true,
+    );
+  });
+
+  it("API-12：disconnect() 也拋錯或 reject → 仍不拋出、不產生浮空 rejection", async () => {
+    const { qe, relay } = setup();
+    qe.close.mockImplementation(() => new Promise<void>(() => undefined));
+    qe.disconnect.mockImplementation(() => Promise.reject(new Error("Connection is closed.")));
+    const destroying = relay.onModuleDestroy();
+    await vi.advanceTimersByTimeAsync(RELAY_CLOSE_DEADLINE_MS);
+    await expect(destroying).resolves.toBeUndefined();
+    expect(qe.disconnect).toHaveBeenCalledTimes(1);
   });
 });
