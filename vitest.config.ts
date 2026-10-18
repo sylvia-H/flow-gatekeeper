@@ -53,14 +53,20 @@ export default defineConfig({
       reporter: ["text-summary", "lcov", "json-summary"],
       // COVERAGE_DIR：覆寫輸出目錄（TQ-15）。輸出目錄是共用可變狀態，兩個 coverage（或 coverage 與 Stryker）
       // 並行時會互相污染（.vue 被靜默排除、數字下滑卻仍過門檻）；需要並行時各自指定不同目錄。
-      reportsDirectory: process.env.COVERAGE_DIR ?? fromRoot("./coverage"),
+      // vitest 每次執行前會整個清空本目錄：COVERAGE_DIR 必須是專屬目錄（不可設成 `reports` 這類共用目錄）。
+      // `||` 而非 `??`：設成空字串時退回預設，避免解析成 repo 根目錄而被清空。
+      reportsDirectory: process.env.COVERAGE_DIR || fromRoot("./coverage"),
       // 測試失敗時仍產出報告：CI 失敗 run 也能上傳 lcov 供比對（vitest 預設失敗即不出報告）。
       reportOnFailure: true,
       // 「不退步門檻」：守住「不往下掉」而非追求數字。
       // 由來：第二輪審查 §6 Batch D 首設 lines 60／branches 50（落地實測約 67／65，其後升到 81.37／76.44 仍維持）；
       // 第三輪審查 TQ-20 指出門檻低於實測 21～27 pt，刪掉約四分之一有效測試 CI 仍綠、也擋不住 TQ-15 的污染數字。
-      // 現況（2026-10-18，review03 Batch E 後隔離實測 lines 92.03／branches 88.36–88.37，兩次實測差 1 個分支）：全域與核心檔逐檔下限一律
+      // 現況（2026-10-18，review03 Batch E 合併門第 2 輪修正後於 HEAD 隔離實測 lines 92.33／branches 88.40，137 檔 1988 支）：
+      // 全域與核心檔逐檔下限一律
       // 「實測 −3、取整數往下」（使用者裁決）。測試增加後可再 ratchet；數字只升不降，下修須有理由。
+      // 下修紀錄：合併門第 1／2 輪改寫 job-status-relay（共用 bullmqConnection）與 shared logging（toJSON／child
+      // bindings／陣列 command）後分支組成改變，依同一規則重量：job-status-relay branches 80 → 78、
+      // shared logging branches 92 → 89（Batch E 首次量測為 98.91／83.33 與 97.91／95.65）。
       // 核心檔以 glob（相對 repo 根）設逐檔下限，避免弱檔被全域平均蓋住；檔案改名或搬移時 MUST 同步改 key——
       // glob 對不到任何檔案時 vitest 不會報錯，該檔的下限就靜默失效。
       // main.ts 入口刻意納入，以免覆蓋率虛高：main.test.ts 只測入口的守衛與 side-effect，
@@ -70,22 +76,22 @@ export default defineConfig({
         branches: 85,
         // 實測 lines／branches：98.64／87.83
         "apps/worker/src/processor.ts": { lines: 95, branches: 84 },
-        // 99.50／92.52
+        // 99.49／92.38
         "apps/api/src/modules/websocket/monitoring.gateway.ts": { lines: 96, branches: 89 },
-        // 98.91／83.33
-        "apps/api/src/modules/websocket/job-status-relay.service.ts": { lines: 95, branches: 80 },
+        // 98.79／81.57
+        "apps/api/src/modules/websocket/job-status-relay.service.ts": { lines: 95, branches: 78 },
         // 96.55／78.26
         "apps/api/src/modules/websocket/ai-stream-relay.service.ts": { lines: 93, branches: 75 },
         // 96.22／75.00
         "apps/api/src/modules/jobs/jobs.service.ts": { lines: 93, branches: 72 },
         // 100／100
         "apps/web/src/domains/ai-copilot/lib/copilot-reducer.ts": { lines: 97, branches: 97 },
-        // 100／91.74
+        // 100／91.81
         "apps/web/src/domains/ai-copilot/stores/copilot.store.ts": { lines: 97, branches: 88 },
         // 97.02／73.49
         "apps/web/src/domains/monitoring/composables/useHighFrequencyWs.ts": { lines: 94, branches: 70 },
-        // 97.91／95.65
-        "packages/shared/src/logging/index.ts": { lines: 94, branches: 92 },
+        // 97.14／92.45
+        "packages/shared/src/logging/index.ts": { lines: 94, branches: 89 },
         // 100／97.22
         "apps/api/src/logging/pino-logger.service.ts": { lines: 97, branches: 94 },
       },

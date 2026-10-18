@@ -19,7 +19,8 @@
 import process from "node:process";
 
 /** 報告輸出目錄（TQ-15，見檔頭）。 */
-const reportDir = process.env.MUTATION_REPORT_DIR ?? "reports/mutation";
+// `||` 而非 `??`：設成空字串時退回預設，避免報告寫到 `/mutation.html`（磁碟根目錄）。
+const reportDir = process.env.MUTATION_REPORT_DIR || "reports/mutation";
 
 /** @type {import('@stryker-mutator/api/core').PartialStrykerOptions} */
 export default {
