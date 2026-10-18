@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { mount, type VueWrapper } from "@vue/test-utils";
 import ThemeToggle from "./ThemeToggle.vue";
-import { resetThemeStateForTest } from "../composables/useTheme.js";
+import { resetThemeStateForTest, THEME_STORAGE_KEY } from "../composables/useTheme.js";
 
 /**
  * 主題切換兩種外觀（FR-002／FR-003、FR-033a）：rail 的兩段式與手機工具列的單一圖示鈕，
@@ -16,6 +16,14 @@ afterEach(() => {
   wrapper = null;
   resetThemeStateForTest();
   delete document.documentElement.dataset["theme"];
+  // 點擊切換會寫入主題偏好；不清掉會讓下一支測試一開始就讀到深色。
+  // Node 26 的實驗性 localStorage 會遮蔽 happy-dom 的實作（寫入無效），所以本機看不出來，
+  // CI 依 .nvmrc 跑 Node 22 時 storage 正常運作才會洩漏。storage 不可用時略過。
+  try {
+    globalThis.localStorage?.removeItem(THEME_STORAGE_KEY);
+  } catch {
+    /* storage 不可用 */
+  }
 });
 
 const root = (): string | undefined => document.documentElement.dataset["theme"];

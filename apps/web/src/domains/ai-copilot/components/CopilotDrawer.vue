@@ -6,7 +6,7 @@ import { useMonitoringStore, type MachineLive } from "../../monitoring/stores/mo
 import { isStale } from "../../monitoring/lib/stale.js";
 import { CARD_ROOT_CLASS } from "../../monitoring/lib/card-style.js";
 import { machineLabel as labelOf } from "../../monitoring/lib/machine-labels.js";
-import { progressLabel, type CopilotJobState } from "../lib/copilot-reducer.js";
+import { isUndeliveredFailure, progressLabel, type CopilotJobState } from "../lib/copilot-reducer.js";
 import { jobSteps, type StepStatus } from "../lib/job-steps.js";
 import { parsePartialDiagnosis } from "../lib/partial-json.js";
 import { compareBars, compareLabel } from "../lib/diagnosis-timing.js";
@@ -187,7 +187,8 @@ watch(
       announcement.value = "";
       return;
     }
-    if (prev.status !== "active") return;
+    // 「結果未送達」失敗被遲到的 ai/done 救回（AR-6）也算同一任務的完成轉移，照樣公告。
+    if (prev.status !== "active" && !isUndeliveredFailure(prev)) return;
     if (next.status === "completed") {
       announcement.value = `${labelOf(next.machineId)} 診斷完成${next.cached ? "（快取）" : ""}：${next.result.summary}`;
     } else if (next.status === "failed") {
@@ -530,6 +531,7 @@ watch(
         </div>
 
         <!-- 失敗：可讀分類錯誤 + 重試（FR-007／FR-024）；中斷前推理以原始串流預設展開保留，不顯示骨架 -->
+        <!-- 「結果未送達」（AR-6）時後端其實已完成、串流是完整的，標題不加「（中斷前）」 -->
         <div v-else-if="state.status === 'failed'" class="space-y-4">
           <ProgressBar status="failed" />
           <!-- 不另掛 role="alert"：失敗已由上方 live region 公告，避免同一則錯誤被念兩次 -->
@@ -549,7 +551,7 @@ watch(
           <StreamDisclosure
             v-if="state.streamText"
             v-model:expanded="showStream"
-            label="原始串流（中斷前）"
+            :label="isUndeliveredFailure(state) ? '原始串流' : '原始串流（中斷前）'"
             :text="state.streamText"
             :streaming="false"
           />

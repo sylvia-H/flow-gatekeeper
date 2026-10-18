@@ -10,7 +10,9 @@ import { DiagnosisResultSchema } from "./schemas.js";
  * `attempt` 為 BullMQ 的第幾次嘗試（`job.attemptsMade + 1`，從 1 起）。重試時 jobId 不變、
  * `seq` 又從 0 起，前端需要據此在換輪時清空已累積的 streamText，而不是把兩輪 token 接在一起。
  * worker 崩潰後的 stalled 重派不遞增 `attemptsMade`，因此 `attempt` 不變但 `seq` 同樣從 0 重播；
- * 消費端在同一 `attempt` 內再收到 `seq` 0 也要視為新的一次執行並清空。
+ * 同一次執行內 `seq` 嚴格遞增，消費端在同一 `attempt` 內收到 `seq <= 上一個 seq` 即視為新的一次執行並清空
+ * （web 以 `lastSeq` 判定，review03 AR-S8：只比 `seq === 0` 時，Pub/Sub at-most-once 弄丟新執行的 seq 0
+ * 就認不出重播）。
  */
 const attempt = z.number().int().min(1);
 

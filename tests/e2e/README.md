@@ -76,7 +76,8 @@ e2e 另把 `AI_TIMEOUT_MS=15000`、`AI_DEDUPE_LOCK_SECONDS=20`（縮短 kill 場
 ### 場景 3 反映的現況語意
 
 - BullMQ stalled 重派**不遞增** `attemptsMade`，所以重跑的 `ai/token` 仍帶 `attempt: 1`，靠「同一 attempt 內再見 `seq: 0`」
-  判定換輪（契約 `packages/contracts/src/ai-stream.ts` 已寫明）。
+  判定換輪（契約 `packages/contracts/src/ai-stream.ts` 已寫明）。契約 1.3.0 起規則為同一 attempt 內 `seq <= 上一個 seq`
+  即視為新一次執行，`seq: 0` 是其特例；本場景斷言的 `seq: 0` 重播在新規則下照樣成立。
 - api 的 job-status relay 沒有監聽 `stalled`（審查報告 AR-3）；前端看到的是 BullMQ `moveJobToWait` 附帶的 `waiting`，
   接著第二次 `active`。
 - 實測 kill → 重派的 `waiting`／第二次 `active` 約 **92 秒**、→ `completed` 約 101 秒（兩輪一致）：BullMQ job lock（30s）

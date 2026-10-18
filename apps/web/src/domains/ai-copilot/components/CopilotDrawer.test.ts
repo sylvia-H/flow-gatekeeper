@@ -409,6 +409,29 @@ describe("CopilotDrawer 終態", () => {
     expect(live).not.toContain("別台");
   });
 
+  it("結果未送達（AR-6）：失敗文案＋重試、公告失敗；同 job 遲到的 ai/done 救回後改顯示完成並公告", async () => {
+    const w = mountWithStore();
+    const jobId = await startJob();
+    const copilot = useCopilotStore();
+    copilot.applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 0, text: "完整的推理" });
+    copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "completed", progress: 100 });
+    copilot.checkStalls(Date.now(), 45_000, performance.now() + 2_001);
+    await flushPromises();
+    const message = "診斷已在後端完成，但結果未送達畫面，請重試";
+    expect(headerText(w)).toContain("失敗");
+    expect(w.text()).toContain(message);
+    expect(buttonExact(w, "重試")).toBeDefined();
+    // 後端已完成、串流是完整的：展開鈕標「原始串流」，不加「（中斷前）」
+    expect(buttonExact(w, "原始串流")!.attributes("aria-expanded")).toBe("true");
+    expect(buttonExact(w, "原始串流（中斷前）")).toBeUndefined();
+    expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷失敗：${message}`);
+
+    copilot.applyEvent({ type: "ai/done", jobId, attempt: 1, cached: false, result: RESULT });
+    await flushPromises();
+    expect(headerText(w)).toContain("已完成");
+    expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
+  });
+
   it("ai/error → 失敗、可讀錯誤與重試；重試走 store 重回進行中；不可診斷時重試停用並說明原因", async () => {
     const w = mountWithStore();
     const jobId = await startJob();

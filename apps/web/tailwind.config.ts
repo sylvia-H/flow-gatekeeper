@@ -16,7 +16,14 @@ import type { Config } from 'tailwindcss';
 const v = (name: string): string => `rgb(var(--c-${name}) / <alpha-value>)`;
 
 export default {
-  content: ['./index.html', './src/**/*.{vue,ts}'],
+  // 測試檔排除在掃描範圍外（WEB-15）：測試裡的 class 字串（斷言用、假資料）不該讓 production CSS
+  // 多出正式碼沒用到的 utility（曾多出 `.blur`、`.shadow` 等 14 個）。
+  // `relative: true`：glob 以本檔所在目錄解析、不依 cwd（TQ-23，與 postcss.config.js 以絕對路徑指向本檔是同一件事）；
+  // 否則從 repo 根目錄跑 Vite／vitest 時找得到設定、卻掃不到任何原始檔，CSS 只剩 base layer。
+  content: {
+    relative: true,
+    files: ['./index.html', './src/**/*.{vue,ts}', '!./src/**/*.test.ts'],
+  },
   theme: {
     extend: {
       // 推擠式 Copilot 面板的門檻（T073 使用者裁決）：≥ 1366px 時 rail 240＋把手 6＋面板 348＋內距後，

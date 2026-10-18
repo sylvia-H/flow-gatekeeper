@@ -1,8 +1,9 @@
 <!-- SPECKIT START -->
-<!-- 提醒：下次執行 speckit-agent-context-update 會覆寫本區塊，屆時再把 current plan 指向新 feature 的 plan.md，並保留下方 1.1.0／2.0.0 的版本現況句。 -->
+<!-- 提醒：下次執行 speckit-agent-context-update 會覆寫本區塊，屆時再把 current plan 指向新 feature 的 plan.md，並保留下方 1.1.0／2.0.0／2.1.0 的版本現況句。 -->
 目前無進行中的 SDD feature；最近一次完成的是 **013-ui-redesign**（UI 全面改版，`specs/013-ui-redesign/plan.md`，2026-10-17 implement 與驗收完成；視覺方向「實驗室玻璃與蝕刻刻度」，direction contract 在 `apps/web/.impeccable/surfaces/src-app-vue.md`；視覺真實來源為 `apps/web/PRODUCT.md` 與 `apps/web/DESIGN.md`，impeccable 工件在 `apps/web/.impeccable/`；critique 四輪最後 29/40，後續待辦見指南 §15.6「013 UI 全面改版」段末）；其前一次完成的是 009（`specs/009-observability-baseline/plan.md`）。
 009 之後的修復與升級見兩輪審查報告 `docs/20260927-research-review.md`、`docs/20260927-research-review02.md`（數字與結論以第二輪為準；`fix/20260927-research-review`、`upgrade/20260927-tech-stack`、`fix/20260927-research-review02`、`fix/20260927-review02-batch-cd` 皆已併入 `develop`，並於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第三輪審查報告 `docs/20260927-research-review03.md` 已於 2026-10-15 併入 `develop`）。
 013、第三輪審查報告與 2026-10 的維護分支（暫停鈕中文化、預設模型 `gemini-3.5-flash-lite`、demo 影片重錄）於 2026-10-17 以產品版本 **2.0.0**（tag `2.0.0`）發布。
+第三輪審查的 quick-fix（`fix/20261018-review03-quickfix`：P1 Redis 密碼外洩與 Batch E 修復、契約 asyncapi **1.3.0**，經合併門三輪）於 2026-10-18 併入 `develop`，同日以產品版本 **2.1.0**（tag `2.1.0`）發布；變更見 `CHANGELOG.md` `[2.1.0]`、裁決見指南 §15.6「第三輪審查 quick-fix」。
 現況摘要見 `docs/Flow-Gatekeeper-SDD-完整實作指南.md` §15.6「1.0.0 之後的現況摘要」。技術棧、結構與指令以 README 與指南為準。
 <!-- SPECKIT END -->
 
@@ -169,6 +170,11 @@ commit**，不需逐次徵詢；流程為：
    契約有變更時 `asyncapi.yaml` 的 `info.version` 已升版且 `CHANGELOG.md` 契約小節有紀錄；六份 `package.json`（root、
    `apps/{api,worker,web}`、`packages/{contracts,shared}`）的 `version` 已升到目標版本，並與 `CHANGELOG.md` 頂端條目一致
    （把 `[Unreleased]` 改為該版本與發布日期）。
+   另外 MUST 列出最新審查報告（`docs/*-research-review*.md` 中日期最新者）中仍未修的 **P1／P2**，以及該報告明示沿用、
+   不再重列的前輪未修 P1／P2（ADR-002 §6.5／§6.5.1 的 backlog；2.1.0 之後的發版起適用），逐條確認：已修（附 commit），
+   或由使用者明確裁決「帶著發布」——後者 MUST 寫進 `CHANGELOG.md` 該版的「相容性注意」，寫明觸發條件與影響，不得只留在報告裡
+   （2026-10-18 定案；起因：第三輪審查的 P1 標為「release 前必做」，卻隨 1.1.0、2.0.0 兩次發版出去。使用者層級 CLAUDE.md
+   「發版前的未修 findings」有同一條，改其中一份時 grep 另一份同步）。
 2. `git checkout main` → `git merge --no-ff develop`，merge commit 訊息格式為
    `merge(release): 併入 develop 準備 <版本> 發布`（前例：`merge(release): 併入 develop 準備第一版發布（v1.0.0）`、`merge(release): 併入 develop 準備 1.1.0 發布`）。
 3. 在該 merge commit 上打 annotated tag：`git tag -a X.Y.Z -m "flow-gatekeeper X.Y.Z：<中文摘要>"`——tag **不帶 `v` 前綴**（第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`；前例：`flow-gatekeeper 1.1.0：三輪審查加固版`）。

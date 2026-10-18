@@ -1,6 +1,7 @@
 import { ApiError, ThinkingLevel } from "@google/genai";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildClientOptions,
   buildGenerateConfig,
   classifyGeminiError,
   DEFAULT_GENERATION_OPTIONS,
@@ -10,6 +11,26 @@ import {
 } from "./gemini-provider.js";
 import { parseWorkerEnv } from "../lib/env-schema.js";
 import { AiProviderError } from "./provider.js";
+
+// 只替換 GoogleGenAI 建構子：記下建構參數、回傳不打網路的 stub client；其餘匯出（ApiError、列舉）沿用真品。
+const sdk = vi.hoisted(() => ({
+  ctorArgs: [] as unknown[],
+  generateContentStream: vi.fn(),
+}));
+vi.mock("@google/genai", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@google/genai")>()),
+  GoogleGenAI: class {
+    readonly models = { generateContentStream: sdk.generateContentStream };
+    constructor(options: unknown) {
+      sdk.ctorArgs.push(options);
+    }
+  },
+}));
+
+beforeEach(() => {
+  sdk.ctorArgs.length = 0;
+  sdk.generateContentStream.mockReset();
+});
 
 describe("thinkingConfigFor", () => {
   it.each(["gemini-2.5-flash", "gemini-2.5-flash-lite", "models/gemini-2.5-flash", "gemini-2.5-flash-preview-09-2025"])(
@@ -148,5 +169,28 @@ describe("GeminiProvider 缺金鑰", () => {
     expect(err).toMatchObject({ retryable: false, code: "provider_error", message: MISSING_API_KEY_MESSAGE });
     expect(MISSING_API_KEY_MESSAGE.toLowerCase()).toContain("api key not valid");
     expect(onToken).not.toHaveBeenCalled();
+    expect(sdk.ctorArgs).toEqual([]);
+  });
+});
+
+describe("GeminiProvider SDK client 建構參數", () => {
+  it("buildClientOptions：帶金鑰並明確關閉 SDK 內建重試（attempts: 1）", () => {
+    expect(buildClientOptions("k")).toEqual({ apiKey: "k", httpOptions: { retryOptions: { attempts: 1 } } });
+  });
+
+  it("第一次呼叫才建 client，建構參數含 retryOptions.attempts: 1；之後重用同一個 client", async () => {
+    async function* chunks() {
+      yield { text: "{}", candidates: [{ finishReason: "STOP" }] };
+    }
+    sdk.generateContentStream.mockImplementation(() => Promise.resolve(chunks()));
+    const provider = new GeminiProvider("secret-key", "gemini-2.5-flash");
+    expect(sdk.ctorArgs).toEqual([]); // 建 provider 時不建 client
+
+    const req = { prompt: "p", signal: new AbortController().signal, onToken: vi.fn() };
+    await provider.streamDiagnosis(req);
+    await provider.streamDiagnosis(req);
+
+    expect(sdk.ctorArgs).toEqual([{ apiKey: "secret-key", httpOptions: { retryOptions: { attempts: 1 } } }]);
+    expect(sdk.generateContentStream).toHaveBeenCalledTimes(2);
   });
 });

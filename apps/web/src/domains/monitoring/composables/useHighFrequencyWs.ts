@@ -217,23 +217,30 @@ export function useHighFrequencyWs(
     socket?.close();
   }
 
+  /** 送一次 ping 並起 pongTimer；逾時未收 pong 直接視為斷線。 */
+  function sendPing(): void {
+    lastPingAt = Date.now();
+    send({ type: "ping" });
+    clearPongTimer();
+    pongTimer = setTimeout(() => {
+      pongTimer = null;
+      clearHeartbeat();
+      retireSocket();
+      scheduleReconnect();
+    }, pongTimeoutMs);
+  }
+
   /**
-   * 週期送 ping；每次 ping 起 pongTimer。逾時未收 pong 直接視為斷線：網路靜默中斷時
-   * 瀏覽器的 close 事件可能數十秒後才到，期間不能讓狀態停在 connected（WEB-2）。
+   * 心跳：open 當下**立即**送第一次 ping，之後每 `heartbeatMs` 一次（WEB-16，2026-10-18 使用者裁決）。
+   * 立即送有兩個作用：延遲 chip 一連上就有 RTT（不必空等一個週期），以及剛 open 就靜默斷線時
+   * 也在 `pongTimeoutMs` 內發現，而不是 `heartbeatMs + pongTimeoutMs`。
+   * 逾時未收 pong 直接視為斷線：網路靜默中斷時瀏覽器的 close 事件可能數十秒後才到，
+   * 期間不能讓狀態停在 connected（WEB-2）。
    */
   function startHeartbeat(): void {
     clearHeartbeat();
-    heartbeatTimer = setInterval(() => {
-      lastPingAt = Date.now();
-      send({ type: "ping" });
-      clearPongTimer();
-      pongTimer = setTimeout(() => {
-        pongTimer = null;
-        clearHeartbeat();
-        retireSocket();
-        scheduleReconnect();
-      }, pongTimeoutMs);
-    }, heartbeatMs);
+    sendPing();
+    heartbeatTimer = setInterval(sendPing, heartbeatMs);
   }
 
   function scheduleReconnect(): void {
