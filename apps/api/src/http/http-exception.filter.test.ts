@@ -3,14 +3,13 @@ import type { AddressInfo } from "node:net";
 import { Writable } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Controller, Get, HttpException, Module } from "@nestjs/common";
-import { NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import type { Queue } from "bullmq";
 import { createLogger } from "@flow-gatekeeper/shared/logging";
 import type { DiagnosisJobPayload } from "@flow-gatekeeper/contracts";
 import { JobsController } from "../modules/jobs/jobs.controller.js";
 import { JobsService } from "../modules/jobs/jobs.service.js";
-import { HTTP_APP_OPTIONS, RequestBodyError, configureHttpApp, normalizeBodyParserError } from "./http-exception.filter.js";
+import { RequestBodyError, createHttpApp, normalizeBodyParserError } from "./http-exception.filter.js";
 
 /**
  * API-7／API-17：以真 Nest app（platform-express、真 body-parser）經 HTTP 驗證全域 filter 與 body 上限，
@@ -89,8 +88,7 @@ beforeAll(async () => {
     context: "HttpExceptionFilter",
   });
 
-  app = await NestFactory.create<NestExpressApplication>(TestModule, { ...HTTP_APP_OPTIONS, logger: false });
-  configureHttpApp(app, { logger, now: () => clock });
+  app = await createHttpApp(TestModule, { logger: false }, { logger, now: () => clock });
   await app.listen(0, "127.0.0.1");
   const { port } = (app.getHttpServer() as { address(): AddressInfo }).address();
   baseUrl = `http://127.0.0.1:${port}`;
@@ -171,6 +169,16 @@ describe("全域 HttpExceptionFilter：body-parser 錯誤", () => {
   it("回應不帶 X-Powered-By", async () => {
     const res = await postJson("{bad");
     expect(res.headers.get("x-powered-by")).toBeNull();
+  });
+});
+
+describe("createHttpApp：建立 app 與 HTTP 設定成對套用", () => {
+  // 守住「關掉 Nest 的 body parser」與「自行掛 parser＋filter」不被拆開：只做前者就完全沒有 body parser。
+  it("合法 JSON 經 body parser 解析後交給 controller（201），且回應不帶 X-Powered-By", async () => {
+    const res = await postJson(JSON.stringify({ machineId: "mixer-01", socketId: SOCKET_ID }));
+    expect(res.status).toBe(201);
+    expect(res.headers.get("x-powered-by")).toBeNull();
+    expect(await res.json()).toMatchObject({ machineId: "mixer-01", status: "waiting" });
   });
 });
 

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import * as mod from "./main.js";
 
@@ -11,5 +12,13 @@ import * as mod from "./main.js";
 describe("apps/api entry", () => {
   it("entry module 能乾淨 import 且匯出 bootstrap", () => {
     expect(typeof mod.bootstrap).toBe("function");
+  });
+
+  // 守住 HTTP 設定的接線：關掉 Nest body parser 與自行掛 parser／filter 綁在 createHttpApp 裡，
+  // entry 若改回直接 NestFactory.create，就會少掉 16 kb 上限、filter 與 x-powered-by 設定。
+  it("bootstrap 以 createHttpApp 建立 app，不直接呼叫 NestFactory.create", () => {
+    const source = readFileSync(new URL("./main.ts", import.meta.url), "utf8");
+    expect(source).toContain("await createHttpApp(AppModule,");
+    expect(source).not.toContain("NestFactory.create");
   });
 });

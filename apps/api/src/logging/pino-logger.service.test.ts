@@ -268,6 +268,18 @@ describe("PinoLoggerService 的 Error 處理與祕密遮蔽（API-11）", () => 
     expect(err.message).toBe(originalMessage);
   });
 
+  it("extra 帶兩個 body-parser 錯誤：第一個進 err、第二個留在 extra，兩者的 body 與引用本文的訊息都不外洩", () => {
+    const { service, raw, lines } = realSetup();
+    service.warn("two parse errors", bodyParserError(), bodyParserError());
+    expect(raw()).not.toContain(SECRET);
+    expect(raw()).not.toContain(`"body"`);
+    const [line] = lines();
+    expect(line?.err).toMatchObject({ message: "request body could not be parsed" });
+    const [second] = line?.extra as [{ type: string; message: string; stack: string }];
+    expect(second).toMatchObject({ type: "SyntaxError", message: "request body could not be parsed" });
+    expect(second.stack).toContain("request body could not be parsed");
+  });
+
   it("Nest BaseExceptionFilter 對非 HttpException 的 `logger.error(exception)`：msg 不再是 `{}`", () => {
     const { service, raw, lines } = realSetup();
     withNestLogger(service, () => {

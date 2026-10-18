@@ -2,10 +2,8 @@ import "reflect-metadata";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Logger } from "@nestjs/common";
-import { NestFactory } from "@nestjs/core";
-import type { NestExpressApplication } from "@nestjs/platform-express";
 import { AppModule } from "./app.module.js";
-import { HTTP_APP_OPTIONS, configureHttpApp } from "./http/http-exception.filter.js";
+import { createHttpApp } from "./http/http-exception.filter.js";
 import { loadApiDotenv } from "./lib/env-file.js";
 import { createShutdownHandler } from "./lib/graceful-shutdown.js";
 import { getAppLogger } from "./logging/app-logger.js";
@@ -37,15 +35,13 @@ export async function bootstrap(): Promise<void> {
   // 錯誤），設定錯誤（例如環境變數驗證失敗）因此不會以 rejection 回到這裡。關掉後錯誤照常拋出，
   // 由 entry 的 catch 走 fatalExit：印出可讀的 fatal JSON、以 exit 1 交給監督者。
   //
-  // HTTP_APP_OPTIONS 關掉 Nest 自動掛的 body parser，改由 configureHttpApp 以 16 kb 上限自行掛，
-  // 並在其後接上 body-parser 錯誤正規化、全域 ExceptionFilter 與 `disable("x-powered-by")`
-  // （API-7／API-17，見 http/http-exception.filter.ts）。
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
-    ...HTTP_APP_OPTIONS,
+  // createHttpApp 關掉 Nest 自動掛的 body parser，改以 16 kb 上限自行掛，並在其後接上 body-parser
+  // 錯誤正規化、全域 ExceptionFilter 與 `disable("x-powered-by")`（API-7／API-17，見
+  // http/http-exception.filter.ts）。兩步綁在同一個 helper 裡，不會只做一半而沒有 body parser。
+  const app = await createHttpApp(AppModule, {
     logger: new PinoLoggerService(getAppLogger()),
     abortOnError: false,
   });
-  configureHttpApp(app);
   // 經 AppConfigService 取 port：直接讀 process.env 會繞過其啟動時的設定驗證。
   const config = app.get(AppConfigService);
   const port = config.apiPort;
@@ -53,7 +49,7 @@ export async function bootstrap(): Promise<void> {
   const gateway = app.get(MonitoringGateway);
   // Origin 白名單、背壓高水位、連線數上限與授權期限一樣走 AppConfigService（單一設定來源），
   // Gateway 內不再各自讀 process.env。
-  // 以 NestExpressApplication 建立，getHttpServer() 的型別即 node:http Server。
+  // createHttpApp 回傳 NestExpressApplication，getHttpServer() 的型別即 node:http Server。
   gateway.attach(app.getHttpServer(), {
     allowedOrigins: config.wsAllowedOrigins,
     sendHighWaterBytes: config.wsSendHighWaterBytes,
@@ -91,7 +87,8 @@ export async function bootstrap(): Promise<void> {
   //
   // 總時限與第二次訊號（API-12，裁決 5）：flush＋app.close() 合計至多 12 秒，逾時記 warn 後仍
   // exit(0)——Redis 不可達時 relay 的 close 可能卡住，不設總時限會吃光 compose 的 15 秒 grace 而被
-  // SIGKILL（137，非零退出會被 on-failure 誤判為崩潰）。關閉中再收到訊號則立即 exit(0)。
+  // SIGKILL（137，非零退出會被 on-failure 誤判為崩潰）。關閉中再收到訊號則立即 exit(0)，但第一次
+  // 訊號後 1 秒內的同名訊號視為重送而忽略（終端機與 watch 工具會各送一次 SIGINT）。
   // 收尾失敗也不是崩潰：記 log 後仍以 0 退出（contracts §3）。見 lib/graceful-shutdown.ts。
   const shutdown = createShutdownHandler({
     close: async () => {

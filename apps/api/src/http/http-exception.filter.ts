@@ -1,7 +1,7 @@
 import { STATUS_CODES } from "node:http";
 import { Catch, HttpException, IntrinsicException } from "@nestjs/common";
-import type { ArgumentsHost, HttpServer } from "@nestjs/common";
-import { BaseExceptionFilter, HttpAdapterHost } from "@nestjs/core";
+import type { ArgumentsHost, HttpServer, NestApplicationOptions } from "@nestjs/common";
+import { BaseExceptionFilter, HttpAdapterHost, NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { ERROR_LOG_THROTTLE_MS, LogThrottle } from "@flow-gatekeeper/shared/logging";
 import type { ChildLogger } from "@flow-gatekeeper/shared/logging";
@@ -16,7 +16,7 @@ import { throttledFields } from "../lib/throttled-log.js";
 export const REQUEST_BODY_LIMIT = "16kb";
 
 /** 交給 `NestFactory.create` 的選項：body parser 改由 `configureHttpApp` 自行掛（見該函式）。 */
-export const HTTP_APP_OPTIONS = { bodyParser: false } as const;
+const HTTP_APP_OPTIONS = { bodyParser: false } as const;
 
 /** 對外固定英文訊息：不回顯輸入（JSON 解析錯誤的原訊息會引用請求本文片段）。 */
 const BODY_ERROR_MESSAGES: Readonly<Record<string, string>> = {
@@ -95,8 +95,10 @@ type RequestLike = { method?: unknown; path?: unknown };
  *   相同（JobsController 的 400／404／409／415、503 等；需要記錄的由呼叫端自行記，例如 409／503 由
  *   JobsService 記 warn），這裡再記一則不會多帶資訊。
  * - 其他帶 4xx 狀態碼的 http-errors（body-parser 的 400／413／415 等）：記 warn 並節流，回
- *   `{ statusCode, message }`、固定英文訊息。原本 Nest 對這類錯誤一律 `logger.error` 且不節流，
- *   任何人送壞 JSON 或超大 body 就能洗版。節流 key 為狀態碼加 body-parser 的 `type`（有限集合），
+ *   `{ statusCode, message }`、固定英文訊息。原本的行為：壞 JSON 由 Nest 11 的 router 先換成
+ *   `BadRequestException`（回應回顯解析訊息裡的本文片段），`BaseExceptionFilter` 不記錄 HttpException，
+ *   所以完全沒有日誌；413、415 等非 HttpException 則走 `handleUnknownError`，每則 `logger.error` 且
+ *   不節流，任何人送超大 body 就能洗版。節流 key 為狀態碼加 body-parser 的 `type`（有限集合），
  *   壞 JSON 與其他 400 不互相壓掉。
  * - 其餘（含 >=500 的 http-errors 與真正未預期的例外）：記 error（帶 err，剝掉 `body`），回
  *   `{ statusCode, message }`，訊息固定英文。
@@ -178,11 +180,12 @@ function requestFields(req: RequestLike): { method?: string; path?: string } {
 }
 
 /**
- * HTTP 層的共用設定（main.ts 與 HTTP 測試共用，避免兩邊漂移）。`app` MUST 以 `HTTP_APP_OPTIONS`
- * 建立（關掉 Nest 自動掛的 body parser）：Nest 在 `init()` 時才掛 parser，順序會落在這裡的 error
- * middleware 之後，body-parser 的錯誤就攔不到。
+ * HTTP 層的設定。`app` MUST 以 `HTTP_APP_OPTIONS` 建立（關掉 Nest 自動掛的 body parser）：Nest 在
+ * `init()` 時才掛 parser，順序會落在這裡的 error middleware 之後，body-parser 的錯誤就攔不到。
+ * 反過來，只套 `HTTP_APP_OPTIONS` 而不呼叫本函式就**完全沒有 body parser**。兩者因此不單獨匯出，
+ * 一律經 `createHttpApp` 成對使用。
  */
-export function configureHttpApp(
+function configureHttpApp(
   app: NestExpressApplication,
   filterOpts: { logger?: ChildLogger; now?: () => number } = {},
 ): void {
@@ -194,4 +197,22 @@ export function configureHttpApp(
   app.useBodyParser("urlencoded", { limit: REQUEST_BODY_LIMIT, extended: true });
   app.use(normalizeBodyParserError);
   app.useGlobalFilters(new HttpExceptionFilter(app.get(HttpAdapterHost).httpAdapter, filterOpts));
+}
+
+type HttpAppModule = Parameters<typeof NestFactory.create>[0];
+type HttpAppOptions = Omit<NestApplicationOptions, "bodyParser">;
+
+/**
+ * 建立 HTTP app（main.ts 與 HTTP 測試共用，避免兩邊漂移）：以 `HTTP_APP_OPTIONS` 建立，並立即套用
+ * `configureHttpApp`（16 kb body parser、body-parser 錯誤正規化、全域 ExceptionFilter、
+ * `disable("x-powered-by")`）。`bodyParser` 不開放覆寫。
+ */
+export async function createHttpApp(
+  module: HttpAppModule,
+  options: HttpAppOptions = {},
+  filterOpts: { logger?: ChildLogger; now?: () => number } = {},
+): Promise<NestExpressApplication> {
+  const app = await NestFactory.create<NestExpressApplication>(module, { ...options, ...HTTP_APP_OPTIONS });
+  configureHttpApp(app, filterOpts);
+  return app;
 }
