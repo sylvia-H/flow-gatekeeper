@@ -45,8 +45,9 @@ function mountPanel() {
   Object.defineProperty(el, "scrollTop", {
     configurable: true,
     get: () => scrollTop,
+    // 與瀏覽器相同：寫入值夾在 0 與 scrollHeight - clientHeight 之間（writes 記呼叫端要求的值）
     set: (v: number) => {
-      scrollTop = v;
+      scrollTop = Math.max(0, Math.min(v, scrollHeight - 100));
       writes.push(v);
     },
   });
@@ -109,6 +110,71 @@ describe("StreamingPanel 貼底捲動", () => {
     el.dispatchEvent(new Event("scroll"));
     nextFrame();
     expect(writes).toEqual([]);
+  });
+
+  it("程式捲動的 scroll 事件晚一幀才到、期間內容已長高 ≥ 24px：不誤判為使用者上捲，繼續跟隨（合併門第 2 輪 #1）", async () => {
+    const { w, el, writes, setScrollHeight } = mountPanel();
+    // 第 N 幀：寫入 scrollTop（scrollHeight 300 → 實際夾到 200，貼底）
+    setScrollHeight(300);
+    await w.setProps({ text: "第一段" });
+    nextFrame();
+    expect(writes).toEqual([300]);
+    expect(el.scrollTop).toBe(200);
+    // 下一幀的 scroll steps 之前，新 token 已讓內容長高 40px（約兩行）
+    setScrollHeight(340);
+    await w.setProps({ text: "第一段第二段" });
+    // 第 N+1 幀：先派發上一次程式捲動的 scroll 事件（scrollTop 仍是 200），再跑 rAF
+    el.dispatchEvent(new Event("scroll"));
+    nextFrame();
+    expect(writes).toEqual([300, 340]);
+    expect(el.scrollTop).toBe(240);
+    // 之後照常跟隨
+    setScrollHeight(400);
+    await w.setProps({ text: "第一段第二段第三段" });
+    el.dispatchEvent(new Event("scroll"));
+    nextFrame();
+    expect(writes).toEqual([300, 340, 400]);
+  });
+
+  it("內容縮短（新一輪清空文字）使瀏覽器把 scrollTop 夾小：仍在底部，不算上捲", async () => {
+    const { w, el, writes, setScrollHeight, userScrollTo } = mountPanel();
+    setScrollHeight(500);
+    await w.setProps({ text: "很長的上一輪" });
+    nextFrame();
+    expect(el.scrollTop).toBe(400);
+    setScrollHeight(100);
+    userScrollTo(0); // 瀏覽器夾值
+    el.dispatchEvent(new Event("scroll"));
+    setScrollHeight(200);
+    await w.setProps({ text: "新一輪" });
+    nextFrame();
+    expect(writes).toEqual([500, 200]);
+  });
+
+  it("跟隨中使用者往上捲（低於程式上次捲到的位置）：停止跟隨；捲回底部才恢復", async () => {
+    const { w, el, writes, setScrollHeight, userScrollTo: scrollBy } = mountPanel();
+    setScrollHeight(500);
+    await w.setProps({ text: "a" });
+    nextFrame();
+    expect(el.scrollTop).toBe(400);
+    scrollBy(300); // 使用者上捲 100px
+    el.dispatchEvent(new Event("scroll"));
+    setScrollHeight(560);
+    await w.setProps({ text: "ab" });
+    nextFrame();
+    expect(writes).toEqual([500]);
+    // 往下捲但沒到底：仍不跟隨
+    scrollBy(420);
+    el.dispatchEvent(new Event("scroll"));
+    await w.setProps({ text: "abc" });
+    nextFrame();
+    expect(writes).toEqual([500]);
+    // 捲到底：恢復跟隨
+    scrollBy(460);
+    el.dispatchEvent(new Event("scroll"));
+    await w.setProps({ text: "abcd" });
+    nextFrame();
+    expect(writes).toEqual([500, 560]);
   });
 
   it("卸載時取消未執行的幀", async () => {

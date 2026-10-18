@@ -565,12 +565,14 @@ describe("copilot store 診斷耗時量測（T044、data-model §8、research R7
 
 describe("copilot store 結果未送達（AR-6：job/status completed 後等不到 ai/done）", () => {
   const T0 = 1_760_000_000_000;
+  /** 單調時鐘起點（`performance.now()`）；2 s 寬限以它計時，45 s watchdog 以牆上時鐘 T0 計時。 */
+  const P0 = 1_000;
   let dateNow: MockInstance<() => number>;
   let perfNow: MockInstance<() => number>;
   beforeEach(() => {
     setActivePinia(createPinia());
     dateNow = vi.spyOn(Date, "now").mockReturnValue(T0);
-    perfNow = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    perfNow = vi.spyOn(performance, "now").mockReturnValue(P0);
     mockDiagnoseOk();
   });
   afterEach(() => {
@@ -590,9 +592,9 @@ describe("copilot store 結果未送達（AR-6：job/status completed 後等不�
   it("寬限 2 s 內維持進行中；超過即轉「結果未送達」失敗，保留串流文字、chip 為失敗", async () => {
     const store = useCopilotStore();
     await diagnoseThenBackendCompleted(store);
-    store.checkStalls(T0 + UNDELIVERED_GRACE_MS, 45_000); // 剛好 2 s：還不算逾時
+    store.checkStalls(T0 + UNDELIVERED_GRACE_MS, 45_000, P0 + UNDELIVERED_GRACE_MS); // 剛好 2 s：還不算逾時
     expect(store.stateFor("mixer-01").status).toBe("active");
-    store.checkStalls(T0 + UNDELIVERED_GRACE_MS + 1, 45_000);
+    store.checkStalls(T0 + UNDELIVERED_GRACE_MS + 1, 45_000, P0 + UNDELIVERED_GRACE_MS + 1);
     expect(store.stateFor("mixer-01")).toMatchObject({
       status: "failed",
       reason: "undelivered",
@@ -609,31 +611,53 @@ describe("copilot store 結果未送達（AR-6：job/status completed 後等不�
     const store = useCopilotStore();
     const jobId = await diagnoseThenBackendCompleted(store);
     store.applyEvent({ type: "ai/done", jobId, attempt: 1, cached: false, result: RESULT });
-    store.checkStalls(T0 + 10_000, 45_000);
+    store.checkStalls(T0 + 10_000, 45_000, P0 + 10_000);
     expect(store.stateFor("mixer-01").status).toBe("completed");
   });
 
   it("重複的 job/status completed 不重置寬限起點", async () => {
     const store = useCopilotStore();
     const jobId = await diagnoseThenBackendCompleted(store);
-    dateNow.mockReturnValue(T0 + 1_500);
+    perfNow.mockReturnValue(P0 + 1_500);
     store.applyEvent({ type: "job/status", jobId, machineId: "mixer-01", status: "completed", progress: 100 });
-    store.checkStalls(T0 + 2_100, 45_000);
+    store.checkStalls(T0 + 2_100, 45_000, P0 + 2_100);
     expect(store.stateFor("mixer-01")).toMatchObject({ status: "failed", reason: "undelivered" });
+  });
+
+  it("寬限以單調時鐘計：牆上時鐘往前跳 ≥ 2 s 不會誤判未送達；單調時鐘真的過了 2 s 才轉失敗", async () => {
+    const store = useCopilotStore();
+    await diagnoseThenBackendCompleted(store);
+    // 牆上時鐘被校時往前跳 10 s（≥ 2 s；刻意小於 45 s，不碰仍用牆上時鐘的 45 s watchdog），單調時鐘只過了 100 ms
+    dateNow.mockReturnValue(T0 + 10_000);
+    store.checkStalls(T0 + 10_000, 45_000, P0 + 100);
+    expect(store.stateFor("mixer-01").status).toBe("active");
+    store.checkStalls(T0 + 10_000, 45_000, P0 + UNDELIVERED_GRACE_MS + 1);
+    expect(store.stateFor("mixer-01")).toMatchObject({ status: "failed", reason: "undelivered" });
+  });
+
+  it("checkStalls 未傳單調時刻時預設讀 performance.now()（App 的每秒 tick 只傳牆上時刻）", async () => {
+    const store = useCopilotStore();
+    await diagnoseThenBackendCompleted(store);
+    perfNow.mockReturnValue(P0 + UNDELIVERED_GRACE_MS);
+    store.checkStalls(T0, 45_000);
+    expect(store.stateFor("mixer-01").status).toBe("active");
+    perfNow.mockReturnValue(P0 + UNDELIVERED_GRACE_MS + 1);
+    store.checkStalls(T0, 45_000);
+    expect(store.stateFor("mixer-01").status).toBe("failed");
   });
 
   it("沒有 job/status completed 的 active 不套用 2 s 寬限（仍是 45 s watchdog）", async () => {
     const store = useCopilotStore();
     await store.diagnose("mixer-01", SOCKET);
     store.applyEvent({ type: "job/status", jobId: jobIdOf(store), machineId: "mixer-01", status: "active", progress: 60 });
-    store.checkStalls(T0 + 10_000, 45_000);
+    store.checkStalls(T0 + 10_000, 45_000, P0 + 10_000);
     expect(store.stateFor("mixer-01").status).toBe("active");
   });
 
   it("保險：同 jobId 遲到的 ai/done 改回 completed，耗時、完成時刻、chip 與準時路徑一致", async () => {
     const store = useCopilotStore();
     const jobId = await diagnoseThenBackendCompleted(store);
-    store.checkStalls(T0 + 3_000, 45_000);
+    store.checkStalls(T0 + 3_000, 45_000, P0 + 3_000);
     expect(store.stateFor("mixer-01").status).toBe("failed");
     // 失敗期間保留 pending，晚到的結果才能結算
     expect(store.timingFor("mixer-01")?.pending).toEqual({ jobId, startedAt: 1_000 });
@@ -655,7 +679,7 @@ describe("copilot store 結果未送達（AR-6：job/status completed 後等不�
   it("遲到的 ai/done 仍經 guardDone 驗證：畸形結果不救回，維持未送達失敗", async () => {
     const store = useCopilotStore();
     const jobId = await diagnoseThenBackendCompleted(store);
-    store.checkStalls(T0 + 3_000, 45_000);
+    store.checkStalls(T0 + 3_000, 45_000, P0 + 3_000);
     store.applyEvent({
       type: "ai/done",
       jobId,
@@ -671,7 +695,7 @@ describe("copilot store 結果未送達（AR-6：job/status completed 後等不�
     const store = useCopilotStore();
     await store.diagnose("mixer-01", SOCKET);
     const jobId = jobIdOf(store);
-    store.checkStalls(T0 + 46_000, 45_000);
+    store.checkStalls(T0 + 46_000, 45_000, P0 + 46_000);
     store.applyEvent({ type: "ai/done", jobId, attempt: 1, cached: false, result: RESULT });
     expect(store.stateFor("mixer-01")).toMatchObject({ status: "failed", error: "診斷逾時或無回應，請重試" });
     expect(store.completedAtFor("mixer-01")).toBeUndefined();
@@ -680,14 +704,14 @@ describe("copilot store 結果未送達（AR-6：job/status completed 後等不�
   it("未送達後按重試：新任務開始，舊 job 遲到的 ai/done 不覆蓋新任務", async () => {
     const store = useCopilotStore();
     const oldJob = await diagnoseThenBackendCompleted(store);
-    store.checkStalls(T0 + 3_000, 45_000);
+    store.checkStalls(T0 + 3_000, 45_000, P0 + 3_000);
     await store.retry("mixer-01", SOCKET);
     const newJob = jobIdOf(store);
     expect(newJob).not.toBe(oldJob);
     store.applyEvent({ type: "ai/done", jobId: oldJob, attempt: 1, cached: false, result: RESULT });
     expect(store.stateFor("mixer-01")).toMatchObject({ status: "active", jobId: newJob });
     // 新任務沒有收到 job/status completed，不套用 2 s 寬限
-    store.checkStalls(T0 + 10_000, 45_000);
+    store.checkStalls(T0 + 10_000, 45_000, P0 + 10_000);
     expect(store.stateFor("mixer-01").status).toBe("active");
   });
 });

@@ -109,6 +109,8 @@ export const useCopilotStore = defineStore("copilot", () => {
   /**
    * 每台「收到後端 `job/status: completed`、但還沒等到 `ai/done`」的時刻（AR-6）。
    * 帶 jobId 比對，只認當前任務；離開 active 即清掉。同樣只有 `checkStalls` 讀，用 plain Map。
+   * `at` 是單調時鐘（`performance.now()`）：寬限只有 2 s，牆上時鐘被 NTP 校時或手動調整往前跳 ≥ 2 s
+   * 就會誤判成未送達；單調時鐘不受影響。
    */
   const backendCompletedAt = new Map<string, { jobId: string; at: number }>();
   /** 記某台目前有進展（開始診斷、或收到屬於當前 job 的事件時呼叫）。 */
@@ -357,7 +359,7 @@ export const useCopilotStore = defineStore("copilot", () => {
         event.status === "completed" &&
         backendCompletedAt.get(machineId)?.jobId !== next.jobId
       ) {
-        backendCompletedAt.set(machineId, { jobId: next.jobId, at: Date.now() });
+        backendCompletedAt.set(machineId, { jobId: next.jobId, at: performance.now() });
       }
     } else if (next.status !== "active") clearWatch(machineId);
     // 耗時量測：只在這一則事件讓任務「離開 active」時收尾（reducer 對非 active 一律原樣回傳），
@@ -392,12 +394,15 @@ export const useCopilotStore = defineStore("copilot", () => {
    * `ai/done`（例如 Pub/Sub 訂閱斷線期間 ai/done 遺失）。不必等滿 `thresholdMs`——後端不會再有任何進展——
    * 直接轉成「結果未送達」失敗。這種失敗**保留**耗時量測的 pending：同 jobId 的 `ai/done` 若只是晚到，
    * reducer 會改回 completed，store 照常結算耗時與完成時刻，與準時抵達的路徑一致。
+   *
+   * 兩種判定用不同時鐘：2 s 寬限比 `monoNowMs`（單調時鐘，預設當下 `performance.now()`，測試可傳入）；
+   * 45 s watchdog 維持既有的牆上時鐘 `nowMs`（門檻寬、語意不變，本次不改）。
    */
-  function checkStalls(nowMs: number, thresholdMs: number): void {
+  function checkStalls(nowMs: number, thresholdMs: number, monoNowMs: number = performance.now()): void {
     for (const [machineId, state] of jobs.value) {
       if (state.status !== "active") continue;
       const done = backendCompletedAt.get(machineId);
-      if (done !== undefined && done.jobId === state.jobId && nowMs - done.at > UNDELIVERED_GRACE_MS) {
+      if (done !== undefined && done.jobId === state.jobId && monoNowMs - done.at > UNDELIVERED_GRACE_MS) {
         jobs.value.set(machineId, {
           status: "failed",
           machineId,

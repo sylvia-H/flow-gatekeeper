@@ -531,6 +531,7 @@ watch(
         </div>
 
         <!-- 失敗：可讀分類錯誤 + 重試（FR-007／FR-024）；中斷前推理以原始串流預設展開保留，不顯示骨架 -->
+        <!-- 「結果未送達」（AR-6）時後端其實已完成、串流是完整的，標題不加「（中斷前）」 -->
         <div v-else-if="state.status === 'failed'" class="space-y-4">
           <ProgressBar status="failed" />
           <!-- 不另掛 role="alert"：失敗已由上方 live region 公告，避免同一則錯誤被念兩次 -->
@@ -550,7 +551,7 @@ watch(
           <StreamDisclosure
             v-if="state.streamText"
             v-model:expanded="showStream"
-            label="原始串流（中斷前）"
+            :label="isUndeliveredFailure(state) ? '原始串流' : '原始串流（中斷前）'"
             :text="state.streamText"
             :streaming="false"
           />
