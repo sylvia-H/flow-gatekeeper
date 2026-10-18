@@ -25,6 +25,64 @@
 - 1.0.0 時五份套件 `package.json`（apps ×3、packages ×2）的 `version` 一直停在 `0.1.0`，root `package.json` 則沒有 `version` 欄位，
   與 tag 沒有單一來源（第二輪審查 DOC-D14）；自 1.1.0 起五份套件由 `0.1.0` 對齊為 `1.1.0`、root 新增 `version`，六份與 tag 對齊。
 
+## [Unreleased]
+
+第三輪審查（`docs/20260927-research-review03.md`）§6 Batch E 的 quick-fix，維護分支 `fix/20261018-review03-quickfix`（自 `develop` `45b1460`）；
+現況摘要見指南 §15.6「第三輪審查 quick-fix」，未修與新增 backlog 見 ADR-002 §6.5.1 的 review03 列。括號內為報告的 finding ID。
+
+### 相容性注意（升級前必讀）
+
+- **壞 JSON 的 400 回應改變**（API-7／API-17）：body 由 Nest 預設的 `{"message":"<JSON 解析錯誤原文>","error":"Bad Request","statusCode":400}` 改為 `{"statusCode":400,"message":"Invalid JSON body"}`——message 固定英文、不再回顯本文片段，且**少了 `error` 欄位**；依 message 文字或 `error` 欄位判斷的外部 client 需改。契約不符的 400（`issues[]`）與 controller／service 回的 404／409／415／503 不變；body-parser 自己產生的其他 4xx 也改為固定的 HTTP reason phrase——charset／encoding 不支援的 415 由原文（如 `unsupported charset "X"`）改為 `Unsupported Media Type`，`request.aborted`、`request.size.invalid` 等 400 改為 `Bad Request`。
+- **body 上限 100 kb → 16 kb**（API-7）：`POST /diagnoses` 正常請求不到 300 bytes；超過回 `413 {"statusCode":413,"message":"Payload too large"}`（原為 body-parser 原文 `request entity too large`）。
+- **回應不再帶 `X-Powered-By: Express`**（API-7）。
+- **非 `err` 鍵下的 `command` 日誌形狀改變**（CT-13）：放在其他鍵（如 `ctx.error.command`、陣列內）的 Redis 指令物件，以前一層萬用 redact 輸出 `"args":"[REDACTED]"`，現在 `args` 整個鍵消失、只剩 `{"command":{"name":…}}`；以 `[REDACTED]` 字樣做 grep 或告警的規則會漏抓，請改比對 `command.name` 或改以缺少 `args` 判斷。
+- **WS 入站限速**（API-13）：每連線 token bucket 穩態 20 則／秒、容量 40；超速的訊息不解析即丟棄並各計一次違規，與畸形訊息、錯誤 token 合計 10 次即以 `1008` 關閉。內建 web 穩態遠低於 1 則／秒、不受影響；以更高頻率送 `ping`／`machine/subscribe` 的自寫 client 或壓測腳本需降頻。
+- **送出緩衝超過高水位時不回 `pong`**（API-13）：`bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES` 的連線，應用層 `ping` 收不到回應；以 `pong` 判活的自寫 client 會判斷線並重連（內建 web 5 秒逾時即重連）。
+- **未授權連線子上限新公式**（API-14）：`max(1, min(MAX_WS_CONNECTIONS − 1, max(10, floor(20% × MAX_WS_CONNECTIONS))))`；只影響 `MAX_WS_CONNECTIONS ≤ 10` 且有設 `WS_AUTH_SECRET` 的部署（例如上限 5 時子上限由 10 變 4），預設 500 不變（仍為 100）。
+- **自寫 WS client 的串流重置規則**（契約 1.3.0，AR-S8）：同一 `attempt` 內收到未遞增的 `seq`（`seq <= 上一個 seq`）即須視為新一次執行並清空累積文字；只認 `seq` 0 的實作在新執行的 seq 0 遺失時會把兩次執行的文字接在一起。
+- **調高 `AI_TIMEOUT_MS` 時 worker `stop_grace_period` MUST 設為 `AI_TIMEOUT_MS`＋15 秒**（WK-21）：worker 行程內關閉總時限＝`AI_TIMEOUT_MS`＋10 秒，compose grace 要比它多 5 秒才不會被 SIGKILL；預設 30 s／45s 不需調整。
+
+### Security
+
+- **P1：api 端 BullMQ producer `Queue` 掛上節流的 `error` listener**（API-1）：設了 `REDIS_PASSWORD` 而 Redis 認證失敗時，密碼不再經 BullMQ 的 `console.error` 明文寫進 stderr（2.0.0 相容性注意所列的未修項）。
+- **日誌全深度遮蔽 Redis 指令參數**（CT-13）：共用 logger 以 `formatters.log` 對整個 log 物件任意深度剝除 `command.args`（含 `err` 以外的鍵、陣列、class instance），不再只處理第一層 `err`；`command` 只留 `name`（`args` 鍵移除，不再輸出 `[REDACTED]`，見相容性注意）；child bindings 不經此路徑、仍由 redact 遮蔽。
+- **api Nest logger 的 Error 不再整包 `JSON.stringify`**（API-11）：Error 導到 `err` 鍵、msg 取 `err.message`，body-parser 錯誤夾帶的原始請求本文（`body`）不進日誌，`ReplyError` 的 `args` 經 serializer 剝除。
+- **HTTP 錯誤不回顯輸入、不記本文**（API-7／API-17）：全域 `HttpExceptionFilter` 讓 body-parser 的 4xx 回固定英文 message、記 warn 並依狀態碼與類型節流（原為每則 `logger.error`、可被洗版）；未預期例外與 500 回 `Internal server error`，其他 5xx 的 http-errors 回該狀態碼的標準 reason phrase（如 503 `Service Unavailable`）；error 日誌保留原 message 與 stack（剝掉 `body`）。
+
+### Fixed
+
+- **`ai/done`／`ai/error` 早於 BullMQ 終態送出**（AR-5／WK-14）：worker 的終態事件（含 `no_context`）改為 await publish 後才結束 job，發布失敗只記 warn、不改 job 結果；`ai/token` 維持 fire-and-forget。
+- **`completed` 後綁定保留 10 秒**（AR-5）：api relay 送出 `job/status: completed` 後延後刪綁定，走另一條 Redis 連線、稍晚抵達的 `ai/done` 仍送得到原連線；寬限內同 jobId 重送仍回 409；`failed` 不加寬限。
+- **快取命中先落地後宣告**（AR-A12）：cache 命中路徑改為寫 trigger → `updateProgress(100)` → `ai/done`，與 LLM 路徑同序。
+- **web 結果未送達收尾**（AR-6）：收到 `job/status: completed` 後 2 秒（每秒檢查，實際 2–3 秒）仍無 `ai/done` 即轉失敗，文案「診斷已在後端完成，但結果未送達畫面，請重試」、沿用重試鈕；只有這種失敗允許同 jobId 遲到的 `ai/done` 救回完成（原本要等 45 秒 watchdog）。
+- **Pub/Sub 訂閱中斷有日誌**（AR-6）：ai-stream subscriber 加掛 `close`／`reconnecting`，與 `error` 共用節流器，整段斷線只記一則 warn、恢復由既有 ready 記錄。
+- **串流重播判定**（AR-S8）：web 以同一輪 `seq <= lastSeq` 判定新一次執行並清空串流文字；原以 `seq === 0` 判定，Pub/Sub 弄丟新執行的 seq 0 時會把兩次執行的文字接在一起。
+- **api 關閉不再卡到 SIGKILL**（API-12）：stopProducer＋flush＋`app.close()` 總時限 12 秒，兩支 relay 的 Redis 連線關閉各限 3 秒（逾時 best-effort `disconnect()`）；逾時記 warn 後 `exit(0)`，關閉中再收到訊號立即 `exit(0)`（原本第二次訊號被吞掉）。
+- **worker 關閉總時限與重入保護**（WK-21）：總時限 `AI_TIMEOUT_MS`＋10 秒（預設 40 秒），逾時記 warn 後 `exit(0)`，第二次訊號立即 `exit(0)`；Gemini SDK 明確設 `retryOptions.attempts: 1`，重試只交給 BullMQ。
+- **`no_context` 終態記 warn**（WK-19）：業務上預期的空脈絡失敗不再以 error 帶 stack 記錄；trigger 照常補寫。
+- **未授權連線不能單獨佔滿名額**（API-14）：`MAX_WS_CONNECTIONS ≤ 10` 時子上限原本等於或大於全域上限。
+- **web 連上即送第一次 ping**（WEB-16）：原本第一次 ping 要等滿一個 15 秒間隔，連上後最長約 20 秒才偵測得到斷線。
+- **web 不再觸發 CSP 違規回報**（WEB-13）：zod 4 預設以 `new Function` 探測 JIT，被 `script-src 'self'` 擋下；web 新增 `src/zod-config.ts`（`z.config({ jitless: true })`）作為 `main.ts` 第一個 import。
+- **production CSS 不再含只在測試出現的 class**（WEB-15／TQ-23）：tailwind content 排除 `*.test.ts` 並以設定檔位置解析，postcss 以絕對路徑指向 tailwind 設定（不隨 cwd 漂移）。
+
+### Changed
+
+- **測試門檻提高**（TQ-20）：`pnpm test:coverage` 全域門檻 lines 60／branches 50 → **89／85**（隔離實測 lines 92.03、branches 88.36–88.37（兩次實測差 1 個分支）減 3、取整數往下；137 個測試檔 1965 支），另以 glob 對十個核心檔設逐檔下限（例如 `processor.ts` 95／84、`monitoring.gateway.ts` 96／89、`useHighFrequencyWs.ts` 94／70，全表見 `vitest.config.ts`）；coverage reporter 加 `json-summary`。
+- **coverage／mutation 輸出目錄可覆寫**（TQ-15）：`COVERAGE_DIR` 覆寫 coverage 輸出目錄；Stryker 報告目錄以 `MUTATION_REPORT_DIR` 覆寫（sandbox 本來就每次獨立建立，不需覆寫）。未設時路徑不變（CI 照舊上傳 `coverage/lcov.info`）。
+- **web 直接依賴 `zod`**（WEB-13）：`apps/web/package.json` 新增 `zod ^4.6.5`（與 contracts 同版，lockfile 未新增套件）。
+- **web 串流效能**（WEB-17）：`lastActivityAt` 改 plain Map（不再每個 token 觸發 reactive 追蹤），StreamingPanel 捲到底改為每幀至多一次。
+
+### Internal
+
+- 三支 `main.test` 改為檔頂 import，避免並行負載下冷載入逾時（TQ-14）；processor liveness 斷言改精確次數、不再對空陣列恆真（TQ-16）；補非最終嘗試 `ai_timeout` 與一般 Error 的重試語意測試（TQ-17）。
+- Gateway 註解與實作對齊（孤兒 JSDoc、背壓略過含 `ai/token`、慢讀者回收時序、pong 與入站速率；API-15）。
+
+### 契約
+
+- **契約 1.3.0**（向後相容的 minor，使用者 2026-10-18 裁決）：`asyncapi.yaml` `info.version` 1.2.0 → **1.3.0**。Zod schema 與訊息結構沒有改動，變的是 wire 行為與描述：
+  WS 入站限速與 1008 違規關閉、高水位時不回 `pong`、同一 `attempt` 內 `seq` 未遞增即視為新執行；`POST /diagnoses` body 上限 16 kb、新增 413、壞 JSON 400 改為固定形狀。明細見下方「asyncapi 契約版本」1.3.0。
+- `packages/contracts/src/ai-stream.ts` 的 `seq` 註解同步改為與 AR-S8 一致。
+
 ## [2.0.0] - 2026-10-17
 
 主版號升級：web 監控台整體換皮、介面文案改為繁體中文、1.0.0 的 demo 影片不再代表現況（使用者 2026-10-17 裁決）。WS／HTTP 契約與 api 行為向後相容（`asyncapi.yaml` 的 `info.version` 維持 1.2.0）；
@@ -227,6 +285,15 @@ worker 預設模型與輸出上限的變更見下方不相容變更。demo 影�
 
 `asyncapi.yaml` 的 `info.version` 獨立於產品版本（見「版本策略」）。本節同時記錄 HTTP（`POST /diagnoses`）的契約變化，
 核對來源為 `git log -p -- asyncapi.yaml` 與 `packages/contracts/src/`。
+
+### 1.3.0（隨 `fix/20261018-review03-quickfix` 落地，首次發布的產品版號見本檔頂端對應條目）
+
+asyncapi `info.version` 1.3.0，向後相容的 minor（第三輪審查 quick-fix，`fix/20261018-review03-quickfix`）。**schema 沒有改動**（12 則 message 的結構、asyncapi↔Zod 漂移比對皆不變），變的是 wire 行為與描述：
+
+- **runtime 接受範圍收窄（WS 入站限速，API-13）**：`machine/subscribe` 與 `ping` 共用每連線 token bucket，穩態 20 則／秒、容量 40；桶空時到達的訊息不解析即丟棄，每則計一次違規，與畸形訊息、schema 不符、錯誤 token 共用違規計數，達 `WS_MAX_VIOLATIONS`（10）以 close code `1008` 關閉。描述寫在 `machine/subscribe` 與 `ping` channel。
+- **語意變更（`pong`，API-13）**：連線的送出緩衝（`bufferedAmount`）超過 `WS_SEND_HIGH_WATER_BYTES` 時伺服器不回 `pong`；消費端 MUST 把 pong 逾時視為斷線並重連（內建 web 5 秒逾時）。`ping`／`pong` 描述同步改寫。
+- **消費端義務更新（AR-S8）**：`ai/token`／`ai/done`／`ai/error` 的 `attempt` 說明——同一次執行內 `seq` 嚴格遞增，同一 `attempt` 內收到未遞增的 `seq`（`seq <= 上一個 seq`）即 MUST 視為新一次執行並清空已累積的串流文字。1.2.0 只要求「同一 attempt 內再收到 `seq` 0」時重置；新規則涵蓋它（`seq` 0 必然不大於上一個），並補上新執行的 `seq` 0 在 Pub/Sub 遺失的情形。
+- **HTTP 契約（API-7／API-17）**：`POST /diagnoses` 的 body 上限由 express 預設 100 kb 收窄為 16 kb，超過回 **413** `{"statusCode":413,"message":"Payload too large"}`；body 不是合法 JSON 的 400 改為固定的 `{"statusCode":400,"message":"Invalid JSON body"}`（原為 `{message: <JSON 解析錯誤原文>, error: "Bad Request", statusCode}`，不再回顯本文、少了 `error` 欄位）。body-parser 自己產生的其他 4xx 改為固定 reason phrase（charset／encoding 不支援的 415 為 `Unsupported Media Type`，`request.aborted`／`request.size.invalid` 的 400 為 `Bad Request`），非 `HttpException` 的 5xx 除 500 回 `Internal server error` 外回標準 reason phrase。契約不符的 400（`issues[]`）與 controller／service 回的 404、409、415、503 及 201 回應不變；回應標頭不再帶 `X-Powered-By`。
 
 ### 1.2.0（產品 1.1.0 起）
 

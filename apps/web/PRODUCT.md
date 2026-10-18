@@ -60,7 +60,7 @@ flow-gatekeeper 是一個致敬 Argo CD 狀態／拓樸語言的**即時流程�
 
 ## Capabilities and Constraints
 
-- **只動前端**：契約（`packages/contracts`，Zod 單一來源；`asyncapi.yaml` 1.2.0）與後端行為在 UI 改版中一律不變；UI 只消費既有的 12 則 WS 訊息與 `POST /diagnoses`。背壓 strip、拓樸連線、異常標記、診斷耗時全部在前端由既有訊息衍生。
+- **只動前端**：契約（`packages/contracts`，Zod 單一來源；`asyncapi.yaml` 於 013 當時為 1.2.0，其後的 1.3.0 只改 wire 行為與描述、schema 不變）與後端行為在 UI 改版中一律不變；UI 只消費既有的 12 則 WS 訊息與 `POST /diagnoses`。背壓 strip、拓樸連線、異常標記、診斷耗時全部在前端由既有訊息衍生。
 - **高頻事件不得逐筆寫 reactive state**：WebSocket telemetry MUST 先進 buffer、再以 `requestAnimationFrame` 每幀批次提交（憲章硬規則）。走勢線、拓樸連線、異常標記、診斷狀態 chip 等新元件同樣不得逐筆寫入畫面狀態。
 - **即時通道是原生 `WebSocket`**（ADR-001），不是 Socket.IO。
 - **技術棧固定**：Vue 3.5、Pinia 3、Tailwind 3、lucide icons、Vite 7、vitest 4、strict TypeScript。截圖劇本 `apps/web/scripts/screenshots.cjs` 另用 devDependency `playwright-core`（不進 production bundle）。

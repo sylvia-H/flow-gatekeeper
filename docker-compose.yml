@@ -163,6 +163,7 @@ services:
     # 15s MUST NOT 照抄 worker 的 45s——後者為涵蓋 AI_TIMEOUT_MS 的 LLM 收尾而算，
     # api 不呼叫 LLM，收尾僅為關閉連線、量級為秒內（FR-004、contracts §4）。
     # 關閉順序 stopProducer → telemetry flush（上限 5s）→ app.close()，最壞約 5s＋數秒，15s 足夠。
+    # 行程內另有總時限 12s（apps/api/src/lib/graceful-shutdown.ts），逾時記 warn 後自行 exit(0)，不會吃滿 15s 被 SIGKILL。
     stop_grace_period: 15s
     # 長式 depends_on：seed 一次性服務成功完成才啟動 api（示範資料先於服務備妥，FR-012）。
     # depends_on 只在啟動編排時求值——api 崩潰重啟不會重跑 seed（research D7、CHK044）。

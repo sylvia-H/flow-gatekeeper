@@ -661,7 +661,7 @@ packages:
 
 ### 6.8 `asyncapi.yaml`
 
-> **現況註記**：下面是 001 起草時的 reference。現行 `asyncapi.yaml` 為 `info.version: 1.2.0`（各版變更見 repo 根 `CHANGELOG.md`）、共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`），`ai/*` 帶 `attempt`、`machine/subscribe` 帶長度上限；並由 `packages/contracts/src/asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
+> **現況註記**：下面是 001 起草時的 reference。現行 `asyncapi.yaml` 為 `info.version: 1.3.0`（各版變更見 repo 根 `CHANGELOG.md`）、共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`），`ai/*` 帶 `attempt`、`machine/subscribe` 帶長度上限；並由 `packages/contracts/src/asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
 
 ```yaml
 asyncapi: 2.6.0
@@ -1363,9 +1363,9 @@ app.get(MonitoringGateway).attach(app.getHttpServer());
 >
 > **現況註記（Gateway 韌性，上方 `MonitoringGateway` 為起草時的 reference）**：
 > - **授權**：有設 `WS_AUTH_SECRET` 時，`ai/*`、`job/status`、`system/metrics` 只送通過 `machine/subscribe` token 的連線；未設時連上即授權。錯誤 token 仍回 `system/unauthorized`。
-> - **違規關閉**：同一連線畸形訊息（無法解析、schema 不符）或錯誤 token 累計 10 次，以 close code `1008` 關閉；有設 `WS_AUTH_SECRET` 時，連線在 `WS_AUTH_GRACE_MS`（預設 10000）內未通過 token 也以 `1008` 關閉（由獨立的授權 sweep 檢查，間隔 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，實際關閉時間 ≤ grace + 該間隔）。
-> - **心跳**：伺服器端探活改為帶 nonce 的協定層 ping，pong 必須原樣帶回才算存活；未經請求或 nonce 不符的 pong 不算（瀏覽器與 `ws` 自動回應）。應用層 `ping`→`pong` 訊息仍保留供前端量 RTT。
-> - **慢 client 與連線上限**：`bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES`（預設 1 MiB）即略過高頻流推送（遙測批次與 `ai/token`；`ai/done`／`ai/error`／`job/status` 等終態與控制訊息照送，漏掉的 token 由 `ai/done` 補齊），連續 3 個心跳 tick 超標則 terminate；連線數達 `MAX_WS_CONNECTIONS`（預設 500）時 upgrade 回 HTTP 503；有設 `WS_AUTH_SECRET` 時，未授權連線另有子上限 `max(10, floor(20% × MAX_WS_CONNECTIONS))`，達到亦回 503（限制未授權者可佔的總名額，持 token 的新連線池滿時同樣 503）。
+> - **違規關閉**：同一連線畸形訊息（無法解析、schema 不符）或錯誤 token 累計 10 次，以 close code `1008` 關閉（**已變更**：2026-10-18 起超過每連線入站速率也計違規，見 §15.6「第三輪審查 quick-fix」）；有設 `WS_AUTH_SECRET` 時，連線在 `WS_AUTH_GRACE_MS`（預設 10000）內未通過 token 也以 `1008` 關閉（由獨立的授權 sweep 檢查，間隔 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`，實際關閉時間 ≤ grace + 該間隔）。
+> - **心跳**：伺服器端探活改為帶 nonce 的協定層 ping，pong 必須原樣帶回才算存活；未經請求或 nonce 不符的 pong 不算（瀏覽器與 `ws` 自動回應）。應用層 `ping`→`pong` 訊息仍保留供前端量 RTT（**已變更**：2026-10-18 起該連線送出緩衝超過高水位時不回 pong、web 連上即送第一次 ping，見 §15.6「第三輪審查 quick-fix」）。
+> - **慢 client 與連線上限**：`bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES`（預設 1 MiB）即略過高頻流推送（遙測批次與 `ai/token`；`ai/done`／`ai/error`／`job/status` 等終態與控制訊息照送，漏掉的 token 由 `ai/done` 補齊），連續 3 個心跳 tick 超標則 terminate；連線數達 `MAX_WS_CONNECTIONS`（預設 500）時 upgrade 回 HTTP 503；有設 `WS_AUTH_SECRET` 時，未授權連線另有子上限 `max(10, floor(20% × MAX_WS_CONNECTIONS))`，達到亦回 503（限制未授權者可佔的總名額，持 token 的新連線池滿時同樣 503；**已變更**：2026-10-18 起子上限為 `max(1, min(MAX − 1, max(10, floor(20% × MAX))))`，見 §15.6「第三輪審查 quick-fix」）。
 > - **relay 日誌**：Redis／QueueEvents 錯誤日誌改為轉態節流——轉態（正常↔故障）時各記一則，故障期間每 30 秒至多一則，斷線期間不刷屏。
 > - 見 §15.6「第二輪審查修復」。
 
@@ -1608,7 +1608,7 @@ export class JobsController {
 
 > 前端按下 Diagnose 時，POST body 要帶上目前的 `socketId`（即連線時收到的 `clientId`）。沒有 `socketId` 就無法把 streaming 推回正確的 client。
 
-> **已變更，現況：Zod 驗證＋冪等**（上面 service／controller 為起草時的形狀，保留作 reference）。controller 先要求 `Content-Type: application/json`（否則 `415`），再以 contracts 的 `CreateDiagnosisBodySchema` `safeParse`（`machineId` `^[a-z0-9-]{1,32}$`、`socketId` 必須是 uuid、`requestedBy` ≤ 64、可選 `jobId` uuid；不符回 `400`，只回 issue 路徑與代碼）。service 先比對機台名冊（`@flow-gatekeeper/contracts` 的 `MACHINE_IDS`，`packages/contracts/src/machines.ts`，api Gateway／mock telemetry 與 web 共用單一來源），格式合法但不在名冊的 `machineId` 在綁定與入列之前即回 `404`（名冊檢查先於冪等檢查），避免亂數 id 每次 cache miss 都真的打 LLM。service 以前端產生的 `jobId` 作 idempotency key：綁定在任何 await 之前建立；同 jobId 重送回同一結果但**不改綁**；同 jobId 不同機台、或 job 已入列而綁定已失效回 `409`；入列設 5 秒逾時，逾時或 Redis 不可用回 `503`。成功為 Nest `@Post()` 預設的 `201`。見 `apps/api/src/modules/jobs/jobs.controller.ts`、`jobs.service.ts` 與 §15.6。
+> **已變更，現況：Zod 驗證＋冪等**（上面 service／controller 為起草時的形狀，保留作 reference）。controller 先要求 `Content-Type: application/json`（否則 `415`），再以 contracts 的 `CreateDiagnosisBodySchema` `safeParse`（`machineId` `^[a-z0-9-]{1,32}$`、`socketId` 必須是 uuid、`requestedBy` ≤ 64、可選 `jobId` uuid；不符回 `400`，只回 issue 路徑與代碼）。service 先比對機台名冊（`@flow-gatekeeper/contracts` 的 `MACHINE_IDS`，`packages/contracts/src/machines.ts`，api Gateway／mock telemetry 與 web 共用單一來源），格式合法但不在名冊的 `machineId` 在綁定與入列之前即回 `404`（名冊檢查先於冪等檢查），避免亂數 id 每次 cache miss 都真的打 LLM。service 以前端產生的 `jobId` 作 idempotency key：綁定在任何 await 之前建立；同 jobId 重送回同一結果但**不改綁**；同 jobId 不同機台、或 job 已入列而綁定已失效回 `409`；入列設 5 秒逾時，逾時或 Redis 不可用回 `503`。成功為 Nest `@Post()` 預設的 `201`。進 controller 之前的 body 解析由全域 `HttpExceptionFilter` 收尾（2026-10-18 第三輪審查 API-7／API-17）：body 不是合法 JSON 回 `400 {statusCode, message: "Invalid JSON body"}`、超過 16 kb 回 `413 {statusCode, message: "Payload too large"}`，固定英文、不回顯本文，見 `apps/api/src/http/http-exception.filter.ts`。見 `apps/api/src/modules/jobs/jobs.controller.ts`、`jobs.service.ts` 與 §15.6。
 >
 > **現況（第二輪審查修復）**：驗證通過後依序檢查——`machineId` 不在名冊（`mixer-01`、`press-02`、`pack-03`、`oven-04`、`sorter-05`）回 `404`；`socketId` 對應的 WS 連線不在線或未授權回 `409`（`{statusCode:409,error:"Conflict",message:"WebSocket 連線不存在或未授權，請重新連線後再發起診斷"}`）；最後才走 `jobId` 冪等（既有 `409` 條件不變）。一鍵 demo 經 nginx 另有 `429` 限流。見 §15.6。
 
@@ -1854,9 +1854,9 @@ export class GeminiProvider implements AiProvider {
 > - **去重真正生效**：鎖值用 `randomUUID()`、釋放用 Lua compare-and-del（只刪自己的鎖）；等待者搶到鎖後**再查一次 cache**；啟動時驗證 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`（5 秒餘裕），鎖不會比 LLM 呼叫先過期。
 > - **LLM 限流**移到取鎖後的 Redis 固定窗（見 §8.5 現況）。
 > - **逾時**：`AbortSignal.timeout(AI_TIMEOUT_MS)` 交給 provider，真正中止底層串流；逾時後的殭屍串流不再送 token。
-> - **重試語意**：非最終嘗試的失敗只記 log 後 throw（交 BullMQ 退避），**不** publish `ai/error`；最終嘗試或不可重試錯誤才送。所有 `ai/*` 事件帶 `attempt`，前端換輪清空串流文字；stalled 重派時 `attempt` 不變、`seq` 從 0 重播，前端以同輪 `seq` 0 判定重播並清空。
+> - **重試語意**：非最終嘗試的失敗只記 log 後 throw（交 BullMQ 退避），**不** publish `ai/error`；最終嘗試或不可重試錯誤才送。所有 `ai/*` 事件帶 `attempt`，前端換輪清空串流文字；stalled 重派時 `attempt` 不變、`seq` 從 0 重播，前端以同輪 `seq` 0 判定重播並清空（**已變更**：2026-10-18 起改以同輪 `seq <= lastSeq` 判定，見 §15.6「第三輪審查 quick-fix」）。
 > - **寫入順序**：先 insert `diagnoses`（`jobId` unique index，建立衝突時退回非 unique 並記 error；重啟時若只剩退回留下的同鍵非 unique 索引擋路，會先探測重複資料是否已清——已清才移除並重建 unique，未清則保留既有索引只記 error；多副本同時啟動互相踩到 drop／重建時視為目的已達成，不會退回）再寫 cache，最後寫 `diagnosisTriggers`（TTL 30 天）；cache 讀回一律 `safeParse`，不合 schema 即刪除並視為 miss。
-> - **關閉**：收到 SIGTERM 先立旗標，dedupe 等待中的 job 立即交回佇列，`worker.close()` 只需等真正在打 LLM 的 job（`stop_grace_period` 45s 維持）。heartbeat 依處理槽進度判斷卡死。
+> - **關閉**：收到 SIGTERM 先立旗標，dedupe 等待中的 job 立即交回佇列，`worker.close()` 只需等真正在打 LLM 的 job（`stop_grace_period` 45s 維持；**已變更**：2026-10-18 起另有行程內總時限 `AI_TIMEOUT_MS`＋10 s、第二次訊號立即退出，見 §15.6「第三輪審查 quick-fix」）。heartbeat 依處理槽進度判斷卡死。
 > - **env fail-fast**：以 Zod 驗證（`apps/worker/src/lib/env-schema.ts`），留空套預設、非法即 exit 1；`GEMINI_API_KEY` 任何環境皆可留空。
 
 `apps/worker/src/main.ts`（起草時的 reference）：
@@ -2052,7 +2052,7 @@ export class AiStreamRelayService implements OnModuleInit {
 
 QueueEvents relay 可在 API process 內訂閱 `active/completed/failed/progress`，組成 `job/status` 後一樣用 `gateway.send(clientId, payload)` 推給綁定的 client（clientId 一樣從 `jobRooms` 查）。
 
-> **已變更，現況**：relay 對 Pub/Sub 訊息以 `AiStreamEventSchema` 驗證後才轉發；綁定額外記 `machineId`（供冪等比對）。**最終失敗的 `ai/error(worker_failed)` 改由 api 的 `JobStatusRelayService` 送出作安全網**（先送 `ai/error`、再送 `job/status:failed`、最後刪綁定）——worker 在最終嘗試已先送帶具體 code 的 `ai/error`，這一則確保 worker 崩潰等情況下前端也收得到終態。Gateway 另有輸入加固（`safeParse`、`maxPayload` 16 KiB、error listener、Origin 白名單、`machineIds` 與名冊取交集）。見 `apps/api/src/modules/websocket/`。
+> **已變更，現況**：relay 對 Pub/Sub 訊息以 `AiStreamEventSchema` 驗證後才轉發；綁定額外記 `machineId`（供冪等比對）。**最終失敗的 `ai/error(worker_failed)` 改由 api 的 `JobStatusRelayService` 送出作安全網**（先送 `ai/error`、再送 `job/status:failed`、最後刪綁定）——worker 在最終嘗試已先送帶具體 code 的 `ai/error`，這一則確保 worker 崩潰等情況下前端也收得到終態。Gateway 另有輸入加固（`safeParse`、`maxPayload` 16 KiB、error listener、Origin 白名單、`machineIds` 與名冊取交集）。`completed` 則先送 `job/status: completed`、綁定保留 10 s 才刪，讓走 Pub/Sub、稍晚抵達的 `ai/done` 仍送得到原連線（2026-10-18 第三輪審查 AR-5，見 §15.6「第三輪審查 quick-fix」）。見 `apps/api/src/modules/websocket/`。
 
 ### 8.12 Feature 003 驗收
 
@@ -3187,7 +3187,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 ### 15.6 1.0.0 之後的現況摘要
 
-本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；表中第 1～5 列與其後的 1.1.0 release 準備列於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第 6～9 列、2.0.0 release 準備列與 SDD feature 013 於 2026-10-17 以產品版本 **2.0.0**（tag `2.0.0`）發布。只改版號與文件的 release 準備分支、及直接 commit 以「—」列出、不編號。變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
+本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；表中第 1～5 列與其後的 1.1.0 release 準備列於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第 6～9 列、2.0.0 release 準備列與 SDD feature 013 於 2026-10-17 以產品版本 **2.0.0**（tag `2.0.0`）發布；第 10 列起尚未發布（版號待定，`CHANGELOG.md` 記於 `[Unreleased]`）。只改版號與文件的 release 準備分支、及直接 commit 以「—」列出、不編號。變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
 但改動了多處跨 feature 的行為；各章 reference code 保留，另以「已變更」註記指回本節。依 `develop` 的 merge 順序
 （`git log --oneline --first-parent --merges 3e94ac2..HEAD` 核對）：
 
@@ -3200,11 +3200,12 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 4 | `fix/20260927-research-review02` | `898ccfc` | 第二輪審查 Batch A／B 修復 | 第二輪審查修復 |
 | 5 | `fix/20260927-review02-batch-cd` | `4c43d18` | 第二輪報告 Batch C（文件與 release 準備）、Batch D（測試基礎建設），外加 6 項 code-review findings | Batch C／D |
 | — | `docs/20260928-release-1.1.0` | `8ae83f4` | 1.1.0 release 準備（版號、CHANGELOG、文件版本註記） | — |
-| 6 | `docs/20260927-research-review03` | `3ad0e9b` | 新增第三輪審查報告 `docs/20260927-research-review03.md`（2026-10-15 併入；發現的缺陷含 P1，截至 2.0.0 未修） | — |
+| 6 | `docs/20260927-research-review03` | `3ad0e9b` | 新增第三輪審查報告 `docs/20260927-research-review03.md`（2026-10-15 併入；發現的缺陷含 P1，截至 2.0.0 未修；quick-fix 見第 10 列） | — |
 | 7 | `fix/20261017-pause-toggle-label` | `b7f7780` | 修正 013 開發期間改成的固定「暫停」：按下後換成「恢復」（Play 圖示；1.1.0 起即換字，當時為英文 `Resume`）、拿掉 `aria-pressed`、暫停橫幅 `role=status` | 013 UI 全面改版（「暫停」條） |
 | 8 | `upgrade/20261017-gemini-3.5-flash-lite` | `7d9f9d9` | 預設 LLM 模型改 `gemini-3.5-flash-lite`、3.x flash 送 `thinkingLevel: MEDIUM`、`AI_MAX_OUTPUT_TOKENS` 預設 4096 | Gemini 3.5 flash-lite 升級 |
 | 9 | `docs/20261018-demo-video` | `84feedd` | README demo 影片以 2.0.0 介面重錄、新增錄影劇本 `record-demo.cjs` | Demo 影片重錄 |
 | — | `docs/20261017-release-2.0.0` | （以 `git log --first-parent --merges` 為準） | 2.0.0 release 準備（版號、CHANGELOG、文件版本註記） | — |
+| 10 | `fix/20261018-review03-quickfix` | （以 `git log --first-parent --merges` 為準） | 第三輪審查報告 §6 Batch E（quick-fix）：P1 與日誌遮蔽、HTTP 錯誤回應、relay 與 Gateway 入站限速、worker 終態事件順序、關閉總時限、web 結果未送達收尾、測試門檻 ratchet；契約升 1.3.0 | 第三輪審查 quick-fix |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」），但不列入本表。
 
@@ -3212,7 +3213,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 - **契約**：`ClientControlMessageSchema`、`CreateDiagnosisBodySchema`／`ResponseSchema`、`AiStreamEventSchema`
   （`ai/*` 帶 `attempt`）、`JobStatusSchema`、`WorkerMetricsSchema` 全面 Zod 化；`machine/data` 為裸陣列、
-  以 `isTelemetryPoint` 守衛；`DiagnosisJobPayload` 移除 `promptVersion`；`asyncapi.yaml` 升 1.1.0（現為 1.2.0，見第二輪修復段與 repo 根 `CHANGELOG.md`），
+  以 `isTelemetryPoint` 守衛；`DiagnosisJobPayload` 移除 `promptVersion`；`asyncapi.yaml` 升 1.1.0（其後 1.2.0 見第二輪修復段、1.3.0 見下方「第三輪審查 quick-fix」，各版明細見 repo 根 `CHANGELOG.md`），
   並有 asyncapi↔Zod 漂移測試。
 - **建置**：packages `exports` 加 `development` condition，乾淨 clone 免 build 即可 typecheck／test；
   worker／web dev 即時吃 packages src，api `start:dev` 先以 `tsc` build packages（改 packages 後需重跑）；
@@ -3260,7 +3261,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - redis `--maxmemory 256mb --maxmemory-policy noeviction`（BullMQ 要求 noeviction）；host shell 或 repo 根 `.env` 設
     `REDIS_PASSWORD` 即以 `--requirepass` 啟用認證（探針同步帶密碼），此時 `apps/api/.env(.demo)` 與 `apps/worker/.env` 必須同值。
   - `stop_grace_period`：worker 45s（AI 逾時 30s＋寫入 ≤10s＋緩衝；dedupe 等待迴圈會交回佇列、不計入；調高 `AI_TIMEOUT_MS`
-    MUST 一併調高）、api 15s（stopProducer → flush 5s → `app.close()`）。
+    MUST 一併調高）、api 15s（stopProducer → flush 5s → `app.close()`）。**已變更**（2026-10-18）：兩端另有行程內關閉總時限——api 12 s、worker `AI_TIMEOUT_MS`＋10 s，逾時記 warn 後 `exit(0)`，見下方「第三輪審查 quick-fix」。
   - base image tag＋digest 雙釘（`node:22.23.3-alpine`、`nginxinc/nginx-unprivileged:1.31.6-alpine`、`redis:7.4.11-alpine`、
     `mongo:7.0.43`）；升版流程：`docker buildx imagetools inspect <image>:<tag>` 取新 digest，tag 與 digest 一起改。
   - 建置：BuildKit `RUN --mount=type=cache`＋`pnpm fetch`＋`pnpm install --offline --filter <app>...`；`pnpm deploy --legacy --prefer-offline`
@@ -3303,13 +3304,13 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 **第二輪審查修復**（`fix/20260927-research-review02`，merge `898ccfc`，報告 `docs/20260927-research-review02.md`）：
 
-- **契約版本**：`asyncapi.yaml` 的 `info.version` 已升 **1.2.0**（向後相容的 minor：涵蓋技術棧升級帶來的驗證加嚴與 `invalid_format`、本輪新增的 optional `system/metrics.persist` 等），各版變更明細見 repo 根 `CHANGELOG.md`。
+- **契約版本**：`asyncapi.yaml` 的 `info.version` 當時升為 **1.2.0**（**已變更**：現為 1.3.0，見下方「第三輪審查 quick-fix」；向後相容的 minor：涵蓋技術棧升級帶來的驗證加嚴與 `invalid_format`、本輪新增的 optional `system/metrics.persist` 等），各版變更明細見 repo 根 `CHANGELOG.md`。
 
 - **api Gateway**：
   - 授權：有設 `WS_AUTH_SECRET` 時 `ai/*`、`job/status`、`system/metrics` 只送已授權連線；未設時連上即授權。
-  - 違規（畸形訊息、錯誤 token）累計 10 次以 `1008` 關閉；有 `WS_AUTH_SECRET` 時 `WS_AUTH_GRACE_MS`（預設 10000，1000–60000）內未授權亦 `1008`；心跳改為帶 nonce 的協定層 ping，pong 須原樣帶回。
+  - 違規（畸形訊息、錯誤 token；**已變更**：2026-10-18 起含超過入站速率，見下方「第三輪審查 quick-fix」）累計 10 次以 `1008` 關閉；有 `WS_AUTH_SECRET` 時 `WS_AUTH_GRACE_MS`（預設 10000，1000–60000）內未授權亦 `1008`；心跳改為帶 nonce 的協定層 ping，pong 須原樣帶回。
   - 慢 client：`WS_SEND_HIGH_WATER_BYTES`（預設 1048576，65536–268435456）超標略過高頻流推送（遙測批次與 `ai/token`；`ai/done`／`ai/error`／`job/status` 等終態與控制訊息照送，漏掉的 token 由 `ai/done` 補齊）、連續 3 tick 超標 terminate；
-    `MAX_WS_CONNECTIONS`（預設 500，1–100000）達上限 upgrade 回 503；有 `WS_AUTH_SECRET` 時未授權連線子上限 `max(10, floor(20% × MAX_WS_CONNECTIONS))`。
+    `MAX_WS_CONNECTIONS`（預設 500，1–100000）達上限 upgrade 回 503；有 `WS_AUTH_SECRET` 時未授權連線子上限 `max(10, floor(20% × MAX_WS_CONNECTIONS))`（**已變更**：2026-10-18 起再取 `min(MAX − 1, …)` 與 `max(1, …)`，見下方「第三輪審查 quick-fix」）。
   - 授權期限改由獨立 sweep 檢查（間隔 `min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)`），不再受心跳間隔拖長。
   - `POST /diagnoses`：檢查順序為名冊 `404` → `socketId` 在線／已授權（否則 `409`，中文 message）→ `jobId` 冪等；既有 `409` 條件不變。
   - relay 的 Redis／QueueEvents 錯誤日誌改為轉態節流（轉態時記、故障期間每 30 秒至多一則）；`system/metrics` 新增 optional `persist: { dropped, failed }`。
@@ -3327,14 +3328,14 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 **Batch C／D**（`fix/20260927-review02-batch-cd`，merge `4c43d18`；報告 `docs/20260927-research-review02.md` §6）：
 
 - **Batch C（文件與 release 準備）**：
-  - 契約：`asyncapi.yaml` 的 `info.version` 已升 **1.2.0**（明細見上方第二輪修復段與 `CHANGELOG.md`「asyncapi 契約版本」）；新增 repo 根 `CHANGELOG.md`（版本策略：產品版本與契約版本兩條獨立演進）。
+  - 契約：`asyncapi.yaml` 的 `info.version` 當時升為 **1.2.0**（其後升 1.3.0，見下方「第三輪審查 quick-fix」；明細見上方第二輪修復段與 `CHANGELOG.md`「asyncapi 契約版本」）；新增 repo 根 `CHANGELOG.md`（版本策略：產品版本與契約版本兩條獨立演進）。
   - 產品版本：六份 `package.json`（root 新增 `version`、五套件由 `0.1.0` 對齊）為 **1.1.0**，已於 2026-09-28 與 tag `1.1.0`、CHANGELOG 條目一致發布（產品 tag 自此不帶 `v` 前綴；**已變更**：2026-10-17 六份升為 2.0.0、tag `2.0.0`）。
   - 憲章升 **1.5.0**：Principle III「型別來源分層」改為全部 WS message 與 `POST /diagnoses` 一律 Zod＋`z.infer`；Governance 新增「跨 feature／跨分支決策 MUST 回補真實來源（涵蓋維護分支）」與「契約變更 MUST 升 `info.version` 並記 CHANGELOG」。`CLAUDE.md` 補「維護分支」小節。
   - 本節由「2026-09 修復摘要」改名為「1.0.0 之後的現況摘要」（原「v1.0.0 之後」，隨 tag 更名）並加上維護分支表；ADR-002 新增 §6.5「已知未做與延後項」表。
   - specs 001–008 補狀態與「已變更」橫幅；第一輪報告數字更正後凍結為歷史快照。
   - 文件一致性自動檢查：`packages/contracts/src/docs-contract-version.test.ts`（README／指南／CHANGELOG 的 `info.version` 現況宣稱＝`asyncapi.yaml`）、api／worker 各一支 `readme-env-table.test.ts`（README 環境變數表涵蓋 `env-schema.ts` 全部 key、反向不留幽靈變數）。
 - **Batch D（測試基礎建設）**——指令、前置與門檻以 README「測試與品質門檻」為準：
-  - **覆蓋率**：root `vitest.config.ts` 以 `test.projects` 聚合五個套件，`pnpm test:coverage`（`@vitest/coverage-v8`，合併報告）；不退步門檻 lines 60％／branches 50％；CI 以它取代 `pnpm test` 並上傳 lcov。2026-09-28 實測總計 lines 約 81％、branches 約 76％。
+  - **覆蓋率**：root `vitest.config.ts` 以 `test.projects` 聚合五個套件，`pnpm test:coverage`（`@vitest/coverage-v8`，合併報告）；不退步門檻 lines 60％／branches 50％（**已變更**：2026-10-18 起為隔離實測 −3 的 89％／85％，另有十個核心檔逐檔下限，見下方「第三輪審查 quick-fix」）；CI 以它取代 `pnpm test` 並上傳 lcov。2026-09-28 實測總計 lines 約 81％、branches 約 76％。
   - **整合測試**：worker／api 各有 `vitest.integration.config.ts` 與 `test:integration`，需 `docker compose up -d`；Redis db 15＋隨機前綴、Mongo 隨機資料庫、測後清理。涵蓋 Lua compare-and-del 鎖、並發去重、鎖換手、限流 `INCR`／`EXPIRE`、cache／lock TTL、`collMod`、Mongo 錯誤碼 85／86／11000、`HistoryService.writeOnce` 計數協調。實測修正一則認知：Mongo 7 允許**不同名**的非 unique 與 unique `{ jobId: 1 }` 索引並存（此時重複資料撞 11000 而非 85），`diagnosis-repository.ts` 註解已更正。
   - **跨 process e2e**：新套件 `tests/e2e`（`@flow-gatekeeper/e2e`，`pnpm test:e2e`）＋`docker-compose.e2e.yml`：獨立專案 `flow-gatekeeper-e2e`、只開 `127.0.0.1:18080`、env 一律用已提交範本、worker `AI_PROVIDER=fake`；四場景（訂閱→POST→事件序列、cache 命中、409／404、worker `SIGKILL` 後 stalled 重派），跑完 `down -v`。需 Compose 2.24.4+（`!reset`／`!override`）；一鍵 demo 本身仍 2.20.2+。
   - **fake AiProvider**：`apps/worker/src/ai/fake-provider.ts` 實作 `AiProvider`（硬規則 4），固定假診斷逐段串流；由 `AI_PROVIDER`（`gemini`｜`fake`，預設 `gemini`）、`FAKE_AI_TOKENS`（20，1–1000）、`FAKE_AI_TOKEN_DELAY_MS`（500，0–60000）控制，production 下允許但啟動 warn、非法值拒絕啟動。`id`／`model` 進快取簽章，不與 gemini 快取互相命中。
@@ -3383,6 +3384,46 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   劇本以 `addInitScript` 注入假游標（頁面 CSP `style-src self` 擋 `<style>`，樣式走 CSSOM、動畫走 Web Animations）。開錄前量 `press-02` 尖峰週期（容器內實測約 13.0～13.3 秒，非名目 12 秒）對齊時間軸。
   輸出 BT.709／limited range 並標記色彩；先在暫存目錄編碼完成才覆寫 `docs/demo/`（不用 .tmp＋rename：Windows 上目標被播放器開著時 rename 會失敗），覆寫失敗時保留暫存成品並印出路徑；逐格寫檔失敗或對齊失準皆在呼叫 LLM 前中止；Chromium 尋找與面板狀態對照抽成 `apps/web/scripts/lib/browser.cjs`，與截圖劇本共用。
   使用者裁決：輸出 mp4（ffmpeg 用下載解壓即用的可攜版，不安裝到系統）、注入假游標、對 demo 容器錄。
+
+**第三輪審查 quick-fix**（`fix/20261018-review03-quickfix`，merge 以 `git log --first-parent --merges` 為準，2026-10-18；報告 `docs/20260927-research-review03.md` §6 Batch E；commit `7cd7a3f`（api）、`5e538bb`（relay／Gateway）、`d1384f6`（worker）、`b8d5bc0`（web）與文件收尾；變更明細見 `CHANGELOG.md` `[Unreleased]`，backlog 見 ADR-002 §6.5.1 的 review03 列）：
+
+- **做了什麼**：
+  - api 日誌與 HTTP：P1（API-1）producer `Queue` 在建構時掛節流 `error` listener，Redis 認證失敗不再經 BullMQ `console.error` 把 `REDIS_PASSWORD` 明文寫進 stderr；
+    共用 logger 以 `formatters.log` 對整個 log 物件任意深度剝 `command.args`（CT-13）；`PinoLoggerService` 收到 Error 時導到 `err` 鍵、剝掉 body-parser 錯誤的 `body`（API-11）；
+    全域 `HttpExceptionFilter`（API-7／API-17）——body-parser 的 4xx 回固定英文 `{statusCode, message}`、記 warn 並依 `status:type` 節流，`HttpException` 維持 Nest 原行為，body-parser 其他 4xx 回該狀態碼的 reason phrase（charset／encoding 的 415 為 `Unsupported Media Type`、`request.aborted`／`request.size.invalid` 的 400 為 `Bad Request`），非 `HttpException` 的 5xx 除 500 回 `Internal server error` 外回標準 reason phrase，皆保留 error 日誌；停用 `X-Powered-By`，json／urlencoded 上限 16 kb。
+  - relay 與 Gateway：送出 `completed` 後綁定保留 10 s（AR-5，`failed` 不加寬限）；ai-stream subscriber 加掛 `close`／`reconnecting`，整段斷線只記一則 warn（AR-6）；
+    兩支 relay 的 Redis 連線關閉各限 3 s、逾時 best-effort `disconnect()`（API-12）；送出緩衝超過高水位時不回 pong，每連線入站 token bucket 穩態 20 則／秒、容量 40，超速計違規（API-13）；
+    未授權子上限改為 `max(1, min(MAX − 1, max(10, floor(MAX × 0.2))))`（API-14）；Gateway 註解漂移（API-15）。
+  - worker：`ai/done`／`ai/error`（含 `no_context`）經 `publishTerminalEvent` await 送出才結束 job，失敗只記 warn、不改 job 結果，`ai/token` 維持 fire-and-forget（AR-5／WK-14）；
+    快取命中改為 `insertTrigger` → `updateProgress(100)` → `ai/done`，與 LLM 路徑一致（AR-A12）；`no_context` 終態記 warn 不帶 stack（WK-19）；
+    關閉加重入保護與總時限，Gemini SDK 明確傳 `retryOptions.attempts: 1`（WK-21）。
+  - web：收到 `completed` 後 2 s 無 `ai/done` 即轉「結果未送達」失敗，只對這種失敗允許同 jobId 遲到的 `ai/done` 救回完成（AR-6）；reducer 以 `seq <= lastSeq` 判新一次執行（AR-S8）；
+    WS 連上即送第一次 ping（WEB-16）；`lastActivityAt` 改 plain Map、串流捲到底每幀至多一次（WEB-17）；web 直接依賴 `zod`、`src/zod-config.ts`（`jitless`）作為 `main.ts` 第一個 import（WEB-13）；
+    tailwind content 排除測試檔、postcss 以絕對路徑指向設定（WEB-15／TQ-23）。
+  - 測試：三支 `main.test` 改檔頂 import（TQ-14）、liveness 斷言精確次數（TQ-16）、兩支重試語意測試（TQ-17）；coverage 輸出目錄可用 `COVERAGE_DIR` 覆寫，Stryker 報告目錄可用 `MUTATION_REPORT_DIR` 覆寫（TQ-15；Stryker 的 sandbox 每次以 mkdtemp 獨立建立，並行時只有報告會互相覆寫）；
+    門檻改為隔離實測 −3：全域 lines 89／branches 85（實測 lines 92.03、branches 88.36–88.37——兩次隔離實測差 1 個分支，137 檔 1965 支），十個核心檔以 glob 設逐檔下限（TQ-20，數值見 `vitest.config.ts`）。
+  - WEB-4 補強與 WEB-22 已由 013 解決，不改碼（ADR-002 §6.5 WEB-4 列）。
+- **使用者裁決（2026-10-18）**：
+  1. 2 s 未送達收尾的文案為「診斷已在後端完成，但結果未送達畫面，請重試」，沿用重試鈕；只有此種失敗可被遲到的 `ai/done` 救回。
+  2. 覆蓋率門檻＝實測 −3（全域與十個核心檔），取整數往下（報告原建議 78／73）。
+  3. WS open 時立即送第一次 ping，再起 interval。
+  4. 快取命中路徑改「先寫 trigger → `updateProgress(100)` → await `ai/done`」。
+  5. 關閉總時限 api 12 s、worker `AI_TIMEOUT_MS`＋10 s（預設 40 s；交叉審查後由固定 40 s 改為隨 `AI_TIMEOUT_MS` 推導），逾時 warn 後 `exit(0)`；第二次訊號立即 `exit(0)`。
+  6. HTTP 錯誤回應維持 `{statusCode, message}` 形狀、固定英文 message、不回顯輸入、body 不進日誌；停用 `X-Powered-By`；body 上限 16 kb。
+  7. web 加 `zod` 直接依賴（與 contracts 同 `^4.6.5`）並以 `jitless` 設定檔作為第一個 import。
+  8. Gemini SDK 不自行重試（重試交給 BullMQ）。
+  9. 範圍外納入 API-15、API-14、WEB-17、TQ-23；relay 10 s 寬限只用在 `completed`，失敗終態的跨連線順序依實務成立、接受不加寬限（ADR-002 §6.5.1）。
+  10. 契約升 **1.3.0**（minor），`asyncapi.yaml` 描述改為現況；review03 roadmap 的契約版號各順延一號（見下方「roadmap 版號順延」）。
+- **行為變更（對外可見）**：
+  - HTTP：壞 JSON 由 `400 {message: <解析錯誤原文>, error: "Bad Request", statusCode}` 改為 `400 {statusCode, message: "Invalid JSON body"}`（不再回顯本文片段、少 `error` 欄位）；body > 16 kb 回 `413 {statusCode, message: "Payload too large"}`（原上限 100 kb、message 為 body-parser 原文）；body-parser 其他 4xx 改回 reason phrase（charset／encoding 的 415 由 `unsupported charset "X"` 等原文改為 `Unsupported Media Type`，`request.aborted`／`request.size.invalid` 的 400 為 `Bad Request`）；非 `HttpException` 的 5xx 除 500 外回標準 reason phrase；回應不帶 `X-Powered-By`。
+    `POST /diagnoses` 由 controller／service 回的 201／400（契約不符）／404／409／415（Content-Type）／503 不變；web 的錯誤文案只採用含中文的後端 message，畫面不變。
+  - WS：入站每連線 20 則／秒（容量 40），超速每則計一次違規，累計 10 次以 `1008` 關閉——web 前端穩態遠低於 1 則／秒，只影響自寫腳本；送出緩衝超過 `WS_SEND_HIGH_WATER_BYTES` 時不回 pong。Zod schema 與訊息結構不變，契約版本因 wire 行為改變升 1.3.0（見下方「契約 1.3.0」）。
+  - 時序：`ai/done`／`ai/error` 從 worker 送出一定早於 BullMQ 的 `completed`／`failed`；`completed` 後綁定保留 10 s，寬限內同 jobId 重送仍回 409。
+  - 關閉：api 12 s、worker `AI_TIMEOUT_MS`＋10 s 內必定自行 `exit(0)`；compose `stop_grace_period`（api 15s、worker 45s）不變，調高 `AI_TIMEOUT_MS` 時 worker 的 grace MUST 同步調為 `AI_TIMEOUT_MS`＋15 s。
+- **契約 1.3.0**（使用者 2026-10-18 裁決，向後相容的 minor）：`asyncapi.yaml` 的 `info.version` 已升 **1.3.0**。schema 沒有改動，變的是 wire 行為與描述——
+  `machine/subscribe`／`ping` 描述每連線入站限速（20 則／秒、容量 40，超速計違規，達 `WS_MAX_VIOLATIONS` 以 1008 關閉）；`ping`／`pong` 描述超過送出高水位時不回 pong；
+  `ai/*` 的 `attempt` 描述改為同一 attempt 內 `seq` 未遞增（`seq <= 上一個 seq`）即視為新一次執行；`POST /diagnoses` 新增 413、壞 JSON 400 的 body 改為固定形狀、body 上限 16 kb。明細見 `CHANGELOG.md`「asyncapi 契約版本」1.3.0。
+- **roadmap 版號順延**：第三輪審查 roadmap（報告 §5.4：quick-fix → 012-lite → 010-lite → 011）原定 012-lite＝契約 1.3.0、010-lite＝1.4.0、011＝1.5.0；1.3.0 已由本 quick-fix 使用，三者各順延一號為 **012-lite＝1.4.0、010-lite＝1.5.0、011＝1.6.0**（報告本身凍結不改）。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 
@@ -3615,7 +3656,7 @@ pnpm check:coverage   # 同上，test 換成 test:coverage（CI 走這條）
 pnpm build      # 選用：production 建置路徑
 
 # 進階測試（review02 Batch D；前置與門檻見 README「測試與品質門檻」）
-pnpm test:coverage                                   # 五套件合併覆蓋率，門檻 lines 60／branches 50
+pnpm test:coverage                                   # 五套件合併覆蓋率，門檻 lines 89／branches 85＋十個核心檔逐檔下限；勿並行跑，需要時以 COVERAGE_DIR 分開輸出目錄
 pnpm --filter @flow-gatekeeper/worker test:integration   # 需 docker compose up -d
 pnpm --filter @flow-gatekeeper/api test:integration      # 需 docker compose up -d
 pnpm test:e2e                                        # 起獨立 compose 專案 flow-gatekeeper-e2e；需 Compose 2.24.4+
