@@ -314,6 +314,7 @@ describe("StageTopology 卡片底列接線：異常標記與診斷 chip（T051�
       machineId: "press-02",
       jobId: "j1",
       attempt: 1,
+      lastSeq: -1,
       progress: 60,
       streamText: "",
     });

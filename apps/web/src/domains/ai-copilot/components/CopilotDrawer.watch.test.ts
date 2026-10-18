@@ -67,7 +67,7 @@ afterEach(() => {
 });
 
 function active(progress: number, streamText: string): CopilotJobState {
-  return { status: "active", machineId: MACHINE, jobId: "job-1", attempt: 1, progress, streamText };
+  return { status: "active", machineId: MACHINE, jobId: "job-1", attempt: 1, lastSeq: -1, progress, streamText };
 }
 
 describe("CopilotDrawer sheet 的 engage watch（合併門第 2 輪 #15）", () => {

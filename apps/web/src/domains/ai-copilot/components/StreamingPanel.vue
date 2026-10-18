@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from "vue";
+import { onBeforeUnmount, ref, watch } from "vue";
 
 /**
  * 原始串流面板（FR-005/FR-013；013 視覺層與繁中文案）：逐段 append 的 AI 推理文字 + 游標。
@@ -29,15 +29,32 @@ function updateStick(): void {
   stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
 }
 
+/**
+ * 貼底捲動以 requestAnimationFrame 合併（WEB-17、硬規則 1 的同一精神）：token 一則一則經不同的
+ * WebSocket message 抵達，若每則都 `nextTick` 後讀 scrollHeight、寫 scrollTop，每個 token 都會逼一次
+ * 同步 layout。改成一幀至多一次：已有排程就不再排，到幀時 DOM 已含這一幀內累積的全部文字。
+ */
+let scrollFrame: number | null = null;
+
+function scrollToBottom(): void {
+  scrollFrame = null;
+  if (!stickToBottom) return; // 排程後使用者才上捲：尊重上捲，不強拉
+  const el = scroller.value;
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
 watch(
   () => props.text,
-  async () => {
-    if (!stickToBottom) return; // 手動上捲時不強拉
-    await nextTick();
-    const el = scroller.value;
-    if (el) el.scrollTop = el.scrollHeight;
+  () => {
+    if (!stickToBottom || scrollFrame !== null) return; // 手動上捲時不強拉；同一幀已排程則合併
+    scrollFrame = requestAnimationFrame(scrollToBottom);
   },
 );
+
+onBeforeUnmount(() => {
+  if (scrollFrame !== null) cancelAnimationFrame(scrollFrame);
+  scrollFrame = null;
+});
 </script>
 
 <template>

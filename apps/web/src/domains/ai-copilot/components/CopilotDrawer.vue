@@ -6,7 +6,7 @@ import { useMonitoringStore, type MachineLive } from "../../monitoring/stores/mo
 import { isStale } from "../../monitoring/lib/stale.js";
 import { CARD_ROOT_CLASS } from "../../monitoring/lib/card-style.js";
 import { machineLabel as labelOf } from "../../monitoring/lib/machine-labels.js";
-import { progressLabel, type CopilotJobState } from "../lib/copilot-reducer.js";
+import { isUndeliveredFailure, progressLabel, type CopilotJobState } from "../lib/copilot-reducer.js";
 import { jobSteps, type StepStatus } from "../lib/job-steps.js";
 import { parsePartialDiagnosis } from "../lib/partial-json.js";
 import { compareBars, compareLabel } from "../lib/diagnosis-timing.js";
@@ -187,7 +187,8 @@ watch(
       announcement.value = "";
       return;
     }
-    if (prev.status !== "active") return;
+    // 「結果未送達」失敗被遲到的 ai/done 救回（AR-6）也算同一任務的完成轉移，照樣公告。
+    if (prev.status !== "active" && !isUndeliveredFailure(prev)) return;
     if (next.status === "completed") {
       announcement.value = `${labelOf(next.machineId)} 診斷完成${next.cached ? "（快取）" : ""}：${next.result.summary}`;
     } else if (next.status === "failed") {

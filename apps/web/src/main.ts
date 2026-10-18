@@ -1,3 +1,6 @@
+// MUST 是第一個 import：zod 的 jitless 要在任何 schema 建構之前生效（含 contracts 模組載入時頂層的
+// z.object()；WEB-13，見 zod-config.ts）。
+import "./zod-config.js";
 import { createApp } from "vue";
 import { createPinia } from "pinia";
 import App from "./App.vue";

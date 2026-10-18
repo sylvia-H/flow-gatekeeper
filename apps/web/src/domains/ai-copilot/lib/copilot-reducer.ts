@@ -24,6 +24,12 @@ export type CopilotJobState =
        * 用來在換輪時清空 streamText，並丟棄舊輪遲到的 token。
        */
       attempt: number;
+      /**
+       * 本次執行最後接上的 token `seq`（尚未收到任何 token 為 -1）。同一輪內收到 `seq <= lastSeq`
+       * 即代表後端從頭重播了一次新的執行（stalled 重派）；只比 `seq === 0` 的話，新執行的第一個
+       * token 若在 at-most-once 的 Pub/Sub 上遺失，就會把兩次執行的文字接在一起（AR-S8）。
+       */
+      lastSeq: number;
       progress: number | null;
       streamText: string;
     }
@@ -41,6 +47,17 @@ export type CopilotJobState =
       jobId?: string;
       streamText: string;
       error: string;
+      /**
+       * 失敗原因標記（web 內部呈現狀態，不是通訊契約）。`"undelivered"`：後端已回報
+       * `job/status: completed`，但寬限期內等不到同 jobId 的 `ai/done`（store `checkStalls` 判定）。
+       * 只有這一種失敗允許同 jobId 遲到的 `ai/done` 把狀態改回 completed；其他失敗一律忽略遲到事件。
+       */
+      reason?: "undelivered";
+      /**
+       * 轉成「結果未送達」失敗當下的輪次（只有該失敗會帶）。救回時與 `ai/done.attempt` 比對：
+       * 結果來自更新一輪時，`streamText` 屬於舊輪、要清空（同 active 終態的 `streamTextFor`）。
+       */
+      attempt?: number;
     };
 
 /** 005 消費的診斷事件聯集（皆自契約 import；MUST NOT 另寫平行定義）。 */
@@ -100,7 +117,17 @@ export function humanizeError(raw: string | undefined, code?: string): string {
  * 讓早於 HTTP 回應抵達的事件也能被消費。純函式，便於單元測試與 store 重用。
  */
 export function startActiveState(machineId: string, jobId: string): CopilotJobState {
-  return { status: "active", machineId, jobId, attempt: 1, progress: null, streamText: "" };
+  return { status: "active", machineId, jobId, attempt: 1, lastSeq: -1, progress: null, streamText: "" };
+}
+
+/** 「結果未送達」失敗（AR-6）：後端已完成，但 `ai/done` 沒有在寬限期內抵達畫面。 */
+export const UNDELIVERED_ERROR = "診斷已在後端完成，但結果未送達畫面，請重試";
+
+/** 是否為可被遲到 `ai/done` 救回的「結果未送達」失敗。 */
+export function isUndeliveredFailure(
+  state: CopilotJobState,
+): state is Extract<CopilotJobState, { status: "failed" }> & { reason: "undelivered" } {
+  return state.status === "failed" && state.reason === "undelivered";
 }
 
 /**
@@ -114,12 +141,25 @@ function streamTextFor(state: Extract<CopilotJobState, { status: "active" }>, at
 /**
  * 決定性狀態轉移（見 data-model 轉移表）。僅在該台 `active` 且 `jobId` 相符時消費事件；
  * 過期片段、或非 active 狀態（idle/completed/failed 由 store 動作而非事件推進）一律回傳原狀態。
+ * 唯一例外是「結果未送達」失敗收到同 jobId 的 `ai/done`：結果其實已產出，只是晚到，改回 completed。
  */
 export function copilotReducer(
   state: CopilotJobState,
   event: CopilotEvent,
 ): CopilotJobState {
   if (isStaleJobEvent(state, event)) return state;
+  if (isUndeliveredFailure(state) && event.type === "ai/done") {
+    return {
+      status: "completed",
+      machineId: state.machineId,
+      jobId: event.jobId,
+      cached: event.cached,
+      // 比照 `streamTextFor`：結果來自更新一輪時（例如重試那輪命中快取、沒吐 token 就直接 done），
+      // 手上的文字屬於已放棄的舊輪，丟掉；同輪才保留。
+      streamText: state.attempt !== undefined && event.attempt > state.attempt ? "" : state.streamText,
+      result: event.result,
+    };
+  }
   if (state.status !== "active") return state; // 只有 active 消費 WS 事件
 
   switch (event.type) {
@@ -141,14 +181,15 @@ export function copilotReducer(
       if (event.attempt < state.attempt) return state;
       // 換輪（重試）：後端從頭重播，先清掉上一輪的半截文字再接，否則會變成「半截 + 完整」。
       if (event.attempt > state.attempt) {
-        return { ...state, attempt: event.attempt, streamText: event.text };
+        return { ...state, attempt: event.attempt, lastSeq: event.seq, streamText: event.text };
       }
-      // 同一輪卻收到 seq 0：worker 崩潰後 BullMQ 以 stalled 重派同一個 job 時只遞增 stalled 計數、
-      // 不遞增 attemptsMade，attempt 因此不變但串流從頭重播。seq 0 在一次執行裡只會出現在第一個
-      // token，所以它必然代表「新的一次執行」，要丟掉前一次的半截文字。
-      if (event.seq === 0) return { ...state, streamText: event.text };
+      // 同一輪卻收到不比上一個大的 seq：worker 崩潰後 BullMQ 以 stalled 重派同一個 job 時只遞增
+      // stalled 計數、不遞增 attemptsMade，attempt 因此不變但串流從頭重播。單一有序 WebSocket 上
+      // 同一次執行的 seq 嚴格遞增，所以 seq 回頭必然代表「新的一次執行」，要丟掉前一次的半截文字。
+      // 以 `<= lastSeq` 而非 `=== 0` 判定：新執行的 seq 0 遺失時（Pub/Sub at-most-once）也認得出來。
+      if (event.seq <= state.lastSeq) return { ...state, lastSeq: event.seq, streamText: event.text };
       // 同一輪：單一有序 WebSocket 依 seq 遞送，直接 append 即保序（research R6）。
-      return { ...state, streamText: state.streamText + event.text };
+      return { ...state, lastSeq: event.seq, streamText: state.streamText + event.text };
 
     case "ai/done":
       return {
