@@ -1608,7 +1608,7 @@ export class JobsController {
 
 > 前端按下 Diagnose 時，POST body 要帶上目前的 `socketId`（即連線時收到的 `clientId`）。沒有 `socketId` 就無法把 streaming 推回正確的 client。
 
-> **已變更，現況：Zod 驗證＋冪等**（上面 service／controller 為起草時的形狀，保留作 reference）。controller 先要求 `Content-Type: application/json`（否則 `415`），再以 contracts 的 `CreateDiagnosisBodySchema` `safeParse`（`machineId` `^[a-z0-9-]{1,32}$`、`socketId` 必須是 uuid、`requestedBy` ≤ 64、可選 `jobId` uuid；不符回 `400`，只回 issue 路徑與代碼）。service 先比對機台名冊（`@flow-gatekeeper/contracts` 的 `MACHINE_IDS`，`packages/contracts/src/machines.ts`，api Gateway／mock telemetry 與 web 共用單一來源），格式合法但不在名冊的 `machineId` 在綁定與入列之前即回 `404`（名冊檢查先於冪等檢查），避免亂數 id 每次 cache miss 都真的打 LLM。service 以前端產生的 `jobId` 作 idempotency key：綁定在任何 await 之前建立；同 jobId 重送回同一結果但**不改綁**；同 jobId 不同機台、或 job 已入列而綁定已失效回 `409`；入列設 5 秒逾時，逾時或 Redis 不可用回 `503`。成功為 Nest `@Post()` 預設的 `201`。進 controller 之前的 body 解析由全域 `HttpExceptionFilter` 收尾（2026-10-18 第三輪審查 API-7／API-17）：body 不是合法 JSON 回 `400 {statusCode, message: "Invalid JSON body"}`、超過 16 kb 回 `413 {statusCode, message: "Payload too large"}`，固定英文、不回顯本文，見 `apps/api/src/http/http-exception.filter.ts`。見 `apps/api/src/modules/jobs/jobs.controller.ts`、`jobs.service.ts` 與 §15.6。
+> **已變更，現況：Zod 驗證＋冪等**（上面 service／controller 為起草時的形狀，保留作 reference）。controller 先要求 `Content-Type: application/json`（否則 `415`），再以 contracts 的 `CreateDiagnosisBodySchema` `safeParse`（`machineId` `^[a-z0-9-]{1,32}$`、`socketId` 必須是 uuid、`requestedBy` ≤ 64、可選 `jobId` uuid；不符回 `400`，只回 issue 路徑與代碼）。service 先比對機台名冊（`@flow-gatekeeper/contracts` 的 `MACHINE_IDS`，`packages/contracts/src/machines.ts`，api Gateway／mock telemetry 與 web 共用單一來源），格式合法但不在名冊的 `machineId` 在綁定與入列之前即回 `404`（名冊檢查先於冪等檢查），避免亂數 id 每次 cache miss 都真的打 LLM。service 以前端產生的 `jobId` 作 idempotency key：綁定在任何 await 之前建立；job 仍在進行中時同 jobId 重送回同一結果但**不改綁**（job 已 completed、綁定在 10 s 寬限內保留時回 `409`「jobId 已使用過」，2026-10-18 第三輪審查 AR-5）；同 jobId 不同機台、或 job 已入列而綁定已失效回 `409`；入列設 5 秒逾時，逾時或 Redis 不可用回 `503`。成功為 Nest `@Post()` 預設的 `201`。進 controller 之前的 body 解析由全域 `HttpExceptionFilter` 收尾（2026-10-18 第三輪審查 API-7／API-17）：body 不是合法 JSON 回 `400 {statusCode, message: "Invalid JSON body"}`、超過 16 kb 回 `413 {statusCode, message: "Payload too large"}`，固定英文、不回顯本文，見 `apps/api/src/http/http-exception.filter.ts`。見 `apps/api/src/modules/jobs/jobs.controller.ts`、`jobs.service.ts` 與 §15.6。
 >
 > **現況（第二輪審查修復）**：驗證通過後依序檢查——`machineId` 不在名冊（`mixer-01`、`press-02`、`pack-03`、`oven-04`、`sorter-05`）回 `404`；`socketId` 對應的 WS 連線不在線或未授權回 `409`（`{statusCode:409,error:"Conflict",message:"WebSocket 連線不存在或未授權，請重新連線後再發起診斷"}`）；最後才走 `jobId` 冪等（既有 `409` 條件不變）。一鍵 demo 經 nginx 另有 `429` 限流。見 §15.6。
 
@@ -3385,7 +3385,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   輸出 BT.709／limited range 並標記色彩；先在暫存目錄編碼完成才覆寫 `docs/demo/`（不用 .tmp＋rename：Windows 上目標被播放器開著時 rename 會失敗），覆寫失敗時保留暫存成品並印出路徑；逐格寫檔失敗或對齊失準皆在呼叫 LLM 前中止；Chromium 尋找與面板狀態對照抽成 `apps/web/scripts/lib/browser.cjs`，與截圖劇本共用。
   使用者裁決：輸出 mp4（ffmpeg 用下載解壓即用的可攜版，不安裝到系統）、注入假游標、對 demo 容器錄。
 
-**第三輪審查 quick-fix**（`fix/20261018-review03-quickfix`，merge 以 `git log --first-parent --merges` 為準，2026-10-18；報告 `docs/20260927-research-review03.md` §6 Batch E；commit `7cd7a3f`（api）、`5e538bb`（relay／Gateway）、`d1384f6`（worker）、`b8d5bc0`（web）與文件收尾；變更明細見 `CHANGELOG.md` `[Unreleased]`，backlog 見 ADR-002 §6.5.1 的 review03 列）：
+**第三輪審查 quick-fix**（`fix/20261018-review03-quickfix`，merge 以 `git log --first-parent --merges` 為準，2026-10-18；報告 `docs/20260927-research-review03.md` §6 Batch E；commit `7cd7a3f`（api）、`5e538bb`（relay／Gateway）、`d1384f6`（worker）、`b8d5bc0`（web）、`819391f`（coverage 門檻與報告目錄，TQ-15／TQ-20）、`3d45c3e`（契約 1.3.0 與文件回補）；變更明細見 `CHANGELOG.md` `[Unreleased]`，backlog 見 ADR-002 §6.5.1 的 review03 列）：
 
 - **做了什麼**：
   - api 日誌與 HTTP：P1（API-1）producer `Queue` 在建構時掛節流 `error` listener，Redis 認證失敗不再經 BullMQ `console.error` 把 `REDIS_PASSWORD` 明文寫進 stderr；
@@ -3398,7 +3398,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
     快取命中改為 `insertTrigger` → `updateProgress(100)` → `ai/done`，與 LLM 路徑一致（AR-A12）；`no_context` 終態記 warn 不帶 stack（WK-19）；
     關閉加重入保護與總時限，Gemini SDK 明確傳 `retryOptions.attempts: 1`（WK-21）。
   - web：收到 `completed` 後 2 s 無 `ai/done` 即轉「結果未送達」失敗，只對這種失敗允許同 jobId 遲到的 `ai/done` 救回完成（AR-6）；reducer 以 `seq <= lastSeq` 判新一次執行（AR-S8）；
-    WS 連上即送第一次 ping（WEB-16）；`lastActivityAt` 改 plain Map、串流捲到底每幀至多一次（WEB-17）；web 直接依賴 `zod`、`src/zod-config.ts`（`jitless`）作為 `main.ts` 第一個 import（WEB-13）；
+    WS 連上即送第一次 ping（WEB-16）；`lastActivityAt` 改 plain Map、串流捲到底每幀至多一次（WEB-17，**部分修復**：`jobs` 仍逐 token 寫入 reactive，屬已接受的既有行為——Gemini 每秒約 10–20 則 token、代價小，改成每幀合併會動到 reducer 主路徑與它和 2 s 救回、`ai/done` 的順序；backlog 見 ADR-002 §6.5.1）；web 直接依賴 `zod`、`src/zod-config.ts`（`jitless`）作為 `main.ts` 第一個 import（WEB-13）；
     tailwind content 排除測試檔、postcss 以絕對路徑指向設定（WEB-15／TQ-23）。
   - 測試：三支 `main.test` 改檔頂 import（TQ-14）、liveness 斷言精確次數（TQ-16）、兩支重試語意測試（TQ-17）；coverage 輸出目錄可用 `COVERAGE_DIR` 覆寫，Stryker 報告目錄可用 `MUTATION_REPORT_DIR` 覆寫（TQ-15；Stryker 的 sandbox 每次以 mkdtemp 獨立建立，並行時只有報告會互相覆寫）；
     門檻改為隔離實測 −3：全域 lines 89／branches 85（實測 lines 92.03、branches 88.36–88.37——兩次隔離實測差 1 個分支，137 檔 1965 支），十個核心檔以 glob 設逐檔下限（TQ-20，數值見 `vitest.config.ts`）。

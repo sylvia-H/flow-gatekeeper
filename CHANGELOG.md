@@ -35,7 +35,11 @@
 - **壞 JSON 的 400 回應改變**（API-7／API-17）：body 由 Nest 預設的 `{"message":"<JSON 解析錯誤原文>","error":"Bad Request","statusCode":400}` 改為 `{"statusCode":400,"message":"Invalid JSON body"}`——message 固定英文、不再回顯本文片段，且**少了 `error` 欄位**；依 message 文字或 `error` 欄位判斷的外部 client 需改。契約不符的 400（`issues[]`）與 controller／service 回的 404／409／415／503 不變；body-parser 自己產生的其他 4xx 也改為固定的 HTTP reason phrase——charset／encoding 不支援的 415 由原文（如 `unsupported charset "X"`）改為 `Unsupported Media Type`，`request.aborted`、`request.size.invalid` 等 400 改為 `Bad Request`。
 - **body 上限 100 kb → 16 kb**（API-7）：`POST /diagnoses` 正常請求不到 300 bytes；超過回 `413 {"statusCode":413,"message":"Payload too large"}`（原為 body-parser 原文 `request entity too large`）。
 - **回應不再帶 `X-Powered-By: Express`**（API-7）。
-- **非 `err` 鍵下的 `command` 日誌形狀改變**（CT-13）：放在其他鍵（如 `ctx.error.command`、陣列內）的 Redis 指令物件，以前一層萬用 redact 輸出 `"args":"[REDACTED]"`，現在 `args` 整個鍵消失、只剩 `{"command":{"name":…}}`；以 `[REDACTED]` 字樣做 grep 或告警的規則會漏抓，請改比對 `command.name` 或改以缺少 `args` 判斷。
+- **Redis 指令物件的日誌形狀改變**（CT-13）：共用 logger 的遮蔽值一直是小寫 `[redacted]`。舊的 `REDACT_PATHS` 只有一層萬用字元，因此：頂層 `command` 與一層鍵下的命令（如 `{error:{command}}`）以前輸出 `"args":"[redacted]"`；**兩層以上**（如 `ctx.error.command`）與陣列內的命令物件以前是**明文**輸出 `args`——這正是 CT-13 修掉的外洩。現在所有位置的 `command` 一律只剩 `{"command":{"name":…}}`、`args` 鍵整個消失（`err` 鍵與 child bindings 之外的位置都不再出現 `[redacted]`）。以 `[redacted]` 字樣做 grep 或告警的規則會漏抓，請改比對 `command.name` 或以缺少 `args` 判斷。**建議檢查升級前的日誌是否含明文 Redis 密碼**（`AUTH` 指令的 `args`），有則輪替密碼並清理日誌。
+- **日誌等級與形狀**（API-7／API-17、API-11、WK-19）：依舊訊息比對的告警需改用新的比對方式——
+  (a) body-parser 的 4xx（壞 JSON、過大 body、charset 不支援等）由 Nest `ExceptionsHandler` 每則 `logger.error`（msg 為錯誤原文）改為 warn，依 `狀態碼:type` 節流（30 秒至多一則、附被壓掉的則數），msg 固定為 `http request rejected`，欄位 `statusCode`、`method`、`path`、`errorType`（body-parser 的 `type`，如 `entity.parse.failed`），不帶本文；
+  (b) api 的 Nest logger 收到 Error 時，msg 由 `JSON.stringify(err)`（通常只剩 `{}`）改為 `err.message`，並多出 `err` 鍵（type／message／stack）；
+  (c) worker 的 `no_context` 終態由 `error` 等級的 `job failed (final)`（帶 `err` 與 stack）改為 `warn` 等級的 `job failed (final, no_context)`，帶 `code: "no_context"`、不帶 stack；其他最終失敗維持 `error` 的 `job failed (final)`。
 - **WS 入站限速**（API-13）：每連線 token bucket 穩態 20 則／秒、容量 40；超速的訊息不解析即丟棄並各計一次違規，與畸形訊息、錯誤 token 合計 10 次即以 `1008` 關閉。內建 web 穩態遠低於 1 則／秒、不受影響；以更高頻率送 `ping`／`machine/subscribe` 的自寫 client 或壓測腳本需降頻。
 - **送出緩衝超過高水位時不回 `pong`**（API-13）：`bufferedAmount` 超過 `WS_SEND_HIGH_WATER_BYTES` 的連線，應用層 `ping` 收不到回應；以 `pong` 判活的自寫 client 會判斷線並重連（內建 web 5 秒逾時即重連）。
 - **未授權連線子上限新公式**（API-14）：`max(1, min(MAX_WS_CONNECTIONS − 1, max(10, floor(20% × MAX_WS_CONNECTIONS))))`；只影響 `MAX_WS_CONNECTIONS ≤ 10` 且有設 `WS_AUTH_SECRET` 的部署（例如上限 5 時子上限由 10 變 4），預設 500 不變（仍為 100）。
@@ -45,14 +49,14 @@
 ### Security
 
 - **P1：api 端 BullMQ producer `Queue` 掛上節流的 `error` listener**（API-1）：設了 `REDIS_PASSWORD` 而 Redis 認證失敗時，密碼不再經 BullMQ 的 `console.error` 明文寫進 stderr（2.0.0 相容性注意所列的未修項）。
-- **日誌全深度遮蔽 Redis 指令參數**（CT-13）：共用 logger 以 `formatters.log` 對整個 log 物件任意深度剝除 `command.args`（含 `err` 以外的鍵、陣列、class instance），不再只處理第一層 `err`；`command` 只留 `name`（`args` 鍵移除，不再輸出 `[REDACTED]`，見相容性注意）；child bindings 不經此路徑、仍由 redact 遮蔽。
+- **日誌全深度遮蔽 Redis 指令參數**（CT-13）：共用 logger 以 `formatters.log` 對整個 log 物件任意深度剝除 `command.args`（含 `err` 以外的鍵、陣列、class instance），不再只處理第一層 `err`；`command` 只留 `name`（`args` 鍵移除，不再輸出 `[redacted]`；兩層以上與陣列內的命令以前是明文，見相容性注意）；child bindings 不經此路徑、仍由 redact 遮成 `[redacted]`。
 - **api Nest logger 的 Error 不再整包 `JSON.stringify`**（API-11）：Error 導到 `err` 鍵、msg 取 `err.message`，body-parser 錯誤夾帶的原始請求本文（`body`）不進日誌，`ReplyError` 的 `args` 經 serializer 剝除。
 - **HTTP 錯誤不回顯輸入、不記本文**（API-7／API-17）：全域 `HttpExceptionFilter` 讓 body-parser 的 4xx 回固定英文 message、記 warn 並依狀態碼與類型節流（原為每則 `logger.error`、可被洗版）；未預期例外與 500 回 `Internal server error`，其他 5xx 的 http-errors 回該狀態碼的標準 reason phrase（如 503 `Service Unavailable`）；error 日誌保留原 message 與 stack（剝掉 `body`）。
 
 ### Fixed
 
 - **`ai/done`／`ai/error` 早於 BullMQ 終態送出**（AR-5／WK-14）：worker 的終態事件（含 `no_context`）改為 await publish 後才結束 job，發布失敗只記 warn、不改 job 結果；`ai/token` 維持 fire-and-forget。
-- **`completed` 後綁定保留 10 秒**（AR-5）：api relay 送出 `job/status: completed` 後延後刪綁定，走另一條 Redis 連線、稍晚抵達的 `ai/done` 仍送得到原連線；寬限內同 jobId 重送仍回 409；`failed` 不加寬限。
+- **`completed` 後綁定保留 10 秒**（AR-5）：api relay 送出 `job/status: completed` 後延後刪綁定，走另一條 Redis 連線、稍晚抵達的 `ai/done` 仍送得到原連線；寬限內同 jobId 重送回 409「jobId 已使用過，請以新的 jobId 重新發起診斷」（job 仍在進行中時才回同一結果）；`failed` 不加寬限。
 - **快取命中先落地後宣告**（AR-A12）：cache 命中路徑改為寫 trigger → `updateProgress(100)` → `ai/done`，與 LLM 路徑同序。
 - **web 結果未送達收尾**（AR-6）：收到 `job/status: completed` 後 2 秒（每秒檢查，實際 2–3 秒）仍無 `ai/done` 即轉失敗，文案「診斷已在後端完成，但結果未送達畫面，請重試」、沿用重試鈕；只有這種失敗允許同 jobId 遲到的 `ai/done` 救回完成（原本要等 45 秒 watchdog）。
 - **Pub/Sub 訂閱中斷有日誌**（AR-6）：ai-stream subscriber 加掛 `close`／`reconnecting`，與 `error` 共用節流器，整段斷線只記一則 warn、恢復由既有 ready 記錄。
@@ -70,7 +74,7 @@
 - **測試門檻提高**（TQ-20）：`pnpm test:coverage` 全域門檻 lines 60／branches 50 → **89／85**（隔離實測 lines 92.03、branches 88.36–88.37（兩次實測差 1 個分支）減 3、取整數往下；137 個測試檔 1965 支），另以 glob 對十個核心檔設逐檔下限（例如 `processor.ts` 95／84、`monitoring.gateway.ts` 96／89、`useHighFrequencyWs.ts` 94／70，全表見 `vitest.config.ts`）；coverage reporter 加 `json-summary`。
 - **coverage／mutation 輸出目錄可覆寫**（TQ-15）：`COVERAGE_DIR` 覆寫 coverage 輸出目錄；Stryker 報告目錄以 `MUTATION_REPORT_DIR` 覆寫（sandbox 本來就每次獨立建立，不需覆寫）。未設時路徑不變（CI 照舊上傳 `coverage/lcov.info`）。
 - **web 直接依賴 `zod`**（WEB-13）：`apps/web/package.json` 新增 `zod ^4.6.5`（與 contracts 同版，lockfile 未新增套件）。
-- **web 串流效能**（WEB-17）：`lastActivityAt` 改 plain Map（不再每個 token 觸發 reactive 追蹤），StreamingPanel 捲到底改為每幀至多一次。
+- **web 串流效能（部分修復）**（WEB-17）：`lastActivityAt` 改 plain Map（不再每個 token 觸發 reactive 追蹤），StreamingPanel 捲到底改為每幀至多一次。`jobs` 仍逐 token 寫入 reactive，屬已接受的既有行為：Gemini 每秒約 10–20 則 token、代價小，改成每幀合併會動到 reducer 主路徑與它和 2 s 救回、`ai/done` 的順序（backlog 見 ADR-002 §6.5.1）。
 
 ### Internal
 
