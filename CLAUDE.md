@@ -170,6 +170,10 @@ commit**，不需逐次徵詢；流程為：
    契約有變更時 `asyncapi.yaml` 的 `info.version` 已升版且 `CHANGELOG.md` 契約小節有紀錄；六份 `package.json`（root、
    `apps/{api,worker,web}`、`packages/{contracts,shared}`）的 `version` 已升到目標版本，並與 `CHANGELOG.md` 頂端條目一致
    （把 `[Unreleased]` 改為該版本與發布日期）。
+   另外 MUST 列出最新審查報告（`docs/2026*-research-review*.md`）中仍未修的 **P1／P2**，逐條確認：已修（附 commit），
+   或由使用者明確裁決「帶著發布」——後者 MUST 寫進 `CHANGELOG.md` 該版的「相容性注意」，寫明觸發條件與影響，不得只留在報告裡
+   （2026-10-18 定案；起因：第三輪審查的 P1 標為「release 前必做」，卻隨 1.1.0、2.0.0 兩次發版出去。使用者層級 CLAUDE.md
+   「發版前的未修 findings」有同一條，改其中一份時 grep 另一份同步）。
 2. `git checkout main` → `git merge --no-ff develop`，merge commit 訊息格式為
    `merge(release): 併入 develop 準備 <版本> 發布`（前例：`merge(release): 併入 develop 準備第一版發布（v1.0.0）`、`merge(release): 併入 develop 準備 1.1.0 發布`）。
 3. 在該 merge commit 上打 annotated tag：`git tag -a X.Y.Z -m "flow-gatekeeper X.Y.Z：<中文摘要>"`——tag **不帶 `v` 前綴**（第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`；前例：`flow-gatekeeper 1.1.0：三輪審查加固版`）。
