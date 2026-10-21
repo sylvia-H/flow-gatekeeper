@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { effectScope, nextTick, reactive, type EffectScope } from "vue";
 import {
   APP_TITLE,
@@ -131,10 +131,36 @@ describe("faviconSvg／faviconDataUrl", () => {
     expect(decode(url)).toBe(faviconSvg("critical", COLORS));
   });
 
-  it("composable 原始碼不含任何 hex 色值（色值只在 theme.css）", () => {
+  it("composable 原始碼不含任何色值字面（hex、rgb()/rgba()、hsl()/hsla()；色值只在 theme.css）", () => {
     const src = readFileSync(join(here, "useDocumentAlert.ts"), "utf8");
     expect(src).not.toMatch(/#[0-9a-f]{3,8}\b/i);
+    expect(src).not.toMatch(/rgba?\(\s*\d/i);
+    expect(src).not.toMatch(/hsla?\(/i);
   });
+});
+
+describe("theme.css 提供 favicon 用的 token", () => {
+  const css = readFileSync(join(here, "../../styles/theme.css"), "utf8");
+
+  /** 取 `:root[data-theme='<name>'] { … }` 區塊原文。 */
+  function block(name: "light" | "dark"): string {
+    const start = css.indexOf(`:root[data-theme='${name}']`);
+    expect(start, `theme.css 找不到 ${name} 主題區塊`).toBeGreaterThanOrEqual(0);
+    const open = css.indexOf("{", start);
+    return css.slice(open + 1, css.indexOf("}", open));
+  }
+
+  for (const theme of ["light", "dark"] as const) {
+    it(`${theme} 主題對每個 FAVICON_TOKENS 都有 \`--c-<name>: R G B;\``, () => {
+      const body = block(theme);
+      for (const name of FAVICON_TOKENS) {
+        const escaped = name.replace(/[-]/g, "\\-");
+        expect(body, `${theme} 缺 --c-${name} 或格式不是 R G B`).toMatch(
+          new RegExp(`--c-${escaped}\\s*:\\s*\\d{1,3}\\s+\\d{1,3}\\s+\\d{1,3}\\s*;`),
+        );
+      }
+    });
+  }
 });
 
 describe("readFaviconColors", () => {
@@ -259,8 +285,11 @@ describe("useDocumentAlert", () => {
     await nextTick();
     expect(document.title).toBe("● 嚴重 1 · flow-gatekeeper");
 
+    const disconnect = vi.spyOn(MutationObserver.prototype, "disconnect");
     scope?.stop();
     scope = null;
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    disconnect.mockRestore();
     expect(document.title).toBe("原始標題");
     expect(iconLink()).toBeNull();
 

@@ -55,7 +55,7 @@ export function documentAlertOf(input: DocumentAlertInput): DocumentAlert {
   return { title: APP_TITLE, icon: "normal" };
 }
 
-/** favicon 用到的 token（theme.css 的 `--c-<name>`）；值為 CSS 色彩字串，例 `rgb(31,42,51)`。 */
+/** favicon 用到的 token（theme.css 的 `--c-<name>`）；值為 CSS 色彩字串 `rgb(R,G,B)`。 */
 export const FAVICON_TOKENS = ["surface", "ink", "ink-3", "accent", "crit", "stale"] as const;
 export type FaviconColors = Record<(typeof FAVICON_TOKENS)[number], string>;
 

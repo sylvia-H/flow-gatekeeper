@@ -384,7 +384,7 @@ rail 版：玻璃片，標頭「機群健康」+ 「共 N 台」，2×2 計數�
 - **嚴重**（`fleetHealth.critical` > 0，停滯的機台不算）：標題「● 嚴重 N · flow-gatekeeper」，favicon 嚴重版。
 - **其餘**：標題「flow-gatekeeper」、基礎 favicon。**警告不上分頁**——mock 會週期性出警告尖峰，分頁跟著跳只會讓人麻痺；分頁訊號留給「需要現在回來看」的狀況。
 
-favicon 是 32×32 viewBox 的極簡玻璃量具：`surface` 玻璃片（rx 5、2px `ink` 框）、左上三道 2px `ink-3` 蝕刻刻度、下方 `accent` 實心液柱；嚴重版右上加 r 6.5 的實心 `crit` 狀態點（2px `surface` 圈與框線分開），離線版同位置改 3px `stale` 空心圈（資料已停，對應標題的「○」）。**不存靜態檔**：`useDocumentAlert` 在執行期以 `getComputedStyle(<html>)` 讀目前主題的 `--c-surface`／`--c-ink`／`--c-ink-3`／`--c-accent`／`--c-crit`／`--c-stale`，組成 SVG data URL 寫進自建的 `<link rel="icon">`（`index.html` 不放 favicon link），`data-theme` 改變時重組——favicon 隨 app 主題走，框與底的對比由 token 本身保證（深色是煙燻玻璃底配淺墨框）。讀不到 token 時不動 favicon、只改標題。只在衍生出的標題／favicon 字串變化時寫入 DOM；不閃爍、不輪播（與 `prefers-reduced-motion` 無關），標題變化不設 live region。暫停時沿用暫停那一刻的計數（與機群健康同一個凍結快照）。
+favicon 是 32×32 viewBox 的極簡玻璃量具：`surface` 玻璃片（rx 5、2px `ink` 框）、左上三道 2px `ink-3` 蝕刻刻度、下方 `accent` 實心液柱；嚴重版右上加 r 6.5 的實心 `crit` 狀態點（2px `surface` 圈與框線分開），離線版同位置改 3px `stale` 空心圈（資料已停，對應標題的「○」）。**不存靜態檔**：`useDocumentAlert` 在執行期以 `getComputedStyle(<html>)` 讀目前主題的 `--c-surface`／`--c-ink`／`--c-ink-3`／`--c-accent`／`--c-crit`／`--c-stale`，組成 SVG data URL 寫進自建的 `<link rel="icon">`（`index.html` 不放 favicon link），`data-theme` 改變時重組——favicon 隨 app 主題走，框與底的對比由 token 本身保證（深色是煙燻玻璃底配淺墨框）。讀不到 token 時不動 favicon、只改標題。只在衍生出的標題／favicon 字串變化時寫入 DOM；不閃爍、不輪播（與 `prefers-reduced-motion` 無關），標題變化不設 live region。暫停時沿用暫停那一刻的計數（與機群健康同一個凍結快照）。背景分頁受瀏覽器計時器節流，隱藏超過約 5 分鐘時標題可能延遲約 1 分鐘才更新（背景分頁的批次提交改走 1 秒 timer flush、與 1 Hz tick 同受節流）。
 
 ## Do's and Don'ts
 
