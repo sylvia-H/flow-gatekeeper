@@ -6,7 +6,12 @@ import { useMonitoringStore, type MachineLive } from "../../monitoring/stores/mo
 import { isStale } from "../../monitoring/lib/stale.js";
 import { CARD_ROOT_CLASS } from "../../monitoring/lib/card-style.js";
 import { machineLabel as labelOf } from "../../monitoring/lib/machine-labels.js";
-import { isUndeliveredFailure, progressLabel, type CopilotJobState } from "../lib/copilot-reducer.js";
+import {
+  STREAM_LABEL_INCOMPLETE,
+  isUndeliveredFailure,
+  progressLabel,
+  type CopilotJobState,
+} from "../lib/copilot-reducer.js";
 import { jobSteps, type StepStatus } from "../lib/job-steps.js";
 import { parsePartialDiagnosis } from "../lib/partial-json.js";
 import { compareBars, compareLabel } from "../lib/diagnosis-timing.js";
@@ -187,7 +192,8 @@ watch(
       announcement.value = "";
       return;
     }
-    // 「結果未送達」失敗被遲到的 ai/done 救回（AR-6）也算同一任務的完成轉移，照樣公告。
+    // 「結果未送達」失敗被遲到的結果救回（AR-6、FR-005）也算同一任務的完成轉移，照樣公告。
+    // 三個完成來源先到者才造成轉移；後到者（含重複的 ai/done）reducer 原樣回傳、不觸發 watch，因此只公告一次（FR-004）。
     if (prev.status !== "active" && !isUndeliveredFailure(prev)) return;
     if (next.status === "completed") {
       announcement.value = `${labelOf(next.machineId)} 診斷完成${next.cached ? "（快取）" : ""}：${next.result.summary}`;
@@ -521,10 +527,11 @@ watch(
               </button>
             </template>
           </DiagnosisResultView>
+          <!-- 以 job/status／GET 收尾（或執行期間重連過）時串流可能缺段，標「原始串流（不完整）」（FR-038） -->
           <StreamDisclosure
             v-if="state.streamText"
             v-model:expanded="showStream"
-            label="原始串流"
+            :label="state.streamIncomplete ? STREAM_LABEL_INCOMPLETE : '原始串流'"
             :text="state.streamText"
             :streaming="false"
           />

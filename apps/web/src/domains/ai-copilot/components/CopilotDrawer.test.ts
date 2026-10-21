@@ -529,6 +529,8 @@ describe("CopilotDrawer 完成態「再次診斷」（critique 第一輪 B）", 
     cached: false,
     streamText: "",
     result: RESULT,
+    source: "ai/done",
+    streamIncomplete: false,
   };
 
   it("完成態在 meta 列下、摘要之前有次要鈕「再次診斷」；面板內沒有精確文字「診斷」的鈕（截圖劇本不誤配）", () => {
@@ -585,6 +587,8 @@ describe("CopilotDrawer 建議動作與原始串流（013 視覺層）", () => {
         { label: "排程潤滑", priority: "low" },
       ],
     },
+    source: "ai/done",
+    streamIncomplete: false,
   };
 
   it("建議動作以中文優先度徽章呈現，不用左緣色條；指令旁標示 AI 建議需審閱", () => {
@@ -624,6 +628,53 @@ describe("CopilotDrawer 建議動作與原始串流（013 視覺層）", () => {
     expect(w.get('[aria-label="原始串流"]').text()).toBe("比對到一半");
     await toggle.trigger("click");
     expect(w.find('[aria-label="原始串流"]').exists()).toBe(false);
+  });
+});
+
+describe("CopilotDrawer 原始串流標題（012 FR-038、contracts/ui-copy §2）", () => {
+  const JOB = "44444444-4444-4444-8444-444444444444";
+  const completed = (streamIncomplete: boolean, source: "ai/done" | "status"): CopilotJobState => ({
+    status: "completed",
+    machineId: MACHINE,
+    jobId: JOB,
+    cached: false,
+    streamText: "推理",
+    result: RESULT,
+    source,
+    streamIncomplete,
+  });
+
+  /** 原始串流展開鈕的文字（每態只會有一顆）。 */
+  function streamToggleLabel(w: VueWrapper): string | undefined {
+    return w.findAll("button").map((b) => b.text()).find((t) => t.startsWith("原始串流"));
+  }
+
+  it.each<[string, CopilotJobState, string]>([
+    ["進行中", { status: "active", machineId: MACHINE, jobId: JOB, attempt: 1, lastSeq: 0, progress: 60, streamText: "推理" }, "原始串流"],
+    ["完成（ai/done 收尾）", completed(false, "ai/done"), "原始串流"],
+    ["完成（job/status 收尾，不完整）", completed(true, "status"), "原始串流（不完整）"],
+    [
+      "結果未送達",
+      { status: "failed", machineId: MACHINE, jobId: JOB, streamText: "推理", error: "診斷已在後端完成，但結果未送達畫面，請重試", reason: "undelivered", attempt: 1 },
+      "原始串流",
+    ],
+    ["其他失敗", { status: "failed", machineId: MACHINE, jobId: JOB, streamText: "推理", error: "AI 診斷逾時，請重試。" }, "原始串流（中斷前）"],
+  ])("%s → 「%s」", (_name, state, label) => {
+    stubDesktop();
+    const w = mountDrawer({ state });
+    expect(streamToggleLabel(w)).toBe(label);
+  });
+
+  it("以真 store 驅動：帶 result 的 job/status completed 收尾 → 已完成、標「原始串流（不完整）」並公告一次", async () => {
+    const w = mountWithStore();
+    const jobId = await startJob();
+    const copilot = useCopilotStore();
+    copilot.applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 0, text: "推理" });
+    copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "completed", progress: 100, result: RESULT, cached: false });
+    await flushPromises();
+    expect(headerText(w)).toContain("已完成");
+    expect(streamToggleLabel(w)).toBe("原始串流（不完整）");
+    expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
   });
 });
 
@@ -879,7 +930,7 @@ describe("CopilotDrawer 行動版 bottom sheet（dialog 語意與焦點陷阱）
     const card = fakeCard(MACHINE);
     card.el.focus();
     const w = mountDrawer({
-      state: { status: "completed", machineId: MACHINE, jobId: "job-1", cached: false, result: RESULT, streamText: "" } as CopilotJobState,
+      state: { status: "completed", machineId: MACHINE, jobId: "job-1", cached: false, result: RESULT, streamText: "", source: "ai/done", streamIncomplete: false } as CopilotJobState,
     });
     await flushPromises();
     show();
@@ -1043,7 +1094,7 @@ describe("CopilotDrawer 行動版 bottom sheet（dialog 語意與焦點陷阱）
     const card = fakeCard(MACHINE);
     const other = fakeCard("mixer-01");
     const w = mountDrawer({
-      state: { status: "completed", machineId: MACHINE, jobId: "job-1", cached: false, result: RESULT, streamText: "" } as CopilotJobState,
+      state: { status: "completed", machineId: MACHINE, jobId: "job-1", cached: false, result: RESULT, streamText: "", source: "ai/done", streamIncomplete: false } as CopilotJobState,
     });
     await flushPromises();
     show();

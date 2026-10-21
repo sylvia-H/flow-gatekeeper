@@ -1,7 +1,7 @@
 import { defineStore } from "pinia";
 import { computed, reactive, ref, shallowRef, triggerRef } from "vue";
 import { readPreference, writePreference } from "../../../shared/composables/useLocalPreference.js";
-import { AiDoneSchema } from "@flow-gatekeeper/contracts";
+import { AiDoneSchema, DiagnosisResultSchema, type JobStatus } from "@flow-gatekeeper/contracts";
 import {
   UNDELIVERED_ERROR,
   copilotReducer,
@@ -107,7 +107,7 @@ export const useCopilotStore = defineStore("copilot", () => {
    */
   const lastActivityAt = new Map<string, number>();
   /**
-   * 每台「收到後端 `job/status: completed`、但還沒等到 `ai/done`」的時刻（AR-6）。
+   * 每台「收到後端不帶 `result` 的 `job/status: completed`、但還沒等到任何來源的結果」的時刻（AR-6、FR-005）。
    * 帶 jobId 比對，只認當前任務；離開 active 即清掉。同樣只有 `checkStalls` 讀，用 plain Map。
    * `at` 是單調時鐘（`performance.now()`）：寬限只有 2 s，牆上時鐘被 NTP 校時或手動調整往前跳 ≥ 2 s
    * 就會誤判成未送達；單調時鐘不受影響。
@@ -133,7 +133,7 @@ export const useCopilotStore = defineStore("copilot", () => {
    * 每次診斷才動一兩次（低頻），用 shallowRef 整份換 Map 內容後 `triggerRef` 一次即可。
    */
   const timings = shallowRef<Map<string, DiagnosisTiming>>(new Map());
-  /** 每台最近一次「active → 已完成」的時刻（epoch ms，`ai/done` 經 reducer 轉完成當下記錄），供完成 meta 的 `HH:mm:ss`。 */
+  /** 每台最近一次「active → 已完成」的時刻（epoch ms，三個完成來源中先到者經 reducer 轉完成當下記錄），供完成 meta 的 `HH:mm:ss`。 */
   const completedAt = shallowRef<Map<string, number>>(new Map());
   /**
    * Copilot 面板開關與手動收合偏好（data-model §2、FR-033）。載入時一律收合（`open = false`），
@@ -237,6 +237,20 @@ export const useCopilotStore = defineStore("copilot", () => {
       code: "schema_invalid",
       message: "ai/done result schema invalid",
     };
+  }
+
+  /**
+   * `job/status` 帶的 `result` 的第二道防線（比照 `guardDone`）。正式路徑在 WS 入口（`ws-message.ts` 的
+   * `JobStatusSchema.safeParse`）就已把 `result` 不合法的整則 `job/status` 丟棄，走不到這裡；這道只防繞過入口
+   * 直接呼叫 `applyEvent` 的來源（測試、日後新增的呼叫端）。012 起帶 `result` 的 completed 會直接交給結果畫面渲染，
+   * 畸形物件進來會在 render 時炸掉整個面板，所以 store 不把未驗證物件當結果（工程硬規則 6）：不合法時只拿掉
+   * `result`／`cached`、其餘照常套用，當成「不帶 result 的 completed」交給 2 s 寬限，不誤判成失敗。
+   * 只在帶 `result` 時才 parse（job/status 為低頻事件）。
+   */
+  function guardStatusResult(event: JobStatus): JobStatus {
+    if (event.result === undefined || DiagnosisResultSchema.safeParse(event.result).success) return event;
+    const { result: _result, cached: _cached, ...rest } = event;
+    return rest;
   }
 
   /** 寫回手動收合偏好；值沒變就不寫，避免每次展開都碰 storage。 */
@@ -345,15 +359,16 @@ export const useCopilotStore = defineStore("copilot", () => {
     const machineId =
       incoming.type === "job/status" ? incoming.machineId : findMachineByJobId(incoming.jobId);
     if (machineId === undefined) return;
-    const event = guardDone(incoming);
+    const event = incoming.type === "job/status" ? guardStatusResult(incoming) : guardDone(incoming);
     const prev = stateFor(machineId);
     const next = copilotReducer(prev, event);
     jobs.value.set(machineId, next);
     // watchdog 計時：只有「屬於當前 job 且仍 active」的事件才算有進展並重置逾時；
-    // 離開 active（completed/failed）即清掉該台計時。
+    // 離開 active（completed/failed）即清掉該台計時——帶 `result` 的 completed 由 reducer 直接收尾，
+    // 因此走這裡清掉，不會記 2 s 寬限起點（FR-004）。
     if (next.status === "active" && event.jobId === next.jobId) {
       touch(machineId);
-      // 後端已回報完成：記下首次收到的時刻，`checkStalls` 據此等 `ai/done` 的寬限期（AR-6）。
+      // 後端已回報完成但沒帶 result：記下首次收到的時刻，`checkStalls` 據此等結果的寬限期（AR-6）。
       if (
         event.type === "job/status" &&
         event.status === "completed" &&
@@ -363,7 +378,8 @@ export const useCopilotStore = defineStore("copilot", () => {
       }
     } else if (next.status !== "active") clearWatch(machineId);
     // 耗時量測：只在這一則事件讓任務「離開 active」時收尾（reducer 對非 active 一律原樣回傳），
-    // 或「結果未送達」失敗被遲到的 ai/done 救回時（該失敗刻意保留 pending，見 `checkStalls`）。
+    // 或「結果未送達」失敗被遲到的結果救回時（該失敗刻意保留 pending，見 `checkStalls`）。三個完成來源
+    // 先到者讓任務離開 active，後到者（含重複的 ai/done）在這裡就 return，所以耗時與完成時刻只結算一次（SC-006）。
     if (prev.status !== "active" && !(isUndeliveredFailure(prev) && next.status === "completed")) return;
     if (next.status === "completed") {
       const timing = timings.value.get(machineId);

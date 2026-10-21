@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { DiagnosisResult } from "@flow-gatekeeper/contracts";
+import type { DiagnosisResult, JobStatus } from "@flow-gatekeeper/contracts";
 import {
+  STREAM_LABEL_INCOMPLETE,
   UNDELIVERED_ERROR,
   copilotReducer,
   humanizeError,
@@ -160,6 +161,8 @@ describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
       cached: true,
       streamText: "分析…",
       result: RESULT,
+      source: "ai/done",
+      streamIncomplete: false,
     });
   });
 
@@ -208,6 +211,8 @@ describe("copilotReducer — 狀態轉移（data-model 轉移表）", () => {
       cached: false,
       streamText: "",
       result: RESULT,
+      source: "ai/done",
+      streamIncomplete: false,
     };
     expect(copilotReducer(done, { type: "ai/token", jobId: "job-1", attempt: 1, seq: 1, text: "y" })).toBe(done);
   });
@@ -243,6 +248,8 @@ describe("copilotReducer — 結果未送達失敗的保險（AR-6）", () => {
       cached: true,
       streamText: "推理過程",
       result: RESULT,
+      source: "ai/done",
+      streamIncomplete: false,
     });
   });
 
@@ -271,6 +278,148 @@ describe("copilotReducer — 結果未送達失敗的保險（AR-6）", () => {
       error: "診斷逾時或無回應，請重試",
     };
     expect(copilotReducer(failed, { type: "ai/done", jobId: "job-1", attempt: 1, cached: false, result: RESULT })).toBe(failed);
+  });
+});
+
+describe("copilotReducer — 三來源先到者為準（012 FR-004、FR-005、FR-038、SC-006）", () => {
+  const OTHER_RESULT: DiagnosisResult = { ...RESULT, summary: "另一份結果" };
+
+  function statusCompleted(over: Partial<JobStatus> = {}): JobStatus {
+    return { type: "job/status", jobId: "job-1", machineId: "mixer-01", status: "completed", progress: 100, result: RESULT, cached: true, ...over };
+  }
+  function done(over: { cached?: boolean; result?: DiagnosisResult; attempt?: number; jobId?: string } = {}) {
+    return { type: "ai/done", jobId: "job-1", attempt: 1, cached: true, result: RESULT, ...over } as const;
+  }
+  /** 收斂判準（SC-006）：result、cached、jobId 相同。 */
+  function converged(s: CopilotJobState) {
+    expect(s.status).toBe("completed");
+    if (s.status !== "completed") return;
+    return { jobId: s.jobId, result: s.result, cached: s.cached };
+  }
+
+  it("文案常數：完成態不完整串流的標題", () => {
+    expect(STREAM_LABEL_INCOMPLETE).toBe("原始串流（不完整）");
+  });
+
+  it("job/status completed 帶 result → completed（source status、streamIncomplete、保留串流文字）", () => {
+    const s = copilotReducer(active("job-1", { streamText: "推理" }), statusCompleted());
+    expect(s).toEqual({
+      status: "completed",
+      machineId: "mixer-01",
+      jobId: "job-1",
+      cached: true,
+      streamText: "推理",
+      result: RESULT,
+      source: "status",
+      streamIncomplete: true,
+    });
+  });
+
+  it("job/status completed 帶 result 但缺 cached → 當 false（research P8）", () => {
+    const s = copilotReducer(active(), statusCompleted({ cached: undefined }));
+    expect(s).toMatchObject({ status: "completed", cached: false, source: "status" });
+  });
+
+  it("job/status completed 不帶 result → 維持 active（交給 store 的 2 s 寬限），僅更新進度", () => {
+    const s = copilotReducer(active("job-1", { progress: 80 }), statusCompleted({ result: undefined, cached: undefined }));
+    expect(s).toMatchObject({ status: "active", progress: 100 });
+  });
+
+  it("job/status completed 帶 result 且來自更新一輪 → 不保留舊輪文字；未帶 attempt 視為同輪", () => {
+    const base = active("job-1", { streamText: "第一輪半截" });
+    expect(copilotReducer(base, statusCompleted({ attempt: 2 }))).toMatchObject({ status: "completed", streamText: "" });
+    expect(copilotReducer(base, statusCompleted({ attempt: 1 }))).toMatchObject({ streamText: "第一輪半截" });
+    expect(copilotReducer(base, statusCompleted())).toMatchObject({ streamText: "第一輪半截" });
+  });
+
+  it("ai/done 收尾 → source ai/done、streamIncomplete false（尚無重連旗標）", () => {
+    expect(copilotReducer(active(), done())).toMatchObject({ source: "ai/done", streamIncomplete: false });
+  });
+
+  it("順序 1：ai/done → completed+result：先到的 ai/done 為準，後到的 completed 原樣忽略", () => {
+    const first = copilotReducer(active(), done());
+    const second = copilotReducer(first, statusCompleted({ result: OTHER_RESULT, cached: false }));
+    expect(second).toBe(first);
+    expect(converged(second)).toEqual({ jobId: "job-1", result: RESULT, cached: true });
+  });
+
+  it("順序 2：completed+result → ai/done：先到的 completed 為準，後到的 ai/done 原樣忽略", () => {
+    const first = copilotReducer(active(), statusCompleted());
+    const second = copilotReducer(first, done({ result: OTHER_RESULT, cached: false }));
+    expect(second).toBe(first);
+    expect(converged(second)).toEqual({ jobId: "job-1", result: RESULT, cached: true });
+  });
+
+  it("順序 3：ai/done 重複兩次：第二則原樣忽略", () => {
+    const first = copilotReducer(active(), done());
+    expect(copilotReducer(first, done())).toBe(first);
+  });
+
+  it("三種順序收斂到相同的 result／cached／jobId（SC-006；第四種「無 result → GET」於 T039 補）", () => {
+    const a = copilotReducer(copilotReducer(active(), done()), statusCompleted());
+    const b = copilotReducer(copilotReducer(active(), statusCompleted()), done());
+    const c = copilotReducer(copilotReducer(active(), done()), done());
+    expect(converged(a)).toEqual(converged(b));
+    expect(converged(b)).toEqual(converged(c));
+  });
+
+  it("completed 之後的 job/status（含 failed）與 ai/error 都不覆蓋", () => {
+    const first = copilotReducer(active(), statusCompleted());
+    expect(copilotReducer(first, { type: "job/status", jobId: "job-1", machineId: "mixer-01", status: "failed", error: "x" })).toBe(first);
+    expect(copilotReducer(first, { type: "ai/error", jobId: "job-1", attempt: 1, code: "worker_failed", message: "x" })).toBe(first);
+  });
+
+  it("過期 jobId 的 completed+result 被忽略", () => {
+    const s0 = active("job-2");
+    expect(copilotReducer(s0, statusCompleted())).toBe(s0);
+  });
+
+  describe("救回規則：只有「結果未送達」可救回（FR-005、代理裁決第 15 條）", () => {
+    const undelivered: CopilotJobState = {
+      status: "failed",
+      machineId: "mixer-01",
+      jobId: "job-1",
+      streamText: "推理過程",
+      error: UNDELIVERED_ERROR,
+      reason: "undelivered",
+      attempt: 1,
+    };
+
+    it("未送達 → 遲到的 completed+result 救回（source status、streamIncomplete true）", () => {
+      expect(copilotReducer(undelivered, statusCompleted({ cached: undefined }))).toEqual({
+        status: "completed",
+        machineId: "mixer-01",
+        jobId: "job-1",
+        cached: false,
+        streamText: "推理過程",
+        result: RESULT,
+        source: "status",
+        streamIncomplete: true,
+      });
+    });
+
+    it("未送達 → completed+result 救回後，再到的 ai/done 被忽略（只收斂一次）", () => {
+      const rescued = copilotReducer(undelivered, statusCompleted());
+      expect(copilotReducer(rescued, done({ cached: false }))).toBe(rescued);
+    });
+
+    it("未送達 → 遲到的 completed+result 來自更新一輪 → 救回但不保留舊輪文字", () => {
+      expect(copilotReducer(undelivered, statusCompleted({ attempt: 2 }))).toMatchObject({ status: "completed", streamText: "" });
+    });
+
+    it("ai/error 失敗：之後到的 ai/done 與 completed+result 都不救回", () => {
+      const failed = copilotReducer(active(), { type: "ai/error", jobId: "job-1", attempt: 1, code: "provider_error", message: "boom" });
+      expect(failed.status).toBe("failed");
+      expect(copilotReducer(failed, done())).toBe(failed);
+      expect(copilotReducer(failed, statusCompleted())).toBe(failed);
+    });
+
+    it("job/status failed 失敗：之後到的 ai/done 與 completed+result 都不救回", () => {
+      const failed = copilotReducer(active(), { type: "job/status", jobId: "job-1", machineId: "mixer-01", status: "failed", error: "boom" });
+      expect(failed.status).toBe("failed");
+      expect(copilotReducer(failed, done())).toBe(failed);
+      expect(copilotReducer(failed, statusCompleted())).toBe(failed);
+    });
   });
 });
 

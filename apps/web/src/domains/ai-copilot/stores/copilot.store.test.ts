@@ -701,6 +701,28 @@ describe("copilot store 結果未送達（AR-6：job/status completed 後等不�
     expect(store.completedAtFor("mixer-01")).toBeUndefined();
   });
 
+  it("其他失敗（45 s watchdog）後到 completed+result：狀態物件不變、耗時不結算（FR-005 只救回未送達）", async () => {
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    const jobId = jobIdOf(store);
+    store.checkStalls(T0 + 46_000, 45_000, P0 + 46_000);
+    const failed = store.stateFor("mixer-01");
+    const timing = store.timingFor("mixer-01");
+    expect(failed.status).toBe("failed");
+    store.applyEvent({
+      type: "job/status",
+      jobId,
+      machineId: "mixer-01",
+      status: "completed",
+      progress: 100,
+      result: RESULT,
+      cached: false,
+    });
+    expect(store.stateFor("mixer-01")).toBe(failed);
+    expect(store.timingFor("mixer-01")).toBe(timing);
+    expect(store.completedAtFor("mixer-01")).toBeUndefined();
+  });
+
   it("未送達後按重試：新任務開始，舊 job 遲到的 ai/done 不覆蓋新任務", async () => {
     const store = useCopilotStore();
     const oldJob = await diagnoseThenBackendCompleted(store);
@@ -713,6 +735,146 @@ describe("copilot store 結果未送達（AR-6：job/status completed 後等不�
     // 新任務沒有收到 job/status completed，不套用 2 s 寬限
     store.checkStalls(T0 + 10_000, 45_000, P0 + 10_000);
     expect(store.stateFor("mixer-01").status).toBe("active");
+  });
+});
+
+describe("copilot store 三來源先到者收尾（012 T027、FR-004、SC-006）", () => {
+  const T0 = 1_760_000_000_000;
+  const P0 = 1_000;
+  let dateNow: MockInstance<() => number>;
+  let perfNow: MockInstance<() => number>;
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    dateNow = vi.spyOn(Date, "now").mockReturnValue(T0);
+    perfNow = vi.spyOn(performance, "now").mockReturnValue(P0);
+    mockDiagnoseOk();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function completedWithResult(jobId: string, cached?: boolean) {
+    return {
+      type: "job/status",
+      jobId,
+      machineId: "mixer-01",
+      status: "completed",
+      progress: 100,
+      result: RESULT,
+      ...(cached === undefined ? {} : { cached }),
+    } as const;
+  }
+
+  it("帶 result 的 completed 直接收尾：結算耗時與完成時刻、chip 為完成", async () => {
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    const jobId = jobIdOf(store);
+    perfNow.mockReturnValue(P0 + 4_000);
+    dateNow.mockReturnValue(T0 + 4_000);
+    store.applyEvent(completedWithResult(jobId, false));
+    expect(store.stateFor("mixer-01")).toMatchObject({ status: "completed", jobId, source: "status", streamIncomplete: true });
+    expect(store.timingFor("mixer-01")).toEqual({ pending: null, lastUncachedMs: 4_000, lastCachedMs: null, lastKind: "uncached" });
+    expect(store.completedAtFor("mixer-01")).toBe(T0 + 4_000);
+    expect(store.badgeFor("mixer-01")).toEqual({ kind: "completed", severity: "ok", cached: false });
+  });
+
+  it("帶 result 的 completed 缺 cached → 當 false 結算（非快取欄位）", async () => {
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    perfNow.mockReturnValue(P0 + 3_000);
+    store.applyEvent(completedWithResult(jobIdOf(store)));
+    expect(store.stateFor("mixer-01")).toMatchObject({ status: "completed", cached: false });
+    expect(store.timingFor("mixer-01")).toMatchObject({ lastUncachedMs: 3_000, lastKind: "uncached" });
+  });
+
+  it("帶 result 的 completed 不觸發 2 s 未送達：先收不帶 result 的 completed（記寬限起點）→ 再收帶 result 的 → tick 跨過 2 s 也不轉失敗", async () => {
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    const jobId = jobIdOf(store);
+    store.applyEvent({ type: "job/status", jobId, machineId: "mixer-01", status: "completed", progress: 100 });
+    perfNow.mockReturnValue(P0 + 500);
+    dateNow.mockReturnValue(T0 + 500);
+    store.applyEvent(completedWithResult(jobId, true));
+    const done = store.stateFor("mixer-01");
+    const settled = store.timingFor("mixer-01");
+    expect(done).toMatchObject({ status: "completed", cached: true, source: "status" });
+    expect(settled).toMatchObject({ pending: null, lastCachedMs: 500, lastKind: "cached" });
+
+    store.checkStalls(T0 + UNDELIVERED_GRACE_MS + 1, 45_000, P0 + UNDELIVERED_GRACE_MS + 1);
+    store.checkStalls(T0 + 60_000, 45_000, P0 + 60_000);
+    expect(store.stateFor("mixer-01")).toBe(done);
+    expect(store.timingFor("mixer-01")).toBe(settled);
+    expect(store.completedAtFor("mixer-01")).toBe(T0 + 500);
+  });
+
+  it("completed+result → ai/done：兩來源都到，耗時與完成時刻只結算一次（以先到者為準）", async () => {
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    const jobId = jobIdOf(store);
+    perfNow.mockReturnValue(P0 + 4_000);
+    dateNow.mockReturnValue(T0 + 4_000);
+    store.applyEvent(completedWithResult(jobId, false));
+    const settled = store.timingFor("mixer-01");
+    const first = store.stateFor("mixer-01");
+
+    perfNow.mockReturnValue(P0 + 9_000);
+    dateNow.mockReturnValue(T0 + 9_000);
+    store.applyEvent({ type: "ai/done", jobId, attempt: 1, cached: true, result: RESULT });
+    expect(store.stateFor("mixer-01")).toBe(first);
+    expect(store.timingFor("mixer-01")).toBe(settled);
+    expect(store.completedAtFor("mixer-01")).toBe(T0 + 4_000);
+  });
+
+  it("ai/done → completed+result：兩來源都到，耗時與完成時刻只結算一次", async () => {
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    const jobId = jobIdOf(store);
+    perfNow.mockReturnValue(P0 + 2_000);
+    dateNow.mockReturnValue(T0 + 2_000);
+    store.applyEvent({ type: "ai/done", jobId, attempt: 1, cached: false, result: RESULT });
+    const settled = store.timingFor("mixer-01");
+
+    perfNow.mockReturnValue(P0 + 7_000);
+    dateNow.mockReturnValue(T0 + 7_000);
+    store.applyEvent(completedWithResult(jobId, true));
+    store.applyEvent({ type: "ai/done", jobId, attempt: 1, cached: false, result: RESULT }); // 重複的 ai/done
+    expect(store.stateFor("mixer-01")).toMatchObject({ status: "completed", cached: false, source: "ai/done" });
+    expect(store.timingFor("mixer-01")).toBe(settled);
+    expect(store.timingFor("mixer-01")).toMatchObject({ lastUncachedMs: 2_000, lastCachedMs: null });
+    expect(store.completedAtFor("mixer-01")).toBe(T0 + 2_000);
+  });
+
+  it("結果未送達後，遲到的 completed+result 救回：照常結算耗時與完成時刻（FR-005）", async () => {
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    const jobId = jobIdOf(store);
+    store.applyEvent({ type: "job/status", jobId, machineId: "mixer-01", status: "completed", progress: 100 });
+    store.checkStalls(T0 + 3_000, 45_000, P0 + 3_000);
+    expect(store.stateFor("mixer-01")).toMatchObject({ status: "failed", reason: "undelivered" });
+
+    perfNow.mockReturnValue(P0 + 5_000);
+    dateNow.mockReturnValue(T0 + 5_000);
+    store.applyEvent(completedWithResult(jobId, false));
+    expect(store.stateFor("mixer-01")).toMatchObject({ status: "completed", source: "status", streamIncomplete: true });
+    expect(store.timingFor("mixer-01")).toMatchObject({ pending: null, lastUncachedMs: 5_000 });
+    expect(store.completedAtFor("mixer-01")).toBe(T0 + 5_000);
+  });
+
+  // 驗的是 store 的第二道防線 `guardStatusResult`：正式路徑在 WS 入口（ws-message.ts 的 JobStatusSchema.safeParse）
+  // 已把這種 job/status 整則丟棄，這裡直接呼叫 applyEvent 繞過入口。
+  it("job/status 的 result 不合 schema → 不當成結果：維持進行中並走 2 s 寬限（工程硬規則 6）", async () => {
+    const store = useCopilotStore();
+    await store.diagnose("mixer-01", SOCKET);
+    const jobId = jobIdOf(store);
+    store.applyEvent({
+      ...completedWithResult(jobId, false),
+      result: { summary: "s", severity: "ok", likelyCauses: [] } as unknown as DiagnosisResult,
+    });
+    expect(store.stateFor("mixer-01")).toMatchObject({ status: "active", progress: 100 });
+    store.checkStalls(T0 + 3_000, 45_000, P0 + 3_000);
+    expect(store.stateFor("mixer-01")).toMatchObject({ status: "failed", reason: "undelivered" });
+    expect(store.completedAtFor("mixer-01")).toBeUndefined();
   });
 });
 

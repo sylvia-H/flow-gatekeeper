@@ -40,6 +40,17 @@ export type CopilotJobState =
       cached: boolean;
       streamText: string;
       result: DiagnosisResult;
+      /**
+       * 收尾來源（012 FR-004、data-model §6.1）：三個完成來源先到者為準，之後到的同 jobId 結果一律忽略。
+       * `"ai/done"`：Pub/Sub 的盡力送達通知；`"status"`：帶 `result` 的 `job/status: completed`（權威完成）；
+       * `"lookup"`：`GET /diagnoses/:jobId` 回 completed（重連續接或 2 s／45 s 退路）。
+       */
+      source: CompletionSource;
+      /**
+       * 原始串流是否可能不完整（FR-038）：以 `job/status`／GET 收尾，或執行期間經歷過 WS 重連時為 true，
+       * 串流標題改用 `STREAM_LABEL_INCOMPLETE`。判斷只看收尾來源與重連旗標，不比對 `seq` 或結果（寧可多標不漏標）。
+       */
+      streamIncomplete: boolean;
     }
   | {
       status: "failed";
@@ -49,16 +60,21 @@ export type CopilotJobState =
       error: string;
       /**
        * 失敗原因標記（web 內部呈現狀態，不是通訊契約）。`"undelivered"`：後端已回報
-       * `job/status: completed`，但寬限期內等不到同 jobId 的 `ai/done`（store `checkStalls` 判定）。
-       * 只有這一種失敗允許同 jobId 遲到的 `ai/done` 把狀態改回 completed；其他失敗一律忽略遲到事件。
+       * `job/status: completed`，但寬限期內等不到同 jobId 的結果（store `checkStalls` 判定）。
+       * 只有這一種失敗允許同 jobId 遲到的結果（`ai/done`、帶 `result` 的 `job/status: completed`）把狀態
+       * 改回 completed（FR-005、代理裁決第 15 條）；其他失敗（`ai/error`、`failed`、watchdog）一律忽略遲到事件。
        */
       reason?: "undelivered";
       /**
-       * 轉成「結果未送達」失敗當下的輪次（只有該失敗會帶）。救回時與 `ai/done.attempt` 比對：
+       * 轉成「結果未送達」失敗當下的輪次（只有該失敗會帶）。救回時與結果來源帶的 `attempt`（`ai/done.attempt`、
+       * `job/status.attempt`；未帶時視為同輪）比對：
        * 結果來自更新一輪時，`streamText` 屬於舊輪、要清空（同 active 終態的 `streamTextFor`）。
        */
       attempt?: number;
     };
+
+/** 完成狀態的收尾來源（web 內部呈現狀態，非通訊契約）。 */
+export type CompletionSource = "ai/done" | "status" | "lookup";
 
 /** 005 消費的診斷事件聯集（皆自契約 import；MUST NOT 另寫平行定義）。 */
 export type CopilotEvent = JobStatus | AiToken | AiDone | AiError;
@@ -123,7 +139,13 @@ export function startActiveState(machineId: string, jobId: string): CopilotJobSt
 /** 「結果未送達」失敗（AR-6）：後端已完成，但 `ai/done` 沒有在寬限期內抵達畫面。 */
 export const UNDELIVERED_ERROR = "診斷已在後端完成，但結果未送達畫面，請重試";
 
-/** 是否為可被遲到 `ai/done` 救回的「結果未送達」失敗。 */
+/**
+ * 完成態原始串流的標題（FR-038、contracts/ui-copy §2）：以 `job/status`／GET 收尾，或執行期間經歷過重連時使用；
+ * 其餘完成態沿用「原始串流」。
+ */
+export const STREAM_LABEL_INCOMPLETE = "原始串流（不完整）";
+
+/** 是否為可被遲到結果救回的「結果未送達」失敗。 */
 export function isUndeliveredFailure(
   state: CopilotJobState,
 ): state is Extract<CopilotJobState, { status: "failed" }> & { reason: "undelivered" } {
@@ -138,27 +160,75 @@ function streamTextFor(state: Extract<CopilotJobState, { status: "active" }>, at
   return attempt > state.attempt ? "" : state.streamText;
 }
 
+/** 一則「帶結果」的完成事件抽出的共同欄位（`ai/done`、帶 `result` 的 `job/status: completed`）。 */
+interface CompletionPayload {
+  result: DiagnosisResult;
+  cached: boolean;
+  /** 產出結果的那一輪；`job/status` 未帶 `attempt` 時為 undefined（視為同輪，保留串流文字）。 */
+  attempt: number | undefined;
+  source: CompletionSource;
+}
+
+/**
+ * 把一則完成事件抽成 `CompletionPayload`；不是帶結果的完成事件則回 null。
+ * `job/status: completed` 不帶 `result`（舊版 api、returnvalue 驗證失敗）時不算完成，由 store 的 2 s 寬限接手；
+ * 帶 `result` 卻缺 `cached` 時當 false（research P8：最多少顯示一個「快取」字樣）。
+ */
+function completionOf(event: CopilotEvent): CompletionPayload | null {
+  if (event.type === "ai/done") {
+    return { result: event.result, cached: event.cached, attempt: event.attempt, source: "ai/done" };
+  }
+  if (event.type === "job/status" && event.status === "completed" && event.result !== undefined) {
+    return { result: event.result, cached: event.cached ?? false, attempt: event.attempt, source: "status" };
+  }
+  return null;
+}
+
+/**
+ * active 或可救回的「結果未送達」失敗 → completed。三個來源共用這一份，確保先到者不論是誰，
+ * 收斂出的 `result`／`cached`／`jobId` 都相同（SC-006）。
+ *
+ * - `streamText`：結果來自更新一輪時（例如重試那輪命中快取、沒吐 token 就直接結束），手上的文字屬於
+ *   已放棄的舊輪，丟掉；同輪（或來源沒帶輪次）才保留。
+ * - `streamIncomplete`：`ai/done` 以外的來源一律標不完整（FR-038）；`ai/done` 收尾時看「執行期間是否經歷過重連」，
+ *   該旗標於 T039 加入 active 狀態前一律視為 false。
+ */
+function toCompleted(
+  state: Extract<CopilotJobState, { status: "active" | "failed" }>,
+  jobId: string,
+  payload: CompletionPayload,
+): CopilotJobState {
+  const baseAttempt = state.attempt;
+  const fromNewerRound = payload.attempt !== undefined && baseAttempt !== undefined && payload.attempt > baseAttempt;
+  return {
+    status: "completed",
+    machineId: state.machineId,
+    jobId,
+    cached: payload.cached,
+    streamText: fromNewerRound ? "" : state.streamText,
+    result: payload.result,
+    source: payload.source,
+    streamIncomplete: payload.source !== "ai/done",
+  };
+}
+
 /**
  * 決定性狀態轉移（見 data-model 轉移表）。僅在該台 `active` 且 `jobId` 相符時消費事件；
  * 過期片段、或非 active 狀態（idle/completed/failed 由 store 動作而非事件推進）一律回傳原狀態。
- * 唯一例外是「結果未送達」失敗收到同 jobId 的 `ai/done`：結果其實已產出，只是晚到，改回 completed。
+ *
+ * 完成以三個來源中最先到者為準（FR-004）：`ai/done`、帶 `result` 的 `job/status: completed`（與 T039 起的
+ * GET 回 completed）。先到者讓狀態離開 active，之後到的同 jobId 結果因「非 active」原樣忽略——`ai/done` 重複亦同。
+ * 唯一例外是「結果未送達」失敗：結果其實已產出、只是晚到，任一來源的結果抵達都改回 completed（FR-005）；
+ * 其他失敗態（`ai/error`、`job/status: failed`、watchdog）不被覆蓋。
  */
 export function copilotReducer(
   state: CopilotJobState,
   event: CopilotEvent,
 ): CopilotJobState {
   if (isStaleJobEvent(state, event)) return state;
-  if (isUndeliveredFailure(state) && event.type === "ai/done") {
-    return {
-      status: "completed",
-      machineId: state.machineId,
-      jobId: event.jobId,
-      cached: event.cached,
-      // 比照 `streamTextFor`：結果來自更新一輪時（例如重試那輪命中快取、沒吐 token 就直接 done），
-      // 手上的文字屬於已放棄的舊輪，丟掉；同輪才保留。
-      streamText: state.attempt !== undefined && event.attempt > state.attempt ? "" : state.streamText,
-      result: event.result,
-    };
+  if (isUndeliveredFailure(state)) {
+    const payload = completionOf(event);
+    return payload ? toCompleted(state, event.jobId, payload) : state;
   }
   if (state.status !== "active") return state; // 只有 active 消費 WS 事件
 
@@ -173,7 +243,12 @@ export function copilotReducer(
           error: humanizeError(event.error),
         };
       }
-      // waiting/active/completed：維持 active，僅更新進度（未帶則維持既值＝indeterminate）。
+      // 帶 result 的 completed 是權威完成（ADR-003 D3）：Pub/Sub 斷線、ai/done 遺失時畫面照樣收尾。
+      {
+        const payload = completionOf(event);
+        if (payload) return toCompleted(state, state.jobId, payload);
+      }
+      // waiting/active/不帶 result 的 completed：維持 active，僅更新進度（未帶則維持既值＝indeterminate）。
       return { ...state, progress: event.progress ?? state.progress };
 
     case "ai/token":
@@ -192,14 +267,12 @@ export function copilotReducer(
       return { ...state, lastSeq: event.seq, streamText: state.streamText + event.text };
 
     case "ai/done":
-      return {
-        status: "completed",
-        machineId: state.machineId,
-        jobId: state.jobId,
-        cached: event.cached,
-        streamText: streamTextFor(state, event.attempt),
+      return toCompleted(state, state.jobId, {
         result: event.result,
-      };
+        cached: event.cached,
+        attempt: event.attempt,
+        source: "ai/done",
+      });
 
     case "ai/error":
       // 後端只在最終嘗試失敗時才送 ai/error，收到即為終態。
