@@ -3508,6 +3508,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **用 `div` 不用 `section`**：帶名稱的 `section` 會成為 region 地標，面板裡多一個地標只增加讀屏的地標清單雜訊；可讀名稱已經由 `ol` 的 `aria-labelledby` 提供。
   - **進度列下的「目前步驟」摘要不動、不加小標**：那行是 12px「目前步驟 · 佇列 · 嘗試」，骨架填滿後清單被擠到捲動區下方時仍看得到目前步驟（critique 第二輪 Minor）；它是摘要、不是第二份清單。進度說明行的高度例外（代理裁決第 54 條）不受影響。
 - **驗證**：`CopilotDrawer.test.ts` 新增推擠式側欄與 bottom sheet 兩種版面下：進行中有唯一的「處理步驟」小標、`ol[aria-labelledby]` 對上小標 id 且有步驟、區塊帶 `border-t border-edge`、不在原始串流展開區之內且位在其後；閒置、已完成、失敗三態不渲染小標與步驟區塊；既有「步驟標籤全中文」測試改由 `copilot-steps` 區塊取清單。web 全套 vitest（70 檔、1420 測試）、`typecheck`、`lint` 通過。
+- **README 截圖**：`docs/screenshots/copilot-streaming.png` 拍於本分支之前，畫面中的步驟清單仍無小標、無分隔線；依「二進位資產只留最終版」本分支不重拍，於下次 release 重拍截圖時更新（`apps/web/scripts/screenshots.cjs --readme`）。README §9 的進行中區塊文字已改為現況（進度列下為目前步驟與任務 meta，最下方是帶小標的處理步驟清單）。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 
