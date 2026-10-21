@@ -57,7 +57,7 @@ const COLORS: FaviconColors = {
 
 /** data URL 解回 SVG 原文。 */
 const decode = (href: string | null | undefined): string =>
-  decodeURIComponent((href ?? "").replace(/^data:image\/svg\+xml;utf8,/, ""));
+  decodeURIComponent((href ?? "").replace(/^data:image\/svg\+xml;charset=utf-8,/, ""));
 
 /** 等 MutationObserver 回呼（microtask）與 Vue 的 pre-flush watcher。 */
 async function flush(): Promise<void> {
@@ -126,8 +126,8 @@ describe("faviconSvg／faviconDataUrl", () => {
 
   it("data URL 以 encodeURIComponent 編碼（不留原始 #、<、\"、空白），解回即原文", () => {
     const url = faviconDataUrl("critical", COLORS);
-    expect(url.startsWith("data:image/svg+xml;utf8,")).toBe(true);
-    expect(url.slice("data:image/svg+xml;utf8,".length)).not.toMatch(/[#<>" ]/);
+    expect(url.startsWith("data:image/svg+xml;charset=utf-8,")).toBe(true);
+    expect(url.slice("data:image/svg+xml;charset=utf-8,".length)).not.toMatch(/[#<>" ]/);
     expect(decode(url)).toBe(faviconSvg("critical", COLORS));
   });
 
@@ -175,6 +175,12 @@ describe("readFaviconColors", () => {
     expect(readFaviconColors()).toBeNull();
     setTokens(LIGHT);
     root().style.removeProperty("--c-stale");
+    expect(readFaviconColors()).toBeNull();
+  });
+
+  it.each(["1 2", "a b c", "1 2 3 4", "rgb(1,2,3)", "1000 2 3"])("token 值格式不是 `R G B`（%s）回 null", (bad) => {
+    setTokens(LIGHT);
+    root().style.setProperty("--c-crit", bad);
     expect(readFaviconColors()).toBeNull();
   });
 });

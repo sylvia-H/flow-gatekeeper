@@ -105,7 +105,7 @@ describe("App 分頁標題與 favicon 接線（013 critique 周邊注意力訊�
   /** favicon 的 SVG 原文（data URL 解碼）。 */
   const iconSvg = (): string =>
     decodeURIComponent(
-      (document.querySelector('link[rel~="icon"]')?.getAttribute("href") ?? "").replace(/^data:image\/svg\+xml;utf8,/, ""),
+      (document.querySelector('link[rel~="icon"]')?.getAttribute("href") ?? "").replace(/^data:image\/svg\+xml;charset=utf-8,/, ""),
     );
   // happy-dom 不載入 theme.css：以 inline 自訂屬性提供 favicon 讀的 token（值同淺色主題）。
   const TOKENS: Record<string, string> = {

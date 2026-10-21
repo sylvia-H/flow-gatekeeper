@@ -97,7 +97,7 @@ export function faviconSvg(kind: FaviconKind, c: FaviconColors): string {
 
 /** SVG data URL；`encodeURIComponent` 會把 `#`、`<`、`"`、空白等全部編碼。 */
 export function faviconDataUrl(kind: FaviconKind, colors: FaviconColors): string {
-  return `data:image/svg+xml;utf8,${encodeURIComponent(faviconSvg(kind, colors))}`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(faviconSvg(kind, colors))}`;
 }
 
 /**
