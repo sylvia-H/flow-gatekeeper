@@ -5,12 +5,14 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from "@nestjs/common";
+import { createHash } from "node:crypto";
 import { InjectQueue } from "@nestjs/bullmq";
 import { Queue } from "bullmq";
 import {
   DIAGNOSIS_QUEUE,
   DiagnosisJobReturnValueSchema,
   DiagnosisResultSchema,
+  isKnownMachineId,
 } from "@flow-gatekeeper/contracts";
 import type {
   DiagnosisJobPayload,
@@ -42,10 +44,23 @@ const IN_FLIGHT_STATES: ReadonlySet<string> = new Set([
   "waiting-children",
   "active",
 ]);
+/** 終態：第一次讀到就直接回應，不補 machineId、不重讀。 */
+const TERMINAL_STATES: ReadonlySet<string> = new Set(["completed", "failed"]);
+
+/**
+ * 日誌裡的 WS clientId 一律記 sha256 前 12 碼：clientId 是連線的存取憑證（知道它就能以它發 POST／GET），
+ * 原值不進日誌；12 碼足以在同一段日誌裡對上同一條連線。
+ */
+function clientRef(clientId: string): string {
+  return createHash("sha256").update(clientId).digest("hex").slice(0, 12);
+}
 
 /** lookup 只需要的依賴切面（測試可注入 fake）。 */
 export type LookupJobSource = Pick<Queue<DiagnosisJobPayload>, "getJobState" | "getJob">;
-export type LookupRegistry = Pick<JobRoutingRegistry, "claimForLookup" | "resolveClaim" | "revertClaim" | "owner">;
+export type LookupRegistry = Pick<
+  JobRoutingRegistry,
+  "claimForLookup" | "resolveClaim" | "revertClaim" | "owner" | "get" | "touch" | "markTerminal"
+>;
 export type LookupPresence = Pick<MonitoringGateway, "isAuthorized" | "isOnline">;
 export type DiagnosisReader = Pick<HistoryService, "findDiagnosisResult">;
 
@@ -77,13 +92,16 @@ type InFlightResponse = Extract<DiagnosisLookupResponse, { status: "waiting" | "
  * 4. 依 state × claim 回應（data-model §2.4），job 不存在／未知 state／`returnvalue` 不合法 → Mongo（上限 3 s）→ 200 或 404。
  * 5. 回應前（含拋錯），非保留的 claim 一律 `revertClaim`（只撤回本次請求自己的動作）。
  *
- * Redis／Mongo 錯誤或逾時 → 503。
+ * Redis／Mongo 錯誤或逾時 → 503（warn 以 30 s 節流）。日誌中的 clientId 一律為短雜湊（見 `clientRef`）。
  */
 @Injectable()
 export class DiagnosisLookupService {
   // jobId 為 SC-002 跨行程串接的關聯鍵，MUST 為獨立結構化欄位（FR-002）。
   private readonly plog = getAppLogger().child({ context: DiagnosisLookupService.name });
-  /** 409（socket 未授權／離線）warn 的全域節流（同 `JobsService`）：此路徑可由任何人以亂數 socketId 反覆觸發。 */
+  /**
+   * 對外可觸發的 warn 共用一個 30 s 全域節流（依 key 分開計）：409 socket 未授權（同 `JobsService`，任何人以亂數
+   * socketId 就能反覆觸發）、Redis／Mongo 不可用（故障期間每個 GET 都會撞到）。
+   */
   private readonly rejectLogThrottle = new LogThrottle(ERROR_LOG_THROTTLE_MS);
 
   constructor(
@@ -127,6 +145,9 @@ export class DiagnosisLookupService {
   private async decide(claim: LookupClaim): Promise<Outcome> {
     const { jobId } = claim;
     const snapshot = await this.readFromQueue(claim);
+    if (snapshot !== undefined && (snapshot.state === "completed" || snapshot.state === "failed")) {
+      this.markTerminalIfUnchanged(claim, snapshot.state);
+    }
 
     if (snapshot?.state === "completed") {
       const parsed = DiagnosisJobReturnValueSchema.safeParse(snapshot.returnvalue);
@@ -162,28 +183,31 @@ export class DiagnosisLookupService {
     const { jobId, socketId } = claim;
     // 等 Redis 期間綁定可能已被另一個 GET 改綁走（例如以 previousSocketId 改綁）：回 rebound: true 前確認
     // 之後的事件確實會送到本 socket，否則與 conflict 同樣回 409。
-    if (claim.kind === "conflict" || (claim.kind !== "terminal" && this.registry.owner(jobId) !== socketId)) {
-      this.plog.info({ jobId, clientId: socketId }, "diagnosis lookup conflict: job bound to another live connection");
-      throw new ConflictException({
-        statusCode: 409,
-        error: "Conflict",
-        code: "job_bound_elsewhere",
-        message: JOB_BOUND_ELSEWHERE_MESSAGE,
-      });
-    }
+    if (claim.kind === "conflict") throw this.boundElsewhere(jobId, socketId);
     if (claim.kind === "terminal") {
       // data-model §2.4：不可達、回 503 不重判。registry 已標終態、BullMQ 卻仍是進行中（終態事件晚於 state 寫入，
       // 照理查到的 state 已是終態）；不猜測要不要改綁，回 503 讓 web 稍後重試。
       this.plog.warn({ jobId, state: snapshot.state }, "diagnosis lookup: terminal binding but job still in flight");
       throw new ServiceUnavailableException(LOOKUP_UNAVAILABLE_MESSAGE);
     }
-    if (claim.kind === "created" || claim.kind === "rebound") {
+    const owner = this.registry.owner(jobId);
+    if (owner === undefined) {
+      // 等 Redis 期間綁定消失（孤兒回收、終態寬限期滿）：不知道之後的事件會不會送到本 socket，回 503 讓 web 重試，
+      // 下一次 GET 會重新建立綁定。
+      this.plog.warn({ jobId }, "diagnosis lookup: binding vanished while reading job");
+      throw new ServiceUnavailableException(LOOKUP_UNAVAILABLE_MESSAGE);
+    }
+    if (owner !== socketId) throw this.boundElsewhere(jobId, socketId);
+    if (claim.kind === "unchanged") {
+      // 使用者仍在等這個任務：孤兒回收自此重新起算（P23）。
+      this.registry.touch(jobId, socketId);
+    } else {
       this.plog.info(
         {
           jobId,
           claim: claim.kind,
-          fromClientId: claim.kind === "rebound" ? claim.previous.clientId : null,
-          toClientId: socketId,
+          fromClientId: claim.kind === "rebound" ? clientRef(claim.previous.clientId) : null,
+          toClientId: clientRef(socketId),
           viaPreviousSocketId: claim.kind === "rebound" && claim.viaPreviousSocketId,
         },
         "diagnosis lookup rebound job to requesting connection",
@@ -208,7 +232,9 @@ export class DiagnosisLookupService {
    * 讀 BullMQ（全程上限 `ENQUEUE_TIMEOUT_MS`）。claim 為 created／rebound 時以 `job.data.machineId` `resolveClaim`
    * （只有這兩種是本請求建立或改綁的綁定；unchanged 等不碰，避免同 socket 並發的另一個 GET 搶走 deferred）；
    * 期間 relay 有 `job/status` 被擱置（`deferred`）就重讀一次 job 與 state，以最新狀態回應（P1）。
-   * 逾時或 Redis 錯誤 → 503。created 但 `job.data.machineId` 不是字串 → 503（呼叫端撤回，不留 null 綁定）。
+   * 第一次讀到終態就直接回傳，不補 machineId、不重讀（claim 反正會撤回）。逾時或 Redis 錯誤 → 503。
+   * `job.data.machineId` 不在機台名冊（Redis 資料不可信）→ 503（呼叫端撤回，不留 null 綁定）；例外是 rebound 且原綁定
+   * 已有 machineId——不需要補，照常回應。
    */
   private async readFromQueue(claim: LookupClaim): Promise<JobSnapshot | undefined> {
     const deadline = Date.now() + ENQUEUE_TIMEOUT_MS;
@@ -220,10 +246,14 @@ export class DiagnosisLookupService {
     } catch (err) {
       throw this.redisUnavailable(claim.jobId, err);
     }
-    if (first === undefined || !owns) return first;
-    if (typeof first.machineId !== "string") {
-      if (claim.kind !== "created") return first; // rebound：原綁定已有 machineId，不需補
-      this.plog.warn({ jobId: claim.jobId }, "diagnosis lookup: job data has no machineId, cannot route job/status");
+    if (first === undefined || TERMINAL_STATES.has(first.state) || !owns) return first;
+    if (typeof first.machineId !== "string" || !isKnownMachineId(first.machineId)) {
+      // rebound 且原綁定已有 machineId：不需補，照常回應。
+      if (claim.kind === "rebound" && this.registry.get(claim.jobId)?.machineId != null) return first;
+      this.plog.warn(
+        { jobId: claim.jobId },
+        "diagnosis lookup: job data has no valid machineId, cannot route job/status",
+      );
       throw new ServiceUnavailableException(LOOKUP_UNAVAILABLE_MESSAGE);
     }
     const { deferred } = this.registry.resolveClaim(claim, first.machineId);
@@ -236,8 +266,33 @@ export class DiagnosisLookupService {
   }
 
   private redisUnavailable(jobId: string, err: unknown): ServiceUnavailableException {
-    this.plog.warn({ jobId, err }, "diagnosis lookup failed, redis unavailable");
+    const fields = throttledFields(this.rejectLogThrottle, "redis-unavailable", { jobId, err });
+    if (fields) this.plog.warn(fields, "diagnosis lookup failed, redis unavailable");
     return new ServiceUnavailableException(LOOKUP_UNAVAILABLE_MESSAGE);
+  }
+
+  private boundElsewhere(jobId: string, socketId: string): ConflictException {
+    this.plog.info(
+      { jobId, clientId: clientRef(socketId) },
+      "diagnosis lookup conflict: job bound to another live connection",
+    );
+    return new ConflictException({
+      statusCode: 409,
+      error: "Conflict",
+      code: "job_bound_elsewhere",
+      message: JOB_BOUND_ELSEWHERE_MESSAGE,
+    });
+  }
+
+  /**
+   * GET 讀到終態、綁定又是本 socket 原本那份（unchanged）且 registry 尚未標終態：代表 relay 錯過了終態事件（例如 api
+   * 重啟後 QueueEvents 從 `$` 讀起），在此補標，讓綁定照寬限刪除，而不是留到孤兒回收。
+   */
+  private markTerminalIfUnchanged(claim: LookupClaim, kind: "completed" | "failed"): void {
+    if (claim.kind !== "unchanged") return;
+    const current = this.registry.get(claim.jobId);
+    if (current === undefined || current.clientId !== claim.socketId || current.terminal !== undefined) return;
+    this.registry.markTerminal(claim.jobId, kind);
   }
 
   /**
@@ -250,7 +305,15 @@ export class DiagnosisLookupService {
   private async snapshot(jobId: string): Promise<JobSnapshot | undefined> {
     const state = await this.queue.getJobState(jobId);
     if (state === "unknown") return undefined;
-    const job = await this.queue.getJob(jobId);
+    let job: Awaited<ReturnType<LookupJobSource["getJob"]>>;
+    try {
+      job = await this.queue.getJob(jobId);
+    } catch (err) {
+      // job hash 解析失敗（BullMQ 對 data／opts 做 JSON.parse）不是 Redis 不可用：資料本身壞了，退到 Mongo 後援。
+      if (!(err instanceof SyntaxError)) throw err;
+      this.plog.warn({ jobId }, "diagnosis lookup: job hash unparsable, falling back to mongo");
+      return undefined;
+    }
     if (!job) return undefined;
     // 資料來自 Redis：快照欄位一律以 unknown 看待（JobSnapshot 的型別），使用前各自檢查。
     const data = job.data as unknown;
@@ -271,7 +334,8 @@ export class DiagnosisLookupService {
     try {
       raw = await withTimeout(this.reader.findDiagnosisResult(jobId), MONGO_LOOKUP_TIMEOUT_MS, "diagnosis read");
     } catch (err) {
-      this.plog.warn({ jobId, err }, "diagnosis lookup failed, mongo unavailable");
+      const fields = throttledFields(this.rejectLogThrottle, "mongo-unavailable", { jobId, err });
+      if (fields) this.plog.warn(fields, "diagnosis lookup failed, mongo unavailable");
       throw new ServiceUnavailableException(LOOKUP_UNAVAILABLE_MESSAGE);
     }
     if (raw === null || raw === undefined) throw new NotFoundException(LOOKUP_NOT_FOUND_MESSAGE);

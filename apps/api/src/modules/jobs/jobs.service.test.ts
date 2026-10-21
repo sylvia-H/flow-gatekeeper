@@ -188,6 +188,29 @@ describe("JobsService.createDiagnosis", () => {
     expect(registry.owner(JOB_ID)).toBe(SOCKET_B);
   });
 
+  it("入列等待期間被 GET rebound 又撤回、之後入列失敗 → 503，且綁定已刪（撤回放回原物件，deleteIfCurrent 認得）", async () => {
+    const registry = new JobRoutingRegistry();
+    let rejectAdd: (e: Error) => void = () => undefined;
+    const queue = makeQueue({
+      add: () =>
+        new Promise((_, reject) => {
+          rejectAdd = reject;
+        }),
+    });
+    const service = new JobsService(queue as unknown as Queue<DiagnosisJobPayload>, registry, makePresence());
+    const posting = service.createDiagnosis({ jobId: JOB_ID, machineId: "mixer-01", socketId: SOCKET_A });
+    const assertion = expect(posting).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await vi.waitFor(() => expect(queue.add).toHaveBeenCalledTimes(1));
+
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: SOCKET_B, isOnline: () => false });
+    expect(claim.kind).toBe("rebound");
+    registry.revertClaim(claim); // 例如 GET 查到已完成或 503
+    expect(registry.owner(JOB_ID)).toBe(SOCKET_A);
+    rejectAdd(new Error("Connection is closed."));
+    await assertion;
+    expect(registry.isBound(JOB_ID)).toBe(false);
+  });
+
   it("Redis 不可用（add reject）→ 503 並解除綁定", async () => {
     const queue = makeQueue({
       add: async () => {

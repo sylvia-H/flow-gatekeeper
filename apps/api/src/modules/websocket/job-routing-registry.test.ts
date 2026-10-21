@@ -437,6 +437,37 @@ describe("JobRoutingRegistry.revertClaim（只撤回自己的那份）", () => {
     });
   });
 
+  it("rebound：撤回時放回原本那份物件（參照不變），之後 deleteIfCurrent(J, P) 認得它", () => {
+    const original = registry.bind(JOB_ID, CLIENT_A, null);
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => false });
+    registry.resolveClaim(claim, "cnc-01");
+    registry.markDeferred(JOB_ID);
+    registry.noteProgress(JOB_ID, 1, 2);
+    registry.revertClaim(claim);
+    expect(registry.get(JOB_ID)).toBe(original);
+    expect(registry.get(JOB_ID)).toEqual({
+      clientId: CLIENT_A,
+      machineId: "cnc-01",
+      boundAt: T0,
+      attempt: 1,
+      execution: 2,
+      deferred: true,
+    });
+    expect(registry.deleteIfCurrent(JOB_ID, original)).toBe(true);
+    expect(registry.isBound(JOB_ID)).toBe(false);
+  });
+
+  it("touch：綁定送往該 clientId 且未標終態才就地刷新 boundAt", () => {
+    const binding = registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    expect(registry.touch(JOB_ID, CLIENT_B, T0 + 5)).toBe(false);
+    expect(registry.touch(JOB_ID, CLIENT_A, T0 + 5)).toBe(true);
+    expect(registry.get(JOB_ID)).toBe(binding);
+    expect(registry.get(JOB_ID)?.boundAt).toBe(T0 + 5);
+    registry.markTerminal(JOB_ID, "completed");
+    expect(registry.touch(JOB_ID, CLIENT_A, T0 + 9)).toBe(false);
+    expect(registry.touch(OTHER_JOB_ID, CLIENT_A)).toBe(false);
+  });
+
   it("rebound：期間已被他人再改綁 → 不還原", () => {
     registry.bind(JOB_ID, CLIENT_A, "cnc-01");
     const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => false });

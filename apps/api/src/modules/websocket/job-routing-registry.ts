@@ -22,7 +22,7 @@ export type JobBinding = {
   clientId: string;
   machineId: string | null;
   boundAt: number;
-  terminal?: { kind: TerminalKind; at: number };
+  terminal?: Readonly<{ kind: TerminalKind; at: number }>;
   attempt?: number;
   execution?: number;
   deferred?: boolean;
@@ -88,7 +88,7 @@ export type LookupClaim =
  * 狀態是一般 `Map`（非 reactive）。
  *
  * **換物件 vs 就地改寫**：會改變「這是哪一份綁定」語意的操作（`bind`、`rebind`、`markTerminal`）換新物件；
- * 只補充資訊的操作（`noteProgress`、`markDeferred`、`resolveClaim` 補 machineId）MUST 就地改寫——寬限計時器與
+ * 只補充資訊的操作（`noteProgress`、`markDeferred`、`resolveClaim` 補 machineId、`touch`）MUST 就地改寫——寬限計時器與
  * `revertClaim` 都以參照比對，換物件會讓它們認不得這份綁定。
  *
  * **GET `/diagnoses/:jobId` 的用法（T034，contracts/diagnosis-lookup §3）**：
@@ -258,8 +258,9 @@ export class JobRoutingRegistry implements OnModuleInit, OnModuleDestroy {
   /**
    * 撤回本次 claim 自己的動作（FR-010；data-model §2.4「撤回」）。以參照比對，只撤回自己的那一份：
    * - `created`：目前綁定仍是 claim 建立的那份才刪；期間已被標終態（換成副本，交給寬限刪）、被刪或被他人改綁皆不動。
-   * - `rebound`：目前綁定仍是 claim 改綁出的那份、且未標終態，才以 `{ ...current, clientId: previous.clientId,
-   *   boundAt: previous.boundAt }` 還原——保留改綁期間記下的 `attempt`／`execution`／machineId；已標終態就不還原。
+   * - `rebound`：目前綁定仍是 claim 改綁出的那份、且未標終態，才把**原本那份 `previous` 物件**放回——先把改綁期間
+   *   在 current 上補的 machineId／`attempt`／`execution`／`deferred` 就地寫回 previous，再 `set` 回去。保持參照：
+   *   POST 入列中被 GET 改綁又撤回時，POST 失敗路徑的 `deleteIfCurrent(jobId, previous)` 仍認得這份。已標終態就不還原。
    * - `unchanged`／`terminal`／`conflict`：no-op。
    */
   revertClaim(claim: LookupClaim): void {
@@ -270,12 +271,26 @@ export class JobRoutingRegistry implements OnModuleInit, OnModuleDestroy {
     }
     if (claim.kind === "rebound") {
       if (current !== claim.binding || current.terminal !== undefined) return;
-      this.bindings.set(claim.jobId, {
-        ...current,
-        clientId: claim.previous.clientId,
-        boundAt: claim.previous.boundAt,
-      });
+      // previous 是 registry 自己存過的物件，對外以 Readonly 暴露；在此就地寫回。
+      const previous = claim.previous as JobBinding;
+      previous.machineId = current.machineId;
+      if (current.attempt !== undefined) previous.attempt = current.attempt;
+      if (current.execution !== undefined) previous.execution = current.execution;
+      if (current.deferred === undefined) delete previous.deferred;
+      else previous.deferred = current.deferred;
+      this.bindings.set(claim.jobId, previous);
     }
+  }
+
+  /**
+   * 綁定仍送往 `clientId` 且未標終態時，就地把 `boundAt` 刷新為 `now`（孤兒回收自此重新起算，P23）；回傳是否刷新。
+   * GET 查到進行中、綁定本來就是本 socket（unchanged）時用：使用者仍在等這個任務，不該因原始建立時間被提早回收。
+   */
+  touch(jobId: string, clientId: string, now: number = Date.now()): boolean {
+    const binding = this.bindings.get(jobId);
+    if (!binding || binding.clientId !== clientId || binding.terminal !== undefined) return false;
+    binding.boundAt = now;
+    return true;
   }
 
   /**

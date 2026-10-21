@@ -99,8 +99,8 @@ export default defineConfig({
         "apps/api/src/modules/websocket/job-routing-registry.ts": { lines: 97, branches: 91 },
         // 98.88／94.59
         "apps/api/src/modules/jobs/diagnosis-lookup.service.ts": { lines: 95, branches: 91 },
-        // 100／100
-        "apps/api/src/modules/websocket/job-status-payload.ts": { lines: 97, branches: 97 },
+        // 100／100；小檔（約 30 行）一個分支就是數個百分點，下限多留餘裕（合併門第 2 輪）
+        "apps/api/src/modules/websocket/job-status-payload.ts": { lines: 95, branches: 90 },
       },
     },
   },

@@ -10,7 +10,6 @@ import {
   Query,
   UnsupportedMediaTypeException,
 } from "@nestjs/common";
-import type { z } from "zod";
 import {
   CreateDiagnosisBodySchema,
   DiagnosisLookupParamsSchema,
@@ -19,16 +18,13 @@ import {
 import type { CreateDiagnosisResponse, DiagnosisLookupResponse } from "@flow-gatekeeper/contracts";
 import { JobsService } from "./jobs.service.js";
 import { DiagnosisLookupService } from "./diagnosis-lookup.service.js";
+import { summarizeIssues } from "../websocket/job-status-payload.js";
 
 /** controller 只需要 service 的建立能力（測試可注入 fake）。 */
 export type DiagnosisCreator = Pick<JobsService, "createDiagnosis">;
 /** controller 只需要 lookup service 的查詢能力（測試可注入 fake）。 */
 export type DiagnosisLookup = Pick<DiagnosisLookupService, "lookup">;
 
-/** 400 的 `issues`：只帶路徑與代碼，不回顯原始輸入。 */
-function issuesOf(error: z.ZodError): { path: string; code: string }[] {
-  return error.issues.map((issue) => ({ path: issue.path.join(".") || "(root)", code: issue.code }));
-}
 
 /**
  * 只接受 `application/json`（可帶 charset 等參數）。express 預設也會解析 urlencoded，而
@@ -70,7 +66,7 @@ export class JobsController {
         statusCode: 400,
         error: "Bad Request",
         message: "request body 不符合 POST /diagnoses 契約",
-        issues: issuesOf(parsed.error),
+        issues: summarizeIssues(parsed.error),
       });
     }
     return this.jobs.createDiagnosis(parsed.data);
@@ -92,8 +88,8 @@ export class JobsController {
         error: "Bad Request",
         message: "request 不符合 GET /diagnoses/:jobId 契約",
         issues: [
-          ...(parsedParams.success ? [] : issuesOf(parsedParams.error)),
-          ...(parsedQuery.success ? [] : issuesOf(parsedQuery.error)),
+          ...(parsedParams.success ? [] : summarizeIssues(parsedParams.error)),
+          ...(parsedQuery.success ? [] : summarizeIssues(parsedQuery.error)),
         ],
       });
     }

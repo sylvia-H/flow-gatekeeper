@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConflictException, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
 import { DiagnosisLookupResponseSchema } from "@flow-gatekeeper/contracts";
@@ -37,11 +38,14 @@ type FakeJob = {
   machineId?: unknown;
 };
 
+/** 日誌裡 clientId 的短雜湊（與 service 的 clientRef 同算法）。 */
+const ref = (clientId: string) => createHash("sha256").update(clientId).digest("hex").slice(0, 12);
+
 /** `queue.getJob` 的替身（job hash 的欄位）；`undefined` 表示 BullMQ 查無 job。state 由 `queue.getJobState` 另回。 */
 function toJob(fake: FakeJob | undefined) {
   if (!fake) return undefined;
   return {
-    data: { machineId: fake.machineId ?? "cnc-01" },
+    data: { machineId: fake.machineId ?? "mixer-01" },
     returnvalue: fake.returnvalue,
     failedReason: fake.failedReason,
     progress: fake.progress,
@@ -146,7 +150,7 @@ describe("DiagnosisLookupService：200 四種回應", () => {
     expect(DiagnosisLookupResponseSchema.safeParse(res).success).toBe(true);
     expect(registry.get(JOB_ID)).toMatchObject({ clientId: SOCKET_NEW, machineId: "press-02" });
     expect(plog.info).toHaveBeenCalledWith(
-      { jobId: JOB_ID, claim: "created", fromClientId: null, toClientId: SOCKET_NEW, viaPreviousSocketId: false },
+      { jobId: JOB_ID, claim: "created", fromClientId: null, toClientId: ref(SOCKET_NEW), viaPreviousSocketId: false },
       "diagnosis lookup rebound job to requesting connection",
     );
   });
@@ -178,7 +182,13 @@ describe("DiagnosisLookupService：200 四種回應", () => {
     await expect(lookup()).resolves.toMatchObject({ status: "active", rebound: true });
     expect(registry.owner(JOB_ID)).toBe(SOCKET_NEW);
     expect(plog.info).toHaveBeenCalledWith(
-      { jobId: JOB_ID, claim: "rebound", fromClientId: SOCKET_OLD, toClientId: SOCKET_NEW, viaPreviousSocketId: false },
+      {
+        jobId: JOB_ID,
+        claim: "rebound",
+        fromClientId: ref(SOCKET_OLD),
+        toClientId: ref(SOCKET_NEW),
+        viaPreviousSocketId: false,
+      },
       "diagnosis lookup rebound job to requesting connection",
     );
   });
@@ -190,7 +200,7 @@ describe("DiagnosisLookupService：200 四種回應", () => {
     await expect(lookup(SOCKET_NEW, SOCKET_OLD)).resolves.toMatchObject({ status: "waiting", rebound: true });
     expect(registry.owner(JOB_ID)).toBe(SOCKET_NEW);
     expect(plog.info).toHaveBeenCalledWith(
-      expect.objectContaining({ claim: "rebound", fromClientId: SOCKET_OLD, viaPreviousSocketId: true }),
+      expect.objectContaining({ claim: "rebound", fromClientId: ref(SOCKET_OLD), viaPreviousSocketId: true }),
       "diagnosis lookup rebound job to requesting connection",
     );
   });
@@ -221,16 +231,50 @@ describe("DiagnosisLookupService：200 四種回應", () => {
     expect(registry.get(JOB_ID)).toEqual({ clientId: SOCKET_OLD, machineId: "cnc-01", boundAt: T0 });
   });
 
-  it("created 但 job.data.machineId 不是字串 → 503、warn，撤回暫定綁定（不留 null 綁定）", async () => {
+  it.each([
+    ["不是字串", 123],
+    ["不在機台名冊", "cnc-99"],
+  ])("created 但 job.data.machineId %s → 503、warn，撤回暫定綁定（不留 null 綁定）", async (_label, machineId) => {
     const { registry, jobReturns, lookup } = setup();
-    jobReturns({ state: "active", machineId: 123 });
+    jobReturns({ state: "active", machineId });
     await expect(lookup()).rejects.toBeInstanceOf(ServiceUnavailableException);
     expect(registry.isBound(JOB_ID)).toBe(false);
     expect(plog.warn).toHaveBeenCalledWith(
       { jobId: JOB_ID },
-      "diagnosis lookup: job data has no machineId, cannot route job/status",
+      "diagnosis lookup: job data has no valid machineId, cannot route job/status",
     );
   });
+
+  it("rebound 且原綁定已有 machineId、job.data.machineId 不合法 → 照常 200 rebound（不需補）", async () => {
+    const { registry, jobReturns, lookup } = setup();
+    registry.bind(JOB_ID, SOCKET_OLD, "mixer-01");
+    jobReturns({ state: "active", machineId: "cnc-99" });
+    await expect(lookup()).resolves.toMatchObject({ status: "active", rebound: true });
+    expect(registry.get(JOB_ID)).toMatchObject({ clientId: SOCKET_NEW, machineId: "mixer-01" });
+  });
+
+  it("unchanged 查到進行中 → 刷新 boundAt（孤兒回收自此重新起算）", async () => {
+    const { registry, jobReturns, lookup } = setup();
+    registry.bind(JOB_ID, SOCKET_NEW, "mixer-01");
+    const before = registry.get(JOB_ID);
+    vi.advanceTimersByTime(9 * 60_000);
+    jobReturns({ state: "active" });
+    await lookup();
+    expect(registry.get(JOB_ID)).toBe(before); // 就地刷新，參照不變
+    expect(registry.get(JOB_ID)?.boundAt).toBe(T0 + 9 * 60_000);
+  });
+
+  it.each(["completed", "failed"] as const)(
+    "unchanged 查到 %s、registry 尚未標終態（relay 錯過終態事件）→ 補 markTerminal，照寬限刪",
+    async (state) => {
+      const { registry, jobReturns, lookup } = setup();
+      registry.bind(JOB_ID, SOCKET_NEW, "mixer-01");
+      jobReturns({ state, returnvalue: { result: RESULT, cached: false }, failedReason: "boom" });
+      await expect(lookup()).resolves.toMatchObject({ status: state });
+      expect(registry.get(JOB_ID)?.terminal?.kind).toBe(state);
+      registry.onModuleDestroy();
+    },
+  );
 });
 
 describe("DiagnosisLookupService：Mongo 後援與 404", () => {
@@ -323,7 +367,7 @@ describe("DiagnosisLookupService：409", () => {
     });
     expect(registry.get(JOB_ID)).toBe(before);
     expect(plog.info).toHaveBeenCalledWith(
-      { jobId: JOB_ID, clientId: SOCKET_NEW },
+      { jobId: JOB_ID, clientId: ref(SOCKET_NEW) },
       "diagnosis lookup conflict: job bound to another live connection",
     );
   });
@@ -348,6 +392,48 @@ describe("DiagnosisLookupService：503", () => {
       expect.objectContaining({ jobId: JOB_ID }),
       "diagnosis lookup failed, redis unavailable",
     );
+  });
+
+  it("讀取期間綁定消失（孤兒回收等）→ 503，不回 409", async () => {
+    const { registry, pendingReads, lookup } = setup();
+    const releases = pendingReads();
+    const pending = captureError(lookup());
+    registry.delete(JOB_ID);
+    releases[0]?.({ state: "active" });
+    const err = await pending;
+    expect(err).toBeInstanceOf(ServiceUnavailableException);
+    expect(plog.warn).toHaveBeenCalledWith({ jobId: JOB_ID }, "diagnosis lookup: binding vanished while reading job");
+  });
+
+  it("getJob 拋 SyntaxError（hash 解析失敗）→ 不當 Redis 不可用：記專屬 warn，退 Mongo", async () => {
+    const { queue, reader, lookup } = setup();
+    queue.getJobState.mockResolvedValue("completed");
+    queue.getJob.mockRejectedValue(new SyntaxError("Unexpected token"));
+    reader.findDiagnosisResult.mockResolvedValue(RESULT);
+    await expect(lookup()).resolves.toEqual({ status: "completed", jobId: JOB_ID, result: RESULT, cached: false });
+    expect(plog.warn).toHaveBeenCalledWith({ jobId: JOB_ID }, "diagnosis lookup: job hash unparsable, falling back to mongo");
+    expect(plog.warn).not.toHaveBeenCalledWith(expect.anything(), "diagnosis lookup failed, redis unavailable");
+  });
+
+  it("getJob 拋其他錯誤 → 503", async () => {
+    const { queue, lookup } = setup();
+    queue.getJobState.mockResolvedValue("active");
+    queue.getJob.mockRejectedValue(new Error("Connection is closed."));
+    await expect(lookup()).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+
+  it("Redis／Mongo 不可用的 warn 以 30 s 節流（依 key 分開計）", async () => {
+    const { queue, reader, lookup } = setup();
+    queue.getJobState.mockRejectedValue(new Error("Connection is closed."));
+    for (let i = 0; i < 3; i += 1) await captureError(lookup());
+    queue.getJobState.mockResolvedValue("unknown");
+    reader.findDiagnosisResult.mockRejectedValue(new Error("mongo not ready"));
+    for (let i = 0; i < 3; i += 1) await captureError(lookup());
+    const messages = plog.warn.mock.calls.map((c) => c[1]);
+    expect(messages).toEqual(["diagnosis lookup failed, redis unavailable", "diagnosis lookup failed, mongo unavailable"]);
+    vi.advanceTimersByTime(30_000);
+    await captureError(lookup());
+    expect(plog.warn.mock.calls.at(-1)?.[0]).toMatchObject({ jobId: JOB_ID, suppressed: 2 });
   });
 
   it("Redis 錯誤 → 503；rebound 的改綁一併撤回", async () => {
@@ -480,6 +566,19 @@ describe("DiagnosisLookupService：先綁定後查詢與 deferred（FR-009、P1�
     expect(err).toBeInstanceOf(ConflictException);
     expect((err as ConflictException).getResponse()).toMatchObject({ code: "job_bound_elsewhere" });
     expect(registry.owner(JOB_ID)).toBe(SOCKET_OTHER);
+  });
+
+  it("第一次讀到終態 → 直接回應，不補 machineId、不因 deferred 重讀", async () => {
+    const ctx = setup();
+    const { registry, queue, pendingReads, lookup } = ctx;
+    const { relay } = withRelay(ctx);
+    const releases = pendingReads();
+    const pending = lookup();
+    relay.handleProgress(JOB_ID, { value: 90, attempt: 1, execution: 1 }); // 擱置 → deferred
+    releases[0]?.({ state: "completed", returnvalue: { result: RESULT, cached: true } });
+    await expect(pending).resolves.toMatchObject({ status: "completed", cached: true });
+    expect(queue.getJobState).toHaveBeenCalledTimes(1);
+    expect(registry.isBound(JOB_ID)).toBe(false);
   });
 
   it("無擱置 → 只讀一次 job", async () => {
