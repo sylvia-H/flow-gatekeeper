@@ -153,7 +153,7 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 ### Edge Cases
 
 - **`ai/done` 重複抵達**：stalled 重派或重試的再執行每次成功都會再送一則 `ai/done`（同一個結果）。畫面以第一個完成為準，之後同 jobId 的 `ai/done`、`completed` 與 GET 結果一律忽略；不新增畫面、不重複公告。
-- **`completed` 不帶 `result`**（舊版 worker 滾動升級、或 `returnvalue` 驗證失敗）：relay 照送不帶 `result` 的 `completed` 並記 warn；web 等 2 秒寬限、先 GET 一次，GET 回 completed 即完成，否則才轉「結果未送達」。
+- **`completed` 不帶 `result`**（舊版 worker 滾動升級、或 `returnvalue` 驗證失敗）：relay 照送不帶 `result` 的 `completed` 並記 warn；web 等 2 秒寬限、先 GET 一次，GET 回 completed 即完成，否則才轉「結果未送達」。（合併門第 1、2 輪註記 2026-10-22：轉「結果未送達」之後的救回來源為 `ai/done` 與 `completed`＋`result`；GET 只對進行中任務發出，不會替未送達失敗取回，ADR-003 第 55 條。）
 - **GET 在 1 小時之後回 404**：快取命中的 job 不寫 `diagnoses`，`returnvalue` 隨 `removeOnComplete`（1 h）消失，之後 GET 回 404，畫面顯示「連線中斷期間的診斷結果已無法取回，請重試」。接受：重連續接的時間尺度是秒到分鐘；寫進 `PRODUCT.md` 已知產品限制。LLM 路徑的結果在 `removeOnComplete` 後仍可由 Mongo `diagnoses` 取回。
 - **原綁定仍在線時另一條連線 GET**：進行中的任務回 409、不改綁（畫面「這個診斷正由另一個視窗接收…」）；已完成或已失敗（含 10 s 終態寬限內）照常回結果、不 rebind。
 - **同一分頁重連時舊連線尚未被伺服器回收**（代理裁決第 17 條）：網路閃斷（換 Wi-Fi、睡醒）後，瀏覽器以 pong 逾時或 `online` 事件立刻重連，伺服器端要等心跳回收（`WS_HEARTBEAT_MS` 預設 15 s，上限約 30 s）才知道舊連線已死。重連 GET 帶 `previousSocketId`（該任務最後一次成功綁定的 socketId），原綁定等於它時視同已離線、改綁到新連線，不回 409；舊連線不主動終止，交給心跳回收。另一個視窗拿不到本分頁的 socketId（只經 `system/connected` 送給連線本身），兩個視窗不互搶的規則不變。
@@ -187,7 +187,7 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 - **FR-002**: api 的 job-status relay 收到 `completed` 事件時 MUST 以 `DiagnosisJobReturnValue` schema `safeParse` 其 `returnvalue`；通過時送 `job/status { status: "completed", result, cached }`，並帶上（已知時）`attempt`、`execution`；驗證失敗或缺值時 MUST 照送不帶 `result` 的 `completed` 並記 warn，MUST NOT 轉發未驗證物件。（US1 情境 3；SC-002；憲章 V）
 - **FR-003**: worker MUST 維持送出 `ai/done`，且維持「先落地後宣告」順序：trigger → `updateProgress(100)` → `ai/done` → return；`ai/done` 的定位為 best-effort 提前通知，可重複、可遺失，權威完成為帶 `result` 的 `job/status: completed`。（US1；SC-010）
 - **FR-004**: web MUST 以三個完成來源中最先到者收尾：`ai/done`、帶 `result` 的 `job/status: completed`、GET 回 `completed`；之後到的同 jobId 結果 MUST 忽略；耗時 MUST 只結算一次、螢幕閱讀器公告 MUST 只一次。四種情況（`ai/done`→`completed+result`、`completed+result`→`ai/done`、`completed` 無 result→GET→遲到 `ai/done`、`ai/done` 重複兩次）MUST 收斂到相同的 completed 狀態（`result`、`cached`、`jobId` 相同）。（US1 情境 2；SC-006）
-- **FR-005**: `completed` 不帶 `result` 時，web 在 2 秒未送達寬限到期時 MUST 先 GET 一次；GET 回 completed 即完成；GET 回 failed 即依 `humanizeError(error)` 轉失敗（與 FR-022 的 watchdog 退路同一規則，此失敗不屬「結果未送達」、不可被救回）；其餘（waiting／active、404、409、503、429、網路錯誤、回應格式不符）才轉「結果未送達」失敗（文案不變；analyze 階段修正 2026-10-21）。已轉「結果未送達」之後，同 jobId 的結果（`ai/done`、帶 `result` 的 `completed`、GET 回 completed）再抵達時 MUST 救回為「已完成」；其他失敗態（`ai/error`、`failed`）MUST NOT 被覆蓋。（US1 情境 3；SC-006；ADR-003 代理裁決第 15 條）
+- **FR-005**: `completed` 不帶 `result` 時，web 在 2 秒未送達寬限到期時 MUST 先 GET 一次；GET 回 completed 即完成；GET 回 failed 即依 `humanizeError(error)` 轉失敗（與 FR-022 的 watchdog 退路同一規則，此失敗不屬「結果未送達」、不可被救回）；其餘（waiting／active、404、409、503、429、網路錯誤、回應格式不符）才轉「結果未送達」失敗（文案不變；analyze 階段修正 2026-10-21）。已轉「結果未送達」之後，同 jobId 的結果（`ai/done`、帶 `result` 的 `completed`、GET 回 completed）再抵達時 MUST 救回為「已完成」；其他失敗態（`ai/error`、`failed`）MUST NOT 被覆蓋。（合併門第 1、2 輪註記 2026-10-22，ADR-003 代理裁決第 55 條：實際能救回的來源是 `ai/done` 與帶 `result` 的 `job/status: completed`，且只在 api 10 s 終態寬限內送得到；GET 只對進行中任務發出、不會替「結果未送達」的失敗取回——reducer 仍接受 GET 回 completed，只是實務上不會發生；WS 斷線期間 2 s 退路凍結，第 63 條。）（US1 情境 3；SC-006；ADR-003 代理裁決第 15 條）
 - **FR-006**: 面板「嘗試 N / 3」MUST 由 `job/status.attempt` 推進（`ai/token` 的 attempt 判斷保留、換輪清空邏輯不變）；收到更大的 `execution` 時 MUST 清空串流文字（`seq <= lastSeq` 判斷保留為備援）；`execution` 遞增本身 MUST NOT 觸發「重新派送」說明（只看 `reason: "stalled"`）。（US6；US3 情境 2）
 
 **結果讀取與 rebind（US2）**

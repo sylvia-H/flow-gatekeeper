@@ -3630,7 +3630,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 13. **「重新派送」說明** → 只看 `reason: "stalled"`，`execution` 遞增不據以顯示。
 14. **keepalive 殘餘風險** → Pub/Sub 斷線且串流中 SIGKILL 時最長約 55 s 無事件，接受、不加機制。
 
-以上為 2026-10-21 使用者離席期間的代理裁決（第 12～14 條與第 9 條的改寫為同日補裁），覆核後若有推翻，於 ADR-003 §7 與本節同步更新。（2026-10-21 更新：之後 specify／clarify 階段補裁第 15～21 條、plan 階段設計點 P1～P25 補錄為第 22～46 條、checklist 推導為第 47～48 條、實作交叉審查補裁第 49～51 條、web 交叉審查補裁第 52～54 條、合併門第 1 輪補裁第 55～57 條（2026-10-22），全文只在 ADR-003 §7，本節不逐條重列。）
+以上為 2026-10-21 使用者離席期間的代理裁決（第 12～14 條與第 9 條的改寫為同日補裁），覆核後若有推翻，於 ADR-003 §7 與本節同步更新。（2026-10-21 更新：之後 specify／clarify 階段補裁第 15～21 條、plan 階段設計點 P1～P25 補錄為第 22～46 條、checklist 推導為第 47～48 條、實作交叉審查補裁第 49～51 條、web 交叉審查補裁第 52～54 條、合併門第 1 輪補裁第 55～57 條、第 2 輪補裁第 58～63 條（2026-10-22），全文只在 ADR-003 §7，本節不逐條重列。）
 
 #### 15.7.4 驗收（判準以 spec SC-001～SC-011 為準）
 
@@ -3669,12 +3669,12 @@ e2e 仍只在本機跑（CI 不含 e2e）；改寫場景 3（SC-001）並新增�
 
 #### 15.7.6 落地摘要（2026-10-21）
 
-以下為 implement 之後的現況；設計理由與代理裁決（第 1～57 條，待覆核）見 ADR-003，逐條細節以 spec 與 `CHANGELOG.md` `[Unreleased]` 為準。
+以下為 implement 之後的現況；設計理由與代理裁決（第 1～63 條，待覆核）見 ADR-003，逐條細節以 spec 與 `CHANGELOG.md` `[Unreleased]` 為準。
 
 - **契約 asyncapi 1.4.0**（向後相容的 minor）：`job/status` 新增 optional `attempt`／`execution`／`reason`（開放字串，已知值 `"stalled"`）／`cached`，`completed` 帶 `result`；`ai/done` 改為可重複、可遺失的 best-effort；`ai/error.code` 新增 `persist_failed`；`http.ts` 新增 `DiagnosisLookupQuerySchema`／`DiagnosisLookupResponseSchema`；傳輸型別 `DiagnosisJobReturnValue`、`DiagnosisJobProgress`。
 - **完成語意**：worker 以 BullMQ `returnvalue` 回傳 `{ result, cached }`，api relay 驗證後放進 `job/status: completed`；web 以 `ai/done`、帶 `result` 的 `completed`、GET 回 completed 三者先到者收尾，之後的忽略；`completed` 不帶 result 時 2 s 後先 GET。
 - **讀取與續接**：`GET /diagnoses/:jobId?socketId=[&previousSocketId=]`（BullMQ → Mongo → 404；409 分 `socket_unauthorized`／`job_bound_elsewhere`；503 為依賴故障或 BullMQ 5 s／Mongo 3 s 逾時）；先綁定後查詢、回 `rebound:true` 前核對 owner；綁定由新抽出的 `JobRoutingRegistry` 持有，`completed` 與 `failed` 共用 10 s 終態寬限。nginx 為 GET 另設 `diag_read` 60 r/m、burst 10。web 在授權成功後逐台 GET 續接，GET 帶 `previousSocketId`。
-- **重派與 keepalive**：`apps/worker/src/lib/bullmq-options.ts` 的 lock 15 s／stalled 5 s／maxStalled 2、keepalive 10 s；relay 監聽 `stalled`；45 s watchdog 觸發先 GET、文案改「結果未知」。
+- **重派與 keepalive**：`apps/worker/src/lib/bullmq-options.ts` 的 lock 15 s／stalled 5 s／maxStalled 2、keepalive 10 s；relay 監聽 `stalled`；45 s watchdog 觸發先 GET、文案改「結果未知」，WS 斷線期間 watchdog 與 2 s 退路凍結、交由重連續接（ADR-003 第 63 條）。
 - **冪等與成本**：processor 開頭以 jobId 查 `ai-result:<jobId>` → `diagnoses`；再執行命中快取前先查自己的結果；trigger 以 jobId upsert；hit／miss 以 `ai-metric:<jobId>` 只計一次；`ai-fail:<sig>` 負向標記（TTL 10 s）；`ai-result` 暫存寫入 best-effort。
 - **UI**：說明行「後端處理程序中斷，任務已重新排入佇列（第 N 次執行）」「已重新連線，正在取回診斷狀態…」、完成 meta「重新連線後取回」、「原始串流（不完整）」（以 `job/status`／GET 收尾或執行期間經歷過重連）、新失敗文案；術語補進 PRODUCT.md；DESIGN.md 補記進度說明行允許改變進行中區塊高度。
 - **e2e**：場景 3 改寫為 3a（串流中 kill）／3b（首 token 前 kill，fake provider 以 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 留出窗口），新增 5（Pub/Sub 斷線迴圈）、6a／6b（api 重啟）、7（Redis 停頓 50 s）、8（GET 回應形狀）。實測數字（2026-10-22 第 3 輪重跑，各場景單次）：3a `maxGap` **14.0 s**（kill → completed 28.7 s）、3b `maxGap` **18.8 s**（kill → completed 31.8 s，kill 前 0 個 token）、`W` **3.8 s／3.7 s**（容器側時鐘；先前一次 7.4 s／12.9 s），兩題皆收到 `reason:"stalled"` 且 execution 2；場景 7：解凍後 4.9 s completed、trigger 1、LLM call 1、hit＋miss 1、收到 stalled、execution 2、短路 `source: diagnoses`（P25 預期 ai-result，實測兩次皆為 diagnoses）；場景 5：踢掉 358 條 Pub/Sub 連線、只收 2/20 token 仍以 completed＋result 收尾；6a healthy 後 41 ms GET 到 completed、6b healthy 後 41 ms rebound、4.1 s completed；全套 14 條 **278.0 s**（build 走快取）。

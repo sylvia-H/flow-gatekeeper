@@ -29,7 +29,7 @@
 
 維護分支 `fix/20261021-ci-and-flaky`（自 `develop` `27bc587`）；現況摘要與裁決見指南 §15.6「CI 恢復自動觸發與 flaky 測試」。
 
-SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1cdb69`；spec／plan／tasks 見 `specs/012-stream-resilience/`，設計決策見 `docs/adr-003-completion-semantics.md`，代理裁決第 1～57 條待使用者覆核）；契約升 asyncapi **1.4.0**。修掉 2.1.0 帶著發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治（含失敗終態寬限）。
+SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1cdb69`；spec／plan／tasks 見 `specs/012-stream-resilience/`，設計決策見 `docs/adr-003-completion-semantics.md`，代理裁決第 1～63 條待使用者覆核）；契約升 asyncapi **1.4.0**。修掉 2.1.0 帶著發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治（含失敗終態寬限）。
 
 ### 相容性注意（升級前必讀）
 
@@ -63,7 +63,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 - **BullMQ 參數 15／5／2**（見相容性注意）：取代 BullMQ 預設 30 s／30 s／1；參數與 keepalive 寫成具名常數，README 說明上界公式 `K + L + 2S`＝35 秒。
 - **`onReconnect` 不再立即把進行中任務判失敗**：重連後維持進行中並記下待續接任務，等連線授權成功（`machine/subscribed`）才逐台 GET；GET 帶 `previousSocketId`，同一分頁重連時舊連線還沒被心跳回收也能改綁，不會誤顯示「正由另一個視窗接收」。
 - **2 秒「結果未送達」先取回**：`completed` 不帶結果時 2 秒後先 GET；GET 回 failed 依錯誤分類文案，其餘才轉「結果未送達」。轉「結果未送達」之後，web 接受三個來源中任一者救回（2.1.0 只接受遲到的 `ai/done`）；實際送得到畫面的仍只限 api 綁定的 10 秒終態寬限內，重連後也不會主動替這種失敗取回（ADR-003 代理裁決第 55 條）。
-- **45 秒 watchdog 語意改為「結果未知」**：觸發時先 GET 一次，completed 照常完成、仍在進行就繼續等，其餘才轉失敗並顯示新文案；仍用牆上時鐘（ADR-002 §6.5.1 backlog 不變）。
+- **45 秒 watchdog 語意改為「結果未知」**：觸發時先 GET 一次，completed 照常完成、仍在進行就繼續等，其餘才轉失敗並顯示新文案；WS 斷線期間 watchdog 與 2 秒退路凍結，交由重連 → 授權 → 續接收尾（長時間斷線時任務停在「進行中」，可中止；ADR-003 代理裁決第 63 條）；仍用牆上時鐘（ADR-002 §6.5.1 backlog 不變）。
 - **`failed` 終態套用 10 秒綁定寬限**（ADR-003 D12）：與 `completed` 共用 `JobRoutingRegistry` 的同一段寬限程式，寬限內的同 jobId POST 回 409（與既有行為相同）。
 - **nginx 新增 `diag_read`**：`location ~ ^/diagnoses/[0-9a-fA-F-]{36}$` 走 60 r/m、burst 10 的獨立桶；不寫 `add_header`，繼承 server 層安全 header。POST 維持 10 r/m、burst 5。
 - **`ai-result` 暫存寫入為 best-effort**：寫不進 Redis 只 warn、照常寫 `diagnoses`，不讓已拿到的 LLM 結果作廢。

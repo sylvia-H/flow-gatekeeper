@@ -144,7 +144,7 @@ MUST 再核對一次 owner（實作交叉審查補，2026-10-21）。
 
 | 常數 | 值 | BullMQ 預設 | 說明 |
 | --- | --- | --- | --- |
-| `LOCK_DURATION_MS` | 15000 | 30000 | `L`；續租 `L/2`＝7.5 s（不另設 `lockRenewTime`） |
+| `LOCK_DURATION_MS` | 15000 | 30000 | `L`；`lockRenewTime` 維持預設 `L/2`＝7.5 s（不另設），續租計時器每 `lockRenewTime/2` 約 3.75 s 觸發、最慢 7.5 s，Redis 卡頓容忍約 11.25～15 s（合併門第 2 輪更正，原寫「續租 `L/2`＝7.5 s」） |
 | `STALLED_INTERVAL_MS` | 5000 | 30000 | `S` |
 | `MAX_STALLED_COUNT` | 2 | 1 | 一次額度留給 Redis 卡頓、一次給真的崩潰 |
 | `KEEPALIVE_INTERVAL_MS` | 10000 | — | `K`（worker 自訂） |
@@ -200,3 +200,5 @@ MUST 再核對一次 owner（實作交叉審查補，2026-10-21）。
 `DiagnosisTiming` 新增 `lastRecoveredMs?: number`、`lastRecoveredCached?: boolean`（實作時改為 optional 並補快取旗標供 `compareLabel` 決定主字，2026-10-21），`lastKind` 增加 `"recovered"`；recovered 判定為「以 GET 收尾或執行期間經歷過重連」（代理裁決 52）。`settleTiming(timing, jobId, cached, now, opts?)`
 的 `opts.recovered === true` 時只寫 `lastRecoveredMs`／`lastKind:"recovered"`，不動 `lastUncachedMs`／`lastCachedMs`；`compareLabel`
 對 `recovered` 回主字（快取與否照 `cached`）、`compareBars` 回 null（P16）。
+
+注（合併門第 2 輪，2026-10-22）：耗時以 `performance.now()` 計（單調時鐘）；部分平台在系統掛起（筆電睡眠）時它不前進，睡醒後取回的任務 `lastRecoveredMs` 可能少算掛起的時間。只影響完成 meta 的顯示，recovered 本來就不作對比基準。

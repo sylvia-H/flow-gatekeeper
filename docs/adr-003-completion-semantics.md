@@ -95,6 +95,8 @@ web 現況已滿足「之後的忽略」：reducer 只在 active 消費事件（
 
 （specify 階段更新，2026-10-21）上句的「取代」已由第 15 條改定：這條例外**保留並擴充**到三種來源——已轉「結果未送達」之後，同 jobId 的 `ai/done`、帶 `result` 的 `job/status: completed`、GET 回 completed 再抵達時都救回為「已完成」；其他失敗態（`ai/error`、`failed`）不被覆蓋（spec FR-005）。D10 的 2 s 退路是在轉「結果未送達」之前多查一次 GET，兩者並存。
 
+（合併門第 1、2 輪更新，2026-10-22）救回的**實際**來源只有 `ai/done` 與帶 `result` 的 `job/status: completed`，且只在 api 綁定的 10 s 終態寬限內送得到；GET 只對進行中任務發出，不會替「結果未送達」的失敗取回（第 55 條；spec FR-005）。reducer 仍接受 GET 回 completed 救回，只是實務上不會發生。
+
 | 方案 | 不選的理由 |
 | --- | --- |
 | **A（選）** 以 jobId 冪等、`ai/done` 可重複 | — |
@@ -120,7 +122,7 @@ BullMQ 的 stalled 判定（`moveStalledJobsToWait-9.lua`）：每次檢查先�
 | **定案 15／5／2，K＝10** | 10＋15＋10＝**35 s** | 餘裕 10 s | `W` 最多可到 15 s 仍成立（`W + 2S ≤ L + 2S`） |
 | 替代 15／10／2，K＝5 | 5＋15＋20＝40 s | 餘裕 5 s | keepalive 寫入量加倍 |
 
-**定案 lock 15 s／stalled 5 s／maxStalled 2、keepalive 10 s。** 理由：`S` 只影響「多快發現」，不影響「多容易誤判」（誤判由 lock 是否過期決定，看的是 `L`），縮小 `S` 的代價是每個 worker 每 5 s 跑一次 stalled 檢查的 Lua（`LRANGE active`＋`SADD`，demo 規模下微秒級）；縮小 `L` 才會提高誤判率。`maxStalledCount` 2 是因為 `L` 縮短後 Redis 卡頓超過 15 s 就會觸發一次 stalled，留一次額度給真正的 worker 崩潰（現況 1 次額度會被一次卡頓用掉，AR-4 實測）。`lockRenewTime` 維持 BullMQ 預設 `L/2`＝7.5 s。四個值寫成具名常數並在 README 說明。
+**定案 lock 15 s／stalled 5 s／maxStalled 2、keepalive 10 s。** 理由：`S` 只影響「多快發現」，不影響「多容易誤判」（誤判由 lock 是否過期決定，看的是 `L`），縮小 `S` 的代價是每個 worker 每 5 s 跑一次 stalled 檢查的 Lua（`LRANGE active`＋`SADD`，demo 規模下微秒級）；縮小 `L` 才會提高誤判率。`maxStalledCount` 2 是因為 `L` 縮短後 Redis 卡頓超過 15 s 就會觸發一次 stalled，留一次額度給真正的 worker 崩潰（現況 1 次額度會被一次卡頓用掉，AR-4 實測）。`lockRenewTime` 維持 BullMQ 預設 `L/2`＝7.5 s。（合併門第 2 輪更正，2026-10-22：BullMQ 的續租計時器實際每 `lockRenewTime/2` 約 3.75 s 觸發一次，最慢 7.5 s；因此 Redis 卡頓的容忍約 11.25～15 s——最後一次成功續租可能發生在卡頓開始前 0～3.75 s，lock 剩餘 11.25～15 s。35 s 上界的推導不變，它只用到 `L` 與 `S`。）四個值寫成具名常數並在 README 說明。
 
 另：重派後的 job 若要等死掉的持鎖者留下的 `ai-lock:<sig>`（TTL `AI_DEDUPE_LOCK_SECONDS`，預設 45 s），等待期間由 keepalive 補事件，不影響上界；首 token 前最長 `A`（30 s），同樣由 keepalive 覆蓋。`A` 本身的上限驗證（`AI_TIMEOUT_MS ≤ 35 s`）屬 010-lite，不在本 ADR。
 
@@ -257,6 +259,7 @@ BullMQ 的 stalled 判定（`moveStalledJobsToWait-9.lua`）：每次檢查先�
   - GET 收尾的耗時以 `recovered` 記錄，不作為「上一次非快取耗時」的對比基準（含斷線時間，第 37 條）。
 - **2 s 未送達先 GET 一次**：`completed` 不帶 result（舊版 api／returnvalue 驗證失敗）時，2 s 寬限到期先 GET；GET 回 completed 就完成，否則才轉現行的「結果未送達」失敗。
   （analyze 階段更新，2026-10-21）「否則」細分為：GET 回 **failed** → 依 `humanizeError(error)` 轉失敗（與 D11 的 watchdog 退路同一規則；此失敗不屬「結果未送達」、不可被救回，spec FR-005）；GET 回 **waiting／active**（理論上不會發生：`completed` 已到）、404、409、503、429、網路錯誤、回應格式不符 → 才轉「結果未送達」（第 42 條）。已轉「結果未送達」之後，同 jobId 的結果再抵達仍救回為「已完成」（第 15 條；見 D3 的更新段）。
+  （合併門第 2 輪更新，2026-10-22）WS 斷線期間跳過 2 s 退路，交由重連 → 授權 → 續接收尾（第 63 條）；救回來源的實際範圍見 D3 的更新段（第 55 條）。
 - **attempt** 改由 `job/status.attempt` 推進；`ai/token` 的 attempt 判斷保留（換輪清空邏輯不變）。`MAX_ATTEMPTS`（`CopilotDrawer.vue:134`）收進 contracts 屬 010-lite，本 feature 不動。
 
 來源：第三輪報告 §5.4（`completed` 帶 result 即收尾、`onReconnect` 先 GET、Attempt 改用 `job/status.attempt`）；授權後才 GET、2 s 退路與失敗文案為 ADR-003 代理裁決第 10、11 條；救回為第 15 條、`previousSocketId` 為第 17 條、重連旗標為第 20 條、409 `code` 為第 23 條、503 為第 25 條、`recovered` 耗時為第 37 條、`onAuthorized` 為第 41 條、2 s 退路回進行中轉「結果未送達」為第 42 條、`rebound` 恆為 true 為第 43 條、授權失敗交給 watchdog 為第 47 條（皆待覆核）。
@@ -268,6 +271,8 @@ BullMQ 的 stalled 判定（`moveStalledJobsToWait-9.lua`）：每次檢查先�
 （analyze 階段更新，2026-10-21）上段的「其他」細分為：GET 回 **failed** → 依 `humanizeError(error)` 轉失敗（與 D10 的 2 s 退路同一規則）；404、409（兩種 `code`）、**503**、429、網路錯誤、回應格式不符 → 才用「超過 45 秒沒有收到進度，結果未知，請重試」（spec FR-022）。由這裡承接的情況另有兩種：重連後 WS 授權失敗、續接 GET 沒發出的任務（GET 以 409 `socket_unauthorized` 失敗 → 「結果未知」文案，第 47 條）；api 重啟時正在限流延後的 job 不補送 `waiting`，45 s 後 GET 得到 waiting、維持進行中（第 38 條）。Redis 整個凍結超過 45 s 時 GET 回 503 → 「結果未知」，Redis 恢復後後端照常完成並寫快取，使用者按重試以新 jobId 命中快取（research R13）。
 
 watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘」列留在 backlog）：觸發後先 GET，時鐘往前跳造成的誤觸會得到「仍在進行」而不轉失敗，改單調時鐘的收益因此更小。
+
+（合併門第 2 輪更新，2026-10-22）WS **斷線**期間 watchdog 凍結、不觸發，交由重連 → 授權 → 續接 GET 收尾；已連線但未授權時照常觸發（第 47 條仍成立）。理由：斷線時以舊 socketId 發的 GET 必失敗，會把已完成的診斷誤標「結果未知」且重連後不再續接（第 63 條）。代價：長時間斷線時任務停在「進行中」，頂部橫幅顯示斷線、可中止。
 
 來源：第三輪報告 §5.6（逾時語意為「結果未知」）；GET 一次、文案與不改單調時鐘為 ADR-003 代理裁決第 7 條；503 為第 25 條、delayed 不補送為第 38 條、授權失敗交給 watchdog 為第 47 條（皆待覆核）。
 
@@ -301,7 +306,10 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 | `ai/done` 會重複、仍可能遺失；自寫 WS client 要以 jobId 去重 | 契約描述明寫（D3）；`CHANGELOG.md` 相容性注意列出 |
 | `ai-fail` 讓同簽章的其他請求在 10 s 內直接拿到同一個錯誤，不給它們自己再試的機會 | 只發生在供應商剛失敗的 10 s 內；錯誤碼與持鎖者相同，畫面文案可讀；省下的是 N × 3 次計費呼叫 |
 | GET 讓任何已授權連線憑 jobId 讀結果；jobId 會進 nginx access log | 沒有使用者身分的前提下無從更細；log 的保存與存取屬部署面（ADR-002 §6.3 生產路徑：握手驗身分後改以使用者為授權主體） |
-| Redis 寫入量增加：lock 續租每 7.5 s（原 15 s）、stalled 檢查每 5 s（原 30 s）、keepalive 每 10 s、`ai-metric`／`ai-result`／`ai-fail` 三種新鍵 | demo 規模（concurrency 個位數、一分鐘數次診斷）可忽略；新鍵都有 TTL，不受 `noeviction` 影響長期記憶體 |
+| Redis 寫入量增加：lock 續租計時器每 `lockRenewTime/2` 約 3.75 s（最慢 7.5 s；原約 7.5 s／最慢 15 s；合併門第 2 輪更正，原寫「每 7.5 s（原 15 s）」）、stalled 檢查每 5 s（原 30 s）、keepalive 每 10 s、`ai-metric`／`ai-result`／`ai-fail` 三種新鍵 | demo 規模（concurrency 個位數、一分鐘數次診斷）可忽略；新鍵都有 TTL，不受 `noeviction` 影響長期記憶體 |
+| （合併門第 2 輪補，2026-10-22）ioredis `commandTimeout` 逾時的指令**仍會在 Redis 恢復後執行**：`SET ai-metric:<jobId> NX` 逾時後仍生效時，該次執行以為沒搶到、其他執行又搶不到，這個 jobId 的 hit／miss 計 0 次；逾時的 `tryAcquireLock` 實際寫入時，留下一把沒人持有、也沒人釋放的 `ai-lock:<sig>`，同簽章的請求要等它過期（`AI_DEDUPE_LOCK_SECONDS`，預設 45 s） | 已知限制，只在 Redis 停頓長於 `commandTimeout` 時發生；計數少一次只影響指標，殘留的鎖由 TTL 回收、等待者有 keepalive 撐著 watchdog。要根治需讓逾時的指令可撤銷（改用帶 token 的 Lua 檢查或停頓後重驗），未排程 |
+| （合併門第 2 輪補）**失去 lock 的舊執行仍會送事件**：stalled 重派後，舊執行若還活著（Redis 停頓而非崩潰），它的 keepalive、`updateProgress` 與 `ai/token` 照常送出。web 對 progress 以 `execution` 單調處理（舊執行的較小值被略過），但 `ai/token` 不帶 `execution`，兩次執行的串流文字可能交錯 | 結果正確（以第一個完成為準，且重派過的任務標「原始串流（不完整）」）；只影響原始串流的可讀性。backlog：worker 監聽 `lockRenewalFailed` 時停 keepalive 並 abort LLM 呼叫，或 `ai/token` 加 `execution`（契約變更） |
+| （合併門第 2 輪補）**去重鎖的收尾餘裕只有 5 s**：啟動驗證只要求 `AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000`；LLM 用滿 `AI_TIMEOUT_MS` 後，`insertDiagnosis` 最長 20 s（`socketTimeoutMS`）再加 012 新增的兩次 Redis 往返（SET／DEL `ai-result`），MongoDB 變慢時 `ai-lock` 可能在寫快取前過期，等待者取得鎖後會再打一次 LLM | 012 之前即存在（012 只多了兩次往返）；預設 30 s／45 s 下正常情況遠低於上限。要根治需把餘裕改為涵蓋寫庫上限，或寫庫前續租 `ai-lock`，未排程 |
 | 打字機動畫在重連後不會續播，只直接出現最終結果 | 這是拒絕 Streams 的直接後果；結果完整、只少過場（ADR-002 §6.2 原本就把它定義為「動畫的過場」） |
 | 快取命中的結果 1 h 後無法以 GET 取回（404） | 重連續接的時間尺度是秒到分鐘；寫進 `PRODUCT.md` 已知產品限制 |
 | BullMQ job hash 的 `progress` 改為物件 | 只影響直接看 BullMQ 資料的人；relay 同時接受數字（舊版 worker） |
@@ -355,7 +363,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 
 ## 7. 代理裁決清單（2026-10-21，使用者離席期間，待覆核）
 
-使用者離席期間授權對 012-lite 的技術決策採建議項，逐題記錄如下（第 1～11 條為首批，第 12～14 條為整理定稿時發現的矛盾與缺口，經協調者同日補裁；第 9 條同日改寫為「只建議、不在離席期間修訂」；第 15～16 條為 specify 階段補裁、第 17～21 條為 clarify 階段補裁；第 22～46 條為 plan 階段自行決定的設計點（`specs/012-stream-resilience/research.md` 文末 P1～P25，第 n 條＝P(n−21)；P25 為 analyze 階段補）、第 47～48 條為 checklist 階段推導（`checklists/resilience.md` Notes 第 3 點）、第 49～51 條為實作交叉審查補裁，三批皆於 T075 補錄（spec FR-040）；第 52～54 條為 web 交叉審查補裁（US2），皆同日；第 55～56 條為 2026-10-22 合併門第 1 輪 web 審查補裁、第 57 條為同輪契約／文件審查補裁）。**第 1 條與第三輪報告的建議不同**，覆核時請優先看；第 45 條的前提已由第 51 條更正，兩條請一起看。覆核後若有推翻，於本節記為推翻紀錄（原提案／裁決），並移除檔頭的「待覆核」註。
+使用者離席期間授權對 012-lite 的技術決策採建議項，逐題記錄如下（第 1～11 條為首批，第 12～14 條為整理定稿時發現的矛盾與缺口，經協調者同日補裁；第 9 條同日改寫為「只建議、不在離席期間修訂」；第 15～16 條為 specify 階段補裁、第 17～21 條為 clarify 階段補裁；第 22～46 條為 plan 階段自行決定的設計點（`specs/012-stream-resilience/research.md` 文末 P1～P25，第 n 條＝P(n−21)；P25 為 analyze 階段補）、第 47～48 條為 checklist 階段推導（`checklists/resilience.md` Notes 第 3 點）、第 49～51 條為實作交叉審查補裁，三批皆於 T075 補錄（spec FR-040）；第 52～54 條為 web 交叉審查補裁（US2），皆同日；第 55～56 條為 2026-10-22 合併門第 1 輪 web 審查補裁、第 57 條為同輪契約／文件審查補裁；第 58～63 條為合併門第 2 輪補裁——58～60 worker 審查、61～62 api 審查、63 web 審查）。**第 1 條與第三輪報告的建議不同**，覆核時請優先看；第 45 條的前提已由第 51 條更正，兩條請一起看。覆核後若有推翻，於本節記為推翻紀錄（原提案／裁決），並移除檔頭的「待覆核」註。
 
 **1. BullMQ lock／stalled／maxStalled 與 keepalive 間隔**（D4）
 - 影響範圍：worker 被強制終止（SIGKILL、OOM）後，AI 診斷面板多久看到「重新派送」說明或結果、45 秒「結果未知，請重試」是否誤觸；worker 的 BullMQ Worker options（README 常數說明）；Redis 寫入頻率。
@@ -711,6 +719,46 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - 理由：e2e 的 client 是原生 `ws`，不經瀏覽器，也不經 `App.vue` 把 `onAuthResult` 接到 copilot store 的接線，上述畫面行為只有 web 單元測試覆蓋；原記錄把 e2e 當成演練判準，會把沒驗過的畫面記成已驗。自動化驅動瀏覽器跑這幾個故障情境（kill worker、重啟 api、pause redis 時同時操作畫面）成本高。
 - 替代方案：以 playwright 劇本演練（比照 `apps/web/scripts/screenshots.cjs`，要另寫故障注入與畫面斷言）。
 
+**以下第 58～62 條：合併門第 2 輪補裁（2026-10-22，待覆核；58～60 來自 worker 審查、61～62 來自 api 審查）**
+
+**58. 舊執行落後於重派執行時改走短路**（D6；第 49 條的延伸；來源：合併門第 2 輪 worker 審查）
+- 影響範圍：Redis 停頓造成 stalled 重派、舊執行恢復後才走到快取或 LLM 步驟時，畫面與卡片是否誤標「快取」、該 jobId 是否多打一次 LLM；`diagnosisTriggers` 與 hit／miss 計數。
+- 裁決：舊執行在記 hit／miss 前 `claimMetric`（`SET ai-metric:<jobId> NX`）回 false，代表另一次執行已先處理過這個 jobId；此時不往下走快取命中或 LLM，改為重查冪等短路（`ai-result` → `diagnoses`），命中就以 `cached:false` 回原結果。
+- 理由：第 49 條只在「再執行」（`attemptsStarted > 1` 或 `attemptsMade > 0`）的快取命中前重查；落後的是**舊執行**（它自己的計數仍是首次）時第 49 條不觸發，舊執行會命中重派執行剛寫的快取並回 `cached:true`，或在快取還沒寫成時再打一次 LLM。`claimMetric` 回 false 是現成、零額外往返的「有人先到」訊號。
+- 替代方案：每次快取命中與呼叫 LLM 前都重查短路（首次執行也多一次 Redis GET＋Mongo `findOne`）。
+
+**59. `ai-fail` 標記加 `attempt` 與 `retryable`**（D5；第 4 條的延伸；來源：合併門第 2 輪 worker 審查）
+- 影響範圍：`ai-fail:<sig>` 的值形狀（worker 內部 `AiFailMarkerSchema`，不進 contracts）；同簽章等待者看到標記時是照標記失敗、交重試，還是白等。
+- 裁決：標記加 `attempt`（寫入者的 attempt）與 `retryable`（寫入者的錯誤是否可重試）。同 jobId 的兄弟執行（stalled 重派）遇到同 attempt 的標記照標記失敗；標記為不可重試時，等待者直接以最終失敗收尾，不再進入退避。
+- 理由：只看 `jobId` 等於自己就忽略時，重派的兄弟執行會無視舊執行剛寫的同一次失敗、再打一次 LLM；不可重試的錯誤（金鑰無效、安全攔截）重試結果必然相同，等待者照可重試處理會白等一輪退避（約 15 s）才看到同一個錯誤。
+- 替代方案：維持只記 `jobId`（兄弟執行重打一次 LLM；不可重試錯誤多等一輪退避）。
+
+**60. SET `ai-cache` 改為 best-effort**（D6 第 4 點；第 50 條的延伸；來源：合併門第 2 輪 worker 審查）
+- 影響範圍：LLM 成功、`diagnoses` 已落地後寫快取失敗時，該 job 是完成還是失敗重試；之後同簽章的新請求是否命中快取。
+- 裁決：SET `ai-cache:<sig>` 失敗只 warn、照常寫 trigger 並完成。
+- 理由：`diagnoses` 已落地，失敗拋出交重試時，重試只會走短路 (ii) 回原結果，而短路刻意不回填快取（第 32 條），拋出換不到快取、只換到一次多餘的重試與延遲；「快取有值就代表已落庫」的不變量不受影響（快取仍只在寫庫成功後才寫）。代價：這次的結果沒進快取，下一個同簽章新請求會再打一次 LLM。
+- 替代方案：維持失敗拋出交重試（多一次重試與延遲，快取照樣沒寫）。
+
+**61. `revertClaim` 的 rebound 改為放回原綁定物件**（D8 第 5 點；來源：合併門第 2 輪 api 審查）
+- 影響範圍：GET 查到終態或失敗、撤回改綁時，`JobRoutingRegistry` 裡的綁定物件身分；終態寬限與孤兒回收以參照比對刪除（`deleteIfCurrent`）是否仍有效。
+- 裁決：撤回 rebound 時放回**原來那個物件**，不複製一份新的。
+- 理由：registry 的寬限期滿與撤回都只刪「當初那一份物件」（data-model §2.1 不變量）；撤回時換成一個內容相同的新物件，原本排定的 `deleteIfCurrent` 比對不到，綁定會一直留到孤兒回收（10 分鐘），期間同 jobId 的 POST 被擋。
+- 替代方案：撤回時重新排定寬限與回收計時器（多一段計時器管理與測試）。
+
+**62. GET 的多項加固**（D8；來源：合併門第 2 輪 api 審查）
+- 影響範圍：`GET /diagnoses/:jobId` 在罕見狀態下的回應碼（200／409／503）與 api 日誌；綁定的 `boundAt`（孤兒回收起算點）與終態標記。
+- 裁決：(1) 查詢期間 owner 消失（綁定已被刪）回 503，不回 `rebound:true`；(2) claim 為 unchanged 時也刷新 `boundAt`；(3) `job.data.machineId` 不是合法字串時回 503（不留 null 綁定）；(4) BullMQ job hash 解析失敗時退到 MongoDB；(5) unchanged 且查到終態時 `markTerminal`，綁定照常進入 10 s 寬限；(6) 第一次讀取就是終態時直接回，不為 `deferred` 重讀；(7) 503 的 warn 以節流記錄；(8) rebound 日誌的 clientId 改記雜湊。
+- 理由：(1) 綁定已消失時回 `rebound:true`，畫面以為之後會收到事件、實際收不到，只能等 45 s watchdog；回 503 讓 web 依既有對映處理。(2)(5) 同一分頁反覆 GET 的長任務不該被孤兒回收提早刪掉，查到終態也要走同一段寬限，否則綁定留到孤兒回收。(3)(4) Redis 讀回的資料不可信（憲章 V 的精神），壞資料不該變成 500 或錯誤的綁定。(6) 終態不會再有事件，重讀只多一次往返。(7)(8) Redis 長時間故障時每個 GET 一則 warn 會洗版；clientId 是連線的存取憑證之一，不以明文進日誌。
+- 替代方案：逐項維持原行為，接受上述罕見狀態下的錯誤回應與日誌量。
+
+**以下第 63 條：合併門第 2 輪 web 審查補裁（2026-10-22，待覆核）**
+
+**63. 斷線期間凍結 45 s watchdog 與 2 s 退路**（D10、D11；取代 §7.1「斷線超過約 45 s 時不再續接」的接受；來源：合併門第 2 輪 web 審查 M1）
+- 影響範圍：WS 斷線期間 AI 診斷面板的進行中任務——不再在斷線中途轉「超過 45 秒沒有收到進度，結果未知，請重試」或「結果未送達」；`copilot.store.ts` `checkStalls` 的觸發條件。
+- 裁決：`checkStalls` 以連線狀態為條件：連線**斷開**時跳過 45 s watchdog 與 2 s 退路，交由重連 → 授權 → 續接 GET 收尾；已連線但尚未授權時不跳過（授權失敗仍由 watchdog 承接，第 47 條）。
+- 理由：斷線時 watchdog 與退路發出的 GET 帶的是舊 socketId，必回 409 `socket_unauthorized` 或網路錯誤，把可能已在後端完成的診斷誤標「結果未知」，而且任務已不是進行中，重連後也不會再續接——使用者只能對已完成的診斷按重試。代價：長時間斷線時任務一直停在「進行中」（頂部橫幅顯示斷線、使用者可中止診斷）。
+- 替代方案：維持 watchdog 照常計時，並在重連後替「結果未知」等失敗態續接（要擴大 FR-016 的續接範圍與對應測試）。
+
 ### 7.1 整理時發現、不在首批 11 條內的待覆核點
 
 - D2：keepalive 計時器被 `ai/token` 重設，與「涵蓋串流期間」的理由矛盾；複合故障下最長無事件約 55 s。→ 已由第 14 條裁決接受。
@@ -727,7 +775,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - （實作階段補，未編條，待覆核）**GET 回 `rebound: true` 前核對 owner**：BullMQ 查詢期間綁定可能已被另一個 GET 改綁走，回應前確認 `JobRoutingRegistry` 的 owner 仍是本次 socketId，不是就回 409 `job_bound_elsewhere`（D8 第 4 點）。代價只是一次 Map 讀取；不核對時兩個 GET 都會回 `rebound: true`，其中一個分頁以為自己在收事件、實際收不到，只能等 45 s watchdog。已寫入 data-model §2.4 與 contracts/diagnosis-lookup §3（2026-10-21 補，合併門第 1 輪確認）。
 - （實作階段補，未編條，待覆核）**終態綁定 × BullMQ 仍進行中回 503、不重判**（data-model §2.4「實作時更新」）：照理不可達；回 503 讓 web 稍後重試，不猜測要不要改綁（D8 第 4 點）。
 - （合併門第 1 輪補，2026-10-22）**瀏覽器端 UI 演練（T081）待使用者**：由第 57 條裁決交使用者驗收——quickstart §4 演練 2／3 的說明行、「重新連線後取回」、「原始串流（不完整）」與無「worker」「stalled」字樣，需在一鍵 demo（`AI_PROVIDER=fake`）實際操作確認；確認前 T081 維持 `[ ]`。
-- （合併門第 1 輪 web 審查補，2026-10-22，未編條，待覆核）**斷線超過約 45 s 時不再續接**：斷線期間 45 s watchdog 照常計時，觸發時以**舊 socketId** 發 GET——舊連線已不在線，必回 409 `socket_unauthorized`，任務轉「超過 45 秒沒有收到進度，結果未知，請重試」，之後重連也不再續接（已不是進行中）。重連退避 1／2／4／8／16 s 加 30% 抖動，api 冷啟動超過約 19 s 時，重連成功到 watchdog 觸發只剩約 5～14 s 的餘裕。行為符合 D11「結果未知」的語意（後端可能已完成，使用者按重試以新 jobId 命中快取），列為待覆核的上界。替代方案：斷線期間凍結 watchdog（重連後才繼續計時；要改 `checkStalls` 與對應測試，且整條通道長時間壞掉時畫面會一直停在進行中）。
+- （合併門第 1 輪 web 審查補，2026-10-22）**斷線超過約 45 s 時不再續接**：→ **已由第 63 條處理**（合併門第 2 輪：斷線期間凍結 watchdog 與 2 s 退路，下列敘述為處理前的情況）。原記錄：斷線期間 45 s watchdog 照常計時，觸發時以**舊 socketId** 發 GET——舊連線已不在線，必回 409 `socket_unauthorized`，任務轉「超過 45 秒沒有收到進度，結果未知，請重試」，之後重連也不再續接（已不是進行中）。重連退避 1／2／4／8／16 s 加 30% 抖動，api 冷啟動超過約 19 s 時，重連成功到 watchdog 觸發只剩約 5～14 s 的餘裕。行為符合 D11「結果未知」的語意（後端可能已完成，使用者按重試以新 jobId 命中快取），列為待覆核的上界。替代方案：斷線期間凍結 watchdog（重連後才繼續計時；要改 `checkStalls` 與對應測試，且整條通道長時間壞掉時畫面會一直停在進行中）。
 
 ---
 
