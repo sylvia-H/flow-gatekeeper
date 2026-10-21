@@ -22,7 +22,7 @@ worker 用 fake provider，且 e2e 把首 token 延後 2 秒（`FAKE_AI_FIRST_TO
 4. 循序跑 `src/*.e2e.test.ts`。
 5. `down -v`（映像保留，下次 build 走快取）。
 
-`E2E_KEEP=1 corepack pnpm test:e2e` 會保留容器，事後用
+`E2E_KEEP=1 corepack pnpm test:e2e`（bash；PowerShell 為 `$env:E2E_KEEP = "1"; corepack pnpm test:e2e`，排查完 `Remove-Item Env:E2E_KEEP`）會保留容器，事後用
 `docker compose -p flow-gatekeeper-e2e logs worker api` 排查，清理：`docker compose -p flow-gatekeeper-e2e --profile demo down -v`。
 
 gating：只有 `vitest run --mode e2e`（即 `test:e2e`）才會設 `E2E=1`、收 `src/*.e2e.test.ts` 並起容器；`test:coverage` 不涵蓋本套件。
@@ -65,7 +65,7 @@ harness 讀後端證據的兩處做法（`src/harness/infra.ts`，與 012 tasks 
 
 e2e 另把 `AI_TIMEOUT_MS=15000`、`AI_DEDUPE_LOCK_SECONDS=20`（縮短 kill 場景等待死鎖過期的時間），
 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000`：場景 3b 要在 context 已建好、首 token 之前 kill worker（research P24），但 fake 原本
-一呼叫就送出首 token，progress 20 → 首 token 只差幾十 ms，從 Windows host 下 `docker compose kill`（數百 ms）打不進這個窗口；
+一呼叫就送出首 token，progress 20 → 首 token 只差幾十 ms，從 Windows host 下 kill 打不進這個窗口（compose CLI 每次約 1～2 s；改用 `docker kill <容器 id>` 後第 3 輪實測 431 ms）；
 P24「首 token 約在 progress 40 後 500ms」的前提與實作不符，2026-10-21 以這個延遲修正。整段串流因此約 11.5s（仍 < `AI_TIMEOUT_MS`）。
 
 ## 場景
@@ -99,8 +99,8 @@ P24「首 token 約在 progress 40 後 500ms」的前提與實作不符，2026-1
   `job/status` 另帶 `attempt`（＝`attemptsMade + 1`，stalled 重派不遞增，維持 1）與 `execution`（＝`attemptsStarted`，重派後為 2），
   場景以「`reason: "stalled"` 或 `execution ≥ 2`」判定重派確實發生。
 - **最長無事件間隔斷言 < 45 s**：client 為每則訊息記收到時間，`maxGap` 取整個 job 期間相鄰兩則訊息的最大間隔。BullMQ lock 15 s、
-  stalled 檢查每 5 s、worker keepalive 10 s，設計上界 `K + L + 2S` ＝ 35 s（`W ≤ L` 時；`W > L` 時為 `K + W + 2S`，`W` 須 < 25 s）。
-  `W`＝kill 後第一則 `worker ready` − 容器 `State.FinishedAt`，`W > 25 s` 時場景印「上界失效」並失敗（不放寬判準）。
+  stalled 檢查每 5 s、worker keepalive 10 s，設計上界 `K + L + 2S` ＝ 35 s（`W ≤ 15 s` 時；`15 < W < 25 s` 時上界為 `K + W + 2S`，仍 < 45 s）。
+  `W`＝kill 後第一則 `worker ready` − 容器 `State.FinishedAt`，`W ≥ 25 s` 時場景印「上界失效」並失敗（不放寬判準；`W` 正好 25 s 時上界等於 45 s，不算通過）。
 - **重播**：3a 的第二輪 `ai/token` 仍帶 `attempt: 1`、`seq` 從 0 重播（同一 attempt 內 `seq <= 上一個 seq` 即新一次執行，契約 1.3.0 起；
   `execution` 遞增同樣會清空串流）；3b 在首 token 前 kill，kill 前零 token，只有重派那一輪。
 - **實測（012-lite，2026-10-21 第 3 輪；修正 kill 時序後重跑的那一次全綠）**：3a `maxGap` **14.0 s**、3b `maxGap` **18.8 s**、
@@ -129,3 +129,4 @@ P24「首 token 約在 progress 40 後 500ms」的前提與實作不符，2026-1
 - 檔案執行順序**不保證**（vitest 依上次耗時排序，實測 `worker-kill` 常先跑）。各檔機台與快取處理見上方「機台選擇」；
   同一檔內的場景依賴順序（檔內循序，例如場景 1 → 2、6a → 6b）。會停 worker、暫停 redis 的檔在 afterAll 一律還原。
 - 冷啟動會 build 三個映像（worker／api／web），第一次約數分鐘；之後走 Docker layer 快取。
+- 全套（6 檔 14 條，不含 build）第 3 輪實測 **278 s**（約 4.6 分鐘；規劃時估 10～15 分鐘）。

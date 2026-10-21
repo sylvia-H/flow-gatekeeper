@@ -49,6 +49,8 @@
 **不變量**：每個 jobId 至多一份綁定；只有 registry 能改寫；寬限期滿與撤回都只刪「當初那一份物件」（以參照比對），不誤刪之後
 以同一 jobId 新建的綁定。
 
+**不變量**（合併門第 1、2 輪補，2026-10-21～22）：POST 入列失敗時只以 `deleteIfCurrent` 刪本次建立的那份綁定；`revertClaim` 撤回 rebound 時把改綁期間補上的 machineId／attempt／execution／deferred 寫回原 `previous` 物件再放回（參照不變，既有的寬限與 `deleteIfCurrent` 仍有效，ADR-003 第 61 條）；`touch(jobId, clientId, now)` 就地刷新 `boundAt`，只在綁定仍送往該 clientId 且未終態時生效。
+
 ### 2.2 生命週期
 
 ```text
@@ -93,6 +95,12 @@ MUST 再核對一次 owner（實作交叉審查補，2026-10-21）。
 `previousSocketId`）改綁走時，與 `conflict` 同樣回 **409** `job_bound_elsewhere`。不核對時兩個 GET 都會回 `rebound:true`，
 其中一個分頁以為自己在收事件、實際收不到，只能等 45 s watchdog。
 
+**讀取順序與邊界**（合併門第 1、2 輪補，2026-10-21～22；ADR-003 §7.1、第 62 條）：
+- MUST 先 `getState()`、再讀 job hash（`Job.fromId`）。反過來讀時，讀 hash 當下 job 仍在跑、讀 state 時已 completed，`returnvalue` 缺值會被當成不合法而退到 MongoDB；快取命中的 job 不寫 `diagnoses`，就誤回 404。
+- unchanged × 進行中：`touch` 刷新 `boundAt`。讀取期間綁定消失 → 503（warn `binding vanished while reading job`）；owner 為別條連線 → 409 `job_bound_elsewhere`。
+- `job.data.machineId` 非字串或不在機台名冊 → 503 並撤回（例外：rebound 且原綁定已有 machineId 時照常回應）。job hash 解析失敗（SyntaxError）→ warn 後退 MongoDB；其他 Redis 錯誤 → 503。
+- 讀到 completed／failed 且綁定是本 socket 原本那份、registry 尚未標終態 → `markTerminal`（進入 10 s 寬限）。第一次讀到終態就直接回應，不補 machineId、不因 `deferred` 重讀。
+
 ---
 
 ## 3. Redis 鍵（worker 寫；皆帶 TTL）
@@ -100,7 +108,7 @@ MUST 再核對一次 owner（實作交叉審查補，2026-10-21）。
 | 鍵 | 值 | TTL | 寫入時機 | 讀取時機 | 刪除 |
 | --- | --- | --- | --- | --- | --- |
 | `ai-result:<jobId>`（新） | `DiagnosisResult` JSON | 3600 s（對齊 `removeOnComplete`） | LLM 成功、`parseResult` 通過後、寫 `diagnoses` 之前 | processor 開頭的冪等短路 (i) | `diagnoses` 寫入成功後 DEL |
-| `ai-fail:<sig>`（新） | `{ code, message, jobId, at }` JSON | 10 s | LLM 階段失敗（`ai_timeout`／`provider_error`／`schema_invalid`），`fail()` 之前 | 取鎖迴圈每輪開頭；取鎖後、限流 INCR 前（P13） | 持鎖者 LLM 成功寫 `ai-cache` 後 DEL；否則 TTL |
+| `ai-fail:<sig>`（新） | `{ code, message, jobId, attempt, retryable, at }` JSON（`attempt`／`retryable` 為合併門第 2 輪補，ADR-003 第 59 條：只在 `marker.jobId === jobId && marker.attempt < attempt` 時忽略；等待者以 `retryable` 決定是否直接最終失敗） | 10 s | LLM 階段失敗（`ai_timeout`／`provider_error`／`schema_invalid`），`fail()` 之前 | 取鎖迴圈每輪開頭；取鎖後、限流 INCR 前（P13） | 持鎖者 LLM 成功寫 `ai-cache` 後 DEL；否則 TTL |
 | `ai-metric:<jobId>`（新） | `"1"` | 86400 s（對齊 `removeOnFail`） | 記 hit／miss 前 `SET NX`，回 OK 才記 | — | TTL |
 | `ai-cache:<sig>`（既有） | `DiagnosisResult` JSON | `AI_CACHE_TTL_SECONDS` | `diagnoses` 寫入成功後（不變量：快取有值就代表已落庫） | 不變 | 讀回不合法時 DEL（不變） |
 | `ai-lock:<sig>`、`ai-rpm:<window>`（既有） | — | 不變 | 不變 | 不變 | 不變 |
@@ -115,7 +123,7 @@ MUST 再核對一次 owner（實作交叉審查補，2026-10-21）。
 | collection | 變更 | 規則 |
 | --- | --- | --- |
 | `diagnosisTriggers` | 新增 `{ jobId: 1 }` unique 索引（衝突時退回非 unique＋error 日誌，沿用 `ensureUniqueJobIdIndex` 邏輯）；寫入改 `updateOne({ jobId }, { $setOnInsert: { machineId, jobId, requestedBy, cached, createdAt } }, { upsert: true })` | 每個 jobId 恰一筆：成功（`cached` true／false）或最終失敗，先寫者勝；TTL 30 天不變；併發 upsert 撞 E11000 視為成功 |
-| `diagnoses` | worker 新增 `findDiagnosisResult(jobId)`；api 新增唯讀 `HistoryService.findDiagnosisResult(jobId)`（`projection: { result: 1 }`、`maxTimeMS` 3 s） | 只收 LLM 路徑結果（快取命中不寫，不變）；api 不寫、不建索引 |
+| `diagnoses` | worker 新增 `findDiagnosisResult(jobId)`（`maxTimeMS` 5000，比照 context 查詢；合併門第 1 輪補）；api 新增唯讀 `HistoryService.findDiagnosisResult(jobId)`（`projection: { result: 1 }`、`maxTimeMS` 3 s） | 只收 LLM 路徑結果（快取命中不寫，不變）；api 不寫、不建索引 |
 
 ---
 
@@ -132,12 +140,12 @@ MUST 再核對一次 owner（實作交叉審查補，2026-10-21）。
 | 3 | **冪等短路** (ii)：`repo.findDiagnosisResult(jobId)` 合法 → 步驟 4；兩者皆無 → 步驟 5 | 拋出 → 重試 |
 | 4 | `upsertTrigger(cached:false)` → `report(100)` → `ai/done(cached:false)` → `return { result, cached:false }`（info `idempotent short-circuit`，`source`） | trigger 失敗 → 拋出 → 重試（下次仍短路） |
 | 5 | `buildContext` → `report(20)` → 空脈絡短路（不變） → 簽章 | 不變 |
-| 6 | `replyCached()`：命中 → `setIfAbsent(ai-metric)` 為真才記 hit → `upsertTrigger(cached:true)` → `report(100)` → `ai/done(cached:true)` → `return { result, cached:true }` | 不變 |
+| 6 | `replyCached()`：命中 → 先 `setIfAbsent(ai-metric)`（`first`）；`isReExecution || !first` 時先重查冪等短路（步驟 2、3），命中即回 `cached:false`（ADR-003 第 49、58 條，合併門第 1、2 輪補）；否則 `first` 為真才記 hit → `upsertTrigger(cached:true)` → `report(100)` → `ai/done(cached:true)` → `return { result, cached:true }` | 不變 |
 | 7 | 取鎖迴圈每輪開頭：查 `ai-fail:<sig>`（非自己）→ 命中即 `fail(marker.code, marker.message, true)` | — |
-| 8 | 取得鎖 → double-check `replyCached()` → 查 `ai-fail` → 限流 INCR（超限 → 延後，不變） | — |
+| 8 | 取得鎖 → double-check `replyCached()` → 未命中時，若 `isReExecution` 或 `ai-metric:<jobId>` 已有值（`countedElsewhere`，只讀不 claim）先重查冪等短路（第 49 條延伸，合併門第 1、2 輪補） → 查 `ai-fail` → 限流 INCR（超限 → 停 keepalive 後延後，合併門第 1 輪補） | — |
 | 9 | `report(40)` → `setIfAbsent(ai-metric)` 為真才記 miss → LLM 串流（每個 token `touch()`；首 token `report(60)`） | LLM 失敗：寫 `ai-fail` → `fail(code, …)`（不變的分類） |
-| 10 | `parseResult` → `report(80)` → SET `ai-result` → `insertDiagnosis` → DEL `ai-result` → SET `ai-cache` → DEL `ai-fail` → `upsertTrigger(cached:false)` → `report(100)` → `ai/done(cached:false)` → `return { result, cached:false }` | （實作交叉審查更新，2026-10-21；ADR-003 代理裁決第 50 條）SET `ai-result` 失敗 → 只 warn、照常 `insertDiagnosis`（best-effort）；`insertDiagnosis` 失敗 → `fail("persist_failed", PERSIST_FAILED_MESSAGE, true, err)`（重試時若暫存在，步驟 2 只重做寫庫）；DEL `ai-result`、DEL `ai-fail` 失敗 → 只 warn、由 TTL 回收；SET `ai-cache`、`upsertTrigger`、`report(100)` 失敗 → 拋出 → 重試（`diagnoses` 已落地，下次步驟 3 短路、不打 LLM） |
-| 11 | 未取得鎖：`replyCached()` → 關閉中交回（不變）→ deadline（不變）→ sleep → 回步驟 7 | 不變 |
+| 10 | `parseResult` → `report(80)` → SET `ai-result` → `insertDiagnosis` → DEL `ai-result` → SET `ai-cache` → DEL `ai-fail` → `upsertTrigger(cached:false)` → `report(100)` → `ai/done(cached:false)` → `return { result, cached:false }` | （實作交叉審查更新，2026-10-21；ADR-003 代理裁決第 50 條）SET `ai-result` 失敗 → 只 warn、照常 `insertDiagnosis`（best-effort）；`insertDiagnosis` 失敗 → `fail("persist_failed", PERSIST_FAILED_MESSAGE, true, err)`（重試時若暫存在，步驟 2 只重做寫庫）；DEL `ai-result`、DEL `ai-fail` 失敗 → 只 warn、由 TTL 回收；SET `ai-cache` 失敗 → 只 warn、照常完成（合併門第 2 輪，ADR-003 第 60 條）；`upsertTrigger`、`report(100)` 失敗 → 拋出 → 重試（`diagnoses` 已落地，下次步驟 3 短路、不打 LLM） |
+| 11 | 未取得鎖：`replyCached()` → 關閉中交回（交回前停 keepalive，合併門第 1 輪補）→ deadline（不變）→ sleep → 回步驟 7 | 不變 |
 | finally | keepalive `stop()`、`liveness.end` | — |
 
 **BullMQ Worker options**（`apps/worker/src/lib/bullmq-options.ts`）：
@@ -181,9 +189,9 @@ MUST 再核對一次 owner（實作交叉審查補，2026-10-21）。
 | active | `job/status` waiting＋`reason:"stalled"` | active，`stalledNotice = { execution: max(state.execution, 既有 N) + 1 }`（未確認）；之後帶 `execution ≥ 估計值` 的事件校正並 `confirmed`，小於者視為遲到事件忽略；確認後 execution 再增且無新 stalled 才移除（實作時依 P15 修正，2026-10-21） |
 | active | `lookup/result` completed | completed（`source:"lookup"`、`streamIncomplete:true`） |
 | active | `lookup/result` failed | failed（`humanizeError(error)`） |
-| active | `lookup/result` waiting／active | active，清 `resume`，更新 progress／attempt／execution（遞增規則同上） |
+| active | `lookup/result` waiting／active | active，清 `resume`，更新 progress／attempt／execution（遞增規則同上；progress 只往前——大於目前值或目前為 null 才採用，回應讓任務換到新一輪或新一次執行時採用回應值，合併門第 2 輪補） |
 | active | `ai/done` | completed（`source:"ai/done"`、`streamIncomplete = reconnected === true`） |
-| failed `undelivered` | `ai/done`／`job/status` completed＋`result`／`lookup/result` completed | completed（三來源皆可救回；`streamIncomplete` 依來源規則） |
+| failed `undelivered` | `ai/done`／`job/status` completed＋`result`／`lookup/result` completed | completed（三來源皆可救回；`streamIncomplete` 依來源規則）。實際上 GET 只對進行中任務發出，救回來源只有前兩者（ADR-003 第 55 條） |
 | completed／failed（非 undelivered） | 任何事件 | 不變（先到者為準，FR-004） |
 
 ### 6.3 store 側附屬表（plain Map／Set，非 reactive；只有副作用路徑讀）
@@ -193,7 +201,15 @@ MUST 再核對一次 owner（實作交叉審查補，2026-10-21）。
 | `boundSocketIds`（新） | jobId → socketId | `diagnose()` 送 POST 前；lookup 回 `rebound:true` | 每次 GET 的 `previousSocketId` | 該台開新任務、`cancel` |
 | `pendingResume`（新） | machineId 集合 | `onReconnect`（clientId 變更且該台 active） | `onAuthorized` | `onAuthorized` 消化後；任務離開 active |
 | `lookupInFlight`（新） | jobId 集合 | `lookup()` 發出 | `checkStalls` 跳過重複觸發 | GET 回應或失敗 |
+| `authorizedSocketId`（新，合併門第 1 輪） | 目前已授權的連線 clientId（或 null） | `onAuthorized(socketId)` | `resumeAfterPost`、續接 GET 的 socketId | `onReconnect` 換連線時設回 null |
 | `lastActivityAt`、`backendCompletedAt`（既有） | 不變 | `onReconnect` 另 `touch()` | 不變 | 不變 |
+
+規則（合併門第 1、2 輪補，2026-10-21～22）：
+- `onAuthorized` 略過 POST 仍在往返的機台（job 可能還沒入列，GET 會 404 而誤轉「無法取回」），留在 `pendingResume`；POST 結束後由 `resumeAfterPost` 補一次續接（只在 `authorizedSocketId` 仍是目前連線時發出）。
+- `retryOnNewSocket`：GET 往返期間發生重連時，舊連線的結果作廢，改以新連線重發。
+- `onReconnect` 一併刪該台 `backendCompletedAt`（2 s 寬限起點作廢，續接 GET 會處理 completed）。
+- reducer 收到同 jobId 的 `ai/token`／`job/status` 即清 `resume`；續接 GET 回應時若 `resume` 已被清，失敗不轉失敗、交 45 s watchdog。
+- 連線不在 connected（斷線、重連中）時 `checkStalls` 跳過 45 s watchdog 與 2 s 退路（ADR-003 第 63 條）；已連線未授權照常。
 
 ### 6.4 耗時（`diagnosis-timing.ts`）
 

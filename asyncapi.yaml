@@ -22,8 +22,10 @@ info:
 
     Error responses (Nest HttpException bodies, no separate schema):
     400 when params or query do not match the contract (body lists issue path and code only, input is not echoed);
-    404 when neither BullMQ nor MongoDB holds a valid result (completed jobs are removed from BullMQ after 1 hour;
-    cache-hit results are not stored in MongoDB, so they return 404 afterwards);
+    404 when neither BullMQ nor MongoDB holds a valid result (completed jobs are removed from BullMQ after 1 hour or
+    once more than 1000 completed jobs are retained, whichever comes first; cache-hit results are not stored in MongoDB, so
+    they return 404 afterwards; failed jobs are removed after 24 hours or beyond 5000 retained failures, after which GET
+    returns 404);
     409 with code socket_unauthorized when socketId is not online or not authorized (same message as POST /diagnoses);
     409 with code job_bound_elsewhere when the job is still in flight and bound to another online connection that is
     neither this socketId nor previousSocketId; the code field appears only on these GET 409 responses, the POST 409
@@ -83,8 +85,12 @@ channels:
       description: >-
         Server emits lifecycle status updates for a diagnosis job. A `completed` status carries the validated `result` and `cached`
         whenever the worker's return value passes validation; this is the authoritative completion signal. `attempt`/`execution`
-        accompany progress updates; `reason: stalled` marks a re-dispatch after the worker lost its lock. When WS_AUTH_SECRET is set, it
-        is sent only to authorized connections.
+        accompany progress updates; `reason: stalled` marks a re-dispatch after the worker lost its lock (it is followed by a plain
+        `waiting`, so consumers may see two waiting updates in a row; it is not sent once the job is already terminal). While a worker
+        is alive, an `active` update with an unchanged progress value is repeated about every 10 seconds as a keepalive. Consumers
+        MUST treat the first terminal status (`completed` or `failed`) they receive for a jobId as final. When `completed` arrives
+        without `result` (older worker, or a return value that failed validation), consumers SHOULD fall back to
+        GET /diagnoses/{jobId} to read the result. When WS_AUTH_SECRET is set, it is sent only to authorized connections.
       message:
         $ref: "#/components/messages/JobStatus"
 
@@ -103,7 +109,8 @@ channels:
       description: >-
         Server forwards the validated final diagnosis result for a job, flagging whether it was served from cache. `ai/done` is a
         best-effort notification. It MAY be delivered more than once for the same jobId (re-execution after a stalled lock or a retry
-        always carries the same result) and MAY be lost (Redis Pub/Sub is at-most-once). The authoritative completion is `job/status`
+        normally carries the same result; in a rare residual case documented in ADR-003 section 4 a re-execution may carry a
+        different result, so keep the first one received) and MAY be lost (Redis Pub/Sub is at-most-once). The authoritative completion is `job/status`
         with `status: completed` and `result`; consumers MUST treat the first completion they receive for a jobId as final and ignore
         later ones. When WS_AUTH_SECRET is set, it is sent only to authorized connections (those that passed the machine/subscribe token check).
       message:
@@ -113,7 +120,12 @@ channels:
     subscribe:
       operationId: aiError
       summary: Server pushes AI provider or worker errors.
-      description: Server emits an error event when the AI provider or worker fails for a job. When WS_AUTH_SECRET is set, it is sent only to authorized connections (those that passed the machine/subscribe token check).
+      description: >-
+        Server emits an error event when the AI provider or worker fails for a job. Because a failed job keeps its routing
+        binding for a 10-second grace period, the worker's specific `ai/error` MAY arrive after `job/status` `failed`, and a
+        job MAY produce two `ai/error` messages (the worker's specific code plus the api's `worker_failed` safety net).
+        Consumers MUST treat the first terminal event for a jobId as final and ignore later ones. When WS_AUTH_SECRET is set, it
+        is sent only to authorized connections (those that passed the machine/subscribe token check).
       message:
         $ref: "#/components/messages/AiError"
 

@@ -114,7 +114,7 @@ pnpm monorepo：`packages/contracts/src/`、`apps/api/src/`、`apps/worker/src/`
 
 ### nginx（U-nginx-e2e）
 
-- [X] T037 [P] [US2] `apps/web/nginx.conf`：檔頭新增 `limit_req_zone $binary_remote_addr zone=diag_read:1m rate=60r/m;`（附 Docker Desktop 共用一桶註解）；在 `location /diagnoses` **之前**新增 `location ~ ^/diagnoses/[0-9a-fA-F-]{36}$`（`limit_req zone=diag_read burst=10 nodelay`、`limit_req_status 429`、沿用 `proxy_pass http://$api_upstream;` 等三行、**不寫** `add_header`）；CSP 註解補一句同源 GET 已涵蓋；**[Docker]** `docker compose --profile demo up -d --build web` 後 `curl.exe -i` 驗 GET 走新桶且回應帶 server 層安全 header（FR-015；R5；代理裁決第 8 條）
+- [X] T037 [P] [US2] `apps/web/nginx.conf`：檔頭新增 `limit_req_zone $binary_remote_addr zone=diag_read:1m rate=60r/m;`（附 Docker Desktop 共用一桶註解）；在 `location /diagnoses` **之前**新增 `location ~ "^/diagnoses/[0-9a-fA-F-]{36}$"`（`limit_req zone=diag_read burst=10 nodelay`、`limit_req_status 429`、沿用 `proxy_pass http://$api_upstream;` 等三行、**不寫** `add_header`）；CSP 註解補一句同源 GET 已涵蓋；**[Docker]** `docker compose --profile demo up -d --build web` 後 `curl.exe -i` 驗 GET 走新桶且回應帶 server 層安全 header（FR-015；R5；代理裁決第 8 條）
 
 ### web（U-web）
 
@@ -237,7 +237,7 @@ pnpm monorepo：`packages/contracts/src/`、`apps/api/src/`、`apps/worker/src/`
 - [X] T069 [P] `README.md`「已知限制」：「重連不 rebind」改為「重連以 jobId 續接（GET＋rebind），原連線仍在線時不改綁」；「診斷結果目前沒有讀取端點」改為「快取命中的結果 1 小時後無法以 GET 取回」；「worker 崩潰後的重派有長時間靜默」改為「設計上界約 35 秒無事件，超過 45 秒才標『結果未知』」；at-most-once 條改寫為「重連後直接顯示結果、不續播」；補「重新整理頁面後不續接進行中的診斷」與「jobId 與 `previousSocketId` 會進 nginx access log」兩條；「第三輪審查的現況」把 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治移到「已修（012-lite）」（FR-039；代理裁決第 19 條；plan 風險 3）
 - [X] T070 `README.md` 資料與設定段：`diagnoses` 的「目前只寫不讀」改為「api 經 `GET /diagnoses/:jobId` 讀取（`returnvalue` 過期後的第二來源）」；`diagnosisTriggers` 補「`jobId` unique，每個 jobId 一筆」；Redis 職責補 `ai-fail:*`／`ai-result:*`／`ai-metric:*`（含 TTL）；確認所有契約版本字串為 1.4.0；nginx 限流敘述補 GET `diag_read` 60 r/m、burst 10；BullMQ 參數具名常數（`apps/worker/src/lib/bullmq-options.ts`，15／5／2、keepalive 10 s、上界公式）說明；API 段補 `GET /diagnoses/:jobId`。相依 T069（同檔串行）（FR-018、FR-039）
 - [X] T071 [P] `apps/web/PRODUCT.md`：「已知產品限制」改為「AI token 串流 at-most-once（重連後不續播動畫，直接顯示結果）、快取命中的結果 1 小時後無法以 GET 取回、重新整理頁面後不續接進行中的診斷（再按一次診斷會命中快取或等待同簽章的去重鎖）、Mock 頻率控制無後端作用」；失敗段「只在後端完成後約 10 秒內、而且中間沒有重連時才救得回來」改為 2 s 退路先 GET 的新規則；新增術語「重新排入佇列」（內部稱重新派送）「取回」「結果未知」（FR-036、FR-039；代理裁決第 19 條）
-- [X] T072 [P] `tests/e2e/README.md`：場景表加 3a／3b、5、6a／6b、7、8；場景 3「反映的現況語意」改為 relay 監聽 `stalled` 並送 `reason`、最長無事件間隔斷言 < 45 s、attempt／execution 由 `job/status` 帶；「注意」段補 GET 走獨立限流桶、新故障場景、全套耗時 10～15 分鐘、場景 7 未重現重派時的判讀（FR-039、FR-046）
+- [X] T072 [P] `tests/e2e/README.md`：場景表加 3a／3b、5、6a／6b、7、8；場景 3「反映的現況語意」改為 relay 監聽 `stalled` 並送 `reason`、最長無事件間隔斷言 < 45 s、attempt／execution 由 `job/status` 帶；「注意」段補 GET 走獨立限流桶、新故障場景、全套耗時（規劃時估 10～15 分鐘；第 3 輪實測 278 s，合併門第 2 輪更正）、場景 7 未重現重派時的判讀（FR-039、FR-046）
 - [X] T073 [P] `docs/Flow-Gatekeeper-SDD-完整實作指南.md`：§15.7 012-lite 藍圖狀態改「已落地」；§15.6「e2e 實測發現（留給 012-lite）」條加「已落地（012-lite）」；§15.6「1.0.0 之後的現況摘要」補 012-lite 一段；§16.3 第 6 列「目前無結果讀取端點」改寫；§17「streaming 推不到前端」列的「重連後舊 jobId 不會改綁」改寫；複核 §15.5 已拒絕註記仍在（FR-039）（另補：`specs/009-observability-baseline/contracts/log-fields.md` §3 api context 清單加 `JobRoutingRegistry`——孤兒回收 warn 的 context 自 relay 移入 registry，交叉審查 L3）
 - [X] T074 [P] `CHANGELOG.md` `[Unreleased]`：契約小節記 asyncapi **1.4.0**（WS：`job/status` 新增 optional `attempt`／`execution`／`reason`（開放字串）／`cached`、`completed` 帶 `result`；`ai/done` 可重複可遺失；`ai/error.code` 新增 `persist_failed`。HTTP：`GET /diagnoses/:jobId?socketId=[&previousSocketId=]` 的 200 四種、400、404、409 `socket_unauthorized`／`job_bound_elsewhere`、429、503，依 contracts/diagnosis-lookup §9）；「相容性注意」逐條記：`ai/done` 可重複、可遺失（自寫 client 須以 jobId 去重）、BullMQ job `progress` 改為物件、BullMQ lock 15／5／2、新增 GET 與 nginx 獨立 60 r/m 桶、`job/status` 新欄位、**升級順序先 api 後 worker（web 不限）**、jobId 與 `previousSocketId` 進 nginx access log 的曝險；記 `[2.1.0]` 帶著發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治已由 012-lite 修掉（在 `[Unreleased]` 記已修，`[2.1.0]` 原文不改寫，只在該條末加「已修，見 [Unreleased]」註）（FR-034；R12；checklist CHK046、CHK047）
 - [X] T075 `docs/adr-003-completion-semantics.md`，依序三步（analyze 階段修正 2026-10-21）：
@@ -259,7 +259,7 @@ pnpm monorepo：`packages/contracts/src/`、`apps/api/src/`、`apps/worker/src/`
 - [X] T079 [Docker] `docker compose up -d` 後 `corepack pnpm --filter @flow-gatekeeper/worker test:integration` 與 `--filter @flow-gatekeeper/api test:integration` 全綠（`apps/worker/src/integration/*.int.test.ts`、`apps/api/src/integration/*.int.test.ts`；結果記入 `specs/012-stream-resilience/tasks.md`「驗收紀錄」）（SC-004、SC-005、SC-007、SC-009）
 - [X] T080 [Docker/e2e] `corepack pnpm test:e2e` 全套：場景 1／2／4a／4b 照過（SC-011），3a／3b、5、6a／6b、7、8 通過（SC-001～SC-005）；把 `maxGap`、`W`、場景 7 的重派證據與全套耗時寫進 `specs/012-stream-resilience/tasks.md`「驗收紀錄」；`W > 25 s` 或場景 7 未重現時停下回報、不改判準
 - [ ] T081 [Docker] quickstart §4 手動演練 1～4（一鍵 demo、`AI_PROVIDER=fake`），記錄演練 1 的 `W` 與各演練畫面是否符合 contracts/ui-copy（說明行、取回 meta、「原始串流（不完整）」、無「worker」「stalled」字樣）；收尾把 `apps/worker/.env` 的 `AI_PROVIDER` 改回 `gemini`（quickstart；SC-001～SC-004）
-- [X] T082 收尾複核：硬規則 1（`ai/token` 寫 reactive 的範圍未擴大，新增 Map／Set 皆非 reactive）、憲章 IV（無新 WS channel、worker 不直接 emit）、spec FR-001～FR-047 皆有對應已完成任務（見下方「FR／SC 覆蓋」）、本檔所有任務勾 `[X]`、`checklists/resilience.md` 仍成立（FR-042～FR-044）
+- [X] T082 收尾複核：硬規則 1（`ai/token` 寫 reactive 的範圍未擴大，新增 Map／Set 皆非 reactive）、憲章 IV（無新 WS channel、worker 不直接 emit）、spec FR-001～FR-047 皆有對應已完成任務（見下方「FR／SC 覆蓋」）、除 T076（merge 時）、T081（待使用者）外皆已勾選（合併門第 2 輪更正；原寫「本檔所有任務勾 `[X]`」）、`checklists/resilience.md` 仍成立（FR-042～FR-044）
 
 ---
 
@@ -274,7 +274,7 @@ pnpm monorepo：`packages/contracts/src/`、`apps/api/src/`、`apps/worker/src/`
 - T079：`docker compose up -d` 後 worker `test:integration` 3 檔 33 條、api 3 檔 10 條全綠（含新增 `bullmq-lifecycle`、`diagnosis-reader`、redis-store (g)(h)）。
 - T080：e2e 第 3 輪 6 檔 14 條全綠 278 s（數字見 `tests/e2e/README.md` 場景 3 與指南 §15.7.6）。
 - T081：**未完成、待使用者驗收**（合併門第 1 輪改回 `[ ]`，2026-10-22，ADR-003 代理裁決第 57 條）。e2e 自動化覆蓋後端與 WS client 行為（場景 3a／3b worker SIGKILL、5 Pub/Sub 斷線迴圈、6a／6b api 重啟、7 Redis pause 50 s）；瀏覽器端 UI（說明行、「重新連線後取回」、「原始串流（不完整）」、文案無「worker」「stalled」字樣）未手動演練，待使用者驗收。（原記錄：以上述 e2e 場景自動化覆蓋、未另行手動演練，離席期間代理裁決 e2e 斷言即演練判準。）
-- 提交顆粒度註記（合併門第 1 輪，2026-10-22；不改寫歷史）：Phase 4–8 的 web 部分與 Phase 6–7 的後端部分因同檔重疊，各合為一個 commit（`fca108a`、`ca6d86f`），未逐 phase 拆分。
+- 提交顆粒度註記（合併門第 1 輪，2026-10-22；不改寫歷史）：Phase 4–8 的 web 部分與 Phase 6–7 的後端部分因同檔重疊，各合為一個 commit（`fca108a`、`ca6d86f`），未逐 phase 拆分。commit 順序也不完全等於建置順序（合併門第 2 輪補，不改寫歷史）：Phase 9 文件 commit `6461d9a` 早於 Phase 4–8 的 web commit `fca108a`；`a139fab`（Phase 4 nginx）夾在 Phase 2 與 Phase 3 之間。
 - T082：硬規則 1（`ai/token` 路徑不逐筆寫 reactive，新增集合皆 plain Map／Set）由 web 兩輪交叉審查核實；契約 1.4.0 漂移與文件版本測試綠；憲章 III／IV／V／VII 對照見 plan Constitution Check 與 analyze 報告；合併門第 1 輪再複核一次。
 
 ### Phase 1 Setup（主 session 實測，2026-10-21）

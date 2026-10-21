@@ -11,7 +11,7 @@
 1. **產品版本**（`X.Y.Z`；git tag **不帶 `v` 前綴**，例 `1.1.0`）：**release 時**三者 MUST 一致——git tag ＝ 六份 `package.json` 的 `version`（root、`apps/api`、`apps/worker`、
    `apps/web`、`packages/contracts`、`packages/shared`）＝ 本檔頂端的版本條目；release 流程（`CLAUDE.md`「`main` 的 release 流程」）第 1 步核對。
    開發期 `package.json` 可先升到預定版本，`## [Unreleased]` 於 release 時改為 `## [X.Y.Z] - YYYY-MM-DD`。
-2. **契約版本**：`asyncapi.yaml` 的 `info.version`，描述即時通道與 `POST /diagnoses` 的 wire 契約，**不跟產品版本走**。
+2. **契約版本**：`asyncapi.yaml` 的 `info.version`，描述即時通道與 `POST /diagnoses`、`GET /diagnoses/:jobId`（1.4.0 起）的 wire 契約，**不跟產品版本走**。
    契約的任何加嚴（runtime 接受範圍變窄）、新增欄位、新增或改變消費端義務，都 MUST 升版——向後相容者升 minor，不相容者升 major；
    純措辭修正可升 patch。各版內容見下方「asyncapi 契約版本」小節，README 與指南中的 `info.version` 字串由
    `packages/contracts/src/docs-contract-version.test.ts` 自動比對。
@@ -33,22 +33,27 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 
 ### 相容性注意（升級前必讀）
 
-- **`ai/done` 可重複、可遺失**（契約 1.4.0，ADR-003 D3）：同一 jobId 再執行（stalled 重派、重試）時會再送一則帶相同結果的 `ai/done`，Pub/Sub 斷線時也可能收不到。權威完成是帶 `result` 的 `job/status: completed`。**自寫 WS client MUST 以 jobId 去重**、以收到的第一個完成為準；只認 `ai/done` 的 client 會把同一結果顯示兩次，或在 Pub/Sub 斷線時永遠等不到結果。
+- **`ai/done` 可重複、可遺失**（契約 1.4.0，ADR-003 D3）：同一 jobId 再執行（stalled 重派、重試）時會再送一則 `ai/done`，通常帶相同結果；罕見的殘餘情況（ADR-003 §4：停頓剛好落在取鎖之後、送出 LLM 請求之前）下再執行可能帶不同結果，client 以先收到者為準，Pub/Sub 斷線時也可能收不到。權威完成是帶 `result` 的 `job/status: completed`。**自寫 WS client MUST 以 jobId 去重**、以收到的第一個完成為準；只認 `ai/done` 的 client 會把同一結果顯示兩次，或在 Pub/Sub 斷線時永遠等不到結果。
 - **`job/status` 新增 optional 欄位**（契約 1.4.0）：`attempt`（＝`attemptsMade + 1`）、`execution`（＝`attemptsStarted`，重試、stalled 重派與限流延後都會遞增）、`reason`（開放字串，已知值 `"stalled"`）、`cached`；`completed` 帶通過 schema 的 `result` 與 `cached`。以封閉 schema（不允許多餘欄位）驗 `job/status` 的自寫 client 需放寬；`reason` 刻意用開放字串，日後新增值不會讓舊 client 丟掉整則訊息。
 - **BullMQ job 的 `progress` 改為物件**：worker 改以 `{ value, attempt, execution }`（`DiagnosisJobProgress`）呼叫 `updateProgress`，`returnvalue` 改存 `{ result, cached }`。直接讀 BullMQ job hash（管理介面、腳本）看 progress 的人會看到物件而不是數字；api relay 同時接受數字（舊版 worker）。
 - **BullMQ lock 參數 15／5／2**：worker 的 `lockDuration` 30000 → **15000** ms、`stalledInterval` 30000 → **5000** ms、`maxStalledCount` 1 → **2**（`apps/worker/src/lib/bullmq-options.ts`），另加 keepalive 10 s。Redis 或 worker 事件迴圈卡住超過 15 秒就會觸發 stalled 重派、同一 jobId 再跑一次（由 jobId 冪等吸收：同一結果、一筆 trigger、一次 hit／miss）；Redis 寫入頻率略增（續租每 7.5 秒、stalled 檢查每 5 秒、keepalive 每 10 秒）。
-- **新增 `GET /diagnoses/:jobId?socketId=[&previousSocketId=]`**：200 `completed`／`failed`／`waiting`／`active`（皆帶 `jobId`，進行中帶 `rebound: true`）、400、404、**409 兩種 `code`**（`socket_unauthorized`：連線不在線或未授權；`job_bound_elsewhere`：進行中且綁定在另一條在線連線）、**503**（Redis／MongoDB 不可用，或 BullMQ 查詢超過 5 秒、MongoDB 查詢超過 3 秒）、經 nginx 的 **429**——GET 走獨立的 `diag_read` 桶（每來源 60 r/m、burst 10），不與 POST 的 10 r/m 桶互搶。`code` 只出現在 GET 的 409，POST 的 409 body 不變。
+- **新增 `GET /diagnoses/:jobId?socketId=[&previousSocketId=]`**：200 `completed`／`failed`／`waiting`／`active`（皆帶 `jobId`，進行中帶 `rebound: true`）、400、404、**409 兩種 `code`**（`socket_unauthorized`：連線不在線或未授權；`job_bound_elsewhere`：進行中且綁定在另一條在線連線）、**503**（Redis／MongoDB 不可用，或 BullMQ 查詢超過 5 秒、MongoDB 查詢超過 3 秒；另有罕見的不一致狀態——終態綁定但佇列仍進行中、job 資料缺 `machineId` 或不在名冊、讀取期間綁定消失——請稍後重試）、經 nginx 的 **429**——GET 走獨立的 `diag_read` 桶（每來源 60 r/m、burst 10），不與 POST 的 10 r/m 桶互搶。`code` 只出現在 GET 的 409，POST 的 409 body 不變。
 - **升級順序 MUST 先 api、後 worker（web 不限）**：舊 api＋新 worker 時，舊 relay 認不得 progress 物件，進度條退化為不確定進度、`returnvalue` 被忽略；新 api＋舊 worker 時 `completed` 不帶 `result`，web 2 秒後退到 GET。一鍵 demo 同時重建三端，不受影響。
 - **jobId 與 `previousSocketId` 會出現在 nginx access log**：GET 的路徑含 jobId、query 含 `socketId`／`previousSocketId`；能讀 access log 的人可讀已完成的診斷結果，並可在原連線仍在線時改綁進行中的任務。沒有使用者身分時「jobId 即存取憑證」無從更細，接受（plan 風險 3）；demo 結果為 mock 遙測的診斷、不含機密。log 的保存與存取屬部署面。
 - **舊新版本混跑的其他組合**：舊 web＋新 api 行為同 2.1.0（新欄位被略過）；新 web＋舊 api 的 GET 回 404，退回「結果未送達」或「連線中斷期間的診斷結果已無法取回，請重試」。
 - **新錯誤碼 `persist_failed`**（`ai/error.code`，可重試）：MongoDB 拒寫 `diagnoses` 時，重試只重做寫庫、不重打 LLM，最終嘗試才送 `ai/error`；BullMQ `failedReason` 與 `ai/error.message` 固定為 `persist_failed: diagnosis record could not be written`，MongoDB 原始錯誤只進日誌。依 `failedReason` 原文做判斷的外部工具需改。
 - **畫面文案變更**：45 秒無進展由「診斷逾時或無回應，請重試」改為先查一次結果，查不到才顯示「超過 45 秒沒有收到進度，結果未知，請重試」；重連後進行中的任務不再立即轉「連線中斷」，改為「已重新連線，正在取回診斷狀態…」並續接；新增「後端處理程序中斷，任務已重新排入佇列（第 N 次執行）」等說明與失敗文案（見下方 Added）。依舊文案做畫面比對的劇本需更新。
 - **既有重複 jobId 的 `diagnosisTriggers` 會讓 unique 索引建立失敗**：2.1.0 的 AR-4（Redis 停頓時同一診斷跑兩次）可能已留下同一 jobId 的兩筆 trigger（TTL 30 天）。worker 啟動時建 `{ jobId: 1 }` unique 索引若撞到這些重複，會記一則 error 並退回非 unique 索引、照常啟動——此時「每個 jobId 一筆」不受資料庫保證（upsert 仍避免新增重複）。需人工清理重複的 jobId 後重啟 worker，unique 索引才會建立。
+- **自寫 client 的終態處理**（契約 1.4.0 描述補充）：以收到的第一個終態（`completed` 或 `failed`）為準。`completed` 不帶 `result`（舊版 worker、或 `returnvalue` 驗證失敗）時退到 `GET /diagnoses/:jobId` 取結果。`failed` 有 10 秒綁定寬限，worker 帶具體 code 的 `ai/error` 可能晚於 `job/status: failed` 才到，同一 job 也可能收到兩則 `ai/error`（具體 code 加上 api 補送的 `worker_failed`）。stalled 重派時先收到 `waiting`＋`reason: "stalled"`、接著一則普通 `waiting`；worker 活著時每約 10 秒會重送一則 progress 值不變的 `active`（keepalive），斷言進度序列的 client 會看到重複值。
+- **同一 jobId 在 BullMQ 清掉之後重新 POST，直接回舊結果**（ADR-003 D12、API-16）：job 被 `removeOnComplete` 清掉後以同 jobId 再 POST 會重新入列，但 processor 開頭的冪等短路會直接回 `diagnoses` 裡的舊結果，不打 LLM、不新增 trigger。
+- **快取 hit／miss 統計改為每個 jobId 只計一次**：`system/metrics` 的 `worker.cache` 命中率語意改變——重試、stalled 重派、限流延後的再執行不再重複計數。
+- **同簽章失敗標記**：LLM 供應商失敗後 10 秒內，同機台同狀態的其他請求不打 LLM、直接以同一個錯誤失敗（`ai-fail:<sig>`）；供應商只短暫抖動時，這些請求不會自己再試一次。
+- **api 需要讀 `diagnoses` 的權限**：`GET /diagnoses/:jobId` 的第二來源由 api 直接讀 MongoDB `diagnoses`；MongoDB 若按角色分權限，api 使用的帳號需有該 collection 的讀權限（api 不寫、不建索引）。
 - **e2e 的 fake provider 首 token 延遲**：`FAKE_AI_FIRST_TOKEN_DELAY_MS`（預設 0）只影響 `AI_PROVIDER=fake`；e2e compose 設 2000，全套 e2e 實測約 4.6 分鐘（278 s，第 3 輪；012 之前的場景組合約 6 分鐘）。
 
 ### Added
 
-- **`GET /diagnoses/:jobId`**（012-lite，ADR-003 D8）：讀診斷結果並在重連時改綁。查詢順序 BullMQ `returnvalue`（保留 1 小時）→ MongoDB `diagnoses`（api 唯讀）→ 404；`returnvalue` 不合法時退到 MongoDB。先綁定後查詢（在任何 await 之前），回 `rebound: true` 前核對綁定仍屬本連線。綁定改由新抽出的 `JobRoutingRegistry` 持有。
+- **`GET /diagnoses/:jobId`**（012-lite，ADR-003 D8）：讀診斷結果並在重連時改綁。查詢順序 BullMQ `returnvalue`（保留 1 小時或至多 1000 筆、先到者；failed 保留 24 小時，之後 GET 回 404）→ MongoDB `diagnoses`（api 唯讀）→ 404；`returnvalue` 不合法時退到 MongoDB。先綁定後查詢（在任何 await 之前），回 `rebound: true` 前核對綁定仍屬本連線。綁定改由新抽出的 `JobRoutingRegistry` 持有。
 - **`job/status` 帶結果與執行資訊**：`completed` 帶 `result`／`cached`；`attempt`／`execution`／`reason` 讓面板「嘗試 N / 3」不再依賴 `ai/token`，stalled 重派以 `reason: "stalled"` 告知畫面。
 - **worker keepalive**：一次執行中 10 秒沒有對外事件就以 `updateProgress(目前里程碑)` 補送一則，涵蓋等待去重鎖、首 token 前與寫庫期間；worker 被 `SIGKILL` 後畫面最長無事件設計上界約 35 秒（低於 45 秒 watchdog）。
 - **jobId 冪等**：processor 開頭以 jobId 查 `ai-result:<jobId>`（LLM 成功後、寫庫前的暫存，1 小時）與 `diagnoses`，命中即回原結果、不打 LLM；再執行命中快取前先查自己的結果；`diagnosisTriggers` 新增 `{ jobId: 1 }` unique 索引並改 upsert；hit／miss 以 `ai-metric:<jobId>` 只計一次。
@@ -65,7 +70,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 - **2 秒「結果未送達」先取回**：`completed` 不帶結果時 2 秒後先 GET；GET 回 failed 依錯誤分類文案，其餘才轉「結果未送達」。轉「結果未送達」之後，web 接受三個來源中任一者救回（2.1.0 只接受遲到的 `ai/done`）；實際送得到畫面的仍只限 api 綁定的 10 秒終態寬限內，重連後也不會主動替這種失敗取回（ADR-003 代理裁決第 55 條）。
 - **45 秒 watchdog 語意改為「結果未知」**：觸發時先 GET 一次，completed 照常完成、仍在進行就繼續等，其餘才轉失敗並顯示新文案；WS 斷線期間 watchdog 與 2 秒退路凍結，交由重連 → 授權 → 續接收尾（長時間斷線時任務停在「進行中」，可中止；ADR-003 代理裁決第 63 條）；仍用牆上時鐘（ADR-002 §6.5.1 backlog 不變）。
 - **`failed` 終態套用 10 秒綁定寬限**（ADR-003 D12）：與 `completed` 共用 `JobRoutingRegistry` 的同一段寬限程式，寬限內的同 jobId POST 回 409（與既有行為相同）。
-- **nginx 新增 `diag_read`**：`location ~ ^/diagnoses/[0-9a-fA-F-]{36}$` 走 60 r/m、burst 10 的獨立桶；不寫 `add_header`，繼承 server 層安全 header。POST 維持 10 r/m、burst 5。
+- **nginx 新增 `diag_read`**：`location ~ "^/diagnoses/[0-9a-fA-F-]{36}$"` 走 60 r/m、burst 10 的獨立桶；不寫 `add_header`，繼承 server 層安全 header。POST 維持 10 r/m、burst 5。
 - **`ai-result` 暫存寫入為 best-effort**：寫不進 Redis 只 warn、照常寫 `diagnoses`，不讓已拿到的 LLM 結果作廢。
 - **CI 恢復自動觸發**（DOC-18／TQ-19，使用者 2026-10-21 裁決；2.1.0 相容性注意列為帶著發布的未修項）：`ci.yml` 改為**所有分支的 push** 自動執行（tag 不觸發），保留手動觸發、不加 `pull_request`；只改 `docs/**` 或 `*.md` 的 push 不跑，但測試會讀的 `README.md`、`CHANGELOG.md` 與實作指南仍會觸發。只在 Linux／Node 22 才出現的回歸（如 2.1.0 的 ThemeToggle）不必再等人手動跑 CI 才發現。nightly mutation 的排程不變（INF-14 仍未處理）。
 
@@ -82,6 +87,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 ### Internal
 
 - **`JobRoutingRegistry` 自 `AiStreamRelayService` 抽出**：兩支 relay、`JobsService` 與新的 `DiagnosisLookupService` 都經它存取綁定；孤兒回收的 warn 日誌 context 由 relay 改為 `JobRoutingRegistry`（009 `log-fields.md` §3 已同步）。
+- **逐檔覆蓋率門檻由 10 檔增為 13 檔**（合併門第 1 輪）：`vitest.config.ts` 加入 `job-routing-registry.ts`、`diagnosis-lookup.service.ts`、`job-status-payload.ts`，推翻 plan 階段「新檔不加入逐檔門檻」的決定（ADR-003 §7.1）。另新增真 Redis 整合測試 `apps/api/src/integration/diagnosis-lookup.int.test.ts` 與 `apps/worker/src/integration/bullmq-lifecycle.int.test.ts`。
 
 - **修正 `TopBar.test.ts`「Escape 收回」的不穩定**（2026-10-19 nightly mutation 的 dry run 失敗，`expected false to be true`；同一 commit 前後兩天都通過）：Vue 的事件 invoker 會略過時間戳 ≤ 監聽器掛上時間的事件，時間戳精度只到毫秒；覆蓋式搜尋剛展開、同一毫秒內從輸入框送出的 Escape，冒泡到覆蓋外框時被當成「掛上前的事件」略過，沒有 `preventDefault`。真實按鍵不會在掛載的同一毫秒內發生，元件不改；該 describe 改以假時鐘固定 `Date`，展開後明確推進 1 ms，結果不再取決於機器快慢。同組的「輸入法組字中的 Escape」原本也可能因同一原因空過，現在確實走到元件的組字判斷。
 
@@ -124,12 +130,12 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
   - **LLM 供應商故障時同簽章請求不去重**（WK-13，012-lite）：多人同時對同一機台同一狀態按診斷，每個請求各自重打 LLM（請求數 × 3 次嘗試），全部計費並消耗 `AI_RPM`；最後一個等待者最長要等 N × `AI_TIMEOUT_MS`。（已修，見 [Unreleased]）
   - **MongoDB 寫入診斷失敗時每次重試都重打 LLM**（WK-4 補強，012-lite；AR-A12 已修）：3 次嘗試全部計費、不送具體錯誤碼——前端只收到 api 補送的 `ai/error`（`worker_failed`），畫面顯示 Mongo 原始錯誤訊息（短訊息）或通用句「診斷失敗，請重試。」，訊息含逾時或連線字樣時會被誤報為「AI 診斷逾時」或「無法連線 AI 服務」；LLM 結果已寫快取後 trigger 才失敗而重試時，結果會被誤標「快取」。（已修，見 [Unreleased]）
   - **完成語意仍只靠 Pub/Sub 的 `ai/done`**（AR-5 根治部分，012-lite）：Pub/Sub 斷線時畫面 2～3 秒內顯示「結果未送達，請重試」而非結果；失敗終態沒有綁定寬限，`failed` 先到時前端收到籠統的 `ai/error`（`worker_failed`）、看不到 worker 送的具體失敗原因（使用者 2026-10-18 裁決接受）。（已修，見 [Unreleased]）
-  - **CI 不自動觸發**（DOC-18／TQ-19／INF-14，待決策）：`ci.yml` 只保留手動觸發，push／PR 不會跑 CI（只在 Linux／Node 22 才出現的回歸要等人手動跑才發現，2.1.0 的 ThemeToggle 即一例）；nightly mutation 不論 `develop` 有無變更每日照跑。
-  - **測試與契約閘門缺口**（CT-14、CT-15、TQ-18、WEB-24，Batch F／G）：asyncapi channels 寫錯、契約變更未升版、Gateway 關閉邏輯或 App 層重連接線被改壞時，測試都不會失敗；不影響目前執行行為。
+  - **CI 不自動觸發**（DOC-18／TQ-19／INF-14，待決策）：`ci.yml` 只保留手動觸發，push／PR 不會跑 CI（只在 Linux／Node 22 才出現的回歸要等人手動跑才發現，2.1.0 的 ThemeToggle 即一例）；nightly mutation 不論 `develop` 有無變更每日照跑。（已修，見 [Unreleased]）
+  - **測試與契約閘門缺口**（CT-14、CT-15、TQ-18、WEB-24，Batch F／G）：asyncapi channels 寫錯、契約變更未升版、Gateway 關閉邏輯或 App 層重連接線被改壞時，測試都不會失敗；不影響目前執行行為。（WEB-24 部分已修，見 [Unreleased]：新增 `App.test.ts` 覆蓋重連接線，TopBar 的 chip 與診斷鈕閘門仍未覆蓋）
   - **文件與流程類**（報告 §3.9，不影響執行行為）：
     - **版號不保證可直接升級**（DOC-15）：本檔宣稱依 SemVer，但尚未宣告「公開介面」、也未定義何謂相容；能否直接升級請以各版「相容性注意」為準，不要只看版號。
     - **backlog 不是完整清單**（DOC-17／WK-18）：ADR-002 §6.5.1 尚未移入第一輪報告 §3.1 a／c／d／f 等殘留項，C.9 #12／#13 的內容已遺失但未標記；查未修項時要同時看前兩輪報告。
-    - **後續 feature 藍圖未寫進指南**（DOC-16）：012-lite／010-lite 的範圍只在第三輪報告 §5.4，起草時須回報告原文。
+    - **後續 feature 藍圖未寫進指南**（DOC-16）：012-lite／010-lite 的範圍只在第三輪報告 §5.4，起草時須回報告原文。（部分已修，見 [Unreleased]：012-lite 藍圖已在指南 §15.7，010-lite 仍缺）
     - **變更紀錄有兩份**（DOC-20）：指南 §15.6 與本檔重複記錄維護分支，改一處要同步另一處，否則會不一致。
     - **merge hash 的回填規則未寫進 CLAUDE.md**（DOC-13）、**SDD 收尾清單未定**（DOC-21）：文件表格的 hash 回填與 feature 收尾的回補步驟目前靠人記得。
 
@@ -375,7 +381,7 @@ worker 預設模型與輸出上限的變更見下方不相容變更。demo 影�
 
 ## asyncapi 契約版本
 
-`asyncapi.yaml` 的 `info.version` 獨立於產品版本（見「版本策略」）。本節同時記錄 HTTP（`POST /diagnoses`）的契約變化，
+`asyncapi.yaml` 的 `info.version` 獨立於產品版本（見「版本策略」）。本節同時記錄 HTTP（`POST /diagnoses`，1.4.0 起另有 `GET /diagnoses/:jobId`）的契約變化，
 核對來源為 `git log -p -- asyncapi.yaml` 與 `packages/contracts/src/`。
 
 ### 1.4.0（Feature 012-stream-resilience，未發布）

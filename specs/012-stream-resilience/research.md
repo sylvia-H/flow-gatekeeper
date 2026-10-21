@@ -153,7 +153,7 @@ api 另開一條 Mongo 連線給讀取（多一組連線與關閉流程，Health
 同樣附 Docker Desktop 共用一桶的註解），server 區塊在 `location /diagnoses` **之前**新增：
 
 ```nginx
-location ~ ^/diagnoses/[0-9a-fA-F-]{36}$ {
+location ~ "^/diagnoses/[0-9a-fA-F-]{36}$" {
     limit_req zone=diag_read burst=10 nodelay;
     limit_req_status 429;
     proxy_pass http://$api_upstream;
@@ -234,7 +234,7 @@ CSP `connect-src 'self'` 已涵蓋同源 GET，註解補一句。Vite dev proxy 
   以 1 代入。
 - **D4 上界驗證**：e2e 場景 3 改寫為兩次 kill（串流中、首 token 前），斷言最長無事件間隔 < 45 s，並把實測 `W`（`start worker`
   到 worker 日誌 `worker ready` 的時間）與最長間隔印在場景輸出；quickstart 演練 1 要求手動記錄一次 `W`。`W > 15 s` 時上界
-  公式改為 `K + W + 2S`，仍 < 45 s 需 `W ≤ 25 s`；超過即回報（風險見 plan）。
+  公式改為 `K + W + 2S`，仍 < 45 s 需 `W < 25 s`（`W ≤ 15 s` 時上界 35 s；`15 < W < 25 s` 時上界 `K + W + 2S`、仍 < 45 s；合併門第 2 輪更正等號）；超過即回報（風險見 plan）。
 
 **Rationale**：D2、D4、FR-018～FR-020。
 
@@ -315,7 +315,7 @@ CSP `connect-src 'self'` 已涵蓋同源 GET，註解補一句。Vite dev proxy 
   redis 映像為 alpine，busybox `sleep` 接受小數，implement 時以一次手動執行確認）。
 - e2e SC-003「仍進行」以「停 worker → POST → restart api → 重連 GET（waiting、`rebound:true`）→ 啟動 worker → 收到 completed」
   重現（P18）。
-- 不改 `vitest.config.ts` 的十個核心檔門檻；新檔 `job-routing-registry.ts` 不加入逐檔門檻（全域門檻照算），implement 後若
+- 不改 `vitest.config.ts` 的十個核心檔門檻；新檔 `job-routing-registry.ts` 不加入逐檔門檻（全域門檻照算）（**已變更（合併門第 1 輪）**：`job-routing-registry.ts`、`diagnosis-lookup.service.ts`、`job-status-payload.ts` 已加入逐檔門檻，共十三個；見 ADR-003 §7.1），implement 後若
   `job-status-relay.service.ts`／`ai-stream-relay.service.ts` 的逐檔覆蓋率因程式移出而變動，以補測試維持門檻、不調低。
 
 ## R12. 相容性（舊新混跑）
@@ -335,7 +335,7 @@ CSP `connect-src 'self'` 已涵蓋同源 GET，註解補一句。Vite dev proxy 
 ## R13. 接受的殘餘風險（不加機制）
 
 - Pub/Sub 斷線＋worker 串流中被 SIGKILL：最長無事件約 55 s，先觸發 watchdog → GET（代理裁決第 14 條）。
-- Redis 停頓 > 45 s 且落在 LLM 串流中：第二次執行可能再打一次 LLM（ADR-003 §4）。
+- Redis 停頓 > 45 s 且落在 LLM 串流中：第二次執行可能再打一次 LLM（ADR-003 §4）。（已變更：ADR-003 §4 改寫為「停頓開始於取得 `ai-lock` 之後、送出 LLM 請求之前，且長於 `AI_DEDUPE_LOCK_SECONDS`」——停頓落在 LLM 請求送出之後時由 `ai-result` 短路吸收。）
 - api 重啟後 delayed 中的 job 沒有 `waiting` 補送（`delayedUntil` 表隨行程清空）：畫面最長 45 s 後由 watchdog GET 得到 waiting 而
   維持進行中（P17）。
 - Redis 整個凍結超過 45 s（`docker compose pause redis` 50 s 即是）：api 收不到任何 QueueEvents、keepalive 也寫不進 Redis，
@@ -370,11 +370,11 @@ CSP `connect-src 'self'` 已涵蓋同源 GET，註解補一句。Vite dev proxy 
 | P15 | 「第 N 次執行」的 N | 收到 `reason:"stalled"` 時 N＝`(目前 execution ?? 1) + 1`，之後由下一則帶 `execution` 的 `job/status` 校正；`execution` 再遞增而沒有新的 stalled 時移除說明 | `stalled` 事件本身不帶 execution；先估再校正，畫面不會出現「第 1 次執行」這種錯值 | 不顯示 N（spec 文案帶 N） |
 | P16 | GET 收尾的耗時記錄 | `settleTiming(…, { recovered: true })` 寫 `lastRecoveredMs`、`lastKind:"recovered"`，不動 `lastUncachedMs`／`lastCachedMs`，不畫對比橫條 | 重連取回的耗時含斷線時間，拿來當「上一次」基準會讓下一次快取對比失真（FR-035） | 不記耗時（完成 meta 少一項資訊） |
 | P17 | api 重啟後 delayed job 的補送 | 不補建 `delayedUntil`；由 watchdog GET 承接 | 補建要讓 lookup service 回頭操作 job-status relay 的內部表；最壞情況是使用者看到 45 s 後仍「進行中」，不轉失敗 | lookup 時依 `job.delay` 補登記 |
-| P18 | e2e 如何重現「api 重啟後 job 仍進行」 | 先停 worker → POST → `restart api` → 重連 GET（waiting、`rebound:true`）→ 啟動 worker → 收到 completed；active 狀態的改綁由 api 單元測試與場景 8 的 `previousSocketId` 覆蓋 | fake 串流約 10 s，短於 api 冷啟動 10～17 s，串流中重啟 api 時 job 一定先完成；改 fake 延遲會牽動既有場景的等待上限（實測（e2e 第 3 輪，2026-10-22）：api 約 8 s 即 healthy（短於規劃時估的 10～17 s），6a 改為第 10 個 token 後才重啟 api，並容許重連前先收到 active、再以 GET 取回。） | e2e override 拉長 `FAKE_AI_TOKEN_DELAY_MS`（影響全部場景） |
+| P18 | e2e 如何重現「api 重啟後 job 仍進行」 | 先停 worker → POST → `restart api` → 重連 GET（waiting、`rebound:true`）→ 啟動 worker → 收到 completed；active 狀態的改綁由 api 單元測試與場景 8 的 `previousSocketId` 覆蓋 | fake 串流約 10 s，短於 api 冷啟動 10～17 s，串流中重啟 api 時 job 一定先完成；改 fake 延遲會牽動既有場景的等待上限（實測（e2e 第 3 輪，2026-10-21）：api 約 8 s 即 healthy（短於規劃時估的 10～17 s），6a 改為第 10 個 token 後才重啟 api，並容許重連前先收到 active、再以 GET 取回。） | e2e override 拉長 `FAKE_AI_TOKEN_DELAY_MS`（影響全部場景） |
 | P19 | Pub/Sub 斷線迴圈的執行位置 | redis 容器內 `sh -c` 迴圈 | Windows 上每次 `docker exec` 數百 ms，做不到 50 ms 間隔 | harness 每 50 ms spawn 一次 |
 | P20 | web 何時觸發續接 GET | 新 store action `onAuthorized(socketId)`，App 於 `onAuthResult(true)` 呼叫；同一連線多次 `machine/subscribed` 只消化一次待續接清單 | 維持 copilot store 與 monitoring store 不互相匯入的現行分工；App 是唯一同時知道兩者的地方 | copilot store watch monitoring store 的授權狀態（store 互相依賴） |
 | P21 | 2 s 退路 GET 回 waiting／active（理論上不會發生：`completed` 已到） | 視同取不到結果，轉「結果未送達」（可被後到的結果救回） | 留在 active 會讓已完成的任務再等 45 s；轉成可救回的失敗，結果一到仍會改回已完成 | 留在 active |
 | P22 | GET 回 `rebound` 的語意 | 綁定原本就是本 socket（`unchanged`）時也回 `rebound: true`，意思是「之後的事件送到這條連線」 | 讓 web 只有一條規則（收到 `rebound:true` 就把 `previousSocketId` 改成本次 socketId） | 新增 `rebound:false` 分支（契約多一種值） |
 | P23 | rebind 後孤兒回收的起算點 | rebind 時更新 `boundAt` | 改綁後還要再跑的 job 不該因原始建立時間被提早回收 | 沿用原 `boundAt` |
 | P24 | e2e「首 token 前」kill 的時點 | 收到 `job/status` progress 20（context 已返回、尚未呼叫 LLM）即 kill；（實作時補 2026-10-21，ADR-003 代理裁決第 51 條）e2e 以 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 延遲 fake 的第一個 token | fake 第一個 token 約在 progress 40 後 500 ms，以 20 為觸發點確定落在首 token 前。（實作時更正 2026-10-21：此前提與實作不符——fake 首 token 一呼叫就送出、沒有延遲，progress 20 到首 token 只差幾十 ms，從 Windows host 下 kill（數百 ms）打不進窗口，3b 會變成串流中 kill；fake provider 因此新增 `FAKE_AI_FIRST_TOKEN_DELAY_MS`（預設 0、只延遲第一個 token），e2e 設 2000，觸發點不變。） | 收到 progress 40 才 kill（與首 token 只差 500 ms，容易落到之後） |
-| P25 | 場景 7 停頓觸發點與時序論證（analyze 階段補 2026-10-21） | 收到該 jobId 第 3 個 `ai/token` 後才 `pauseRedis()`（停頓在 exec1 首 token 之後開始）；場景從 worker 日誌印出重派那次 `idempotent short-circuit` 的 `source` 作為「冪等短路吸收重派」的證據 | e2e 的 `AI_DEDUPE_LOCK_SECONDS` 為 20 s，停頓 50 s 一定超過它，表面上落在 spec Edge Cases 的殘餘風險（第二次執行搶到 `ai-lock` 再打一次 LLM），會讓 SC-004 的「LLM 恰 1 次」偶發失敗。停頓排在首 token 之後時：token 發布不等 Redis 回應，exec1 在停頓期間跑完 LLM 串流、停在 `report(80)`；恢復後 exec1 排在前面的 SET `ai-result` 先於 exec2 的冪等短路查詢送進 Redis，exec2 一定在短路 (i) 命中，殘餘風險不適用（實作交叉審查更正措辭 2026-10-21：兩者沒有同一連線上的指令順序保證，依據是 exec1 的 SET `ai-result` 領先 exec2 的短路查詢至少 1 個 Redis 往返——exec2 要先被 stalled 檢查搬回 wait、被取出、`updateProgress(0)` 後才查短路；ADR-003 代理裁決第 46 條）；觸發點若落在首 token 前，exec1 卡在 LLM 呼叫前、恢復後與 exec2 競爭，場景會不穩。印 `source` 讓失敗時看得出是走 `ai-result` 還是 `diagnoses`，不必重跑才能判讀（實測（e2e 第 3 輪，2026-10-22）：兩次皆為短路 (ii) `diagnoses`——exec1 解凍後在 exec2 查詢前已寫庫並 DEL 暫存；判準不受影響（LLM 恰 1 次、trigger 1 筆照樣成立）。） | e2e 把 `AI_DEDUPE_LOCK_SECONDS` 拉到 60 s，讓停頓不超過去重鎖（代價：kill 場景 3a／3b 中死掉的持鎖者留下的 `ai-lock` 要等 60 s 才過期，重派的 job 才能取鎖，每個 kill 場景多等約 40 s，全套 e2e 再拉長，既有場景的等待上限也要跟著調） |
+| P25 | 場景 7 停頓觸發點與時序論證（analyze 階段補 2026-10-21） | 收到該 jobId 第 3 個 `ai/token` 後才 `pauseRedis()`（停頓在 exec1 首 token 之後開始）；場景從 worker 日誌印出重派那次 `idempotent short-circuit` 的 `source` 作為「冪等短路吸收重派」的證據 | e2e 的 `AI_DEDUPE_LOCK_SECONDS` 為 20 s，停頓 50 s 一定超過它，表面上落在 spec Edge Cases 的殘餘風險（第二次執行搶到 `ai-lock` 再打一次 LLM），會讓 SC-004 的「LLM 恰 1 次」偶發失敗。停頓排在首 token 之後時：token 發布不等 Redis 回應，exec1 在停頓期間跑完 LLM 串流、停在 `report(80)`；恢復後 exec1 排在前面的 SET `ai-result` 先於 exec2 的冪等短路查詢送進 Redis，exec2 一定在短路 (i) 命中，殘餘風險不適用（實作交叉審查更正措辭 2026-10-21：兩者沒有同一連線上的指令順序保證，依據是 exec1 的 SET `ai-result` 領先 exec2 的短路查詢至少 1 個 Redis 往返——exec2 要先被 stalled 檢查搬回 wait、被取出、`updateProgress(0)` 後才查短路；ADR-003 代理裁決第 46 條）；觸發點若落在首 token 前，exec1 卡在 LLM 呼叫前、恢復後與 exec2 競爭，場景會不穩。印 `source` 讓失敗時看得出是走 `ai-result` 還是 `diagnoses`，不必重跑才能判讀（實測（e2e 第 3 輪，2026-10-21）：兩次皆為短路 (ii) `diagnoses`——exec1 解凍後在 exec2 查詢前已寫庫並 DEL 暫存；判準不受影響（LLM 恰 1 次、trigger 1 筆照樣成立）。） | e2e 把 `AI_DEDUPE_LOCK_SECONDS` 拉到 60 s，讓停頓不超過去重鎖（代價：kill 場景 3a／3b 中死掉的持鎖者留下的 `ai-lock` 要等 60 s 才過期，重派的 job 才能取鎖，每個 kill 場景多等約 40 s，全套 e2e 再拉長，既有場景的等待上限也要跟著調） |

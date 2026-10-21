@@ -35,7 +35,7 @@ services:
       FAKE_AI_TOKENS: "20"
       FAKE_AI_TOKEN_DELAY_MS: "500"
       # 只延遲第一個 token（預設 0）：場景 3b 要在「context 已建好、首 token 之前」SIGKILL worker（research P24），
-      # 但 fake 首 token 一呼叫就送出，progress 20 → 首 token 只差幾十 ms，從 Windows host 下 kill（數百 ms）打不進。
+      # 但 fake 首 token 一呼叫就送出，progress 20 → 首 token 只差幾十 ms，從 Windows host 下 kill 打不進（compose CLI 約 1～2 s；`docker kill <容器 id>` 實測約 431 ms）。
       # 2s 讓這個窗口足夠寬；P24「首 token 約在 progress 40 後 500ms」的前提與實作不符，以此修正。
       FAKE_AI_FIRST_TOKEN_DELAY_MS: "2000"
       # 縮短逾時與去重鎖：kill 場景中死掉的持鎖者留下的 ai-lock 要等 TTL 過期，重派的 job 才能取鎖。

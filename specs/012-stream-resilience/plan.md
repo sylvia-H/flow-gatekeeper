@@ -221,7 +221,7 @@ docs/Flow-Gatekeeper-SDD-完整實作指南.md
 | `onReconnect` 等授權後 GET | `onReconnect` 只標 `resume:"pending"`＋`reconnected`、加入 `pendingResume`；App 於 `onAuthResult(true)` 呼叫 `onAuthorized(socketId)` 逐台 GET | D10；FR-016；P20 |
 | 2 s／watchdog 退路 | `checkStalls`：2 s 寬限到期 → `lookup(undelivered)`；45 s → `lookup(watchdog)`，回進行中則重設並 `console.warn`；`lookupInFlight` 去重 | D10、D11；FR-005、022；[ui-copy §3](./contracts/ui-copy.contract.md) |
 | 文案對映 | 文案常數集中 reducer 檔；`humanizeError` 先判 `persist_failed`、`job stalled more than allowable limit`；GET 失敗依 purpose 對映 | FR-023、035；[ui-copy §1](./contracts/ui-copy.contract.md) |
-| nginx `diag_read` | `limit_req_zone … zone=diag_read:1m rate=60r/m`；`location ~ ^/diagnoses/[0-9a-fA-F-]{36}$`（`burst=10 nodelay`、429、不寫 `add_header`），放在 `location /diagnoses` 之前 | D9；FR-015；R5 |
+| nginx `diag_read` | `limit_req_zone … zone=diag_read:1m rate=60r/m`；`location ~ "^/diagnoses/[0-9a-fA-F-]{36}$"`（`burst=10 nodelay`、429、不寫 `add_header`），放在 `location /diagnoses` 之前 | D9；FR-015；R5 |
 
 ---
 
@@ -287,13 +287,13 @@ e2e 場景隨各 story 交付（不另立 e2e phase）；與 tasks.md 的 phase 
 ## 風險
 
 1. **D4 上界依賴實測冷啟動 `W`**：35 s 上界在 `W ≤ L`（15 s）時成立；`W` 為 compose 重啟延遲＋Node 載入＋Mongo 連線＋建索引＋Redis ready，
-   預估 3～8 s 但未實測。**處置**：e2e 場景 3a／3b 印出 `W` 與 `maxGap`；quickstart 演練 1 手動記錄一次。`15 s < W ≤ 25 s` 時上界改為
-   `K + W + 2S`，仍 < 45 s；`W > 25 s` 即上界破功，回報使用者（候選：縮短 worker 冷啟動，或把 watchdog 門檻改由 `system/connected` 下發，屬 010-lite）。
+   預估 3～8 s 但未實測。**處置**：e2e 場景 3a／3b 印出 `W` 與 `maxGap`；quickstart 演練 1 手動記錄一次。`15 s < W < 25 s` 時上界改為
+   `K + W + 2S`，仍 < 45 s；`W ≥ 25 s` 即上界破功（合併門第 2 輪更正等號：`W` 正好 25 s 時上界等於 45 s），回報使用者（候選：縮短 worker 冷啟動，或把 watchdog 門檻改由 `system/connected` 下發，屬 010-lite）。
    `diagnosisTriggers` 新增 unique 索引會讓第一次啟動多一次建索引時間，計入 `W`。
 2. **`lockDuration` 縮短造成的雙重執行**：Redis 卡頓或 worker 事件迴圈被佔住 > 15 s 就觸發 stalled 重派，同 jobId 雙重執行比現在常見。
    **處置**：US4 冪等先於 US3 落地（phase 5 → 6）；e2e 場景 7 驗「trigger 1、LLM 1、hit／miss 1」；`maxStalledCount` 2 留一次額度。殘餘：
-   停頓 > 45 s 且落在 LLM 串流中時可能再打一次 LLM（ADR-003 §4，接受）。另需注意 fake provider 與 context 查詢都不應同步阻塞事件迴圈
-   > 7.5 s（續租間隔）；processor 沒有同步重運算，風險低。
+   停頓 > 45 s 且落在 LLM 串流中時可能再打一次 LLM（ADR-003 §4，接受）（已變更：ADR-003 §4 改寫為「停頓開始於取得 `ai-lock` 之後、送出 LLM 請求之前，且長於 `AI_DEDUPE_LOCK_SECONDS`」）。另需注意 fake provider 與 context 查詢都不應同步阻塞事件迴圈
+   > 7.5 s（續租間隔）；processor 沒有同步重運算，風險低。（合併門第 2 輪更正：續租計時器每約 3.75 s 觸發，事件迴圈阻塞超過約 11.25～15 s 才會讓 lock 過期，見 ADR-003 D4。）
 3. **`previousSocketId` 的安全邊界**：它讓「原綁定仍在線」的進行中任務也能被改綁，前提是請求者知道原 socketId。clientId 只經
    `system/connected` 送給連線本身，不出現在 URL 以外的地方；但 GET 的 query 會出現在 nginx access log（與 jobId 相同的既有曝險，
    ADR-002 §6.3）。能讀 log 的人可同時取得 jobId 與 previousSocketId，進而在原連線仍在線時搶走進行中的串流——後果是 demo 的 mock 診斷
@@ -322,9 +322,9 @@ e2e 場景隨各 story 交付（不另立 e2e phase）；與 tasks.md 的 phase 
 - [x] `apps/web/PRODUCT.md`：已知產品限制改寫（含「重新整理頁面後不續接」）、失敗段改為 2 s 退路先 GET、新術語（重新排入佇列（內部稱重新派送）、取回、結果未知）。
 - [x] `tests/e2e/README.md`：場景表（3a／3b、5～8）、場景 3 的現況語意、「注意」段（GET 獨立桶、新場景與耗時；實測約 4.6 分鐘（278 s，第 3 輪），規劃時估 10～15 分鐘）。
 - [x] `asyncapi.yaml`（FR-033）與 `CHANGELOG.md`（FR-034：契約 1.4.0、相容性注意四條＋升級順序、`[2.1.0]` 帶著發布的 012-lite 項標已修）。
-- [ ] 憲章 Principle III 補列 GET：**建議**、待使用者；merge 前仍未確認則 spec 與 ADR-003 保留「建議修訂、待使用者」註記（FR-041）。（2026-10-22 合併門第 1 輪：保留未勾——憲章待使用者確認；CLAUDE.md 現況段於 merge 時改（T076））
+- [ ] 憲章 Principle III 補列 GET：**建議**、待使用者；merge 前仍未確認則 spec 與 ADR-003 保留「建議修訂、待使用者」註記（FR-041）。（2026-10-22 合併門第 1 輪：保留未勾——憲章修訂待使用者確認）
 - [x] ADR-003：§6 勾選；§7 補記 plan／analyze 階段的 P1～P25（第 22 條起，待覆核）；檔頭「待覆核」註保留到使用者覆核（FR-040）。
-- [ ] repo `CLAUDE.md` 開頭現況段：落地後改為最近一次完成的 feature。（2026-10-22 合併門第 1 輪：保留未勾——憲章待使用者確認；CLAUDE.md 現況段於 merge 時改（T076））
+- [ ] repo `CLAUDE.md` 開頭現況段：落地後改為最近一次完成的 feature。（2026-10-22 合併門第 1 輪：保留未勾——merge 時改（T076））
 
 ---
 

@@ -89,7 +89,7 @@
 
 jobId 是前端產生的 idempotency key（`http.ts` `CreateDiagnosisBodySchema.jobId`），BullMQ 以它為 job id。同 jobId 的再執行有三種來源：BullMQ 重試（`attemptsMade` 遞增）、stalled 重派（`attemptsMade` 不變、`stalledCounter`／`attemptsStarted` 遞增）、限流或關閉時的 `moveToDelayed`（`attemptsStarted` 遞增）。012-lite 之後，三種再執行對外的結果一致：同一個 `result`、同一筆 trigger、hit／miss 只記一次；每次成功的再執行都會再送一則 `ai/done`，所以 `ai/done` 的契約描述改為：
 
-> `ai/done` is a best-effort notification. It MAY be delivered more than once for the same jobId (re-execution after a stalled lock or a retry always carries the same result) and MAY be lost (Redis Pub/Sub is at-most-once). The authoritative completion is `job/status` with `status: completed` and `result`; consumers MUST treat the first completion they receive for a jobId as final and ignore later ones.
+> `ai/done` is a best-effort notification. It MAY be delivered more than once for the same jobId (re-execution after a stalled lock or a retry normally carries the same result; in a rare residual case documented in ADR-003 section 4 a re-execution may carry a different result, so keep the first one received) and MAY be lost (Redis Pub/Sub is at-most-once). The authoritative completion is `job/status` with `status: completed` and `result`; consumers MUST treat the first completion they receive for a jobId as final and ignore later ones.
 
 web 現況已滿足「之後的忽略」：reducer 只在 active 消費事件（`copilot-reducer.ts:163`），唯一例外是「結果未送達」失敗可被遲到的 `ai/done` 救回（`:151-162`），012-lite 之後這條例外改由 D10 的規則取代。
 
@@ -218,7 +218,7 @@ BullMQ 的 stalled 判定（`moveStalledJobsToWait-9.lua`）：每次檢查先�
      - **completed 但 `returnvalue` 不合法**（舊版 worker、外部寫入）→ 記 warn、退到 Mongo，Mongo 也無合法結果則 404；不回未驗證物件（第 16 條）。
      - **進行中的 state** 補 `waiting-children`（回應的 `status` 歸為 `waiting`）；`getState` 回未列舉的值（例如 `unknown`）**視同 job 不存在**、走 Mongo 分支（spec FR-010）。
      - **衝突者的 409** body 帶 `code: "job_bound_elsewhere"`（第 23 條）。
-     - **回 `rebound: true` 前核對 owner**：BullMQ 查詢期間綁定可能已被另一個 GET（例如以 `previousSocketId`）改綁走；回應前確認 `JobRoutingRegistry` 目前的 owner 仍是本次 socketId，不是就與衝突同樣回 409 `job_bound_elsewhere`（實作交叉審查補，見 §7.1）。綁定原本就是本 socket（不動）時也回 `rebound: true`，意思是「之後的事件送到這條連線」（第 43 條）。
+     - **回 `rebound: true` 前核對 owner**：BullMQ 查詢期間綁定可能已被另一個 GET（例如以 `previousSocketId`）改綁走；回應前確認 `JobRoutingRegistry` 目前的 owner 仍是本次 socketId，不是就與衝突同樣回 409 `job_bound_elsewhere`（實作交叉審查補，見 §7.1）；讀取期間綁定已消失則回 503（合併門第 2 輪，第 62 條）。綁定原本就是本 socket（不動）時也回 `rebound: true`，意思是「之後的事件送到這條連線」（第 43 條）。
      - **終態綁定 × BullMQ 仍進行中** → **503、不重判**：照理不可達（終態事件晚於 state 寫入，registry 禁止改綁終態綁定），不猜測要不要改綁，讓 web 稍後重試；寬限 10 s 過後再查會走「綁定不存在」路徑（data-model §2.4，實作時更新，見 §7.1）。
      - **依賴故障 → 503**：Redis 或 Mongo 不可用、BullMQ 查詢超過 5 s（沿用 `ENQUEUE_TIMEOUT_MS`）或 Mongo 查詢超過 3 s（`maxTimeMS`，合計上限 8 s）→ 503「診斷狀態暫時無法查詢，請稍後再試」，撤回暫定動作；GET 不無上限等待依賴恢復（第 25 條；spec FR-010）。
      - 四種 200 回應都帶 `jobId`，web 比對不符視為格式錯誤（第 24 條）。
@@ -238,7 +238,7 @@ BullMQ 的 stalled 判定（`moveStalledJobsToWait-9.lua`）：每次檢查先�
 
 `apps/web/nginx.conf:86-90` 的 `location /diagnoses` 是前綴匹配，GET `/diagnoses/<uuid>` 會共用 POST 的 `limit_req zone=diag`（10 r/m、burst 5）。web 重連時最多 5 台同時 GET、2 s 未送達與 watchdog 也各會 GET 一次，加上使用者接著按「重試」的 POST，會在同一個桶裡互搶，使用者看到「診斷請求過於頻繁」。
 
-**定案**：新增 `limit_req_zone $binary_remote_addr zone=diag_read:1m rate=60r/m;` 與 `location ~ ^/diagnoses/[0-9a-fA-F-]{36}$ { limit_req zone=diag_read burst=10 nodelay; limit_req_status 429; … }`（regex location 優先於前綴 location；location 比對不含 query string，`?socketId=` 不影響），POST 維持原桶。新 location 沿用 `/diagnoses` 的 `proxy_pass http://$api_upstream;` 寫法，且**不寫 `add_header`**，才會繼承 server 層的安全 header（`nginx.conf:44-45` 的繼承規則）。理由：讀取是冪等、成本低（一次 Redis HGETALL、最多一次 Mongo `findOne`），60 r/m 足以涵蓋 5 台重連＋退路；仍保留上限，避免被拿來掃 jobId（UUID v4 也掃不出來）。Docker Desktop 下全體共用一桶的既有限制不變（ADR-002 §6.5）。
+**定案**：新增 `limit_req_zone $binary_remote_addr zone=diag_read:1m rate=60r/m;` 與 `location ~ "^/diagnoses/[0-9a-fA-F-]{36}$" { limit_req zone=diag_read burst=10 nodelay; limit_req_status 429; … }`（regex location 優先於前綴 location；location 比對不含 query string，`?socketId=` 不影響），POST 維持原桶。新 location 沿用 `/diagnoses` 的 `proxy_pass http://$api_upstream;` 寫法，且**不寫 `add_header`**，才會繼承 server 層的安全 header（`nginx.conf:44-45` 的繼承規則）。理由：讀取是冪等、成本低（一次 Redis HGETALL、最多一次 Mongo `findOne`），60 r/m 足以涵蓋 5 台重連＋退路；仍保留上限，避免被拿來掃 jobId（UUID v4 也掃不出來）。Docker Desktop 下全體共用一桶的既有限制不變（ADR-002 §6.5）。
 
 | 方案 | 不選的理由 |
 | --- | --- |
@@ -300,7 +300,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 | 代價 | 如何承擔 |
 | --- | --- |
 | lock 15 s 讓 Redis 卡頓或 worker 事件迴圈卡住超過 15 s 就觸發 stalled 重派，雙重執行比現在常見 | D6 冪等讓重複執行對外結果一致；`maxStalledCount` 2 留一次額度給真的崩潰 |
-| （實作階段改寫，2026-10-21）Redis 停頓**開始於 exec1 取得 `ai-lock` 之後、發出 LLM 請求之前，且停頓超過 `AI_DEDUPE_LOCK_SECONDS`（預設 45 s；e2e 20 s）**時，stalled 重派的 exec2 在 `ai-result` 短路查不到結果（exec1 還沒拿到 LLM 回應），又取得已過期的 `ai-lock`，與恢復後繼續執行的 exec1 各打一次 LLM。兩次結果可能不同：`diagnoses` 留先寫者（jobId unique），exec2 的 `returnvalue`／`ai/done` 帶它自己的結果，所以畫面顯示的結果可能與 `diagnoses` 那筆不同。（原寫法「停頓超過 45 s 且正好發生在 LLM 串流中」：有了 `ai-result` 短路後，停頓落在 LLM 請求送出之後時，exec1 會在停頓期間收完串流，恢復後它的 SET `ai-result` 領先 exec2 的短路查詢至少 1 個 Redis 往返，exec2 在短路 (i) 命中，不雙打——第 46 條） | 罕見（停頓要剛好開始在取鎖到送出 LLM 請求之間的幾個 Redis 往返內，且長於 45 s）；記為殘餘風險，不為它加第二把鎖（D3 方案 B 的理由）。另一種「不雙打、但 exec2 在快取命中時把權威 `completed` 標成 `cached:true`」的情況（前一次執行在 exec2 等鎖期間落地）已由第 49 條吸收：再執行命中快取前先查自己的結果。實測（e2e 第 3 輪，2026-10-22）：兩次皆為短路 (ii) `diagnoses`——exec1 解凍後在 exec2 查詢前已寫庫並 DEL 暫存；判準不受影響（LLM 恰 1 次、trigger 1 筆照樣成立）（第 46 條） |
+| （實作階段改寫，2026-10-21）Redis 停頓**開始於 exec1 取得 `ai-lock` 之後、發出 LLM 請求之前，且停頓超過 `AI_DEDUPE_LOCK_SECONDS`（預設 45 s；e2e 20 s）**時，stalled 重派的 exec2 在 `ai-result` 短路查不到結果（exec1 還沒拿到 LLM 回應），又取得已過期的 `ai-lock`，與恢復後繼續執行的 exec1 各打一次 LLM。兩次結果可能不同：`diagnoses` 留先寫者（jobId unique），exec2 的 `returnvalue`／`ai/done` 帶它自己的結果，所以畫面顯示的結果可能與 `diagnoses` 那筆不同。（原寫法「停頓超過 45 s 且正好發生在 LLM 串流中」：有了 `ai-result` 短路後，停頓落在 LLM 請求送出之後時，exec1 會在停頓期間收完串流，恢復後它的 SET `ai-result` 領先 exec2 的短路查詢至少 1 個 Redis 往返，exec2 在短路 (i) 命中，不雙打——第 46 條） | 罕見（停頓要剛好開始在取鎖到送出 LLM 請求之間的幾個 Redis 往返內，且長於 45 s）；記為殘餘風險，不為它加第二把鎖（D3 方案 B 的理由）。另一種「不雙打、但 exec2 在快取命中時把權威 `completed` 標成 `cached:true`」的情況（前一次執行在 exec2 等鎖期間落地）已由第 49 條吸收：再執行命中快取前先查自己的結果。實測（e2e 第 3 輪，2026-10-21）：兩次皆為短路 (ii) `diagnoses`——exec1 解凍後在 exec2 查詢前已寫庫並 DEL 暫存；判準不受影響（LLM 恰 1 次、trigger 1 筆照樣成立）（第 46 條） |
 | Pub/Sub 斷線**且** worker 在串流中被 SIGKILL 時，畫面最長無事件約 55 s，會觸發「結果未知」 | 複合故障，接受、不加機制（代理裁決第 14 條）；觸發後先 GET，重派完成後仍可由重試或 GET 取回（D2 殘餘風險註） |
 | `failed` 後綁定保留 10 s，寬限內同 jobId 的 POST 回 409 | 與綁定已刪時查到既有 job 的 409 相同，對 POST 沒有新行為；換到的是具體錯誤碼能送到原連線（D12） |
 | `ai/done` 會重複、仍可能遺失；自寫 WS client 要以 jobId 去重 | 契約描述明寫（D3）；`CHANGELOG.md` 相容性注意列出 |
@@ -356,8 +356,8 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - [x] **`specs/012-stream-resilience/contracts/diagnosis-lookup.contract.md` §8**（實作交叉審查補，2026-10-21）：`DiagnoseLookupError` 補 `kind`（`http`／`network`／`timeout`／`invalid`；`status` 只在 `http` 時必有、`code` 只在 409 時讀 body），與 `diagnose-api.ts` 實作一致。
 - [x] **`specs/012-stream-resilience/data-model.md` §5 步驟 10 的「失敗時」欄**（實作交叉審查補，2026-10-21）：改為逐步寫清楚——SET `ai-result` 失敗只 warn、照常寫庫（第 50 條）；`insertDiagnosis` 失敗 → `persist_failed`；DEL `ai-result`、DEL `ai-fail` 失敗只 warn、由 TTL 回收；SET `ai-cache`、`upsertTrigger` 等其他寫入失敗 → 拋出 → 重試（下次步驟 2 或 3 短路）。
 - [x] **research P24／P25 措辭**（實作交叉審查補，2026-10-21）：`specs/012-stream-resilience/research.md` P24「fake 第一個 token 約在 progress 40 後 500 ms」與實作不符，改為「fake 首 token 無延遲，e2e 以 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 拉開窗口」（第 51 條）；P25「SET `ai-result` 先於 exec2 的冪等短路查詢」改為「領先至少 1 個 Redis 往返」（第 46 條）。spec SC-004 末段與 `tests/e2e/src/worker-kill.e2e.test.ts` 檔頭註解有同一句，一併改。
-- [ ] **憲章 Principle III**（**待使用者**）：建議 `/speckit-constitution` PATCH（1.6.0 → 1.6.1）補列 `GET /diagnoses/:jobId`；離席期間不執行，由使用者確認後才修訂。merge 前若仍未確認，在 spec 與本 ADR 保留「建議修訂、待使用者」的註記，GET 的 Zod 定義照做。（2026-10-22 合併門第 1 輪：保留未勾——憲章待使用者確認；CLAUDE.md 現況段於 merge 時改（T076））
-- [ ] **repo `CLAUDE.md` 開頭的現況段**：立案時改為「進行中：012-lite」，落地後改為最近一次完成。（2026-10-22 合併門第 1 輪：保留未勾——憲章待使用者確認；CLAUDE.md 現況段於 merge 時改（T076））
+- [ ] **憲章 Principle III**（**待使用者**）：建議 `/speckit-constitution` PATCH（1.6.0 → 1.6.1）補列 `GET /diagnoses/:jobId`；離席期間不執行，由使用者確認後才修訂。merge 前若仍未確認，在 spec 與本 ADR 保留「建議修訂、待使用者」的註記，GET 的 Zod 定義照做。（2026-10-22 合併門第 1 輪：保留未勾——憲章修訂待使用者確認）
+- [ ] **repo `CLAUDE.md` 開頭的現況段**：立案時改為「進行中：012-lite」，落地後改為最近一次完成。（2026-10-22 合併門第 1 輪：保留未勾——merge 時改（T076））
 
 ---
 
@@ -409,7 +409,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 
 **8. nginx 對 GET 的限流**（D9）
 - 影響範圍：一鍵 demo 入口（`http://localhost:8080`）的 GET 流量上限；重連後按「重試」是否拿到 429「診斷請求過於頻繁」。
-- 裁決：GET 獨立 regex location `^/diagnoses/[0-9a-fA-F-]{36}$`＋`diag_read` 60 r/m、burst 10 nodelay；POST 維持 10 r/m、burst 5。
+- 裁決：GET 獨立 regex location `location ~ "^/diagnoses/[0-9a-fA-F-]{36}$"`（regex 含 `{36}`，nginx 設定中 MUST 整段加雙引號，否則 nginx 拒絕啟動）＋`diag_read` 60 r/m、burst 10 nodelay；POST 維持 10 r/m、burst 5。
 - 理由：共用 POST 的桶時，5 台重連 GET 加上退路 GET 就把 burst 用完，使用者接著按重試拿 429；不限流則 GET 成為可無上限打 Redis／Mongo 的入口（api 端沒有 HTTP 限流）。
 - 替代方案：共用 POST 的桶；GET 不限流。
 
@@ -600,7 +600,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - 裁決：先停 worker → POST → `restart api` → 重連 GET（waiting、`rebound:true`）→ 啟動 worker → 收到 completed。
 - 理由：fake 串流約 10 s，短於 api 冷啟動 10～17 s，串流中重啟 api 時 job 一定先完成，測不到「仍進行」；拉長 `FAKE_AI_TOKEN_DELAY_MS` 會牽動全部場景的等待上限。代價：e2e 驗到的是 waiting 而不是 active（SC-003 已據此修正）。
 - 替代方案：e2e override 拉長 `FAKE_AI_TOKEN_DELAY_MS`（影響全部場景）。
-- 實測（e2e 第 3 輪，2026-10-22）：api 約 8 s 即 healthy（短於規劃時估的 10～17 s），6a 改為第 10 個 token 後才重啟 api，並容許重連前先收到 active、再以 GET 取回。
+- 實測（e2e 第 3 輪，2026-10-21）：api 約 8 s 即 healthy（短於規劃時估的 10～17 s），6a 改為第 10 個 token 後才重啟 api，並容許重連前先收到 active、再以 GET 取回。
 
 **40. Pub/Sub 斷線迴圈在 redis 容器內執行**（D13；plan 階段 P19）
 - 影響範圍：e2e 場景 5（SC-002，Pub/Sub 每 50 ms 斷一次）在 Windows 上能否照設計頻率重現。
@@ -643,7 +643,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - 裁決：收到該 jobId 第 3 個 `ai/token` 後才 `pauseRedis()`；場景印出重派那次 `idempotent short-circuit` 的 `source`。
 - 理由：e2e 的 `AI_DEDUPE_LOCK_SECONDS` 為 20 s，停頓 50 s 必然超過；停頓若開始在 exec1 發出 LLM 請求之前，exec1 卡在 LLM 呼叫前、恢復後與 exec2 競爭（§4 殘餘風險），「LLM 恰 1 次」會偶發失敗。停頓排在首 token 之後時，token 發布不等 Redis 回應，exec1 在停頓期間跑完 LLM 串流、停在 `report(80)`；恢復後 exec1 的 SET `ai-result` 領先 exec2 的冪等短路查詢至少 1 個 Redis 往返（exec2 要先被 stalled 檢查搬回 wait、被取出、`updateProgress(0)` 才查短路），exec2 在短路 (i) 命中。（實作交叉審查更正措辭：research 原寫「先於」，實際依據是這個往返差，不是同一連線上的指令順序；§6 已列待改。）印 `source` 讓失敗時看得出走的是 `ai-result` 還是 `diagnoses`，不必重跑才能判讀。
 - 替代方案：e2e 把 `AI_DEDUPE_LOCK_SECONDS` 拉到 60 s，讓停頓不超過去重鎖（kill 場景 3a／3b 中死掉的持鎖者留下的 `ai-lock` 要等 60 s 才過期，每個 kill 場景多等約 40 s，全套 e2e 再拉長，既有場景的等待上限也要跟著調）。
-- 實測（e2e 第 3 輪，2026-10-22）：兩次皆為短路 (ii) `diagnoses`——exec1 解凍後在 exec2 查詢前已寫庫並 DEL 暫存；判準不受影響（LLM 恰 1 次、trigger 1 筆照樣成立）。
+- 實測（e2e 第 3 輪，2026-10-21）：兩次皆為短路 (ii) `diagnoses`——exec1 解凍後在 exec2 查詢前已寫庫並 DEL 暫存；判準不受影響（LLM 恰 1 次、trigger 1 筆照樣成立）。
 
 **以下第 47～48 條：checklist 階段推導（`checklists/resilience.md` Notes 第 3 點，T075 補錄，待覆核）**
 
@@ -666,6 +666,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - 裁決：再執行（`attemptsStarted > 1` 或 `attemptsMade > 0`）在快取命中、回 `cached:true` 之前，先重跑一次冪等短路（`ai-result:<jobId>` → `diagnoses`）；命中就照短路語意回 `cached:false`。首次執行不受影響。
 - 理由：開頭短路沒命中、但前一次執行在 exec2 等鎖期間落地並寫了快取時，exec2 會命中快取、回 `cached:true`；前一次執行已失去 lock、無法把 job 移到 completed，所以權威的 `completed` 來自 exec2，帶著錯的 `cached:true`，與 `diagnoses`／trigger 的 `cached:false` 不一致，demo 會把一次真的打了 LLM 的診斷標成「快取秒回」。代價只在再執行且命中快取的路徑多一次 Redis GET 與一次 Mongo `findOne`。
 - 替代方案：記為殘餘風險（重派那次被標成快取，結果本身正確）。
+- （合併門第 1、2 輪延伸，2026-10-21～22；實作 `bac9426`、`0d97fc8`）**延伸到取鎖後未命中路徑（限流 INCR 前）**：取得 `ai-lock`、double-check 快取仍未命中時，若 `isReExecution` 或 `ai-metric:<jobId>` 已有值（`countedElsewhere`，只讀不 claim——提前 claim 會讓限流延後後真正打 LLM 的那次記不到 miss），先重查冪等短路再決定是否 INCR 與呼叫 LLM。快取命中路徑則先 `claimMetric`，`isReExecution || !first` 時重查（第 58 條）。理由同本條：前一次執行可能在等鎖期間已落地，不重查就會再打一次 LLM。
 
 **50. `ai-result` 暫存 SET 改為 best-effort**（D6 第 4 點；來源：實作交叉審查）
 - 影響範圍：LLM 成功後 Redis 寫入暫存失敗時，該 job 是否多打一次 LLM（計費）；worker warn 日誌「ai-result 暫存寫入失敗（照常寫 diagnoses）」。
@@ -676,7 +677,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 **51. fake provider 加 e2e 專用的首 token 延遲**（D13；更正第 45 條的前提；來源：實作交叉審查）
 - 影響範圍：e2e 場景 3b 能否真的在首 token 前 kill（SC-001 的首 token 前情境）；fake provider 新增 env `FAKE_AI_FIRST_TOKEN_DELAY_MS`（預設 0，一鍵 demo 與單元測試行為不變），`docker-compose.e2e.yml` 設 2000；e2e 每個走 LLM 路徑的 fake 診斷多約 2 s。
 - 裁決：只延遲第一個 token；e2e 設 2000 ms；第 45 條的觸發點（progress 20）不變。
-- 理由：第 45 條的前提與實作不符——fake 首 token 一呼叫就送出，progress 20 到首 token 只差幾十 ms，從 Windows host 下 kill（數百 ms）打不進這個窗口，3b 實際會變成「串流中 kill」，首 token 前的情境沒測到卻綠燈。2 s 讓窗口夠寬；e2e fake 串流約 2＋9.5＝11.5 s，仍低於 `AI_TIMEOUT_MS` 15 s。
+- 理由：第 45 條的前提與實作不符——fake 首 token 一呼叫就送出，progress 20 到首 token 只差幾十 ms，從 Windows host 下 kill（compose CLI 約 1～2 s；改用 `docker kill <容器 id>` 後實測約 431 ms）打不進這個窗口，3b 實際會變成「串流中 kill」，首 token 前的情境沒測到卻綠燈。2 s 讓窗口夠寬；e2e fake 串流約 2＋9.5＝11.5 s，仍低於 `AI_TIMEOUT_MS` 15 s。
 - 替代方案：把 3b 改定義為「第 N 個 token 前」kill（不改 fake，但不再驗首 token 前、context 已建好那段的 keepalive 上界）。
 
 **以下第 52～54 條：web 交叉審查補裁（2026-10-21，US2，待覆核）**
@@ -776,6 +777,17 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - （實作階段補，未編條，待覆核）**終態綁定 × BullMQ 仍進行中回 503、不重判**（data-model §2.4「實作時更新」）：照理不可達；回 503 讓 web 稍後重試，不猜測要不要改綁（D8 第 4 點）。
 - （合併門第 1 輪補，2026-10-22）**瀏覽器端 UI 演練（T081）待使用者**：由第 57 條裁決交使用者驗收——quickstart §4 演練 2／3 的說明行、「重新連線後取回」、「原始串流（不完整）」與無「worker」「stalled」字樣，需在一鍵 demo（`AI_PROVIDER=fake`）實際操作確認；確認前 T081 維持 `[ ]`。
 - （合併門第 1 輪 web 審查補，2026-10-22）**斷線超過約 45 s 時不再續接**：→ **已由第 63 條處理**（合併門第 2 輪：斷線期間凍結 watchdog 與 2 s 退路，下列敘述為處理前的情況）。原記錄：斷線期間 45 s watchdog 照常計時，觸發時以**舊 socketId** 發 GET——舊連線已不在線，必回 409 `socket_unauthorized`，任務轉「超過 45 秒沒有收到進度，結果未知，請重試」，之後重連也不再續接（已不是進行中）。重連退避 1／2／4／8／16 s 加 30% 抖動，api 冷啟動超過約 19 s 時，重連成功到 watchdog 觸發只剩約 5～14 s 的餘裕。行為符合 D11「結果未知」的語意（後端可能已完成，使用者按重試以新 jobId 命中快取），列為待覆核的上界。替代方案：斷線期間凍結 watchdog（重連後才繼續計時；要改 `checkStalls` 與對應測試，且整條通道長時間壞掉時畫面會一直停在進行中）。
+- （合併門第 1 輪實作補，2026-10-21，未編條，待覆核；`561dee6`、`bac9426`、`97487f7`）：
+  - (a) **GET 先讀 state、再讀 job hash**（正確性條件）：反過來讀時，讀 hash 當下 job 仍在跑（沒有 `returnvalue`）、讀 state 時已 completed，會被當成 `returnvalue` 不合法而退到 MongoDB；快取命中的 job 不寫 `diagnoses`，於是誤回 404。先讀 state 的話，state 為 completed 時 hash 裡一定已有 `returnvalue`。寫入 data-model §2.4 與 contracts/diagnosis-lookup §3。
+  - (b) POST 入列失敗時只刪本次建立的綁定（`deleteIfCurrent`），不誤刪別人的。
+  - (c) worker 把 job 交回佇列（限流延後、關閉中）前先停 keepalive，避免交回後仍以舊執行送 progress。
+  - (d) worker 端 `findDiagnosisResult` 加 `maxTimeMS` 5000（比照 context 查詢），Mongo 卡頓時冪等短路不無限期掛著。
+  - (e) web `onAuthorized` 略過 POST 仍在往返的機台（job 可能還沒入列，GET 會 404 而誤轉「無法取回」），由 `resumeAfterPost` 在 POST 結束後補一次續接；`retryOnNewSocket` 作廢 GET 往返期間重連造成的結果，改以新連線重發。
+  - (f) 逐檔覆蓋率門檻由 10 檔增為 13 檔：加入 `job-routing-registry.ts`、`diagnosis-lookup.service.ts`、`job-status-payload.ts`（推翻 research R11「新檔不加入逐檔門檻」；新檔都是行為核心，納入後重構時退步會被擋下）。
+- （合併門第 2 輪實作補，2026-10-22，未編條，待覆核；`0d97fc8`、`eb36537`、`48a20f7`）：
+  - worker：第 58～60 條的落地細節見 data-model §3、§5（`ai-fail` 值加 `attempt`／`retryable`，只在 `marker.jobId === jobId && marker.attempt < attempt` 時忽略；等待者以 `retryable` 決定是否直接最終失敗；SET `ai-cache` 失敗只 warn）。
+  - web：`lookup/result` 的 progress 只往前（大於目前值或目前為 null 才採用；回應讓任務換到新一輪或新一次執行時採用回應值）；重連時清掉 2 s 寬限起點 `backendCompletedAt`；同 jobId 的 `ai/token`／`job/status` 抵達即清「正在取回」，此後該次續接 GET 若失敗不轉失敗、交 watchdog（新連線確實在收事件，GET 失敗不代表取不回）。
+  - api（第 61、62 條的落地細節）：`revertClaim` 把改綁期間補的 machineId／attempt／execution／deferred 寫回原物件再放回（參照不變）；新增 `touch(jobId, clientId, now)` 就地刷新 `boundAt`（僅綁定仍送往該 clientId 且未終態），unchanged × 進行中時呼叫；讀取期間綁定消失回 503（warn `binding vanished while reading job`）、owner 為別條連線回 409；`job.data.machineId` 非字串或不在機台名冊回 503 並撤回（rebound 且原綁定已有 machineId 時照常回應）；job hash 解析失敗（SyntaxError）warn 後退 MongoDB，其他錯誤仍 503；讀到終態且綁定為本 socket 原本那份、尚未標終態時 `markTerminal`；第一次讀到終態直接回應；Redis／Mongo 不可用的 warn 共用節流器、以 key 分開；rebound／衝突 info 的 clientId 改記 sha256 前 12 碼；400 的 `issues` params 與 query 各最多 5 則；新 job 的 GET 回 `progress: 0`（BullMQ 預設）；新增真 Redis 整合測試 `apps/api/src/integration/diagnosis-lookup.int.test.ts`。
 
 ---
 

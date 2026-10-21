@@ -43,7 +43,7 @@ export const JobStatusSchema = z.object({
 | `progress`，`data` 為 number（舊 worker） | `active`＋`progress` | 不變 |
 | `progress`，其他 | `active`（不帶 progress） | 不變 |
 | `delayed` | `waiting`（延後期間每 15 s 補送，不變） | 不變 |
-| `stalled`（**新監聽**） | `waiting`＋`reason: "stalled"`；warn 日誌 | 不變 |
+| `stalled`（**新監聽**） | `waiting`＋`reason: "stalled"`；warn 日誌。綁定已是終態時不送（合併門第 2 輪補：終態後的 stalled 只可能是遲到事件）；BullMQ 之後還會發一則普通 `waiting`，client 會連續收到兩則 waiting | 不變 |
 | `completed`，`returnvalue` 合法 | `completed`＋`result`、`cached`、（已知時）`attempt`、`execution` | `markTerminal("completed")`，10 s 後刪 |
 | `completed`，`returnvalue` 缺／不合法 | `completed`（不帶 result）；warn（只記 issue 路徑與代碼） | 同上 |
 | `failed` | 先 `ai/error(worker_failed, message=failedReason)`，再 `failed`＋`error` | **`markTerminal("failed")`，10 s 後刪**（1.4.0 前為立即刪） |
@@ -56,7 +56,8 @@ asyncapi `channels.ai/done.subscribe.description` 改為（ADR-003 D3 原文）�
 
 > Server forwards the validated final diagnosis result for a job, flagging whether it was served from cache. `ai/done` is a
 > best-effort notification. It MAY be delivered more than once for the same jobId (re-execution after a stalled lock or a retry
-> always carries the same result) and MAY be lost (Redis Pub/Sub is at-most-once). The authoritative completion is `job/status`
+> normally carries the same result; in a rare residual case documented in ADR-003 section 4 a re-execution may carry a
+> different result, so keep the first one received) and MAY be lost (Redis Pub/Sub is at-most-once). The authoritative completion is `job/status`
 > with `status: completed` and `result`; consumers MUST treat the first completion they receive for a jobId as final and ignore
 > later ones. When WS_AUTH_SECRET is set, it is sent only to authorized connections (those that passed the machine/subscribe token check).
 
@@ -64,8 +65,14 @@ asyncapi `channels.ai/done.subscribe.description` 改為（ADR-003 D3 原文）�
 
 > Server emits lifecycle status updates for a diagnosis job. A `completed` status carries the validated `result` and `cached`
 > whenever the worker's return value passes validation; this is the authoritative completion signal. `attempt`/`execution`
-> accompany progress updates; `reason: stalled` marks a re-dispatch after the worker lost its lock. When WS_AUTH_SECRET is set, it
-> is sent only to authorized connections.
+> accompany progress updates; `reason: stalled` marks a re-dispatch after the worker lost its lock (it is followed by a plain
+> `waiting`, so consumers may see two waiting updates in a row; it is not sent once the job is already terminal). While a worker
+> is alive, an `active` update with an unchanged progress value is repeated about every 10 seconds as a keepalive. Consumers
+> MUST treat the first terminal status (`completed` or `failed`) they receive for a jobId as final. When `completed` arrives
+> without `result` (older worker, or a return value that failed validation), consumers SHOULD fall back to
+> GET /diagnoses/{jobId} to read the result. When WS_AUTH_SECRET is set, it is sent only to authorized connections.
+
+（合併門第 2 輪補，2026-10-22）`ai/error` channel 的描述另補失敗終態的消費端義務：`failed` 有 10 s 綁定寬限，worker 的具體 `ai/error` 可能晚於 `job/status: failed` 到達，同一 job 也可能收到兩則 `ai/error`（具體 code 加 api 補送的 `worker_failed`）；以第一個終態為準。原文見 `asyncapi.yaml`。
 
 ## 4. WS `ai/error.code` 已知值（schema 仍 `string`，asyncapi 加 `description`）
 

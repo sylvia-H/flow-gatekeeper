@@ -3348,7 +3348,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - specs 001–008 補狀態與「已變更」橫幅；第一輪報告數字更正後凍結為歷史快照。
   - 文件一致性自動檢查：`packages/contracts/src/docs-contract-version.test.ts`（README／指南／CHANGELOG 的 `info.version` 現況宣稱＝`asyncapi.yaml`）、api／worker 各一支 `readme-env-table.test.ts`（README 環境變數表涵蓋 `env-schema.ts` 全部 key、反向不留幽靈變數）。
 - **Batch D（測試基礎建設）**——指令、前置與門檻以 README「測試與品質門檻」為準：
-  - **覆蓋率**：root `vitest.config.ts` 以 `test.projects` 聚合五個套件，`pnpm test:coverage`（`@vitest/coverage-v8`，合併報告）；不退步門檻 lines 60％／branches 50％（**已變更**：2026-10-18 起為隔離實測 −3 的 89％／85％，另有十個核心檔逐檔下限，見下方「第三輪審查 quick-fix」）；CI 以它取代 `pnpm test` 並上傳 lcov。2026-09-28 實測總計 lines 約 81％、branches 約 76％。
+  - **覆蓋率**：root `vitest.config.ts` 以 `test.projects` 聚合五個套件，`pnpm test:coverage`（`@vitest/coverage-v8`，合併報告）；不退步門檻 lines 60％／branches 50％（**已變更**：2026-10-18 起為隔離實測 −3 的 89％／85％，另有十個核心檔逐檔下限，見下方「第三輪審查 quick-fix」；012-lite 合併門第 1 輪起為十三個，加入 `job-routing-registry.ts`、`diagnosis-lookup.service.ts`、`job-status-payload.ts`，見 §15.7.6）；CI 以它取代 `pnpm test` 並上傳 lcov。2026-09-28 實測總計 lines 約 81％、branches 約 76％。
   - **整合測試**：worker／api 各有 `vitest.integration.config.ts` 與 `test:integration`，需 `docker compose up -d`；Redis db 15＋隨機前綴、Mongo 隨機資料庫、測後清理。涵蓋 Lua compare-and-del 鎖、並發去重、鎖換手、限流 `INCR`／`EXPIRE`、cache／lock TTL、`collMod`、Mongo 錯誤碼 85／86／11000、`HistoryService.writeOnce` 計數協調。實測修正一則認知：Mongo 7 允許**不同名**的非 unique 與 unique `{ jobId: 1 }` 索引並存（此時重複資料撞 11000 而非 85），`diagnosis-repository.ts` 註解已更正。
   - **跨 process e2e**：新套件 `tests/e2e`（`@flow-gatekeeper/e2e`，`pnpm test:e2e`）＋`docker-compose.e2e.yml`：獨立專案 `flow-gatekeeper-e2e`、只開 `127.0.0.1:18080`、env 一律用已提交範本、worker `AI_PROVIDER=fake`；四場景（訂閱→POST→事件序列、cache 命中、409／404、worker `SIGKILL` 後 stalled 重派），跑完 `down -v`。需 Compose 2.24.4+（`!reset`／`!override`）；一鍵 demo 本身仍 2.20.2+。
   - **fake AiProvider**：`apps/worker/src/ai/fake-provider.ts` 實作 `AiProvider`（硬規則 4），固定假診斷逐段串流；由 `AI_PROVIDER`（`gemini`｜`fake`，預設 `gemini`）、`FAKE_AI_TOKENS`（20，1–1000）、`FAKE_AI_TOKEN_DELAY_MS`（500，0–60000）控制，production 下允許但啟動 warn、非法值拒絕啟動。`id`／`model` 進快取簽章，不與 gemini 快取互相命中。
@@ -3648,7 +3648,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | SC-010 | 契約 1.4.0、新欄位與 GET schema、漂移與文件版本測試、`CHANGELOG.md` 契約小節與相容性注意 | `pnpm check` |
 | SC-011 | 不退步：既有 e2e 場景 1／2／4a／4b、覆蓋率全域與十個核心檔門檻、硬規則 1 不惡化 | `pnpm check`、`pnpm test:e2e` |
 
-e2e 仍只在本機跑（CI 不含 e2e）；改寫場景 3（SC-001）並新增三個場景（SC-002～004）後全套實測約 4.6 分鐘（278 s，第 3 輪；規劃時估 10–15 分鐘）。真 BullMQ 的 worker 整合測試已新增
+e2e 仍只在本機跑（CI 不含 e2e）；改寫場景 3（SC-001）並新增場景 5、6a／6b、7、8（SC-002～005）後全套實測約 4.6 分鐘（278 s，第 3 輪；規劃時估 10–15 分鐘）。真 BullMQ 的 worker 整合測試已新增
 `apps/worker/src/integration/bullmq-lifecycle.int.test.ts`（`returnvalue` 與 lock 參數生效；撰寫時：repo 沒有這類測試，建議補一支）。
 
 #### 15.7.5 與 013 UI 的接點（摘要，細表見 spec）
@@ -3677,7 +3677,7 @@ e2e 仍只在本機跑（CI 不含 e2e）；改寫場景 3（SC-001）並新增�
 - **重派與 keepalive**：`apps/worker/src/lib/bullmq-options.ts` 的 lock 15 s／stalled 5 s／maxStalled 2、keepalive 10 s；relay 監聽 `stalled`；45 s watchdog 觸發先 GET、文案改「結果未知」，WS 斷線期間 watchdog 與 2 s 退路凍結、交由重連續接（ADR-003 第 63 條）。
 - **冪等與成本**：processor 開頭以 jobId 查 `ai-result:<jobId>` → `diagnoses`；再執行命中快取前先查自己的結果；trigger 以 jobId upsert；hit／miss 以 `ai-metric:<jobId>` 只計一次；`ai-fail:<sig>` 負向標記（TTL 10 s）；`ai-result` 暫存寫入 best-effort。
 - **UI**：說明行「後端處理程序中斷，任務已重新排入佇列（第 N 次執行）」「已重新連線，正在取回診斷狀態…」、完成 meta「重新連線後取回」、「原始串流（不完整）」（以 `job/status`／GET 收尾或執行期間經歷過重連）、新失敗文案；術語補進 PRODUCT.md；DESIGN.md 補記進度說明行允許改變進行中區塊高度。
-- **e2e**：場景 3 改寫為 3a（串流中 kill）／3b（首 token 前 kill，fake provider 以 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 留出窗口），新增 5（Pub/Sub 斷線迴圈）、6a／6b（api 重啟）、7（Redis 停頓 50 s）、8（GET 回應形狀）。實測數字（2026-10-22 第 3 輪重跑，各場景單次）：3a `maxGap` **14.0 s**（kill → completed 28.7 s）、3b `maxGap` **18.8 s**（kill → completed 31.8 s，kill 前 0 個 token）、`W` **3.8 s／3.7 s**（容器側時鐘；先前一次 7.4 s／12.9 s），兩題皆收到 `reason:"stalled"` 且 execution 2；場景 7：解凍後 4.9 s completed、trigger 1、LLM call 1、hit＋miss 1、收到 stalled、execution 2、短路 `source: diagnoses`（P25 預期 ai-result，實測兩次皆為 diagnoses）；場景 5：踢掉 358 條 Pub/Sub 連線、只收 2/20 token 仍以 completed＋result 收尾；6a healthy 後 41 ms GET 到 completed、6b healthy 後 41 ms rebound、4.1 s completed；全套 14 條 **278.0 s**（build 走快取）。
+- **e2e**：場景 3 改寫為 3a（串流中 kill）／3b（首 token 前 kill，fake provider 以 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 留出窗口），新增 5（Pub/Sub 斷線迴圈）、6a／6b（api 重啟）、7（Redis 停頓 50 s）、8（GET 回應形狀）。實測數字（2026-10-21 第 3 輪重跑，各場景單次）：3a `maxGap` **14.0 s**（kill → completed 28.7 s）、3b `maxGap` **18.8 s**（kill → completed 31.8 s，kill 前 0 個 token）、`W` **3.8 s／3.7 s**（容器側時鐘；先前一次 7.4 s／12.9 s），兩題皆收到 `reason:"stalled"` 且 execution 2；場景 7：解凍後 4.9 s completed、trigger 1、LLM call 1、hit＋miss 1、收到 stalled、execution 2、短路 `source: diagnoses`（P25 預期 ai-result，實測兩次皆為 diagnoses）；場景 5：踢掉 358 條 Pub/Sub 連線、只收 2/20 token 仍以 completed＋result 收尾；6a healthy 後 41 ms GET 到 completed、6b healthy 後 41 ms rebound、4.1 s completed；全套 14 條 **278.0 s**（build 走快取）。
 - **文件回補**：ADR-002（§3 第 5 列、§6.1、§6.2、§6.5、§6.5.1）、README、PRODUCT.md、DESIGN.md、`tests/e2e/README.md`、`CHANGELOG.md`、009 `log-fields.md`；憲章 Principle III 補列 GET 仍為**建議、待使用者**（未執行 `/speckit-constitution`）。
 
 ---
@@ -3834,7 +3834,7 @@ pnpm check:coverage   # 同上，test 換成 test:coverage（CI 走這條）
 pnpm build      # 選用：production 建置路徑
 
 # 進階測試（review02 Batch D；前置與門檻見 README「測試與品質門檻」）
-pnpm test:coverage                                   # 五套件合併覆蓋率，門檻 lines 89／branches 85＋十個核心檔逐檔下限；勿並行跑，需要時以 COVERAGE_DIR 分開輸出目錄
+pnpm test:coverage                                   # 五套件合併覆蓋率，門檻 lines 89／branches 85＋十三個核心檔逐檔下限；勿並行跑，需要時以 COVERAGE_DIR 分開輸出目錄
 pnpm --filter @flow-gatekeeper/worker test:integration   # 需 docker compose up -d
 pnpm --filter @flow-gatekeeper/api test:integration      # 需 docker compose up -d
 pnpm test:e2e                                        # 起獨立 compose 專案 flow-gatekeeper-e2e；需 Compose 2.24.4+

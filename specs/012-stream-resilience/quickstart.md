@@ -24,7 +24,7 @@ corepack pnpm --filter @flow-gatekeeper/web exec vitest run src/domains/ai-copil
 ```
 
 收尾前一次：`corepack pnpm check`（contract lint＋typecheck＋lint＋test，SC-010／SC-011），`corepack pnpm test:coverage`
-（全域與十個核心檔逐檔門檻，FR-044）。
+（全域與十三個核心檔逐檔門檻，FR-044；合併門第 1 輪由十個增為十三個，加入 `job-routing-registry.ts`、`diagnosis-lookup.service.ts`、`job-status-payload.ts`）。
 
 | 判準 | 由哪些單元測試承接 |
 | --- | --- |
@@ -49,6 +49,7 @@ corepack pnpm --filter @flow-gatekeeper/api test:integration      # HistoryServi
 ```powershell
 corepack pnpm test:e2e                 # build → up --wait → 循序跑全部場景 → down -v
 $env:E2E_KEEP = "1"; corepack pnpm test:e2e   # 保留容器排查；事後 docker compose -p flow-gatekeeper-e2e --profile demo down -v
+Remove-Item Env:E2E_KEEP                       # 排查完移除，否則同一個 PowerShell session 之後每次都會保留容器
 ```
 
 | 場景 | 判準 | 看什麼 |
