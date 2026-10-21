@@ -89,13 +89,14 @@ const PAYLOAD: DiagnosisJobPayload = {
   windowMinutes: 5,
 };
 
-/** 讓 failed handler 內 fire-and-forget 的 insertTrigger（及其 catch）跑完。 */
+/** 讓 failed handler 內 fire-and-forget 的 upsertTrigger（及其 catch）跑完。 */
 const flush = () => new Promise<void>((r) => setImmediate(r));
 
 describe("createFailedHandler", () => {
-  function setup(insertTrigger: () => Promise<void> = async () => {}) {
+  type TriggerDoc = { machineId: string; jobId: string; requestedBy: string; cached: boolean };
+  function setup(upsertTrigger: (doc: TriggerDoc) => Promise<void> = async () => {}) {
     const { logger, calls } = recordingLogger();
-    const repo = { insertTrigger: vi.fn(insertTrigger) };
+    const repo = { upsertTrigger: vi.fn(upsertTrigger) };
     const handler = mod.createFailedHandler({ logger, repo });
     return { handler, repo, calls };
   }
@@ -113,7 +114,7 @@ describe("createFailedHandler", () => {
         bindings: { jobId: "j1", machineId: "press-02", attempt: 1 },
       },
     ]);
-    expect(repo.insertTrigger).toHaveBeenCalledWith({ machineId: "press-02", jobId: "j1", requestedBy: "tester", cached: false });
+    expect(repo.upsertTrigger).toHaveBeenCalledWith({ machineId: "press-02", jobId: "j1", requestedBy: "tester", cached: false });
   });
 
   it("其他終態失敗（不可重試）：維持 error 帶 err，trigger 補寫", async () => {
@@ -123,7 +124,7 @@ describe("createFailedHandler", () => {
     await flush();
 
     expect(calls).toEqual([expect.objectContaining({ level: "error", obj: { err }, msg: "job failed (final)" })]);
-    expect(repo.insertTrigger).toHaveBeenCalledTimes(1);
+    expect(repo.upsertTrigger).toHaveBeenCalledTimes(1);
   });
 
   it("attempts 用盡的一般錯誤：error 帶 err，trigger 補寫", async () => {
@@ -133,7 +134,18 @@ describe("createFailedHandler", () => {
     await flush();
 
     expect(calls).toEqual([expect.objectContaining({ level: "error", obj: { err } })]);
-    expect(repo.insertTrigger).toHaveBeenCalledTimes(1);
+    expect(repo.upsertTrigger).toHaveBeenCalledTimes(1);
+  });
+
+  // 「已有成功紀錄時不覆寫、仍只一筆」的保證在 repository 層（$setOnInsert＋unique），由
+  // diagnosis-repository.test.ts 與 integration/diagnosis-repository.int.test.ts 驗證；這裡只鎖住呼叫的是 upsert。
+  it("failed handler 呼叫 upsertTrigger(cached:false)（FR-025）", async () => {
+    const { handler, repo } = setup();
+    handler({ data: PAYLOAD, attemptsMade: 3, opts: { attempts: 3 } }, new Error("lock lost"));
+    await flush();
+
+    expect(repo.upsertTrigger).toHaveBeenCalledTimes(1);
+    expect(repo.upsertTrigger).toHaveBeenCalledWith({ machineId: "press-02", jobId: "j1", requestedBy: "tester", cached: false });
   });
 
   it("尚可重試：只記 warn、不補寫 trigger", async () => {
@@ -143,7 +155,7 @@ describe("createFailedHandler", () => {
     await flush();
 
     expect(calls).toEqual([expect.objectContaining({ level: "warn", obj: { err }, msg: "job attempt failed (will retry)" })]);
-    expect(repo.insertTrigger).not.toHaveBeenCalled();
+    expect(repo.upsertTrigger).not.toHaveBeenCalled();
   });
 
   it("trigger 寫入失敗：記 error、不拋出（不變成浮空 rejection）", async () => {
@@ -163,7 +175,7 @@ describe("createFailedHandler", () => {
     const { handler, repo, calls } = setup();
     handler(undefined, new Error("x"));
     expect(calls).toEqual([]);
-    expect(repo.insertTrigger).not.toHaveBeenCalled();
+    expect(repo.upsertTrigger).not.toHaveBeenCalled();
   });
 });
 

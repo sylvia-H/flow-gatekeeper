@@ -228,7 +228,7 @@ export type FailedJobLike = Pick<ProcessorJob, "data" | "attemptsMade" | "opts">
  */
 export function createFailedHandler(deps: {
   logger: ProcessorLogger;
-  repo: Pick<DiagnosisRepository, "insertTrigger">;
+  repo: Pick<DiagnosisRepository, "upsertTrigger">;
 }): (job: FailedJobLike | undefined, err: Error) => void {
   const { logger, repo } = deps;
   return (job, err) => {
@@ -242,8 +242,9 @@ export function createFailedHandler(deps: {
         jl.error({ err }, "job failed (final)");
       }
       // 失敗（含重試用盡、不可重試）也是一次觸發，補寫輕量稽核（cached:false），使每次觸發皆可追溯。
+      // upsert（$setOnInsert）：同 jobId 已有成功紀錄（例如 stalled 重派前那次已完成）時不覆寫，每個 jobId 恰一筆（FR-025）。
       void repo
-        .insertTrigger({ machineId, jobId, requestedBy, cached: false })
+        .upsertTrigger({ machineId, jobId, requestedBy, cached: false })
         .catch((e: unknown) => jl.error({ err: e }, "failure trigger write failed"));
     } else {
       jl.warn({ err }, "job attempt failed (will retry)");

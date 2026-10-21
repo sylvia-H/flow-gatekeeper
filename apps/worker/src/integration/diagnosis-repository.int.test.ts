@@ -49,6 +49,11 @@ async function jobIdIndex(db: Db): Promise<IndexInfo | undefined> {
   return all.find((i) => JSON.stringify(i.key) === JSON.stringify({ jobId: 1 }));
 }
 
+async function triggerJobIdIndex(db: Db): Promise<IndexInfo | undefined> {
+  const all = (await db.collection("diagnosisTriggers").indexes()) as IndexInfo[];
+  return all.find((i) => JSON.stringify(i.key) === JSON.stringify({ jobId: 1 }));
+}
+
 function errCode(obj: unknown): unknown {
   return (obj as { err?: { code?: unknown } } | null)?.err?.code;
 }
@@ -81,6 +86,82 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("diagnosis-repository × 真 
     } finally {
       await client?.close();
     }
+  });
+
+  it("全新資料庫：diagnosisTriggers 也建立 jobId unique（012 FR-025）", async () => {
+    const db = freshDb();
+    const log = new RecordingLogger();
+    await ensureDiagnosisIndexes(db, log);
+    await ensureDiagnosisIndexes(db, log);
+    expect(log.errors).toEqual([]);
+    expect((await triggerJobIdIndex(db))?.unique).toBe(true);
+  });
+
+  it("upsertTrigger：同 jobId 先成功（cached:true）再失敗補寫（cached:false）→ 只一筆、保留先寫者", async () => {
+    const db = freshDb();
+    await ensureDiagnosisIndexes(db, new RecordingLogger());
+    const repo = createMongoDiagnosisRepository(db);
+    const jobId = `job-${randomUUID()}`;
+    await repo.upsertTrigger({ machineId: "press-01", jobId, requestedBy: "a", cached: true });
+    await repo.upsertTrigger({ machineId: "press-01", jobId, requestedBy: "b", cached: false });
+
+    const docs = await db.collection("diagnosisTriggers").find({ jobId }).toArray();
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({ machineId: "press-01", jobId, requestedBy: "a", cached: true });
+    expect(docs[0]?.createdAt).toBeInstanceOf(Date);
+  });
+
+  it("upsertTrigger 併發 20 次同 jobId：不拋（E11000 視為成功），恰好一筆", async () => {
+    const db = freshDb();
+    await ensureDiagnosisIndexes(db, new RecordingLogger());
+    const repo = createMongoDiagnosisRepository(db);
+    const jobId = `job-${randomUUID()}`;
+    const results = await Promise.allSettled(
+      Array.from({ length: 20 }, (_, i) =>
+        repo.upsertTrigger({ machineId: "press-01", jobId, requestedBy: `r${i}`, cached: i % 2 === 0 }),
+      ),
+    );
+    expect(results.filter((r) => r.status === "rejected")).toEqual([]);
+    expect(await db.collection("diagnosisTriggers").countDocuments({ jobId })).toBe(1);
+  });
+
+  it("diagnosisTriggers 有既有重複 jobId：unique 撞 11000 → 記 error（帶集合名）並退回非 unique，不拋", async () => {
+    const db = freshDb();
+    const triggers = db.collection("diagnosisTriggers");
+    await triggers.insertMany([{ jobId: "dup" }, { jobId: "dup" }]);
+    const log = new RecordingLogger();
+
+    await expect(ensureDiagnosisIndexes(db, log)).resolves.toBeUndefined();
+
+    expect(log.errors).toHaveLength(1);
+    expect(errCode(log.errors[0]?.obj)).toBe(11000);
+    expect(log.errors[0]?.msg).toContain("diagnosisTriggers.jobId");
+    const ix = await triggerJobIdIndex(db);
+    expect(ix).toBeDefined();
+    expect(ix?.unique).not.toBe(true);
+    // 退回後 upsert 仍冪等（以 updateOne 篩選既有文件，不新增）。
+    await createMongoDiagnosisRepository(db).upsertTrigger({ machineId: "m", jobId: "dup", requestedBy: "x", cached: false });
+    expect(await triggers.countDocuments({ jobId: "dup" })).toBe(2);
+    // diagnoses 不受影響。
+    expect((await jobIdIndex(db))?.unique).toBe(true);
+  });
+
+  it("findDiagnosisResult：合法回傳、查無回 null、不合法回 null 並呼叫 onInvalid", async () => {
+    const db = freshDb();
+    await ensureDiagnosisIndexes(db, new RecordingLogger());
+    const invalid: string[] = [];
+    const repo = createMongoDiagnosisRepository(db);
+    const jobId = `job-${randomUUID()}`;
+    await repo.insertDiagnosis({ machineId: "press-01", jobId, result: VALID_RESULT });
+
+    expect(await repo.findDiagnosisResult(jobId, () => invalid.push(jobId))).toEqual(VALID_RESULT);
+    const missing = `job-${randomUUID()}`;
+    expect(await repo.findDiagnosisResult(missing, () => invalid.push(missing))).toBeNull();
+
+    const bad = `job-${randomUUID()}`;
+    await db.collection("diagnoses").insertOne({ machineId: "press-01", jobId: bad, result: { summary: 42 } });
+    expect(await repo.findDiagnosisResult(bad, () => invalid.push(bad))).toBeNull();
+    expect(invalid).toEqual([bad]);
   });
 
   it("全新資料庫：建立 jobId unique、machineId+createdAt 與 diagnosisTriggers 的 TTL 索引，不記 error", async () => {
@@ -119,7 +200,7 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("diagnosis-repository × 真 
     expect(docs[0]).toMatchObject({ machineId: "press-01", cached: false, result: { summary: VALID_RESULT.summary } });
     expect(docs[0]?.createdAt).toBeInstanceOf(Date);
 
-    await repo.insertTrigger({ machineId: "press-01", jobId, requestedBy: "integration", cached: true });
+    await repo.upsertTrigger({ machineId: "press-01", jobId, requestedBy: "integration", cached: true });
     const trigger = await db.collection("diagnosisTriggers").findOne({ jobId });
     expect(trigger).toMatchObject({ requestedBy: "integration", cached: true });
     expect(trigger?.createdAt).toBeInstanceOf(Date);

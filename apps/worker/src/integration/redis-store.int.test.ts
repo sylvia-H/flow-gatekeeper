@@ -91,11 +91,18 @@ class CollectingPublisher {
 class MemoryRepo implements DiagnosisRepository {
   readonly diagnoses: string[] = [];
   readonly triggers: { jobId: string; cached: boolean }[] = [];
-  async insertDiagnosis(doc: { jobId: string }) {
+  private readonly results = new Map<string, DiagnosisResult>();
+  async insertDiagnosis(doc: { jobId: string; result: DiagnosisResult }) {
+    if (this.results.has(doc.jobId)) return; // 與 Mongo jobId unique 同語意：重複視為成功
+    this.results.set(doc.jobId, doc.result);
     this.diagnoses.push(doc.jobId);
   }
-  async insertTrigger(doc: { jobId: string; cached: boolean }) {
+  async upsertTrigger(doc: { jobId: string; cached: boolean }) {
+    if (this.triggers.some((t) => t.jobId === doc.jobId)) return; // $setOnInsert：先寫者勝
     this.triggers.push({ jobId: doc.jobId, cached: doc.cached });
+  }
+  async findDiagnosisResult(jobId: string) {
+    return this.results.get(jobId) ?? null;
   }
 }
 
