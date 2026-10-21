@@ -3186,7 +3186,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 > **已變更（2026-09-27 第二輪審查）**：roadmap 修訂為 **010-lite → 012-lite → 011**（`docs/20260927-research-review02.md` §5.4）；
 > 012-lite 改為優先採 BullMQ `returnvalue`＋`GET /diagnoses/:jobId`＋`stalled` 監聽，Redis Streams 降為備選。延後項總表見 ADR-002 §6.5。
 >
-> **已變更（2026-10，第三輪審查）**：roadmap 再修訂為 **quick-fix → 012-lite → 010-lite（縮小）→ 011**（`docs/20260927-research-review03.md` §5.4）。quick-fix 已於 2.1.0 落地（`fix/20261018-review03-quickfix`，見 §15.6「第三輪審查 quick-fix」）；它用掉契約 1.3.0，其餘三項的契約版號各順延一號為 012-lite＝1.4.0、010-lite＝1.5.0、011＝1.6.0（見 §15.6「第三輪審查 quick-fix」的「roadmap 版號順延」）。上一則的 010-lite → 012-lite → 011 已由本則取代。
+> **已變更（2026-09-28 第三輪審查；2026-10-21 回補）**：roadmap 再修訂為 **quick-fix → 012-lite → 010-lite（縮小）→ 011**（`docs/20260927-research-review03.md` §5.4）。quick-fix 已於 2.1.0 落地（`fix/20261018-review03-quickfix`，見 §15.6「第三輪審查 quick-fix」）；它用掉契約 1.3.0，其餘三項的契約版號各順延一號為 012-lite＝1.4.0、010-lite＝1.5.0、011＝1.6.0（見 §15.6「第三輪審查 quick-fix」的「roadmap 版號順延」）。上一則的 010-lite → 012-lite → 011 已由本則取代。
 
 ### 15.6 1.0.0 之後的現況摘要
 
@@ -3449,9 +3449,9 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - 文件回補：ADR-002 §3 第 9 列、§6.5.1 infra Low 列與 §7 末段；本指南 §6.10 現況註記、上方「Batch C／D」的 CI 條、§15.5 roadmap 註記（改為第三輪的 quick-fix → 012-lite → 010-lite（縮小）→ 011，並指向「roadmap 版號順延」）；README「一鍵全檢」的 CI 敘述；`CHANGELOG.md` `[Unreleased]`。第三輪報告凍結不改。
 - **驗證**：`TopBar.test.ts` 單檔在本機 Node 26 與 Node 22.23.3（CI 版本）各連跑 10 次（各 5 次加 `--sequence.shuffle`）全數通過（45／45）；拿掉 1 ms 推進則「Escape 收回」穩定失敗、訊息與 CI 相同；`stryker run --dryRunOnly`（與 nightly 相同設定，只跑 initial test run）526 支通過。
 - **使用者裁決（2026-10-21）**：
-  1. （推翻紀錄）CI 恢復 **push** 自動觸發，保留 `workflow_dispatch`、**不加** `pull_request`。原提案為第三輪報告附錄 C 的 (a)「恢復 `pull_request`（加 `paths-ignore`）、不恢復 push」；使用者問「為何不建議恢復 push」後改為 push，使用者採納。
-     理由：本 repo 從未開過 PR，合併一律本機 `--no-ff` 後 push `develop`，只恢復 `pull_request` 等於 CI 永不自動跑；當初關閉的理由「私有 repo 期間節省 Actions 分鐘」（`6417069`）在 repo 公開後已不成立；push 自動跑一次約 2 分鐘（2026-10-18 實測），公開 repo 不計費，連續 push 由 concurrency 取消舊 run。不加 `pull_request` 是因為同 repo 分支的 PR 會讓同一個 commit 跑兩次。
-- **仍未處理**：INF-14（nightly 不論 `develop` 有無變更每日照跑、180 分 timeout 為推估值）與第三輪報告 Batch F 第 6 點的其餘建議（`compose config -q`、e2e 進 CI 的方式）不在本分支範圍；ADR-002 §6.5.1 infra Low 列的 INF-8 餘項同樣未處理。
+  1. （推翻紀錄）CI 恢復 **push** 自動觸發，保留 `workflow_dispatch`、**不加** `pull_request`。原提案為第三輪報告附錄 C 的 (a)「恢復 `pull_request`（加 `paths-ignore`）、不恢復 push」；使用者問「為何不建議恢復 push」後改為 push。
+     理由（Claude 回答使用者提問「為何不建議恢復 push」時提出，使用者採納）：本 repo 從未開過 PR，合併一律本機 `--no-ff` 後 push `develop`，只恢復 `pull_request` 等於 CI 永不自動跑；當初關閉的理由「私有 repo 期間節省 Actions 分鐘」（`6417069`）在 repo 公開後已不成立；push 自動跑一次約 2 分鐘（2026-10-18 實測），公開 repo 不計費，連續 push 由 concurrency 取消舊 run。不加 `pull_request` 是因為同 repo 分支的 PR 會讓同一個 commit 跑兩次。
+- **仍未處理**（不在本分支範圍）：第三輪報告 Batch F 第 6 點其餘的 INF-14（nightly 不論 `develop` 有無變更每日照跑；180 分 timeout 為私有 repo 2 vCPU 時的推估值，公開 repo 4 vCPU 下 2026-10-15～20 成功的 run 實測 7 分 08 秒～10 分 22 秒）、INF-15（重跑 mutation、更新基準），以及 §3.8 DOC-18 條目的 `compose config -q`、e2e 進 CI 的方式；ADR-002 §6.5.1 infra Low 列的 INF-8 餘項同樣未處理。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 
