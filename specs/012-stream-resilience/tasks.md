@@ -132,8 +132,8 @@ pnpm monorepo：`packages/contracts/src/`、`apps/api/src/`、`apps/worker/src/`
 
 ### e2e（U-nginx-e2e）
 
-- [ ] T045 [US2] [Docker/e2e] 新檔 `tests/e2e/src/api-restart.e2e.test.ts`：6a 串流中 `restartApi()`＋`waitHealthy("api")`，`reconnectClient` 後以新 socketId `getDiagnosis` → 200 completed＋result；6b 先 `stopWorker()` → POST → `restartApi()` → 重連 GET → 200 waiting `rebound: true` → `startWorker()` → 新連線收到帶 `result` 的 `completed`；兩者皆在 api healthy 後 60 s 內。相依 T020、T021、T034、T036、T037（SC-003；P18）
-- [ ] T046 [US2] [Docker/e2e] 新檔 `tests/e2e/src/diagnosis-lookup.e2e.test.ts`（場景 8）：隨機 jobId → 404；他人在線 socketId 查進行中 → 409 `job_bound_elsewhere`；同情境帶 `previousSocketId`＝原 socketId → 200 `rebound: true`；隨機 UUID socketId → 409 `socket_unauthorized`；`socketId=abc` → 400；已完成任務以他人 socketId 查 → 200 completed。相依 T045（e2e 循序）（SC-005；quickstart §3）
+- [X] T045 [US2] [Docker/e2e] 新檔 `tests/e2e/src/api-restart.e2e.test.ts`：6a 串流中 `restartApi()`＋`waitHealthy("api")`，`reconnectClient` 後以新 socketId `getDiagnosis` → 200 completed＋result；6b 先 `stopWorker()` → POST → `restartApi()` → 重連 GET → 200 waiting `rebound: true` → `startWorker()` → 新連線收到帶 `result` 的 `completed`；兩者皆在 api healthy 後 60 s 內。相依 T020、T021、T034、T036、T037（SC-003；P18）
+- [X] T046 [US2] [Docker/e2e] 新檔 `tests/e2e/src/diagnosis-lookup.e2e.test.ts`（場景 8）：隨機 jobId → 404；他人在線 socketId 查進行中 → 409 `job_bound_elsewhere`；同情境帶 `previousSocketId`＝原 socketId → 200 `rebound: true`；隨機 UUID socketId → 409 `socket_unauthorized`；`socketId=abc` → 400；已完成任務以他人 socketId 查 → 200 completed。相依 T045（e2e 循序）（SC-005；quickstart §3）
 
 **Checkpoint**：US1＋US2 合起來達成「後端完成的結果一定回得到畫面」；可做 quickstart 演練 3。建議 commit：`feat(012): [Phase 4: US2] JobRoutingRegistry claim 與 GET /diagnoses/:jobId`、`feat(012): [Phase 4: US2] nginx diag_read 獨立限流`、`feat(012): [Phase 4: US2] web 重連續接與 2 s／watchdog 退路`、`test(012): [Phase 4: US2] e2e 場景 6、8`。
 

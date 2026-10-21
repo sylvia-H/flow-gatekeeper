@@ -276,3 +276,30 @@ export async function pubsubKillLoop(seconds: number): Promise<PubsubKillSummary
   });
   return parsePubsubKillOutput((await run).stdout);
 }
+
+/**
+ * 刪掉 redis 內所有 `ai-cache:*`（診斷結果快取）的 sh 腳本；與 `pubsubKillScript` 同樣單行、不含雙引號、密碼走
+ * `REDISCLI_AUTH`。逐鍵 DEL（鍵名為 `ai-cache:<hex 簽章>`，不含空白），結尾印出刪除數。
+ */
+export function clearDiagnosisCacheScript(): string {
+  return [
+    "case ${REDIS_PASSWORD:-} in '') ;; *) export REDISCLI_AUTH=$REDIS_PASSWORD ;; esac",
+    "n=0",
+    "for k in $(redis-cli --scan --pattern 'ai-cache:*'); do redis-cli del $k >/dev/null; n=$((n + 1)); done",
+    "echo ai-cache-cleared=$n",
+  ].join("; ");
+}
+
+/**
+ * 清空診斷結果快取，回刪除的鍵數。給「必須走 LLM 路徑（cache miss）」的場景在 beforeAll 呼叫：e2e 檔案執行順序
+ * 不保證（vitest 依上次耗時排序），只剩 press-02／oven-04 兩台未被既有場景占用，不清快取時，先跑的場景留下的
+ * 600 s 快取會讓後跑的場景秒回 cache 命中而測不到串流／重派。只動 `ai-cache:`，不碰 BullMQ、`ai-lock:`、`ai-result:`。
+ */
+export async function clearDiagnosisCache(): Promise<number> {
+  const { stdout } = await compose(["exec", "-T", "redis", "sh", "-c", clearDiagnosisCacheScript()], {
+    timeoutMs: 30_000,
+  });
+  const m = /ai-cache-cleared=(\d+)/.exec(stdout);
+  if (!m) throw new Error(`clearDiagnosisCache 未輸出結尾摘要：${stdout.slice(-300)}`);
+  return Number(m[1]);
+}

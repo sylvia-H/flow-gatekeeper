@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  clearDiagnosisCacheScript,
   countLlmCallsIn,
   firstLogAfter,
   nthLogTime,
@@ -205,5 +206,17 @@ describe("parseMongoshCount", () => {
   it("空輸出或沒有整數列時拋錯", () => {
     expect(() => parseMongoshCount("")).toThrow(/找不到整數/);
     expect(() => parseMongoshCount("MongoServerError: not authorized\n")).toThrow(/找不到整數/);
+  });
+});
+
+describe("clearDiagnosisCacheScript", () => {
+  it("單行、不含雙引號、只掃 ai-cache: 前綴、密碼走 REDISCLI_AUTH", () => {
+    const s = clearDiagnosisCacheScript();
+    expect(s).not.toContain("\n");
+    expect(s).not.toContain('"');
+    expect(s).toContain("--scan --pattern 'ai-cache:*'");
+    expect(s).not.toMatch(/FLUSH/i);
+    expect(s).toContain("REDISCLI_AUTH=$REDIS_PASSWORD");
+    expect(s).toContain("echo ai-cache-cleared=$n");
   });
 });

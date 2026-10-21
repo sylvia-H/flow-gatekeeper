@@ -343,6 +343,27 @@ export async function getDiagnosis(
   return { status: res.status, body: await readBody(res) };
 }
 
+/** api 重啟期間 nginx／連線層的暫時性回應：`status: 0`（連線失敗、逾時）與 502／503／504。 */
+export const TRANSIENT_LOOKUP_STATUSES: readonly number[] = [0, 502, 503, 504];
+
+/**
+ * 重送 `getDiagnosis`（每 1 s）直到回應不是暫時性狀態碼，或逾時；回最後一次回應（不丟錯，斷言交給場景）。
+ * 給 api 重啟後的第一次查詢用：healthcheck 轉 healthy 與 nginx 能轉發之間可能還有一小段 502。
+ */
+export async function getDiagnosisUntilSettled(
+  jobId: string,
+  socketId: string,
+  previousSocketId: string | undefined,
+  timeoutMs: number,
+): Promise<{ status: number; body: unknown }> {
+  const started = Date.now();
+  for (;;) {
+    const res = await getDiagnosis(jobId, socketId, previousSocketId);
+    if (!TRANSIENT_LOOKUP_STATUSES.includes(res.status) || Date.now() - started >= timeoutMs) return res;
+    await sleep(1_000);
+  }
+}
+
 /**
  * 重連流程（場景 6a／6b）：關掉舊 client（已被 api 重啟斷開時為 no-op）、新建 `E2eClient`、`connect`＋`subscribe`，
  * 回傳新 client 與它的 `clientId`（＝之後 GET 要帶的 `socketId`；舊的 `old.clientId` 即 `previousSocketId`）。
