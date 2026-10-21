@@ -122,7 +122,7 @@ BullMQ 的 stalled 判定（`moveStalledJobsToWait-9.lua`）：每次檢查先�
 | **定案 15／5／2，K＝10** | 10＋15＋10＝**35 s** | 餘裕 10 s | `W` 最多可到 15 s 仍成立（`W + 2S ≤ L + 2S`） |
 | 替代 15／10／2，K＝5 | 5＋15＋20＝40 s | 餘裕 5 s | keepalive 寫入量加倍 |
 
-**定案 lock 15 s／stalled 5 s／maxStalled 2、keepalive 10 s。** 理由：`S` 只影響「多快發現」，不影響「多容易誤判」（誤判由 lock 是否過期決定，看的是 `L`），縮小 `S` 的代價是每個 worker 每 5 s 跑一次 stalled 檢查的 Lua（`LRANGE active`＋`SADD`，demo 規模下微秒級）；縮小 `L` 才會提高誤判率。`maxStalledCount` 2 是因為 `L` 縮短後 Redis 卡頓超過 15 s 就會觸發一次 stalled，留一次額度給真正的 worker 崩潰（現況 1 次額度會被一次卡頓用掉，AR-4 實測）。`lockRenewTime` 維持 BullMQ 預設 `L/2`＝7.5 s。（合併門第 2 輪更正，2026-10-22：BullMQ 的續租計時器實際每 `lockRenewTime/2` 約 3.75 s 觸發一次，最慢 7.5 s；因此 Redis 卡頓的容忍約 11.25～15 s——最後一次成功續租可能發生在卡頓開始前 0～3.75 s，lock 剩餘 11.25～15 s。35 s 上界的推導不變，它只用到 `L` 與 `S`。）四個值寫成具名常數並在 README 說明。
+**定案 lock 15 s／stalled 5 s／maxStalled 2、keepalive 10 s。** 理由：`S` 只影響「多快發現」，不影響「多容易誤判」（誤判由 lock 是否過期決定，看的是 `L`），縮小 `S` 的代價是每個 worker 每 5 s 跑一次 stalled 檢查的 Lua（`LRANGE active`＋`SADD`，demo 規模下微秒級）；縮小 `L` 才會提高誤判率。`maxStalledCount` 2 是因為 `L` 縮短後 Redis 卡頓超過 15 s 就會觸發一次 stalled，留一次額度給真正的 worker 崩潰（現況 1 次額度會被一次卡頓用掉，AR-4 實測）。`lockRenewTime` 維持 BullMQ 預設 `L/2`＝7.5 s。（合併門第 2 輪更正，2026-10-22：BullMQ 的續租計時器實際每 `lockRenewTime/2` 約 3.75 s 觸發一次，最慢 7.5 s；因此 Redis 卡頓的容忍約 11.25～15 s——最後一次成功續租可能發生在卡頓開始前 0～3.75 s，lock 剩餘 11.25～15 s。35 s 上界的推導不變——`K + L + 2S` 只看 lock 期限、stalled 間隔與 keepalive 間隔，不依賴續租節拍（合併門第 3 輪更正措辭：原寫「它只用到 `L` 與 `S`」，漏了 `K`）。）四個值寫成具名常數並在 README 說明。
 
 另：重派後的 job 若要等死掉的持鎖者留下的 `ai-lock:<sig>`（TTL `AI_DEDUPE_LOCK_SECONDS`，預設 45 s），等待期間由 keepalive 補事件，不影響上界；首 token 前最長 `A`（30 s），同樣由 keepalive 覆蓋。`A` 本身的上限驗證（`AI_TIMEOUT_MS ≤ 35 s`）屬 010-lite，不在本 ADR。
 

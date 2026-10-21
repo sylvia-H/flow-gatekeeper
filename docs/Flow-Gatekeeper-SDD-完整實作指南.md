@@ -3542,7 +3542,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 ### 15.7 Feature 012-lite：串流韌性（Stream Resilience）藍圖
 
-> **狀態：已落地**（2026-10-21 implement 完成，落地摘要見 §15.7.6；merge 回 `develop` 的 commit 於 merge 時補記）。
+> **狀態：已落地**（2026-10-21 implement 完成，落地摘要見 §15.7.6；2026-10-22 經合併門三輪後併回 `develop`（merge commit 見 `git log develop --merges`））。
 > 撰寫時的狀態：藍圖已定案、已立案、尚未落地（2026-10-21 自 `develop` `e1cdb69` 開 branch `012-stream-resilience`；
 > 規格見 [`specs/012-stream-resilience/spec.md`](../specs/012-stream-resilience/spec.md)）。設計決策見
 > **[ADR-003](adr-003-completion-semantics.md)**（Accepted，2026-10-21 使用者離席期間代理裁決、待覆核）；
