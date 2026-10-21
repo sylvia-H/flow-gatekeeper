@@ -48,7 +48,7 @@ export async function setup(): Promise<void> {
 export async function teardown(): Promise<void> {
   if (!process.env.E2E) return;
   if (process.env.E2E_KEEP) {
-    log(`E2E_KEEP 已設，保留 ${PROJECT} 容器（手動清理：docker compose -p ${PROJECT} down -v）`);
+    log(`E2E_KEEP 已設，保留 ${PROJECT} 容器（手動清理：docker compose -p ${PROJECT} --profile demo down -v）`);
     return;
   }
   const t = Date.now();

@@ -12,7 +12,7 @@ import { createDiagnosis, E2eClient, sleep } from "./harness/ws-client.js";
  * - 3a 串流中 kill（第 3 個 token 後）；3b 首 token 前 kill（收到 `job/status` progress 20 即 kill：context 已返回、尚未呼叫
  *   LLM，P24）。e2e override 以 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 把 fake 首 token 延後 2 s（原本一呼叫就送出，progress 20
  *   → 首 token 只差幾十 ms），以 progress 20 為觸發點、`docker kill` 數百 ms 內生效，確定落在首 token 前。
- * - SC-001：使用者看到的最長無事件間隔 `maxGap < 45_000`（前端 watchdog 門檻；設計上界 `K + W + 2S` ≈ 35 s，前提 W ≤ 25 s）。
+ * - SC-001：使用者看到的最長無事件間隔 `maxGap < 45_000`（前端 watchdog 門檻；`W ≤ 15 s` 時設計上界 35 s；`15 < W < 25 s` 時上界 `K + W + 2S`，仍 < 45 s）。
  *   間隔量整個 job 到 completed 為止（含 kill 前最後一則事件 → kill 後第一則事件那一段，正是要量的空窗）。
  * - `W`（worker 冷啟動，含 compose 重啟延遲）＝ kill 後第一則 `worker ready`（則數基線判定）− 容器 `State.FinishedAt`，
  *   兩者都是 Docker VM 時鐘。W > 25 s 時設計上界不成立：印「上界失效」並判失敗，不放寬（plan 風險 1 要回報使用者）。
@@ -32,7 +32,7 @@ const KILL_AFTER_TOKENS = 3;
 const KILL_AT_PROGRESS = 20;
 /** SC-001：前端無進展 watchdog 門檻。 */
 const MAX_GAP_MS = 45_000;
-/** plan 風險 1：W 超過此值時 35 s 設計上界（K + W + 2S）不成立。 */
+/** plan 風險 1：W 達此值時 `K + W + 2S` 不再 < 45 s（W ≤ 15 s 時上界 35 s；15 < W < 25 s 時上界 K + W + 2S）。 */
 const MAX_W_MS = 25_000;
 
 describe.skipIf(!process.env.E2E)("跨 process e2e：worker 崩潰後 stalled 重派", () => {
@@ -104,8 +104,8 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：worker 崩潰後 stalled �
     );
 
     // plan 風險 1：W 超出就是設計上界失效，先印再判失敗（不放寬）
-    if (w > MAX_W_MS) console.log(`[e2e] 場景 ${label}：上界失效（W ${w}ms > ${MAX_W_MS}ms，K + W + 2S 不再 < 45 s）`);
-    expect(w, `W（worker 冷啟動）應 ≤ ${MAX_W_MS}ms，否則 35 s 設計上界失效`).toBeLessThanOrEqual(MAX_W_MS);
+    if (w >= MAX_W_MS) console.log(`[e2e] 場景 ${label}：上界失效（W ${w}ms ≥ ${MAX_W_MS}ms，K + W + 2S 不再 < 45 s）`);
+    expect(w, `W（worker 冷啟動）應 < ${MAX_W_MS}ms，否則 K + W + 2S 不再 < 45 s`).toBeLessThan(MAX_W_MS);
     expect(gap, `SC-001：maxGap 應 < ${MAX_GAP_MS}ms`).toBeLessThan(MAX_GAP_MS);
 
     expect(stalled || maxExecution >= 2, "應收到 waiting＋reason:stalled 或 execution ≥ 2").toBe(true);
@@ -121,7 +121,7 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：worker 崩潰後 stalled �
     return { jobId, statusesBeforeKill, tokensBeforeKill };
   }
 
-  it("3a 串流中 SIGKILL（第 3 個 token 後）→ stalled 重派 → completed；maxGap < 45 s、W ≤ 25 s；第二輪 seq 從 0 重播、attempt 仍為 1", { timeout: 360_000 }, async () => {
+  it("3a 串流中 SIGKILL（第 3 個 token 後）→ stalled 重派 → completed；maxGap < 45 s、W < 25 s；第二輪 seq 從 0 重播、attempt 仍為 1", { timeout: 360_000 }, async () => {
     const { jobId, statusesBeforeKill, tokensBeforeKill } = await killAndRecover(
       "3a",
       (id) => client.tokens(id).length >= KILL_AFTER_TOKENS,
@@ -145,7 +145,7 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：worker 崩潰後 stalled �
     expect(JSON.parse(secondRun.map((t) => t.text).join(""))).toEqual(client.statuses(jobId).at(-1)?.result);
   });
 
-  it("3b 首 token 前 SIGKILL（收到 progress 20 即 kill，P24）→ stalled 重派 → completed；maxGap < 45 s、W ≤ 25 s；token 只有重派那一輪", { timeout: 360_000 }, async () => {
+  it("3b 首 token 前 SIGKILL（收到 progress 20 即 kill，P24）→ stalled 重派 → completed；maxGap < 45 s、W < 25 s；token 只有重派那一輪", { timeout: 360_000 }, async () => {
     const { jobId, tokensBeforeKill } = await killAndRecover(
       "3b",
       (id) => client.statuses(id).some((s) => s.progress !== undefined && s.progress >= KILL_AT_PROGRESS),

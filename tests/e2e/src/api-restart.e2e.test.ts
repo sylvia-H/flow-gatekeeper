@@ -28,6 +28,9 @@ const RESUME_DEADLINE_MS = 60_000;
 const RESTART_AFTER_TOKENS = 10;
 /** api 重啟：SIGTERM 收尾（stop_grace_period 15 s）＋冷啟動＋healthcheck，留寬。 */
 const API_HEALTHY_TIMEOUT_MS = 120_000;
+// 場景總逾時（合併門第 2 輪調整）MUST 大於各段等待上限的總和，異常時才會先看到具名的 waitFor／compose 逾時訊息：
+// 6a ≈ 首 token 30＋restart 120＋healthy 120＋重連至多 5×22＋GET 60＋改綁後 completed 60＋GET 60 ≈ 560 s → 600 s；
+// 6b 另加 stop worker 120、waiting 10、start worker 60 ≈ 660 s → 720 s。正常執行各約 30 s。
 
 /** healthy 後 nginx 偶有短暫 502：重連最多試 5 次、間隔 2 s。 */
 async function reconnectWithRetry(old: E2eClient): Promise<{ client: E2eClient; clientId: string }> {
@@ -61,7 +64,7 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：api 重啟後以 GET 續接
     if (workerStopped) await startWorker().catch(() => undefined);
   });
 
-  it("6a 串流中重啟 api → 重連後新 socketId GET → 200 completed＋result（api healthy 後 60 s 內）", { timeout: 240_000 }, async () => {
+  it("6a 串流中重啟 api → 重連後新 socketId GET → 200 completed＋result（api healthy 後 60 s 內）", { timeout: 600_000 }, async () => {
     const jobId = randomUUID();
     const oldSocketId = client.clientId;
     await createDiagnosis({ jobId, machineId: MACHINE, socketId: oldSocketId });
@@ -109,7 +112,7 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：api 重啟後以 GET 續接
     );
   });
 
-  it("6b job 仍在佇列時重啟 api → 重連 GET → 200 waiting rebound:true → 啟動 worker → 新連線收到帶 result 的 completed", { timeout: 300_000 }, async () => {
+  it("6b job 仍在佇列時重啟 api → 重連 GET → 200 waiting rebound:true → 啟動 worker → 新連線收到帶 result 的 completed", { timeout: 720_000 }, async () => {
     await stopWorker();
     workerStopped = true;
     const jobId = randomUUID();

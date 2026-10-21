@@ -29,7 +29,8 @@ export default defineConfig(({ mode }) => {
       sequence: { concurrent: false },
       testTimeout: 60_000,
       // 冷啟動含三個映像 build，交給 globalSetup 自己的逾時控制；這裡只管單一 hook。
-      hookTimeout: 60_000,
+      // 大於 afterAll 裡 startWorker 的 60 s 上限（合併門第 2 輪調整），逾時時先看到 compose 的具名訊息。
+      hookTimeout: 90_000,
     },
   };
 });
