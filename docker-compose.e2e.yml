@@ -12,7 +12,7 @@
 #   （可能留有 GEMINI_API_KEY、WORKER_CHAOS、WS_AUTH_SECRET 等會改變行為的值）；檔案不存在也能跑。
 # - redis 強制不啟用密碼：root .env 或 shell 若殘留 REDIS_PASSWORD，會讓 redis 啟用認證而範本 env 留空 → NOAUTH。
 # - worker 改用 fake AiProvider（AI_PROVIDER=fake，測試替身，見 apps/worker/src/ai/fake-provider.ts）：
-#   20 段 × 500ms ≈ 10s 串流，足以在中途 kill worker；不需金鑰、不耗配額。
+#   首 token 前延遲 2s、之後 20 段 × 500ms，約 11.5s 串流，足以在中途 kill worker；不需金鑰、不耗配額。
 # - 映像改標 :e2e：不覆寫使用者 demo 的 :local 映像。
 # - healthcheck 加 start_interval：`--wait` 不必等滿第一個 30s interval。
 services:
@@ -34,8 +34,12 @@ services:
       AI_PROVIDER: fake
       FAKE_AI_TOKENS: "20"
       FAKE_AI_TOKEN_DELAY_MS: "500"
+      # 只延遲第一個 token（預設 0）：場景 3b 要在「context 已建好、首 token 之前」SIGKILL worker（research P24），
+      # 但 fake 首 token 一呼叫就送出，progress 20 → 首 token 只差幾十 ms，從 Windows host 下 kill（數百 ms）打不進。
+      # 2s 讓這個窗口足夠寬；P24「首 token 約在 progress 40 後 500ms」的前提與實作不符，以此修正。
+      FAKE_AI_FIRST_TOKEN_DELAY_MS: "2000"
       # 縮短逾時與去重鎖：kill 場景中死掉的持鎖者留下的 ai-lock 要等 TTL 過期，重派的 job 才能取鎖。
-      # 仍滿足 AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000；fake 串流約 9.5s < 15s。
+      # 仍滿足 AI_DEDUPE_LOCK_SECONDS × 1000 ≥ AI_TIMEOUT_MS + 5000；fake 串流約 2s + 9.5s = 11.5s < 15s。
       AI_TIMEOUT_MS: "15000"
       AI_DEDUPE_LOCK_SECONDS: "20"
       REDIS_PASSWORD: ""

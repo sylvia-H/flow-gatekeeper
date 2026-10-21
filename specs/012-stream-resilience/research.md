@@ -228,7 +228,7 @@ CSP `connect-src 'self'` 已涵蓋同源 GET，註解補一句。Vite dev proxy 
   建一個：`report(value)`（取代所有 `job.updateProgress(n)`：送 `{ value, attempt, execution }`、記目前里程碑、`touch()`）、
   `onToken` 內 `touch()`；到期 `onIdle` → `job.updateProgress({ value: 目前里程碑, attempt, execution })` 後重新排程。
   失敗吞掉、每次執行至多 warn 一則（P12）；`finally` 內 `stop()`。不逐次記日誌（FR-047）。
-- `ProcessorJob` 介面加 `attemptsStarted: number`，`updateProgress` 參數型別改為 `number | DiagnosisJobProgress`（只會送後者）；
+- `ProcessorJob` 介面加 `attemptsStarted: number`，`updateProgress` 參數型別改為 `DiagnosisJobProgress`（實作時由 `number | DiagnosisJobProgress` 收窄：呼叫端只送物件、typecheck 擋退回數字，2026-10-21）（只會送後者）；
   processor 回傳型別 `Promise<DiagnosisJobReturnValue>`；`new Worker<DiagnosisJobPayload, DiagnosisJobReturnValue>`。
 - `execution`＝`job.attemptsStarted`（BullMQ 於 `moveToActive` 遞增，處理中的值 ≥ 1）；若讀到 0（非 BullMQ 呼叫的單元測試）
   以 1 代入。
@@ -289,11 +289,11 @@ CSP `connect-src 'self'` 已涵蓋同源 GET，註解補一句。Vite dev proxy 
 - `CopilotDrawer.vue` 進行中區塊：步驟列下新增一行說明（`resume === "pending"` →「已重新連線，正在取回診斷狀態…」；`stalledNotice`
   →「後端處理程序中斷，任務已重新排入佇列（第 N 次執行）」；兩者同時成立時只顯示續接那行）；`text-xs ink-3`、`aria-live="polite"`
   沿用面板既有的 sr-only 公告區，不新增色值或 chip。
-- 完成 meta：`source === "lookup"` 時加中性小字「重新連線後取回」；耗時照常顯示（`compareLabel` 對 `recovered` 回主字、`compareBars` 回 null）。
+- 完成 meta：`source === "lookup"` 且 `reconnected`（代理裁決 53，2026-10-21）時加中性小字「重新連線後取回」；耗時照常顯示（`compareLabel` 對 `recovered` 回主字、`compareBars` 回 null）。
 - 原始串流標題：completed 且 `streamIncomplete` → 「原始串流（不完整）」；否則維持現行（完成「原始串流」、失敗「原始串流（中斷前）」、
   未送達「原始串流」）。`StreamDisclosure.vue` 只吃 `label`，不改。
 - 螢幕閱讀器公告：沿用 `CopilotDrawer.vue:179-195` 的「active → completed」邊緣觸發，reducer 保證只轉一次，因此只念一次。
-- 卡片 chip（`diagnosis-badge.ts`）不新增 kind；`apps/web/PRODUCT.md` 補術語（重新派送、取回、結果未知）。
+- 卡片 chip（`diagnosis-badge.ts`）不新增 kind；`apps/web/PRODUCT.md` 補術語（重新排入佇列（內部稱重新派送）、取回、結果未知）。
 
 **Rationale**：FR-035～FR-038、DESIGN.md「徽章出現或消失不改變容器高度」、代理裁決第 10、13、20 條。
 
@@ -376,5 +376,5 @@ CSP `connect-src 'self'` 已涵蓋同源 GET，註解補一句。Vite dev proxy 
 | P21 | 2 s 退路 GET 回 waiting／active（理論上不會發生：`completed` 已到） | 視同取不到結果，轉「結果未送達」（可被後到的結果救回） | 留在 active 會讓已完成的任務再等 45 s；轉成可救回的失敗，結果一到仍會改回已完成 | 留在 active |
 | P22 | GET 回 `rebound` 的語意 | 綁定原本就是本 socket（`unchanged`）時也回 `rebound: true`，意思是「之後的事件送到這條連線」 | 讓 web 只有一條規則（收到 `rebound:true` 就把 `previousSocketId` 改成本次 socketId） | 新增 `rebound:false` 分支（契約多一種值） |
 | P23 | rebind 後孤兒回收的起算點 | rebind 時更新 `boundAt` | 改綁後還要再跑的 job 不該因原始建立時間被提早回收 | 沿用原 `boundAt` |
-| P24 | e2e「首 token 前」kill 的時點 | 收到 `job/status` progress 20（context 已返回、尚未呼叫 LLM）即 kill | fake 第一個 token 約在 progress 40 後 500 ms，以 20 為觸發點確定落在首 token 前 | 收到 progress 40 才 kill（與首 token 只差 500 ms，容易落到之後） |
-| P25 | 場景 7 停頓觸發點與時序論證（analyze 階段補 2026-10-21） | 收到該 jobId 第 3 個 `ai/token` 後才 `pauseRedis()`（停頓在 exec1 首 token 之後開始）；場景從 worker 日誌印出重派那次 `idempotent short-circuit` 的 `source` 作為「冪等短路吸收重派」的證據 | e2e 的 `AI_DEDUPE_LOCK_SECONDS` 為 20 s，停頓 50 s 一定超過它，表面上落在 spec Edge Cases 的殘餘風險（第二次執行搶到 `ai-lock` 再打一次 LLM），會讓 SC-004 的「LLM 恰 1 次」偶發失敗。停頓排在首 token 之後時：token 發布不等 Redis 回應，exec1 在停頓期間跑完 LLM 串流、停在 `report(80)`；恢復後 exec1 排在前面的 SET `ai-result` 先於 exec2 的冪等短路查詢送進 Redis，exec2 一定在短路 (i) 命中，殘餘風險不適用；觸發點若落在首 token 前，exec1 卡在 LLM 呼叫前、恢復後與 exec2 競爭，場景會不穩。印 `source` 讓失敗時看得出是走 `ai-result` 還是 `diagnoses`，不必重跑才能判讀 | e2e 把 `AI_DEDUPE_LOCK_SECONDS` 拉到 60 s，讓停頓不超過去重鎖（代價：kill 場景 3a／3b 中死掉的持鎖者留下的 `ai-lock` 要等 60 s 才過期，重派的 job 才能取鎖，每個 kill 場景多等約 40 s，全套 e2e 再拉長，既有場景的等待上限也要跟著調） |
+| P24 | e2e「首 token 前」kill 的時點 | 收到 `job/status` progress 20（context 已返回、尚未呼叫 LLM）即 kill；（實作時補 2026-10-21，ADR-003 代理裁決第 51 條）e2e 以 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 延遲 fake 的第一個 token | fake 第一個 token 約在 progress 40 後 500 ms，以 20 為觸發點確定落在首 token 前。（實作時更正 2026-10-21：此前提與實作不符——fake 首 token 一呼叫就送出、沒有延遲，progress 20 到首 token 只差幾十 ms，從 Windows host 下 kill（數百 ms）打不進窗口，3b 會變成串流中 kill；fake provider 因此新增 `FAKE_AI_FIRST_TOKEN_DELAY_MS`（預設 0、只延遲第一個 token），e2e 設 2000，觸發點不變。） | 收到 progress 40 才 kill（與首 token 只差 500 ms，容易落到之後） |
+| P25 | 場景 7 停頓觸發點與時序論證（analyze 階段補 2026-10-21） | 收到該 jobId 第 3 個 `ai/token` 後才 `pauseRedis()`（停頓在 exec1 首 token 之後開始）；場景從 worker 日誌印出重派那次 `idempotent short-circuit` 的 `source` 作為「冪等短路吸收重派」的證據 | e2e 的 `AI_DEDUPE_LOCK_SECONDS` 為 20 s，停頓 50 s 一定超過它，表面上落在 spec Edge Cases 的殘餘風險（第二次執行搶到 `ai-lock` 再打一次 LLM），會讓 SC-004 的「LLM 恰 1 次」偶發失敗。停頓排在首 token 之後時：token 發布不等 Redis 回應，exec1 在停頓期間跑完 LLM 串流、停在 `report(80)`；恢復後 exec1 排在前面的 SET `ai-result` 先於 exec2 的冪等短路查詢送進 Redis，exec2 一定在短路 (i) 命中，殘餘風險不適用（實作交叉審查更正措辭 2026-10-21：兩者沒有同一連線上的指令順序保證，依據是 exec1 的 SET `ai-result` 領先 exec2 的短路查詢至少 1 個 Redis 往返——exec2 要先被 stalled 檢查搬回 wait、被取出、`updateProgress(0)` 後才查短路；ADR-003 代理裁決第 46 條）；觸發點若落在首 token 前，exec1 卡在 LLM 呼叫前、恢復後與 exec2 競爭，場景會不穩。印 `source` 讓失敗時看得出是走 `ai-result` 還是 `diagnoses`，不必重跑才能判讀 | e2e 把 `AI_DEDUPE_LOCK_SECONDS` 拉到 60 s，讓停頓不超過去重鎖（代價：kill 場景 3a／3b 中死掉的持鎖者留下的 `ai-lock` 要等 60 s 才過期，重派的 job 才能取鎖，每個 kill 場景多等約 40 s，全套 e2e 再拉長，既有場景的等待上限也要跟著調） |

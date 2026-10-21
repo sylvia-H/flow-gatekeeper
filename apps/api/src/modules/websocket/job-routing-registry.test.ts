@@ -67,6 +67,15 @@ describe("JobRoutingRegistry：bind／get／owner／isBound／delete", () => {
     registry.noteProgress(OTHER_JOB_ID, 1, 1);
     expect(registry.isBound(OTHER_JOB_ID)).toBe(false);
   });
+
+  it("noteProgress 單調遞增：較小的 attempt／execution（雙重執行時舊的那次晚到）不覆寫較大的值", () => {
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    registry.noteProgress(JOB_ID, 2, 3);
+    registry.noteProgress(JOB_ID, 1, 1);
+    expect(registry.get(JOB_ID)).toMatchObject({ attempt: 2, execution: 3 });
+    registry.noteProgress(JOB_ID, 2, 4);
+    expect(registry.get(JOB_ID)).toMatchObject({ attempt: 2, execution: 4 });
+  });
 });
 
 describe("JobRoutingRegistry.markTerminal（AR-5、D12）", () => {

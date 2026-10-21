@@ -2,6 +2,7 @@ import "dotenv/config";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "bullmq";
+import type { WorkerOptions } from "bullmq";
 import { MongoClient } from "mongodb";
 import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
 import type { DiagnosisJobPayload, DiagnosisJobReturnValue } from "@flow-gatekeeper/contracts";
@@ -19,6 +20,7 @@ import { parseWorkerEnv } from "./lib/env-schema.js";
 import type { WorkerEnv } from "./lib/env-schema.js";
 import { fatal } from "./lib/fatal.js";
 import { startHeartbeat, stopHeartbeat } from "./lib/heartbeat.js";
+import { WORKER_LOCK_OPTIONS } from "./lib/bullmq-options.js";
 import { createLivenessTracker } from "./lib/liveness.js";
 import { createThrottledErrorReporter } from "./lib/log-throttle.js";
 import { createMetricsCollector } from "./lib/metrics-collector.js";
@@ -144,12 +146,7 @@ export async function bootstrap(): Promise<void> {
       isClosing: closingState.isClosing,
       liveness,
     }),
-    {
-      connection: bullmqConnectionOptions(env),
-      concurrency: env.WORKER_CONCURRENCY,
-      // 刻意不設 BullMQ `limiter`：它計的是 job 啟動數（cache 命中、等待者、重試都吃額度），
-      // 不是 LLM 呼叫數。LLM 限流改在 processor 取鎖後以 Redis 固定窗計數（AI_RPM）。
-    },
+    buildWorkerOptions(env),
   );
 
   // BullMQ 內部錯誤（連線中斷、腳本失敗）預設完全靜默；記下來才查得到「佇列為何不動」。
@@ -214,6 +211,21 @@ export async function bootstrap(): Promise<void> {
     { provider: ai.id, model: ai.model, concurrency: env.WORKER_CONCURRENCY, aiRpm: env.AI_RPM },
     "flow-gatekeeper worker (003) bootstrapped",
   );
+}
+
+/**
+ * BullMQ Worker 參數（抽出供單測）。lock／stalled 參數展開 `WORKER_LOCK_OPTIONS`（15 s／5 s／2，012 FR-018；ADR-003 D4：
+ * 與 keepalive 10 s 合起來，worker 被 SIGKILL 後畫面最長無事件 `K + L + 2S`＝35 s < 45 s watchdog）；`lockRenewTime` 不設，
+ * 維持 BullMQ 預設 `L/2`。
+ * 刻意不設 BullMQ `limiter`：它計的是 job 啟動數（cache 命中、等待者、重試都吃額度），不是 LLM 呼叫數。LLM 限流改在
+ * processor 取鎖後以 Redis 固定窗計數（AI_RPM）。
+ */
+export function buildWorkerOptions(env: WorkerEnv): WorkerOptions {
+  return {
+    connection: bullmqConnectionOptions(env),
+    concurrency: env.WORKER_CONCURRENCY,
+    ...WORKER_LOCK_OPTIONS,
+  };
 }
 
 /** failed handler 用到的 BullMQ Job 子集（沿用 processor 的定義；`Job<DiagnosisJobPayload>` 結構上相容）。 */
@@ -411,7 +423,11 @@ export function buildShutdown(deps: {
  */
 export function selectAiProvider(env: WorkerEnv): AiProvider {
   if (env.AI_PROVIDER === "fake") {
-    return new FakeAiProvider({ tokenDelayMs: env.FAKE_AI_TOKEN_DELAY_MS, tokenCount: env.FAKE_AI_TOKENS });
+    return new FakeAiProvider({
+      tokenDelayMs: env.FAKE_AI_TOKEN_DELAY_MS,
+      tokenCount: env.FAKE_AI_TOKENS,
+      firstTokenDelayMs: env.FAKE_AI_FIRST_TOKEN_DELAY_MS,
+    });
   }
   return createAiProvider(env);
 }

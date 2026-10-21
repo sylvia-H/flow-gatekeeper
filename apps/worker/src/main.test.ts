@@ -36,11 +36,16 @@ describe("apps/worker entry", () => {
   });
 
   it("selectAiProvider：AI_PROVIDER=fake → FakeAiProvider，段數／延遲取自 env", () => {
-    const parsed = parseWorkerEnv({ AI_PROVIDER: "fake", FAKE_AI_TOKENS: "7", FAKE_AI_TOKEN_DELAY_MS: "123" });
+    const parsed = parseWorkerEnv({
+      AI_PROVIDER: "fake",
+      FAKE_AI_TOKENS: "7",
+      FAKE_AI_TOKEN_DELAY_MS: "123",
+      FAKE_AI_FIRST_TOKEN_DELAY_MS: "2000",
+    });
     if (!parsed.ok) throw new Error(parsed.error);
     const ai = mod.selectAiProvider(parsed.env);
     expect(ai).toBeInstanceOf(FakeAiProvider);
-    expect(ai instanceof FakeAiProvider && ai.options).toEqual({ tokenCount: 7, tokenDelayMs: 123 });
+    expect(ai instanceof FakeAiProvider && ai.options).toEqual({ tokenCount: 7, tokenDelayMs: 123, firstTokenDelayMs: 2000 });
   });
 
   it("selectAiProvider：未設 AI_PROVIDER → GeminiProvider（production 預設不變）", () => {
@@ -91,6 +96,18 @@ const PAYLOAD: DiagnosisJobPayload = {
 
 /** 讓 failed handler 內 fire-and-forget 的 upsertTrigger（及其 catch）跑完。 */
 const flush = () => new Promise<void>((r) => setImmediate(r));
+
+describe("buildWorkerOptions（012 T054；FR-018、ADR-003 D4）", () => {
+  it("lock／stalled 參數為 15000／5000／2，且不設 lockRenewTime（維持 BullMQ 預設 L/2）", () => {
+    const parsed = parseWorkerEnv({ WORKER_CONCURRENCY: "3" });
+    if (!parsed.ok) throw new Error(parsed.error);
+    const opts = mod.buildWorkerOptions(parsed.env);
+    expect(opts).toMatchObject({ lockDuration: 15_000, stalledInterval: 5_000, maxStalledCount: 2, concurrency: 3 });
+    expect(opts).not.toHaveProperty("lockRenewTime");
+    expect(opts).not.toHaveProperty("limiter");
+    expect(opts.connection).toBeDefined();
+  });
+});
 
 describe("createFailedHandler", () => {
   type TriggerDoc = { machineId: string; jobId: string; requestedBy: string; cached: boolean };

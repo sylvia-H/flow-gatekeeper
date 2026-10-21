@@ -6,7 +6,9 @@ import type { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisResult } from "@flow-gatekeeper/contracts";
 import { PROMPT_VERSION } from "../ai/prompt.js";
+import { AiProviderError } from "../ai/provider.js";
 import type { AiProvider, AiStreamRequest, AiStreamResult } from "../ai/provider.js";
+import { AI_FAIL_TTL_SECONDS, aiFailKey } from "../cache/job-keys.js";
 import { createRedisStore } from "../cache/redis-store.js";
 import type { ProcessorStore } from "../cache/redis-store.js";
 import { buildDiagnosisSignature } from "../cache/signature.js";
@@ -458,6 +460,58 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("RedisStore × 真 Redis（�
       expect(await storeA.setIfAbsent(key, "1", 1)).toBe(true);
       await waitUntilExpired(raw, `${PREFIX}${key}`, 3000);
       expect(await storeB.setIfAbsent(key, "1", 1)).toBe(true);
+    });
+  });
+
+  describe("(h) ai-fail:<sig> 負向標記（012 T064；SC-007、ADR-003 D5）", () => {
+    const marker = () =>
+      JSON.stringify({ code: "provider_error", message: "503 overloaded", jobId: "job-a", at: new Date().toISOString() });
+
+    it("setWithTtl(…, AI_FAIL_TTL_SECONDS)：另一副本 10 s 內可讀、PTTL ≤ 10 s，逾時後消失", async () => {
+      const key = aiFailKey(`h-${randomUUID()}`);
+      const value = marker();
+      await storeA.setWithTtl(key, value, AI_FAIL_TTL_SECONDS);
+      expect(await storeB.get(key)).toBe(value);
+      const ttl = await raw.pttl(`${PREFIX}${key}`);
+      expect(ttl).toBeGreaterThan(9_000);
+      expect(ttl).toBeLessThanOrEqual(10_000);
+
+      await waitUntilExpired(raw, `${PREFIX}${key}`, 12_000);
+      expect(await storeB.get(key)).toBeNull();
+    });
+
+    it("del 生效：持鎖者成功後清除，其他副本立即讀不到", async () => {
+      const key = aiFailKey(`h2-${randomUUID()}`);
+      await storeA.setWithTtl(key, marker(), AI_FAIL_TTL_SECONDS);
+      await storeB.del(key);
+      expect(await storeA.get(key)).toBeNull();
+      expect(await raw.exists(`${PREFIX}${key}`)).toBe(0);
+    });
+
+    it("processor 層：持鎖者 LLM 失敗寫標記後，另一副本同簽章的新 job 不打 LLM、以同 code 失敗", async () => {
+      const machineId = `int-m-${randomUUID()}`;
+      let calls = 0;
+      const failingAi: AiProvider = {
+        id: "int-fake",
+        model: "int-fake-model",
+        streamDiagnosis: async () => {
+          calls += 1;
+          throw new AiProviderError("503 overloaded", { retryable: true, code: "provider_error" });
+        },
+      };
+      const p1 = buildProcessor(storeA, failingAi, { cacheTtlSeconds: 600, lockTtlSeconds: 45 });
+      const p2 = buildProcessor(storeB, failingAi, { cacheTtlSeconds: 600, lockTtlSeconds: 45 });
+
+      await expect(p1.processor(makeJob(`job-${randomUUID()}`, machineId))).rejects.toThrow("503 overloaded");
+      const sig = signatureFor(machineId, failingAi);
+      expect(await raw.pttl(`${PREFIX}${aiFailKey(sig)}`)).toBeGreaterThan(0);
+
+      const last = { ...makeJob(`job-${randomUUID()}`, machineId), attemptsMade: 2 };
+      await expect(p2.processor(last)).rejects.toThrow("503 overloaded");
+      expect(calls).toBe(1);
+      expect(p2.publisher.events).toEqual([
+        expect.objectContaining({ type: "ai/error", code: "provider_error", attempt: 3 }),
+      ]);
     });
   });
 });

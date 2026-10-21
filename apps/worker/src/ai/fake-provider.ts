@@ -20,6 +20,8 @@ export const FAKE_MODEL = "fake-diagnosis-v1";
 export interface FakeProviderOptions {
   /** 相鄰兩段 token 之間的延遲（毫秒）；0＝不延遲。 */
   tokenDelayMs: number;
+  /** 第一段 token 之前的延遲（毫秒；省略或 0＝不延遲）：模擬 LLM 的首 token 延遲，e2e 用來製造「首 token 前」的時間窗。 */
+  firstTokenDelayMs?: number;
   /** 把診斷 JSON 切成幾段送出（實際段數不超過 JSON 字元數）。 */
   tokenCount: number;
 }
@@ -61,7 +63,8 @@ export class FakeAiProvider implements AiProvider {
     const text = JSON.stringify(fakeDiagnosis());
     const chunks = splitIntoChunks(text, this.options.tokenCount);
     for (const [i, chunk] of chunks.entries()) {
-      if (i > 0 && this.options.tokenDelayMs > 0) await delay(this.options.tokenDelayMs, signal);
+      const wait = i === 0 ? (this.options.firstTokenDelayMs ?? 0) : this.options.tokenDelayMs;
+      if (wait > 0) await delay(wait, signal);
       // 與 Gemini adapter 同一語意：abort 後不再往外送 token，並以可重試錯誤結束。
       if (signal.aborted) throw abortedError(signal);
       onToken(chunk);

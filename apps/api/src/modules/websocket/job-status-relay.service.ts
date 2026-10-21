@@ -28,7 +28,7 @@ export const DELAYED_KEEPALIVE_MS = 15_000;
 const DELAYED_GRACE_MS = 5_000;
 /**
  * Job 生命週期轉發（通道 B，憲章 IV）：以**獨立 blocking 連線**建 `QueueEvents`，把
- * waiting/active/completed/failed/progress 組成 `job/status` → `gateway.send`；`delayed` 以 `waiting`
+ * waiting/active/completed/failed/progress/stalled 組成 `job/status` → `gateway.send`；`delayed` 以 `waiting`
  * 轉發，並在延後期間定期補送（見 `DELAYED_KEEPALIVE_MS`）。`completed` 的 `returnvalue` 與 `progress` 的 `data`
  * 來自 Redis、視為不受信任，經 `job-status-payload.ts` 的純函式驗證後才轉發（contracts/job-lifecycle §2）。
  *
@@ -74,6 +74,7 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
         this.emit(jobId, "waiting");
       });
       this.queueEvents.on("active", ({ jobId }) => this.emit(jobId, "active"));
+      this.queueEvents.on("stalled", ({ jobId }) => this.handleStalled(jobId));
       this.queueEvents.on("progress", ({ jobId, data }) => this.handleProgress(jobId, data));
       this.queueEvents.on("delayed", ({ jobId, delay }) => this.handleDelayed(jobId, Number(delay)));
       // bullmq 的 QueueEvents 已 JSON.parse 過 returnvalue（型別宣告寫 string，實際是解析後的值）。
@@ -118,6 +119,20 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
       () => queueEvents.disconnect(),
       (ms) => this.logger.warn(`QueueEvents close() 逾 ${ms} ms 未完成，改以 disconnect() 強制斷線`),
     );
+  }
+
+  /**
+   * stalled（FR-021、D7）：worker 失去 lock，BullMQ 把 job 搬回 wait 重新派送。`moveStalledJobsToWait` 先寫 `waiting`
+   * 再寫 `stalled`，所以畫面會依序收到兩則 `waiting`，第二則帶 `reason: "stalled"`（web 據此顯示「重新派送」說明）。
+   * 之後新 worker 撿起時照常 `active`／progress（`execution` 遞增）。
+   *
+   * 每次都記 warn（FR-047；不論是否有綁定，stalled 本身就是值得注意的事件）。綁定已標終態（寬限中）時不送：
+   * job 已結束，晚到的 stalled 不該把畫面拉回「排隊中」。
+   */
+  private handleStalled(jobId: string): void {
+    this.plog.warn({ jobId, reason: "stalled" }, "job stalled, re-queued by bullmq");
+    if (this.registry.get(jobId)?.terminal !== undefined) return;
+    this.emit(jobId, "waiting", { reason: "stalled" });
   }
 
   /**
@@ -233,7 +248,7 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
   private emit(
     jobId: string,
     status: JobStatus["status"],
-    fields: ProgressFields & Pick<JobStatus, "error"> = {},
+    fields: ProgressFields & Pick<JobStatus, "error" | "reason"> = {},
   ): void {
     // active/completed/failed 都代表 job 已離開 delayed，停止補送（waiting 由呼叫端各自處理）。
     if (status !== "waiting") this.delayedUntil.delete(jobId);
@@ -244,6 +259,7 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
     if (fields.attempt !== undefined) jobStatus.attempt = fields.attempt;
     if (fields.execution !== undefined) jobStatus.execution = fields.execution;
     if (fields.error !== undefined) jobStatus.error = fields.error;
+    if (fields.reason !== undefined) jobStatus.reason = fields.reason;
     this.gateway.send(target.binding.clientId, jobStatus);
   }
 

@@ -114,7 +114,7 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
     expect(qe.name).toBe("diagnosis");
     expect(config.redisOptions).toHaveBeenCalledWith("blocking");
     expect(qe.opts).toEqual({ connection: { host: "fake" } });
-    for (const event of ["waiting", "active", "progress", "delayed", "completed", "failed", "error"]) {
+    for (const event of ["waiting", "active", "progress", "delayed", "stalled", "completed", "failed", "error"]) {
       expect(qe.listenerCount(event), event).toBeGreaterThan(0);
     }
     await relay.onModuleDestroy();
@@ -566,6 +566,101 @@ describe("JobStatusRelayService：machineId 尚未補上的暫定綁定（T032�
     qe.emit("failed", { jobId: JOB_ID, failedReason: "boom" });
     await vi.waitFor(() => expect(registry.get(JOB_ID)?.terminal?.kind).toBe("failed"));
     expect(sent.map((s) => [s.clientId, s.payload.type])).toEqual([[NEW_CLIENT, "ai/error"]]);
+    expect(registry.get(JOB_ID)?.deferred).toBe(true);
+    await relay.onModuleDestroy();
+  });
+});
+
+describe("JobStatusRelayService：stalled 重派（T057、FR-021、D7）", () => {
+  const RESULT = {
+    summary: "主軸溫度偏高",
+    severity: "warning",
+    likelyCauses: ["冷卻液不足"],
+    suggestedActions: [{ label: "補充冷卻液", priority: "high" }],
+    evidence: [{ source: "telemetry", excerpt: "temp=92" }],
+  };
+  const base = { type: "job/status", jobId: JOB_ID, machineId: "cnc-01" };
+
+  it("BullMQ 先寫 waiting 再寫 stalled → 依序送兩則 waiting，第二則帶 reason；記 warn", async () => {
+    const { qe, sent, relay } = setup();
+    qe.emit("waiting", { jobId: JOB_ID });
+    qe.emit("stalled", { jobId: JOB_ID });
+    expect(sent.map((s) => s.payload)).toEqual([
+      { ...base, status: "waiting" },
+      { ...base, status: "waiting", reason: "stalled" },
+    ]);
+    expect(plog.warn).toHaveBeenCalledWith({ jobId: JOB_ID, reason: "stalled" }, "job stalled, re-queued by bullmq");
+    await relay.onModuleDestroy();
+  });
+
+  it("stalled → 新 worker 撿起後 progress 物件帶 execution 2 → completed 沿用最新的 attempt／execution", async () => {
+    const { qe, registry, sent, relay } = setup();
+    qe.emit("active", { jobId: JOB_ID });
+    qe.emit("progress", { jobId: JOB_ID, data: { value: 20, attempt: 1, execution: 1 } });
+    qe.emit("waiting", { jobId: JOB_ID });
+    qe.emit("stalled", { jobId: JOB_ID });
+    qe.emit("active", { jobId: JOB_ID });
+    qe.emit("progress", { jobId: JOB_ID, data: { value: 10, attempt: 1, execution: 2 } });
+    qe.emit("completed", { jobId: JOB_ID, returnvalue: { result: RESULT, cached: false } });
+
+    expect(sent.map((s) => s.payload)).toEqual([
+      { ...base, status: "active" },
+      { ...base, status: "active", progress: 20, attempt: 1, execution: 1 },
+      { ...base, status: "waiting" },
+      { ...base, status: "waiting", reason: "stalled" },
+      { ...base, status: "active" },
+      { ...base, status: "active", progress: 10, attempt: 1, execution: 2 },
+      { ...base, status: "completed", result: RESULT, cached: false, attempt: 1, execution: 2 },
+    ]);
+    expect(registry.get(JOB_ID)?.terminal?.kind).toBe("completed");
+    await relay.onModuleDestroy();
+  });
+
+  it("雙重執行：exec 2 之後才到的 exec 1 progress 不覆寫綁定，completed 仍帶 execution 2", async () => {
+    const { qe, registry, sent, relay } = setup();
+    qe.emit("progress", { jobId: JOB_ID, data: { value: 10, attempt: 1, execution: 2 } });
+    qe.emit("progress", { jobId: JOB_ID, data: { value: 80, attempt: 1, execution: 1 } }); // 舊的 exec1 恢復後送出
+    expect(registry.get(JOB_ID)).toMatchObject({ attempt: 1, execution: 2 });
+    qe.emit("completed", { jobId: JOB_ID, returnvalue: { result: RESULT, cached: false } });
+    expect(sent.at(-1)?.payload).toEqual({ ...base, status: "completed", result: RESULT, cached: false, attempt: 1, execution: 2 });
+    await relay.onModuleDestroy();
+  });
+
+  it("無綁定（純後端 smoke）→ 不送，仍記 warn", async () => {
+    const { qe, gateway, relay } = setup();
+    qe.emit("stalled", { jobId: OTHER_JOB_ID });
+    expect(gateway.send).not.toHaveBeenCalled();
+    expect(plog.warn).toHaveBeenCalledWith({ jobId: OTHER_JOB_ID, reason: "stalled" }, "job stalled, re-queued by bullmq");
+    await relay.onModuleDestroy();
+  });
+
+  it("終態寬限內晚到的 stalled → 不送（不把已結束的任務拉回排隊中）", async () => {
+    const { qe, sent, relay } = setup();
+    qe.emit("completed", { jobId: JOB_ID, returnvalue: { result: RESULT, cached: false } });
+    qe.emit("stalled", { jobId: JOB_ID });
+    expect(sent.map((s) => s.payload.status)).toEqual(["completed"]);
+    await relay.onModuleDestroy();
+  });
+
+  it("delayed 補送中收到 stalled → 送帶 reason 的 waiting，keepalive 照舊補送到期為止", async () => {
+    const { qe, sent, relay } = setup();
+    qe.emit("delayed", { jobId: JOB_ID, delay: Date.now() + 20_000 });
+    qe.emit("stalled", { jobId: JOB_ID });
+    vi.advanceTimersByTime(DELAYED_KEEPALIVE_MS);
+    expect(sent.map((s) => [s.payload.status, s.payload.reason])).toEqual([
+      ["waiting", undefined],
+      ["waiting", "stalled"],
+      ["waiting", undefined],
+    ]);
+    await relay.onModuleDestroy();
+  });
+
+  it("machineId 尚未補上的暫定綁定 → stalled 也擱置並記 deferred", async () => {
+    const { qe, registry, sent, relay } = setup();
+    registry.delete(JOB_ID);
+    registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_ID, isOnline: () => true });
+    qe.emit("stalled", { jobId: JOB_ID });
+    expect(sent).toEqual([]);
     expect(registry.get(JOB_ID)?.deferred).toBe(true);
     await relay.onModuleDestroy();
   });

@@ -174,6 +174,46 @@ describe("JobStatusRelayService.handleFailed", () => {
   });
 });
 
+describe("JobStatusRelayService stalled（T057）", () => {
+  type Internals = {
+    handleStalled(jobId: string): void;
+    handleProgress(jobId: string, data: unknown): void;
+    handleCompleted(jobId: string, returnvalue: unknown): void;
+  };
+
+  function makeRelay() {
+    const gateway = { send: vi.fn() };
+    const registry = new JobRoutingRegistry();
+    registry.bind(JOB_ID, CLIENT_ID, "cnc-01");
+    const statusRelay = new JobStatusRelayService({} as never, gateway as never, registry, {} as never);
+    const payloads = () => gateway.send.mock.calls.map((c) => c[1] as Record<string, unknown>);
+    return { gateway, registry, internals: statusRelay as unknown as Internals, payloads };
+  }
+
+  it("stalled 送 waiting＋reason（不帶 attempt／execution）；之後 progress 帶 execution 2，completed 沿用", () => {
+    const { registry, internals, payloads } = makeRelay();
+    internals.handleProgress(JOB_ID, { value: 40, attempt: 1, execution: 1 });
+    internals.handleStalled(JOB_ID);
+    internals.handleProgress(JOB_ID, { value: 5, attempt: 1, execution: 2 });
+    internals.handleCompleted(JOB_ID, null);
+    expect(payloads().map((p) => [p.status, p.reason, p.execution])).toEqual([
+      ["active", undefined, 1],
+      ["waiting", "stalled", undefined],
+      ["active", undefined, 2],
+      ["completed", undefined, undefined], // returnvalue 不合法：不帶 result，也不帶 attempt／execution
+    ]);
+    expect(registry.get(JOB_ID)).toMatchObject({ attempt: 1, execution: 2 });
+    registry.onModuleDestroy();
+  });
+
+  it("綁定已被刪除 → 不送", () => {
+    const { gateway, registry, internals } = makeRelay();
+    registry.delete(JOB_ID);
+    internals.handleStalled(JOB_ID);
+    expect(gateway.send).not.toHaveBeenCalled();
+  });
+});
+
 describe("JobStatusRelayService delayed keepalive", () => {
   type DelayedInternals = {
     handleDelayed(jobId: string, until: number): void;

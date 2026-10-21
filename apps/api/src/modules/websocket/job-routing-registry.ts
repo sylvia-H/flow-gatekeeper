@@ -157,14 +157,15 @@ export class JobRoutingRegistry implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * 記下最近一次 progress 物件帶來的 `attempt`／`execution`（P7）。就地更新、不換物件：
+   * 記下 progress 物件帶來的 `attempt`／`execution`（P7），各自取目前看過的最大值（單調遞增）。就地更新、不換物件：
    * 寬限計時器與撤回都以參照比對，換物件會讓它們認不得這份綁定。
    */
   noteProgress(jobId: string, attempt: number | undefined, execution: number | undefined): void {
     const binding = this.bindings.get(jobId);
     if (!binding) return;
-    if (attempt !== undefined) binding.attempt = attempt;
-    if (execution !== undefined) binding.execution = execution;
+    // 單調遞增：Redis 停頓造成雙重執行時，舊的那次（exec1）恢復後仍可能送出較小的值；不得讓它覆寫較新的值。
+    if (attempt !== undefined) binding.attempt = Math.max(binding.attempt ?? 0, attempt);
+    if (execution !== undefined) binding.execution = Math.max(binding.execution ?? 0, execution);
   }
 
   /**

@@ -1,7 +1,7 @@
 import { DelayedError, UnrecoverableError } from "bullmq";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AiStreamEventSchema, DiagnosisJobReturnValueSchema } from "@flow-gatekeeper/contracts";
-import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisResult } from "@flow-gatekeeper/contracts";
+import { AiStreamEventSchema, DiagnosisJobProgressSchema, DiagnosisJobReturnValueSchema } from "@flow-gatekeeper/contracts";
+import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisJobProgress, DiagnosisResult } from "@flow-gatekeeper/contracts";
 import { GeminiProvider } from "./ai/gemini-provider.js";
 import { PROMPT_VERSION } from "./ai/prompt.js";
 import { AiProviderError } from "./ai/provider.js";
@@ -12,6 +12,7 @@ import type { DiagnosisContext } from "./context/context-builder.js";
 import type { DiagnosisRepository } from "./diagnosis-repository.js";
 import type { LivenessTracker } from "./lib/liveness.js";
 import {
+  AiFailMarkerSchema,
   createProcessor,
   isNoContextFailure,
   isTerminalFailure,
@@ -304,7 +305,7 @@ function keysFor(ctx: DiagnosisContext) {
     providerId: "fake",
     model: "fake-model",
   });
-  return { cacheKey: `ai-cache:${sig}`, lockKey: `ai-lock:${sig}` };
+  return { sig, cacheKey: `ai-cache:${sig}`, lockKey: `ai-lock:${sig}`, failKey: `ai-fail:${sig}` };
 }
 
 function makeJob(jobId: string, opts: { attemptsMade?: number; attempts?: number; attemptsStarted?: number } = {}) {
@@ -315,15 +316,32 @@ function makeJob(jobId: string, opts: { attemptsMade?: number; attempts?: number
     requestedAt: new Date(0).toISOString(),
     windowMinutes: 5,
   };
-  const job: ProcessorJob & { progress: number[]; moveToDelayed: ReturnType<typeof vi.fn> } = {
+  const job: ProcessorJob & {
+    /** 每次 progress 的 value（里程碑序列斷言用）。 */
+    progress: number[];
+    /** 原始參數（形狀斷言用：012 起一律為 DiagnosisJobProgress 物件）。 */
+    progressRaw: DiagnosisJobProgress[];
+    /** 每次 progress 的時間（Date.now；fake timer 下為虛擬時間）。 */
+    progressAt: number[];
+    /** 測試掛勾：記錄順序或讓某次 progress 失敗（拋錯即 reject）。 */
+    progressHook: ((value: number) => void) | undefined;
+    moveToDelayed: ReturnType<typeof vi.fn>;
+  } = {
     data,
     attemptsMade: opts.attemptsMade ?? 0,
     // BullMQ 於 moveToActive 遞增：處理中至少為 attemptsMade + 1。
     attemptsStarted: opts.attemptsStarted ?? (opts.attemptsMade ?? 0) + 1,
     opts: { attempts: opts.attempts ?? 3 },
     progress: [],
-    async updateProgress(p: number) {
-      this.progress.push(p);
+    progressRaw: [],
+    progressAt: [],
+    progressHook: undefined,
+    async updateProgress(p: DiagnosisJobProgress) {
+      const value = p.value;
+      this.progressHook?.(value);
+      this.progressRaw.push(p);
+      this.progressAt.push(Date.now());
+      this.progress.push(value);
     },
     moveToDelayed: vi.fn(async () => {}),
   };
@@ -381,6 +399,8 @@ function setup(
     liveness?: LivenessTracker;
     clock?: FakeClock;
     logger?: ProcessorLogger;
+    /** true＝用全域 Date.now 與 setTimeout（搭配 vi.useFakeTimers，讓 keepalive 與輪詢 sleep 同一條時間軸）。 */
+    realClock?: boolean;
   } = {},
 ) {
   const store = new FakeStore();
@@ -395,6 +415,7 @@ function setup(
     liveness,
     clock = new FakeClock(CLOCK_START),
     logger = silentLogger,
+    realClock = false,
     ...config
   } = overrides;
   const processor = createProcessor({
@@ -408,8 +429,7 @@ function setup(
     config: { ...CONFIG, ...config },
     isClosing,
     liveness,
-    now: clock.now,
-    sleep: clock.sleep,
+    ...(realClock ? {} : { now: clock.now, sleep: clock.sleep }),
   });
   return { store, publisher, repo, ai, metrics, processor, clock };
 }
@@ -534,26 +554,34 @@ describe("createProcessor：去重", () => {
     expect(liveness.touch).toHaveBeenCalledTimes(1 + (clock.sleeps.length + 1));
   });
 
-  it("持鎖者失敗後，等待者接手重算", async () => {
+  it("持鎖者失敗後：等待者看到 ai-fail 標記即以同 code 失敗（不接手重打）；標記過期後的重試才重算", async () => {
     const holder = gatedScript(new AiProviderError("503 overloaded", { retryable: true, code: "provider_error" }));
-    const { ai, publisher, metrics, clock, processor } = setup([holder.script, okScript()]);
+    const { ai, store, publisher, metrics, clock, processor } = setup([holder.script, okScript()]);
     const a = processor(makeJob("a")).catch((e: unknown) => e);
-    const b = processor(makeJob("b"));
+    const b = processor(makeJob("b")).catch((e: unknown) => e);
     await flush();
     expect(clock.pending).toBe(1);
 
     holder.release();
     expect(await a).toBeInstanceOf(Error);
     clock.advance(CONFIG.pollIntervalMs);
-    await b;
-
-    expect(ai.calls).toHaveLength(2);
-    expect(publisher.ofType("ai/done")).toEqual([expect.objectContaining({ jobId: "b", cached: false, attempt: 1 })]);
-    // a 是非最終嘗試：不送 ai/error
+    const errB = await b;
+    expect(errB).toBeInstanceOf(Error);
+    expect(errB).not.toBeInstanceOf(UnrecoverableError);
+    expect((errB as Error).message).toBe("503 overloaded");
+    expect(ai.calls).toHaveLength(1);
+    // 兩者都是非最終嘗試：不送 ai/error
     expect(publisher.ofType("ai/error")).toEqual([]);
-    // 兩個 job 都真的要打 LLM → 各一筆未命中；延遲只記成功的那一次
+
+    // 標記 TTL（10 s）過期後，b 的重試照常打 LLM 並成功。
+    store.data.delete(`ai-fail:${keysFor(CONTEXT).sig}`);
+    await expect(processor(makeJob("b", { attemptsMade: 1, attempts: 3 }))).resolves.toEqual({
+      result: VALID_RESULT,
+      cached: false,
+    });
+    expect(ai.calls).toHaveLength(2);
+    // a 打過 LLM 記一筆未命中；b 第一次被標記擋在取鎖前（未記），重試打 LLM 時記一筆
     expect(metrics.recordCacheMiss).toHaveBeenCalledTimes(2);
-    expect(metrics.recordCacheHit).not.toHaveBeenCalled();
     expect(metrics.recordLatency).toHaveBeenCalledTimes(1);
   });
 
@@ -1428,10 +1456,8 @@ describe("createProcessor：寫庫暫存與 persist_failed（012 T051；FR-027�
       await del(key);
     });
     const job = makeJob("o");
-    const updateProgress = job.updateProgress.bind(job);
-    job.updateProgress = async (p: number) => {
+    job.progressHook = (p) => {
       if (p >= 80) order.push(`progress:${p}`);
-      await updateProgress(p);
     };
 
     await processor(job);
@@ -1441,6 +1467,7 @@ describe("createProcessor：寫庫暫存與 persist_failed（012 T051；FR-027�
       "insertDiagnosis",
       "del:ai-result",
       "set:ai-cache",
+      "del:ai-fail",
       "upsertTrigger",
       "progress:100",
       "publish:ai/done",
@@ -1513,6 +1540,341 @@ describe("createProcessor：Redis 停頓造成雙重執行（012 T051；US4 情�
   });
 });
 
+describe("createProcessor：keepalive 與 progress 物件（012 T055；FR-019、FR-020、SC-009）", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** 相鄰 progress 的最大間隔（含起點與終點）。 */
+  const maxGap = (at: number[], from: number, to: number): number => {
+    const points = [from, ...at.filter((t) => t >= from && t <= to), to];
+    let gap = 0;
+    for (let i = 1; i < points.length; i++) gap = Math.max(gap, (points[i] ?? 0) - (points[i - 1] ?? 0));
+    return gap;
+  };
+
+  it("等待去重鎖 25 s 期間：每 10 s（± 1 s）至少一次 progress，補送值為目前里程碑 20", async () => {
+    vi.useFakeTimers();
+    const { store, processor } = setup([okScript()], { realClock: true, pollIntervalMs: 300, aiTimeoutMs: 60_000 });
+    const { cacheKey, lockKey } = keysFor(CONTEXT);
+    store.data.set(lockKey, "other-replica");
+    const job = makeJob("w");
+    const start = Date.now();
+    const run = processor(job);
+    await vi.advanceTimersByTimeAsync(25_000);
+    store.data.set(cacheKey, RESULT_TEXT); // 25 s 後持鎖者寫好結果
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(run).resolves.toEqual({ result: VALID_RESULT, cached: true });
+
+    expect(maxGap(job.progressAt, start, start + 25_000)).toBeLessThanOrEqual(11_000);
+    const keepalives = job.progress.filter((v, i) => v === 20 && i > 1);
+    expect(keepalives.length).toBeGreaterThanOrEqual(2);
+    // 也不能補送過密：25 s 內至多 3 則，相鄰補送間隔 ≥ 9 s（keepalive 是閒置補送，不是輪詢頻率）。
+    expect(keepalives.length).toBeLessThanOrEqual(3);
+    const keepaliveAt = job.progressAt.filter((_, i) => job.progress[i] === 20 && i > 1);
+    for (let i = 1; i < keepaliveAt.length; i++) {
+      expect((keepaliveAt[i] ?? 0) - (keepaliveAt[i - 1] ?? 0)).toBeGreaterThanOrEqual(9_000);
+    }
+    expect(job.progress.at(-1)).toBe(100);
+  });
+
+  it("首 token 前 20 s 等待：至少補送兩次（值為 40）", async () => {
+    vi.useFakeTimers();
+    const slowFirst: Script = async (req) => {
+      await new Promise<void>((r) => setTimeout(r, 20_500)); // 首 token 前約 20 s
+      return okScript()(req);
+    };
+    const { processor } = setup([slowFirst], { realClock: true, aiTimeoutMs: 60_000 });
+    const job = makeJob("f");
+    const run = processor(job);
+    await vi.advanceTimersByTimeAsync(22_000);
+    await run;
+
+    const i40 = job.progress.indexOf(40);
+    const i60 = job.progress.indexOf(60);
+    expect(job.progress.slice(i40 + 1, i60).filter((v) => v === 40).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("insertDiagnosis 慢 15 s 期間：至少補送一次（值為 80）", async () => {
+    vi.useFakeTimers();
+    const { repo, processor } = setup([okScript()], { realClock: true, aiTimeoutMs: 60_000 });
+    const insert = repo.insertDiagnosis.bind(repo);
+    vi.spyOn(repo, "insertDiagnosis").mockImplementation(async (doc) => {
+      await new Promise<void>((r) => setTimeout(r, 15_000));
+      await insert(doc);
+    });
+    const job = makeJob("s");
+    const run = processor(job);
+    await vi.advanceTimersByTimeAsync(16_000);
+    await run;
+
+    const i80 = job.progress.indexOf(80);
+    const i100 = job.progress.indexOf(100);
+    expect(job.progress.slice(i80 + 1, i100).filter((v) => v === 80).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("串流中 token 每 5 s 一則、持續 30 s：不補送（只有里程碑）", async () => {
+    vi.useFakeTimers();
+    const steady: Script = async ({ onToken }) => {
+      const parts = 7;
+      for (let i = 0; i < parts; i++) {
+        if (i > 0) await new Promise<void>((r) => setTimeout(r, 5_000));
+        onToken(RESULT_TEXT.slice((i * RESULT_TEXT.length) / parts, ((i + 1) * RESULT_TEXT.length) / parts));
+      }
+      return { text: RESULT_TEXT, finishReason: "stop" };
+    };
+    const { processor } = setup([steady], { realClock: true, aiTimeoutMs: 60_000 });
+    const job = makeJob("t");
+    const run = processor(job);
+    await vi.advanceTimersByTimeAsync(31_000);
+    await run;
+    expect(job.progress).toEqual([0, 20, 40, 60, 80, 100]);
+  });
+
+  it("所有 progress 皆為 DiagnosisJobProgress 物件、attempt＝attemptsMade＋1、execution ≥ 1（attemptsStarted 為 0 時以 1 代入）", async () => {
+    vi.useFakeTimers();
+    const { store, processor } = setup([okScript()], { realClock: true, pollIntervalMs: 300, aiTimeoutMs: 60_000 });
+    const { cacheKey, lockKey } = keysFor(CONTEXT);
+    store.data.set(lockKey, "other-replica");
+    const job = makeJob("x", { attemptsMade: 1, attemptsStarted: 0 });
+    const run = processor(job);
+    await vi.advanceTimersByTimeAsync(12_000); // 含一次 keepalive 補送
+    store.data.set(cacheKey, RESULT_TEXT);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await run;
+
+    expect(job.progressRaw.length).toBeGreaterThanOrEqual(4);
+    for (const p of job.progressRaw) {
+      expect(DiagnosisJobProgressSchema.safeParse(p).success).toBe(true);
+      expect(p).toMatchObject({ attempt: 2, execution: 1 });
+    }
+    const stalled = makeJob("y", { attemptsStarted: 3 });
+    store.data.delete(lockKey);
+    await processor(stalled);
+    expect(stalled.progressRaw.every((p) => p.execution === 3)).toBe(true);
+  });
+
+  it("執行結束（成功或失敗）後不再補送；計時器全部清除", async () => {
+    vi.useFakeTimers();
+    const { processor } = setup([okScript()], { realClock: true, aiTimeoutMs: 60_000 });
+    const job = makeJob("done");
+    await processor(job);
+    const count = job.progress.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(job.progress).toHaveLength(count);
+
+    const failing = setup([async () => Promise.reject(new AiProviderError("bad", { retryable: false, code: "provider_error" }))], {
+      realClock: true,
+      aiTimeoutMs: 60_000,
+    });
+    const job2 = makeJob("fail");
+    await expect(failing.processor(job2)).rejects.toBeInstanceOf(UnrecoverableError);
+    const count2 = job2.progress.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(job2.progress).toHaveLength(count2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("補送失敗：吞掉、本次執行只 warn 一則，job 照常完成", async () => {
+    vi.useFakeTimers();
+    const { logger, warns } = recordingLogger();
+    const { store, processor } = setup([okScript()], { realClock: true, pollIntervalMs: 300, aiTimeoutMs: 60_000, logger });
+    const { cacheKey, lockKey } = keysFor(CONTEXT);
+    store.data.set(lockKey, "other-replica");
+    const job = makeJob("k");
+    let failing = false;
+    job.progressHook = () => {
+      if (failing) throw new Error("redis down");
+    };
+    const run = processor(job);
+    await vi.advanceTimersByTimeAsync(1_000);
+    failing = true; // 之後的 keepalive 補送都失敗
+    await vi.advanceTimersByTimeAsync(35_000);
+    failing = false;
+    store.data.set(cacheKey, RESULT_TEXT);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(run).resolves.toEqual({ result: VALID_RESULT, cached: true });
+    expect(warns.filter((w) => w.msg === "keepalive 進度補送失敗（本次執行不再重複記錄）")).toHaveLength(1);
+  });
+});
+
+describe("createProcessor：ai-fail 負向標記（012 T062／T063；FR-028、SC-007、D5）", () => {
+  const failing = (code = "provider_error", retryable = true): Script =>
+    async () => Promise.reject(new AiProviderError("503 overloaded", { retryable, code }));
+
+  it("LLM 階段失敗：寫 ai-fail:<sig>（EX 10，{ code, message, jobId, at }），info 記 ai-fail written", async () => {
+    const { logger, infos } = infoLogger();
+    const { store, processor } = setup([failing()], { logger });
+    await expect(processor(makeJob("a"))).rejects.toThrow("503 overloaded");
+    const { failKey } = keysFor(CONTEXT);
+    const marker = JSON.parse(store.data.get(failKey) ?? "null") as unknown;
+    expect(AiFailMarkerSchema.parse(marker)).toEqual({
+      code: "provider_error",
+      message: "503 overloaded",
+      jobId: "a",
+      at: new Date(CLOCK_START).toISOString(),
+    });
+    expect(store.ttls.filter((t) => t.key === failKey)).toEqual([{ op: "cache", key: failKey, ttlSeconds: 10 }]);
+    expect(infos.some((i) => i.msg === "ai-fail written")).toBe(true);
+  });
+
+  it.each([
+    ["ai_timeout（逾時）", "ai_timeout"],
+    ["schema_invalid（safety，不可重試）", "schema_invalid"],
+    ["schema_invalid（parse 失敗）", "schema_invalid"],
+  ])("%s 也寫標記", async (label, code) => {
+    const scripts: Record<string, Script> = {
+      "ai_timeout（逾時）": () => new Promise<AiStreamResult>(() => {}),
+      "schema_invalid（safety，不可重試）": async () => ({ text: "", finishReason: "safety" }),
+      "schema_invalid（parse 失敗）": async () => ({ text: "not json", finishReason: "stop" }),
+    };
+    const script = scripts[label];
+    if (!script) throw new Error(label);
+    const { store, processor } = setup([script], { aiTimeoutMs: 20 });
+    await expect(processor(makeJob("a"))).rejects.toThrow();
+    const marker = AiFailMarkerSchema.parse(JSON.parse(store.data.get(keysFor(CONTEXT).failKey) ?? "null"));
+    expect(marker.code).toBe(code);
+  });
+
+  it("no_context、persist_failed、限流延後不寫標記", async () => {
+    const empty = setup([okScript()], { context: EMPTY_CONTEXT });
+    await expect(empty.processor(makeJob("n"))).rejects.toBeInstanceOf(UnrecoverableError);
+    expect([...empty.store.data.keys()].some((k) => k.startsWith("ai-fail:"))).toBe(false);
+
+    const persist = setup([okScript()]);
+    persist.repo.failInsertDiagnosis = 1;
+    await expect(persist.processor(makeJob("p"))).rejects.toThrow(PERSIST_FAILED_MESSAGE);
+    expect(persist.store.data.has(keysFor(CONTEXT).failKey)).toBe(false);
+
+    const limited = setup([okScript()], { aiRpm: 1 });
+    limited.store.counters.set(`ai-rpm:${Math.floor(CLOCK_START / 60_000)}`, 1);
+    await expect(limited.processor(makeJob("r"), "tok")).rejects.toBeInstanceOf(DelayedError);
+    expect(limited.store.data.has(keysFor(CONTEXT).failKey)).toBe(false);
+  });
+
+  it("SC-007：兩個同簽章 job、供應商持續失敗——LLM 總數 ≤ 4、第二個 job 最終錯誤碼相同、ai-rpm 不因第二個 job 增加", async () => {
+    const holderGate = gatedScript(new AiProviderError("503 overloaded", { retryable: true, code: "provider_error" }));
+    const { ai, store, publisher, clock, processor } = setup([holderGate.script, failing()]);
+    const windowKey = `ai-rpm:${Math.floor(CLOCK_START / 60_000)}`;
+    // 第 1 輪：A 持鎖打 LLM、B 等待；A 失敗寫標記後 B 被擋。
+    const a1 = processor(makeJob("A")).catch((e: unknown) => e);
+    const b1 = processor(makeJob("B")).catch((e: unknown) => e);
+    await flush();
+    holderGate.release();
+    await a1;
+    clock.advance(CONFIG.pollIntervalMs);
+    await b1;
+    // 第 2、3 輪（退避後重試，標記仍在 10 s 內）：A 忽略自己的標記再打；B 每次都被擋。
+    for (const attemptsMade of [1, 2]) {
+      await processor(makeJob("A", { attemptsMade })).catch(() => {});
+      await processor(makeJob("B", { attemptsMade })).catch(() => {});
+    }
+
+    expect(ai.calls.length).toBeLessThanOrEqual(4);
+    expect(ai.calls).toHaveLength(3); // 全部來自 A
+    expect(store.counters.get(windowKey)).toBe(3); // B 從未吃 AI_RPM
+    const errors = publisher.ofType("ai/error");
+    expect(errors.map((e) => [e.jobId, e.code, e.attempt])).toEqual([
+      ["A", "provider_error", 3],
+      ["B", "provider_error", 3],
+    ]);
+  });
+
+  it("ai-fail 標記寫入失敗：只 warn、持鎖者原本的錯誤不變；等待者看不到標記而接手重打（ai.calls === 2）", async () => {
+    const holder = gatedScript(new AiProviderError("503 overloaded", { retryable: true, code: "provider_error" }));
+    const { logger, warns } = recordingLogger();
+    const { ai, store, clock, processor } = setup([holder.script, okScript()], { logger });
+    store.failSetWithTtl = (key) => key.startsWith("ai-fail:");
+    const a = processor(makeJob("a")).catch((e: unknown) => e);
+    const b = processor(makeJob("b"));
+    await flush();
+    holder.release();
+    const errA = await a;
+    expect(errA).toBeInstanceOf(Error);
+    expect((errA as Error).message).toBe("503 overloaded");
+    expect(warns.map((w) => w.msg)).toContain("ai-fail 標記寫入失敗");
+
+    clock.advance(CONFIG.pollIntervalMs);
+    await expect(b).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(ai.calls).toHaveLength(2);
+  });
+
+  it("成功路徑 DEL ai-fail 拋錯：只 warn，job 照常完成", async () => {
+    const { logger, warns } = recordingLogger();
+    const { store, processor } = setup([okScript()], { logger });
+    const del = store.del.bind(store);
+    vi.spyOn(store, "del").mockImplementation(async (key) => {
+      if (key.startsWith("ai-fail:")) throw new Error("redis down");
+      await del(key);
+    });
+    await expect(processor(makeJob("ok"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(warns.map((w) => w.msg)).toContain("ai-fail 標記刪除失敗（將由 TTL 過期回收）");
+    expect(store.cacheKeys()).toHaveLength(1);
+  });
+
+  it("持鎖者自己的重試忽略自己的標記；成功時 DEL 標記", async () => {
+    const { ai, store, processor } = setup([okScript()]);
+    const { failKey } = keysFor(CONTEXT);
+    store.data.set(failKey, JSON.stringify({ code: "provider_error", message: "x", jobId: "self", at: "t" }));
+    await expect(processor(makeJob("self", { attemptsMade: 1 }))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(ai.calls).toHaveLength(1);
+    expect(store.data.has(failKey)).toBe(false);
+  });
+
+  it("新 job 看到別人的標記：取鎖前就失敗、不取鎖、不吃 AI_RPM；最終 attempt 送同 code 的 ai/error", async () => {
+    const { logger, warns } = recordingLogger();
+    const { ai, store, publisher, processor } = setup([okScript()], { logger });
+    const { failKey } = keysFor(CONTEXT);
+    store.data.set(failKey, JSON.stringify({ code: "ai_timeout", message: "AI streaming timeout", jobId: "other", at: "t" }));
+    const acquire = vi.spyOn(store, "tryAcquireLock");
+
+    const err = await processor(makeJob("n", { attemptsMade: 2, attempts: 3 })).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(UnrecoverableError);
+    expect(publisher.ofType("ai/error")).toEqual([
+      { type: "ai/error", jobId: "n", attempt: 3, code: "ai_timeout", message: "AI streaming timeout" },
+    ]);
+    expect(acquire).not.toHaveBeenCalled();
+    expect(store.counters.size).toBe(0);
+    expect(ai.calls).toHaveLength(0);
+    expect(warns.some((w) => w.msg === "ai-fail hit")).toBe(true);
+  });
+
+  it("標記過期（不存在）後新 job 照常呼叫 LLM", async () => {
+    const { ai, store, processor } = setup([okScript()]);
+    const { failKey } = keysFor(CONTEXT);
+    store.data.set(failKey, JSON.stringify({ code: "provider_error", message: "x", jobId: "other", at: "t" }));
+    store.data.delete(failKey); // TTL 到期
+    await expect(processor(makeJob("n"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(ai.calls).toHaveLength(1);
+  });
+
+  it("標記內容不合法：DEL 並視為無標記", async () => {
+    const { ai, store, processor } = setup([okScript()]);
+    const { failKey } = keysFor(CONTEXT);
+    store.data.set(failKey, "{oops");
+    await expect(processor(makeJob("n"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(store.deleted).toContain(failKey);
+    expect(ai.calls).toHaveLength(1);
+  });
+
+  it("「持鎖者寫標記放鎖、等待者恰好在 (a) 與取鎖之間」：第二處讀取（取鎖後、限流前）擋下，不吃 AI_RPM", async () => {
+    const { ai, store, processor } = setup([okScript()]);
+    const { failKey, lockKey } = keysFor(CONTEXT);
+    const acquire = store.tryAcquireLock.bind(store);
+    vi.spyOn(store, "tryAcquireLock").mockImplementation(async (key, token, ttl) => {
+      // 等待者剛通過 (a)：此刻持鎖者寫好標記並放鎖。
+      store.data.set(failKey, JSON.stringify({ code: "provider_error", message: "503", jobId: "holder", at: "t" }));
+      return acquire(key, token, ttl);
+    });
+    const err = await processor(makeJob("w")).catch((e: unknown) => e);
+    expect((err as Error).message).toBe("503");
+    expect(ai.calls).toHaveLength(0);
+    expect(store.counters.size).toBe(0);
+    expect(store.data.has(lockKey)).toBe(false); // 擋下後照常放鎖
+  });
+});
+
 describe("createProcessor：回傳值 DiagnosisJobReturnValue（012 T023；ADR-003 D1）", () => {
   it("LLM 路徑：回 { result, cached: false }，通過 DiagnosisJobReturnValueSchema，且與 ai/done 同一份結果", async () => {
     const { publisher, processor } = setup([okScript()]);
@@ -1566,11 +1928,7 @@ describe("createProcessor：cache 命中路徑順序（AR-A12）", () => {
     publisher.order = order;
     repo.order = order;
     const job = makeJob("hit");
-    const updateProgress = job.updateProgress.bind(job);
-    job.updateProgress = async (p: number) => {
-      order.push(`progress:${p}`);
-      await updateProgress(p);
-    };
+    job.progressHook = (p) => order.push(`progress:${p}`);
 
     await processor(job);
     expect(order).toEqual(["progress:0", "progress:20", "upsertTrigger", "progress:100", "publish:ai/done"]);
@@ -1582,11 +1940,7 @@ describe("createProcessor：cache 命中路徑順序（AR-A12）", () => {
     publisher.order = order;
     repo.order = order;
     const job = makeJob("m");
-    const updateProgress = job.updateProgress.bind(job);
-    job.updateProgress = async (p: number) => {
-      order.push(`progress:${p}`);
-      await updateProgress(p);
-    };
+    job.progressHook = (p) => order.push(`progress:${p}`);
 
     await processor(job);
     expect(order.slice(-3)).toEqual(["upsertTrigger", "progress:100", "publish:ai/done"]);

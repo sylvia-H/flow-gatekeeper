@@ -165,7 +165,27 @@ describe("AI_PROVIDER 與 fake provider 參數（review02 Batch D e2e）", () =>
     expect(r.env.AI_PROVIDER).toBe("gemini");
     expect(r.env.FAKE_AI_TOKENS).toBe(20);
     expect(r.env.FAKE_AI_TOKEN_DELAY_MS).toBe(500);
+    expect(r.env.FAKE_AI_FIRST_TOKEN_DELAY_MS).toBe(0);
     expect(r.warnings.some((w) => w.includes("AI_PROVIDER=fake"))).toBe(false);
+  });
+
+  it("FAKE_AI_FIRST_TOKEN_DELAY_MS=2000（e2e compose 值）可通過、計入逾時 warn 的串流總長", () => {
+    const ok = parseWorkerEnv({ AI_PROVIDER: "fake", FAKE_AI_FIRST_TOKEN_DELAY_MS: "2000" });
+    expect(ok.ok).toBe(true);
+    if (!ok.ok) return;
+    expect(ok.env.FAKE_AI_FIRST_TOKEN_DELAY_MS).toBe(2000);
+    expect(ok.warnings.some((w) => w.includes("每筆診斷都會逾時"))).toBe(false);
+    // 2 段 × 0ms＋首段前 30s ≥ AI_TIMEOUT_MS 30s → warn
+    const slow = parseWorkerEnv({
+      AI_PROVIDER: "fake",
+      FAKE_AI_TOKENS: "2",
+      FAKE_AI_TOKEN_DELAY_MS: "0",
+      FAKE_AI_FIRST_TOKEN_DELAY_MS: "30000",
+      AI_TIMEOUT_MS: "30000",
+    });
+    expect(slow.ok).toBe(true);
+    if (!slow.ok) return;
+    expect(slow.warnings.some((w) => w.includes("每筆診斷都會逾時"))).toBe(true);
   });
 
   it("AI_PROVIDER=fake：warn 測試替身、不再 warn 缺 GEMINI_API_KEY；延遲可設 0", () => {
@@ -219,6 +239,9 @@ describe("AI_PROVIDER 與 fake provider 參數（review02 Batch D e2e）", () =>
     ["FAKE_AI_TOKENS", "1001"],
     ["FAKE_AI_TOKEN_DELAY_MS", "-1"],
     ["FAKE_AI_TOKEN_DELAY_MS", "60001"],
+    ["FAKE_AI_FIRST_TOKEN_DELAY_MS", "-1"],
+    ["FAKE_AI_FIRST_TOKEN_DELAY_MS", "60001"],
+    ["FAKE_AI_FIRST_TOKEN_DELAY_MS", "1.5"],
   ])("%s=%s → 啟動失敗", (key, value) => {
     const r = parseWorkerEnv({ [key]: value });
     expect(r.ok).toBe(false);
