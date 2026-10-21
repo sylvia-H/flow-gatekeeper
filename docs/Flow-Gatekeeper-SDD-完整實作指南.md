@@ -3465,7 +3465,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 **零值計數中性色**（`fix/20261022-ui-zero-count-neutral`，merge 以 `git log --first-parent --merges` 為準，2026-10-22；自 `develop` `eb60786`；變更明細見 `CHANGELOG.md` `[Unreleased]`）：
 
 - **做了什麼**：`FleetHealth.vue` 的四類計數（rail 面板與手機 `compact` 摘要條共用同一組 segment）在計數為 0 時，數字由狀態色（`text-ok-fg`／`text-warn-fg`／`text-crit-fg`，停滯 `text-ink`）改為中性 `text-ink-3`，非 0 維持原色；比例條與摘要條的可讀名稱（`barLabel`／`toggleLabel`）不變。`apps/web/DESIGN.md` FleetHealth 段補上零值規則。
-- **依據**：013 critique 快照 `apps/web/.impeccable/critique/2026-10-17T05-27-46Z__src-app-vue.md` 第 29 行（Aesthetic and Minimalist Design：「零值計數仍染狀態色」）、第 77 行（Minor Observations：「零值計數用 ink-3」）與色弱者 persona（「『嚴重 0』染紅無意義」）；即上方「013 UI 全面改版」T073 待辦清單的「零值計數改中性色」。
+- **依據**：013 critique 快照 `apps/web/.impeccable/critique/2026-10-17T05-27-46Z__src-app-vue.md` 第 29 行（Aesthetic and Minimalist Design：「零值計數仍染狀態色」）、第 77 行（Minor Observations：「零值計數用 ink-3」）與色弱者 persona（「『嚴重 0』染紅無意義」）；即下方「013 UI 全面改版」T073 待辦清單的「零值計數改中性色」。
 - **取捨**：狀態圓點**保留**狀態色——它是圖例鍵，對應卡片狀態色與比例條各段，一起中性化會讓四類只剩文字標籤可辨，而 critique 只點名計數文字。比例條**不動**——0 佔比的段寬度本來就是 0、不會出現。ink-3 對玻璃的對比為淺色 6.61（rail，玻璃疊 rim）～6.90（摘要條，玻璃疊 bench）、深色 5.77（摘要條落在桌面格線上的像素為 5.55），皆依 `theme.css` 檔頭量測表，仍 ≥ 4.5:1。
 - **驗證**：`FleetHealth.test.ts` 新增 rail 與 compact 的零值／非零值 class 斷言、計數由 0 變非 0 恢復狀態色、圓點仍為 `bg-ok/warn/crit/stale`；web 全套 vitest（69 檔、1378 測試）、`typecheck`、`lint` 通過。
 - **README 截圖**：`docs/screenshots/fleet-health.png` 等含機群健康面板的 README 截圖拍於本分支之前，畫面中的零值計數仍是狀態色；依「二進位資產只留最終版」本分支不重拍，於下次 release 重拍截圖時更新（`apps/web/scripts/screenshots.cjs --readme`）。
