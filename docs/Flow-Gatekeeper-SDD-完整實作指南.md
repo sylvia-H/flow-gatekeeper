@@ -3222,6 +3222,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 12 | `fix/20261022-ui-zero-count-neutral` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：機群健康四類計數為 0 時數字改中性 `ink-3` | 零值計數中性色 |
 | 13 | `fix/20261022-ui-humanize-error-zh` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：AI 診斷失敗時未能分類的英文原文不再當主訊息，改顯通用繁中句、原文收進預設收合的「技術細節」 | 失敗訊息英文後援改繁中 |
 | 14 | `fix/20261022-ui-tab-title-alert` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：分頁標題與 favicon 隨嚴重台數與離線狀態變化（favicon 在執行期依目前主題的 token 組成） | 分頁標題與 favicon 告警 |
+| 15 | `fix/20261022-ui-steps-heading` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：AI 診斷面板進行中的步驟清單加小標「處理步驟」並以分隔線與原始串流隔開 | 處理步驟小標 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」與「012-lite 串流韌性」；後者的完整藍圖與落地摘要在 §15.7），但不列入本表。
 
@@ -3497,6 +3498,17 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **不閃爍、不設 live region**：標題只在狀態變化時換一次，沒有輪播或閃動，與 `prefers-reduced-motion` 無關；畫面上的機群健康與連線 chip 已有可讀名稱，分頁標題不再額外朗讀。
 - **驗證**：`useDocumentAlert.test.ts` 新增 `documentAlertOf` 五種情況（正常、嚴重 N、重新連線中／曾連上後已斷線蓋過嚴重、從未連上但重新連線中也標離線、第一次嘗試結果出來前不標）、`faviconSvg` 三版（基礎無狀態點、嚴重版 crit 實心點、離線版 stale 空心圈）、data URL 編碼（不留原始 `#`、`<`、`"`、空白，可解回原文）、composable 原始碼無色值字面（hex、`rgb()`／`rgba()`、`hsl()`／`hsla()`）、theme.css 淺深兩區塊對每個 favicon token 都有 `--c-<name>: R G B;`、`readFaviconColors` 的三元組轉換、缺值與格式不符（兩元、非數字、四元、`rgb()`、超過三位數）回 null、嚴重數變化 → 標題與 favicon 跟著換、回 0 還原、斷線與重連、切換 `data-theme` → favicon 改用深色 token、衍生值不變時不重寫 DOM、讀不到 token 時不建 link 只改標題、沒有 link 時自建並在 scope 結束時移除（`MutationObserver` 只 disconnect 一次，之後切主題也不再寫）、既有 link 還原原 href；`App.test.ts` 新增接線測試（批次帶入嚴重機台 → 嚴重標題與 crit 點、`reconnecting` → 離線標題與 stale 圈、unmount 還原並移除 link）；web 全套 vitest（70 檔、1415 測試）、`typecheck`、`lint` 通過，`vite build` 通過（`dist/index.html` 不含 favicon link、產物無 favicon 圖檔）。
 
+**處理步驟小標**（`fix/20261022-ui-steps-heading`，merge 以 `git log --first-parent --merges` 為準，2026-10-22；自 `fix/20261022-ui-tab-title-alert` 尖端開出、併回 develop 時以 develop 為準；變更明細見 `CHANGELOG.md` `[Unreleased]`）：
+
+- **做了什麼**：`CopilotDrawer.vue` 進行中區塊最後的步驟清單（`jobSteps(progress)`）包進一個 `border-t border-edge pt-3` 的區塊（`data-testid="copilot-steps"`），開頭加 `<h3>` 小標「處理步驟」（`mb-2 text-sm font-semibold text-ink-2`，與 `DiagnosisResultView`／`ResultSkeleton` 的區段標頭同一組 class）；`<ol>` 的可讀名稱由 `aria-label="診斷處理步驟"` 改為 `aria-labelledby` 指向小標（`useId`），讀屏念「處理步驟 清單 N 項」。推擠式側欄與 bottom sheet 共用同一段 markup，兩種版面相同。`apps/web/DESIGN.md`（Cards / Containers 新增「處理步驟」一條）與 `apps/web/PRODUCT.md`（Copilot 面板進行中敘述）同步。
+- **依據**：013 critique 快照 `apps/web/.impeccable/critique/2026-10-17T05-27-46Z__src-app-vue.md` 第 77 行（Minor Observations：「進行中步驟清單緊接『原始串流』鈕下方像其內容（加『處理步驟』小標）」）；即下方「013 UI 全面改版」T073 待辦清單的同名項。
+- **取捨**：
+  - **分隔線沿用原始串流展開區的規則、不新增 token**：`StreamDisclosure` 本身就是 `border-t border-edge pt-3` 開頭的一段；步驟區塊用同一條規則，兩段成為並列的同級區段，清單不再像是「原始串流」鈕底下的內容。只加小標不加分隔線的話，小標與展開鈕同字級同色，仍可能被讀成展開內容的第一行。
+  - **小標比照結果區段標頭（14px/600 `ink-2`）、不用 12px 標籤**：與上方骨架的「摘要」「建議動作」與「原始串流」鈕同一層級；DESIGN.md Don't 禁止 uppercase eyebrow／kicker，不另做小一階的標籤。
+  - **用 `div` 不用 `section`**：帶名稱的 `section` 會成為 region 地標，面板裡多一個地標只增加讀屏的地標清單雜訊；可讀名稱已經由 `ol` 的 `aria-labelledby` 提供。
+  - **進度列下的「目前步驟」摘要不動、不加小標**：那行是 12px「目前步驟 · 佇列 · 嘗試」，骨架填滿後清單被擠到捲動區下方時仍看得到目前步驟（critique 第二輪 Minor）；它是摘要、不是第二份清單。進度說明行的高度例外（代理裁決第 54 條）不受影響。
+- **驗證**：`CopilotDrawer.test.ts` 新增推擠式側欄與 bottom sheet 兩種版面下：進行中有唯一的「處理步驟」小標、`ol[aria-labelledby]` 對上小標 id 且有步驟、區塊帶 `border-t border-edge`、不在原始串流展開區之內且位在其後；閒置、已完成、失敗三態不渲染小標與步驟區塊；既有「步驟標籤全中文」測試改由 `copilot-steps` 區塊取清單。web 全套 vitest（70 檔、1420 測試）、`typecheck`、`lint` 通過。
+
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 
 前端整套視覺改為「實驗室玻璃與蝕刻刻度」，視覺真實來源由 design-spec＋refs 切換為 impeccable 工件 `apps/web/PRODUCT.md`＋`apps/web/DESIGN.md`。全部是前端改動：`packages/contracts`、`asyncapi.yaml` 與後端行為不變（FR-039），只消費既有 12 則 WS 訊息與 `POST /diagnoses`；高頻遙測仍是「先進 buffer、每幀至多一次批次提交」（硬規則 1）。
@@ -3572,7 +3584,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - 這**推翻**了 `MachineNodeCard.css.test.ts` 註解記載的「以 CSS cascade 測試取代 Playwright 截圖、不新增瀏覽器相依」取捨。
     cascade 測試仍保留為單元層回歸（跑在 `pnpm test`、不需瀏覽器）；截圖劇本需先起 api 與 web dev server，手動執行，不進 CI。
 
-- **T073 critique 結果與後續待辦（2026-10-17）**：改版前基準 20/40，四輪修正後最後一次評分 29/40（趨勢 20→28→29→29→29，快照在 `apps/web/.impeccable/critique/`）。門檻 30 未達，使用者裁決結案不再追分：四位獨立審查者的 P1 互不重疊且各輪都已修掉，分數停滯的結構性原因是「說明與文件」四輪皆 2 分（概念說明只靠 tooltip）。留給後續 feature 的待辦：768 高視窗的卡片密度（第二排卡片與異常標記被裁切）、AI 結果與機台現況脫鉤的交代（依據時刻、之後已回復）、側欄確認鈕改文字鈕並在確認後顯示「已確認」tag、桌機面板展開時工具列「診斷」主鈕降級、分頁 title／favicon 嚴重告警（已做，`fix/20261022-ui-tab-title-alert`）、卡片三線刻度改迷你量筒（閾值分段＋液位）、768 堆疊改 2 欄、進行中步驟清單加小標、零值計數改中性色（已做，`fix/20261022-ui-zero-count-neutral`）、`humanizeError` 的英文原文後援改繁中（已做，`fix/20261022-ui-humanize-error-zh`）。
+- **T073 critique 結果與後續待辦（2026-10-17）**：改版前基準 20/40，四輪修正後最後一次評分 29/40（趨勢 20→28→29→29→29，快照在 `apps/web/.impeccable/critique/`）。門檻 30 未達，使用者裁決結案不再追分：四位獨立審查者的 P1 互不重疊且各輪都已修掉，分數停滯的結構性原因是「說明與文件」四輪皆 2 分（概念說明只靠 tooltip）。留給後續 feature 的待辦：768 高視窗的卡片密度（第二排卡片與異常標記被裁切）、AI 結果與機台現況脫鉤的交代（依據時刻、之後已回復）、側欄確認鈕改文字鈕並在確認後顯示「已確認」tag、桌機面板展開時工具列「診斷」主鈕降級、分頁 title／favicon 嚴重告警（已做，`fix/20261022-ui-tab-title-alert`）、卡片三線刻度改迷你量筒（閾值分段＋液位）、768 堆疊改 2 欄、進行中步驟清單加小標（已做，`fix/20261022-ui-steps-heading`）、零值計數改中性色（已做，`fix/20261022-ui-zero-count-neutral`）、`humanizeError` 的英文原文後援改繁中（已做，`fix/20261022-ui-humanize-error-zh`）。
 
 **012-lite 串流韌性**（SDD feature `012-stream-resilience`，spec／plan／tasks 見 `specs/012-stream-resilience/`；屬 SDD feature 而非維護分支，不列入上表；2026-10-21 implement 完成）：完成語意改以 BullMQ `returnvalue` 為權威（`job/status: completed` 帶 `result`、`ai/done` 降為 best-effort）、新增 `GET /diagnoses/:jobId` 與重連 rebind（`JobRoutingRegistry`）、BullMQ lock 15／5／2＋keepalive 10 s（SIGKILL 後設計上界 35 s）、jobId 冪等與 `ai-fail` 負向標記；契約 asyncapi **1.4.0**。帶著 2.1.0 發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治由此修掉。設計決策見 ADR-003，藍圖與落地摘要見 §15.7（§15.7.6）。
 

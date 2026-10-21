@@ -358,6 +358,7 @@ components:
 - **異常標記 pill**（卡片底列、`animate-latch-in` 160ms）：嚴重 `border-crit bg-crit-bg text-crit-fg`、警告 `border-warn bg-warn-bg text-warn-fg`，**不可互動**（`span`、整列 `pointer-events-none`，點在 pill 上即選台；T073 第三輪）；確認後 `border-edge bg-rim text-ink-3 line-through`，保留到回復後 30 秒期滿才消失。確認入口：rail 最近異常列的 `Check` 鈕、鍵盤 `x`、手機覆蓋層；最近異常列同步劃線。卡片 id 列為標頭第二列獨佔內容寬：id（mono）→ 相對時間（僅更新 ≥ 3 秒前或停滯時顯示，否則 sr-only）→ 停滯徽章 → 診斷 chip（4px 方角 `rounded-control` tag、無圖示：「診斷中 N%」／「AI：嚴重度」／「AI：嚴重度 · 快取」／「AI 失敗」，T073 第四輪加「AI：」前綴標示 AI 判定）；時間最先讓位、id 最後。已知限制：1366 卡寬 220px 時「停滯徽章＋快取 chip」同現會截 id。嚴重越界的三格刻度改全寬實心短柱（`fill-crit`），警告維持細線換色（色弱冗餘編碼）。
 - **內凹區塊**（原始串流面板、建議指令、比例條軌道）：`rounded-control border border-edge bg-bench`，串流面板 mono 12px `leading-relaxed text-ink-2`、max-h 320px，尾端 6×14px 深青方塊游標以 0.8s `steps(1)` 閃爍。
 - **結果骨架**：區段以 `divide-y divide-edge` 分隔、`py-3.5`；缺欄位時 10px 高 `bg-ink/20` 的靜止佔位條；串流中的欄位尾端同一種游標；頂部 2px 嚴重度色條 `bg-ok／warn／crit`。
+- **處理步驟**（Copilot 進行中區塊的最後一段）：與「原始串流」展開區同一條分區規則——上方 `border-t border-edge pt-3`，開頭一個小標「處理步驟」（14px/600 `text-ink-2`，同結果區段標頭），清單以 `aria-labelledby` 指向小標；每步 12×2px 短線（已完成 `ok`、目前 `accent`、待辦 `etch`）＋14px 步驟名＋右側 mono 12px 里程碑 %。少了小標與分隔線時，清單緊接在「原始串流」鈕下方會被讀成它的展開內容（`fix/20261022-ui-steps-heading`）。進度列下那行 12px「目前步驟 · 佇列 · 嘗試」是摘要，不另加小標。
 - **覆蓋層**（快捷鍵說明、手機異常清單）：`rounded-card border-edge bg-surface-strong shadow-panel`（`0 8px 24px ink/0.18`，由上而下展開的面板用往下投影；`shadow-sheet` 保留給由下而上的 bottom-sheet 與 peek 條，T075），後方 `bg-scrim/50`，起於工具列以下（`top-14`）。
 
 ### Inputs / Fields
