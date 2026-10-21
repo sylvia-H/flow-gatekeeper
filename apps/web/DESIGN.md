@@ -373,7 +373,7 @@ components:
 24px 的 SVG：`stroke-etch` 底線表達管線、粗細隨下游 throughput 總和三檔變化；上層 `stroke-ink-3` 的 `6 6` 虛線以 `animate-flow`（1s 線性位移 -24）流動、三檔時長；箭頭 `fill-ink-3`。堆疊版面改為垂直短箭頭且不流動；reduced-motion 只保留粗細。
 
 ### FleetHealth（signature）
-rail 版：玻璃片，標頭「機群健康」+ 「共 N 台」，2×2 計數（8px 狀態點 + 12px 標籤 + 右對齊 16px mono 計數染 `*-fg`、停滯用 ink），下方 8px 高 `rounded-control border-edge bg-bench` 軌道的四段比例條（ok／warn／crit／stale，0 佔比不渲染）。手機版：44px 高的玻璃按鈕，比例條 + 四個計數一列 + 展開箭頭。
+rail 版：玻璃片，標頭「機群健康」+ 「共 N 台」，2×2 計數（8px 狀態點 + 12px 標籤 + 右對齊 16px mono 計數染 `*-fg`、停滯用 ink；**計數為 0 時改 ink-3**——零值不該讀成告警，「嚴重 0」染紅只是雜訊；狀態點是圖例鍵、仍保留狀態色），下方 8px 高 `rounded-control border-edge bg-bench` 軌道的四段比例條（ok／warn／crit／stale，0 佔比不渲染）。手機版：44px 高的玻璃按鈕，比例條 + 四個計數一列 + 展開箭頭（零值計數同樣 ink-3）。
 
 ### StatusLight
 12px 方框內置中 10px `rounded-pill` 圓點，`bg-ok／warn／crit`；燈本身不脈動（嚴重卡片的脈動在底色，燈再閃會在半週期與底同色而消失）；`role="img"` + `aria-label="狀態：…"`。狀態 → 色 token 與中文標籤的單一對照在 `shared/lib/state-style.ts`，卡片徽章、機群健康、事件流、Copilot 摘要共用。

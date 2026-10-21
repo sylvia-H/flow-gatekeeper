@@ -3536,7 +3536,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - 這**推翻**了 `MachineNodeCard.css.test.ts` 註解記載的「以 CSS cascade 測試取代 Playwright 截圖、不新增瀏覽器相依」取捨。
     cascade 測試仍保留為單元層回歸（跑在 `pnpm test`、不需瀏覽器）；截圖劇本需先起 api 與 web dev server，手動執行，不進 CI。
 
-- **T073 critique 結果與後續待辦（2026-10-17）**：改版前基準 20/40，四輪修正後最後一次評分 29/40（趨勢 20→28→29→29→29，快照在 `apps/web/.impeccable/critique/`）。門檻 30 未達，使用者裁決結案不再追分：四位獨立審查者的 P1 互不重疊且各輪都已修掉，分數停滯的結構性原因是「說明與文件」四輪皆 2 分（概念說明只靠 tooltip）。留給後續 feature 的待辦：768 高視窗的卡片密度（第二排卡片與異常標記被裁切）、AI 結果與機台現況脫鉤的交代（依據時刻、之後已回復）、側欄確認鈕改文字鈕並在確認後顯示「已確認」tag、桌機面板展開時工具列「診斷」主鈕降級、分頁 title／favicon 嚴重告警、卡片三線刻度改迷你量筒（閾值分段＋液位）、768 堆疊改 2 欄、進行中步驟清單加小標、零值計數改中性色、`humanizeError` 的英文原文後援改繁中。
+- **T073 critique 結果與後續待辦（2026-10-17）**：改版前基準 20/40，四輪修正後最後一次評分 29/40（趨勢 20→28→29→29→29，快照在 `apps/web/.impeccable/critique/`）。門檻 30 未達，使用者裁決結案不再追分：四位獨立審查者的 P1 互不重疊且各輪都已修掉，分數停滯的結構性原因是「說明與文件」四輪皆 2 分（概念說明只靠 tooltip）。留給後續 feature 的待辦：768 高視窗的卡片密度（第二排卡片與異常標記被裁切）、AI 結果與機台現況脫鉤的交代（依據時刻、之後已回復）、側欄確認鈕改文字鈕並在確認後顯示「已確認」tag、桌機面板展開時工具列「診斷」主鈕降級、分頁 title／favicon 嚴重告警、卡片三線刻度改迷你量筒（閾值分段＋液位）、768 堆疊改 2 欄、進行中步驟清單加小標、零值計數改中性色（已做，`fix/20261022-ui-zero-count-neutral`）、`humanizeError` 的英文原文後援改繁中。
 
 **012-lite 串流韌性**（SDD feature `012-stream-resilience`，spec／plan／tasks 見 `specs/012-stream-resilience/`；屬 SDD feature 而非維護分支，不列入上表；2026-10-21 implement 完成）：完成語意改以 BullMQ `returnvalue` 為權威（`job/status: completed` 帶 `result`、`ai/done` 降為 best-effort）、新增 `GET /diagnoses/:jobId` 與重連 rebind（`JobRoutingRegistry`）、BullMQ lock 15／5／2＋keepalive 10 s（SIGKILL 後設計上界 35 s）、jobId 冪等與 `ai-fail` 負向標記；契約 asyncapi **1.4.0**。帶著 2.1.0 發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治由此修掉。設計決策見 ADR-003，藍圖與落地摘要見 §15.7（§15.7.6）。
 

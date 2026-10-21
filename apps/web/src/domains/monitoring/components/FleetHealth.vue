@@ -9,6 +9,8 @@ import { STATE_STYLE, STALE_DOT } from "../../../shared/lib/state-style.js";
  * 資料由 `store.fleetHealth` getter 衍生（FR-006/007/008），本元件不持有狀態、不逐筆重繪。
  * 顏色一律語意 token，與卡片同一組（FR-004）：正常→ok、警告→warn、嚴重→crit、停滯→stale。
  * 計數文字用 `text-*-fg`（對玻璃 ≥ 6.6:1）；實心色只用在圓點與比例條。
+ * 計數為 0 時文字退為中性 `text-ink-3`（「嚴重 0」染紅沒有資訊、只增加雜訊；critique 2026-10-17）；
+ * 圓點是圖例鍵、保留狀態色，比例條 0 佔比本來就不渲染。
  *
  * 兩種版面：
  * - 預設：rail 裡的面板（標題、總台數、兩欄圖例、比例條）。
@@ -36,15 +38,20 @@ interface Segment {
   label: string;
   count: number;
   bar: string; // 比例條與圖例圓點色（實心 token）
-  text: string; // 計數文字色（*-fg token）
+  text: string; // 計數文字色（*-fg token；計數為 0 時為中性 ink-3）
+}
+
+/** 計數文字色：非 0 用該類狀態色，0 退為中性（零值不該讀成告警）。 */
+function countTone(count: number, stateText: string): string {
+  return count === 0 ? "text-ink-3" : stateText;
 }
 
 // 顏色 token 與 label 取自共用 STATE_STYLE；停滯為聚合層第四類（STALE_DOT，與卡片停滯徽章同色）。
 const segments = computed<Segment[]>(() => [
-  { key: "healthy", label: STATE_STYLE.healthy.label, count: props.summary.healthy, bar: STATE_STYLE.healthy.dot, text: STATE_STYLE.healthy.badgeText },
-  { key: "warning", label: STATE_STYLE.warning.label, count: props.summary.warning, bar: STATE_STYLE.warning.dot, text: STATE_STYLE.warning.badgeText },
-  { key: "critical", label: STATE_STYLE.critical.label, count: props.summary.critical, bar: STATE_STYLE.critical.dot, text: STATE_STYLE.critical.badgeText },
-  { key: "stale", label: "停滯", count: props.summary.stale, bar: STALE_DOT, text: "text-ink" },
+  { key: "healthy", label: STATE_STYLE.healthy.label, count: props.summary.healthy, bar: STATE_STYLE.healthy.dot, text: countTone(props.summary.healthy, STATE_STYLE.healthy.badgeText) },
+  { key: "warning", label: STATE_STYLE.warning.label, count: props.summary.warning, bar: STATE_STYLE.warning.dot, text: countTone(props.summary.warning, STATE_STYLE.warning.badgeText) },
+  { key: "critical", label: STATE_STYLE.critical.label, count: props.summary.critical, bar: STATE_STYLE.critical.dot, text: countTone(props.summary.critical, STATE_STYLE.critical.badgeText) },
+  { key: "stale", label: "停滯", count: props.summary.stale, bar: STALE_DOT, text: countTone(props.summary.stale, "text-ink") },
 ]);
 
 /** 比例條的可讀名稱，例：「機群健康：正常 3、警告 1、嚴重 1、停滯 0」。 */

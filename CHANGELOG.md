@@ -29,6 +29,8 @@
 
 維護分支 `fix/20261021-ci-and-flaky`（自 `develop` `27bc587`）；現況摘要與裁決見指南 §15.6「CI 恢復自動觸發與 flaky 測試」。
 
+維護分支 `fix/20261022-ui-zero-count-neutral`（自 `develop` `eb60786`）：013 UI 待辦「零值計數改中性色」。
+
 SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1cdb69`；spec／plan／tasks 見 `specs/012-stream-resilience/`，設計決策見 `docs/adr-003-completion-semantics.md`，代理裁決第 1～63 條待使用者覆核）；契約升 asyncapi **1.4.0**。修掉 2.1.0 帶著發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治（含失敗終態寬限）。
 
 ### 相容性注意（升級前必讀）
@@ -73,6 +75,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 - **nginx 新增 `diag_read`**：`location ~ "^/diagnoses/[0-9a-fA-F-]{36}$"` 走 60 r/m、burst 10 的獨立桶；不寫 `add_header`，繼承 server 層安全 header。POST 維持 10 r/m、burst 5。
 - **`ai-result` 暫存寫入為 best-effort**：寫不進 Redis 只 warn、照常寫 `diagnoses`，不讓已拿到的 LLM 結果作廢。
 - **CI 恢復自動觸發**（DOC-18／TQ-19，使用者 2026-10-21 裁決；2.1.0 相容性注意列為帶著發布的未修項）：`ci.yml` 改為**所有分支的 push** 自動執行（tag 不觸發），保留手動觸發、不加 `pull_request`；只改 `docs/**` 或 `*.md` 的 push 不跑，但測試會讀的 `README.md`、`CHANGELOG.md` 與實作指南仍會觸發。只在 Linux／Node 22 才出現的回歸（如 2.1.0 的 ThemeToggle）不必再等人手動跑 CI 才發現。nightly mutation 的排程不變（INF-14 仍未處理）。
+- **機群健康的零值計數改中性色**（013 critique 2026-10-17「零值計數仍染狀態色」）：rail 面板與手機摘要條的四類計數為 0 時，數字由狀態色（`*-fg`／停滯 ink）改為中性 `ink-3`，非 0 維持原色；「嚴重 0」不再染紅。狀態點仍保留狀態色作圖例鍵，比例條 0 佔比本來就不渲染；比例條與摘要條的可讀名稱不變。
 
 ### Fixed
 
