@@ -33,6 +33,8 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 
 維護分支 `fix/20261022-ui-zero-count-neutral`（自 `develop` `eb60786`）：013 UI 待辦「零值計數改中性色」；現況摘要見指南 §15.6「零值計數中性色」。
 
+維護分支 `fix/20261022-ui-humanize-error-zh`（自 `fix/20261022-ui-zero-count-neutral` 尖端開出、併回 develop 時以 develop 為準）：013 UI 待辦「`humanizeError` 的英文原文後援改繁中」；現況摘要見指南 §15.6「失敗訊息英文後援改繁中」。
+
 ### 相容性注意（升級前必讀）
 
 - **`ai/done` 可重複、可遺失**（契約 1.4.0，ADR-003 D3）：同一 jobId 再執行（stalled 重派、重試）時會再送一則 `ai/done`，通常帶相同結果；罕見的殘餘情況（ADR-003 §4：停頓剛好落在取鎖之後、送出 LLM 請求之前）下再執行可能帶不同結果，client 以先收到者為準，Pub/Sub 斷線時也可能收不到。權威完成是帶 `result` 的 `job/status: completed`。**自寫 WS client MUST 以 jobId 去重**、以收到的第一個完成為準；只認 `ai/done` 的 client 會把同一結果顯示兩次，或在 Pub/Sub 斷線時永遠等不到結果。
@@ -76,6 +78,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 - **`ai-result` 暫存寫入為 best-effort**：寫不進 Redis 只 warn、照常寫 `diagnoses`，不讓已拿到的 LLM 結果作廢。
 - **CI 恢復自動觸發**（DOC-18／TQ-19，使用者 2026-10-21 裁決；2.1.0 相容性注意列為帶著發布的未修項）：`ci.yml` 改為**所有分支的 push** 自動執行（tag 不觸發），保留手動觸發、不加 `pull_request`；只改 `docs/**` 或 `*.md` 的 push 不跑，但測試會讀的 `README.md`、`CHANGELOG.md` 與實作指南仍會觸發。只在 Linux／Node 22 才出現的回歸（如 2.1.0 的 ThemeToggle）不必再等人手動跑 CI 才發現。nightly mutation 的排程不變（INF-14 仍未處理）。
 - **機群健康的零值計數改中性色**（013 critique 2026-10-17「零值計數仍染狀態色」）：rail 面板與手機摘要條的四類計數為 0 時，數字由狀態色（`*-fg`／停滯 ink）改為中性 `ink-3`，非 0 維持原色；「嚴重 0」不再染紅。狀態點仍保留狀態色作圖例鍵，比例條 0 佔比本來就不渲染；比例條與摘要條的可讀名稱不變。
+- **未能分類的錯誤不再照顯英文原文**（013 critique 2026-10-17「`humanizeError` < 120 字後援可能英文」）：AI 診斷失敗時，錯誤沒命中已知分類（金鑰、限流、逾時、連線、格式、寫庫、多次中斷）且原文是短的英文句，主訊息由英文原文改為「診斷失敗，請重試。」，原文收進失敗訊息下方預設收合的「技術細節」（12px 小字展開鈕，展開後以等寬字顯示）供排錯；原文已是中文的短句照顯，長堆疊與多行原文維持只顯示通用句、不上畫面。已知分類的固定句與判斷順序不變；live region 公告只念主訊息。依英文原文做畫面比對的劇本需改比對「診斷失敗，請重試。」。
 
 ### Fixed
 

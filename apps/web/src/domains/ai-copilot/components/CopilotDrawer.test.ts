@@ -479,6 +479,45 @@ describe("CopilotDrawer 終態", () => {
     expect(panel.text()).toBe('{"summary":"比對振動');
     expect(panel.find(".animate-stream-caret").exists()).toBe(false);
   });
+
+  it("未能分類的英文錯誤 → 主訊息通用繁中句，原文收在預設收合的「技術細節」（fix/20261022-ui-humanize-error-zh）", async () => {
+    const w = mountWithStore();
+    const jobId = await startJob();
+    useCopilotStore().applyEvent({ type: "ai/error", jobId, attempt: 1, code: "worker_failed", message: "Worker crashed unexpectedly" });
+    await flushPromises();
+
+    expect(w.text()).toContain("診斷失敗，請重試。");
+    // 公告只念通用句，不念英文原文
+    expect(w.get('[data-testid="copilot-announcement"]').text()).toBe(`${LABEL} 診斷失敗：診斷失敗，請重試。`);
+    const toggle = buttonExact(w, "技術細節")!;
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    expect(toggle.attributes("aria-controls")).toBeUndefined();
+    expect(w.text()).not.toContain("Worker crashed unexpectedly");
+
+    await toggle.trigger("click");
+    const id = toggle.attributes("aria-controls")!;
+    expect(toggle.attributes("aria-expanded")).toBe("true");
+    const detail = w.get(`[id="${id}"]`);
+    expect(detail.text()).toBe("Worker crashed unexpectedly");
+    expect(detail.classes()).toEqual(expect.arrayContaining(["font-mono", "bg-bench"]));
+
+    // 重試 → 進行中，技術細節消失；再失敗時回到收合
+    await buttonExact(w, "重試")!.trigger("click");
+    await flushPromises();
+    expect(w.find('[data-testid="copilot-error-detail"]').exists()).toBe(false);
+    const nextJob = (useCopilotStore().stateFor(MACHINE) as { jobId: string }).jobId;
+    useCopilotStore().applyEvent({ type: "ai/error", jobId: nextJob, attempt: 1, code: "worker_failed", message: "boom" });
+    await flushPromises();
+    expect(buttonExact(w, "技術細節")!.attributes("aria-expanded")).toBe("false");
+  });
+
+  it("已分類或中文的錯誤 → 不顯示「技術細節」", () => {
+    const w = mountDrawer({
+      state: { status: "failed", machineId: MACHINE, streamText: "", error: "AI 診斷逾時，請重試。" },
+    });
+    expect(w.find('[data-testid="copilot-error-detail"]').exists()).toBe(false);
+    expect(buttonExact(w, "技術細節")).toBeUndefined();
+  });
 });
 
 describe("CopilotDrawer 完成 meta 與快取耗時對比（FR-022／FR-023）", () => {

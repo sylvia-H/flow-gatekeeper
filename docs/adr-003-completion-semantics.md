@@ -280,7 +280,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 
 - **快取命中的 job 1 h 後 GET 回 404**：快取命中不寫 `diagnoses`（避免同一份結果複製多筆，`processor.ts:254-256`），`returnvalue` 隨 `removeOnComplete` 1 h 消失。接受：重連續接的時間尺度是秒到分鐘，1 h 後的 GET 只會來自手動查詢。若要涵蓋，可把 `result` 寫進該筆 trigger，代價是 `diagnosisTriggers` 變大（30 天 TTL）。
 - **POST 的 jobId 冪等延伸到 1 h 之後**（API-16）：job 被 `removeOnComplete` 清掉後，同 jobId 的 POST 會重新入列；012-lite 之後 processor 開頭的 `findByJobId` 會直接回舊結果，不打 LLM——語意上正是「同 jobId＝同一個請求」，不需另外改 POST。
-- **失敗終態**：`failed` 仍只帶 `failedReason` 原文，具體錯誤碼要等 010-lite 的 `AiErrorCode`；`maxStalledCount` 用盡時的 `failedReason` 是英文 `job stalled more than allowable limit`，web `humanizeError` 對 < 120 字的英文原文會照顯（`copilot-reducer.ts:110`），012-lite 補一條對映（文案見 D13）。
+- **失敗終態**：`failed` 仍只帶 `failedReason` 原文，具體錯誤碼要等 010-lite 的 `AiErrorCode`；`maxStalledCount` 用盡時的 `failedReason` 是英文 `job stalled more than allowable limit`，web `humanizeError` 對 < 120 字的英文原文會照顯（`copilot-reducer.ts:110`），012-lite 補一條對映（文案見 D13）。（已變更：`fix/20261022-ui-humanize-error-zh` 起未知的英文原文不再照顯、改顯通用句並收進「技術細節」，現況見指南 §15.6「失敗訊息英文後援改繁中」；這條對映仍需要，固定句才不會退成通用句。）
 - **失敗終態的 relay 寬限**（ADR-002 §6.5.1「review03 新增：失敗終態沒有 relay 寬限」列，由 012-lite 收掉）：`failed` 終態套用與 `completed` 相同的 10 s 綁定寬限，由 `JobRoutingRegistry` 的同一段終態寬限程式處理（2.1.0 的 `markCompleted`／`COMPLETED_BINDING_GRACE_MS` 一般化為兩種終態共用）。理由：`ai/error` 走 Pub/Sub、`failed` 走 QueueEvents，跨連線的先後與 `ai/done`／`completed` 一樣沒有保證；`failed` 先到時綁定即刪，worker 送的具體錯誤碼（`persist_failed`、`provider_error` 等）送不到原連線，畫面只看到 api 補送的籠統 `ai/error(worker_failed)`——012-lite 新增的 `persist_failed` 文案就會被這條吞掉。寬限內同 jobId 的 POST 回 409，與綁定已刪時 `enqueueOnce` 查到既有 job 的 409 相同（`jobs.service.ts:116-123`），對 POST 沒有新行為；寬限內的 GET 依 D8 視為終態。
 
 來源：前三點為 ADR-003 補充，隨定稿採用（不在代理裁決條目內，待覆核）；失敗終態寬限為 ADR-003 代理裁決第 12 條（待覆核）。
@@ -470,7 +470,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 **18. `failed` 只帶原因原文時的 `persist_failed` 文案**（D6 第 4 點、D12；spec FR-027、FR-035）
 - 影響範圍：重連後 GET 回 `failed`、或 `job/status: failed` 在 10 s 寬限外才收到時，AI 診斷面板的失敗文案；worker 對 `persist_failed` 寫進 BullMQ `failedReason` 與 `ai/error.message` 的訊息內容；web `humanizeError` 的對映。
 - 裁決：`persist_failed` 的訊息為含 `persist_failed` 字樣的固定英文句（例如 `persist_failed: diagnosis record could not be written`），MongoDB 原始錯誤只進日誌的 `err` 欄位；web 在錯誤碼或訊息含 `persist_failed` 時都對映為「診斷結果無法寫入資料庫，請稍後重試」。GET 的 `failed` 回應不新增 `code` 欄位。
-- 理由：GET 與 `job/status: failed` 只有 `failedReason` 原文、沒有錯誤碼（`AiErrorCode` 屬 010-lite）；`humanizeError` 對 120 字以內的未知原文會照顯（`copilot-reducer.ts` `humanizeError` 末段），訊息若夾帶 MongoDB 錯誤，重連後的使用者會看到 `MongoServerSelectionError…` 之類的內部錯誤，違反 spec US4 情境 2。固定訊息加一條關鍵字對映，只動一個字串與一條判斷。
+- 理由：GET 與 `job/status: failed` 只有 `failedReason` 原文、沒有錯誤碼（`AiErrorCode` 屬 010-lite）；`humanizeError` 對 120 字以內的未知原文會照顯（`copilot-reducer.ts` `humanizeError` 末段；`fix/20261022-ui-humanize-error-zh` 起英文原文改收進「技術細節」，現況見指南 §15.6），訊息若夾帶 MongoDB 錯誤，重連後的使用者會看到 `MongoServerSelectionError…` 之類的內部錯誤，違反 spec US4 情境 2。固定訊息加一條關鍵字對映，只動一個字串與一條判斷。
 - 替代方案：GET 的 `failed` 回應加 `code`（worker 要把錯誤碼另存進 job data、api 讀出，等於提前做 010-lite 的 `AiErrorCode`）；接受原文顯示（使用者看得到資料庫內部錯誤）。
 
 **19. 重新整理頁面後不續接**（D10；spec Edge Cases、FR-039、Out of Scope；clarify 階段補）

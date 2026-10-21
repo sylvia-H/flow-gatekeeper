@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, useId, watch } from "vue";
-import { Stethoscope, X, RotateCcw, Ban } from "lucide-vue-next";
+import { Stethoscope, X, RotateCcw, Ban, ChevronDown } from "lucide-vue-next";
 import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
 import { useMonitoringStore, type MachineLive } from "../../monitoring/stores/monitoring.store.js";
 import { isStale } from "../../monitoring/lib/stale.js";
@@ -357,10 +357,14 @@ onUnmounted(() => document.removeEventListener("focusin", onDocumentFocusIn));
  * 讓中斷前的推理直接可見（FR-024）。每次狀態或任務切換都回到該態的預設。
  */
 const showStream = ref(false);
+/** 失敗態「技術細節」（未能分類的英文原文）的展開狀態：一律預設收合，換態或換任務時收回。 */
+const showErrorDetail = ref(false);
+const errorDetailId = useId();
 watch(
   () => ("jobId" in props.state ? `${props.state.status}:${props.state.jobId}` : props.state.status),
   () => {
     showStream.value = props.state.status === "failed";
+    showErrorDetail.value = false;
   },
   { immediate: true },
 );
@@ -575,9 +579,37 @@ watch(
         <div v-else-if="state.status === 'failed'" class="space-y-4">
           <ProgressBar status="failed" />
           <!-- 不另掛 role="alert"：失敗已由上方 live region 公告，避免同一則錯誤被念兩次 -->
-          <p class="rounded-control border border-crit bg-crit-bg px-3 py-2.5 text-sm leading-relaxed text-crit-fg">
-            {{ state.error }}
-          </p>
+          <div class="space-y-1.5">
+            <p class="rounded-control border border-crit bg-crit-bg px-3 py-2.5 text-sm leading-relaxed text-crit-fg">
+              {{ state.error }}
+            </p>
+            <!-- 技術細節（fix/20261022-ui-humanize-error-zh）：未能分類的錯誤主訊息改通用繁中句，英文短原文收在這裡供排錯，
+               預設收合、12px ink-3 小字；不進 live region 公告。用按鈕＋aria-expanded（同原始串流）而非 <details>，
+               焦點陷阱的 FOCUSABLE_SELECTOR 不含 summary，Tab 循環會跳過它。 -->
+            <div v-if="state.errorDetail" data-testid="copilot-error-detail">
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 rounded-control text-xs text-ink-3 hover:text-ink-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+                :aria-expanded="showErrorDetail"
+                :aria-controls="showErrorDetail ? errorDetailId : undefined"
+                @click="showErrorDetail = !showErrorDetail"
+              >
+                技術細節
+                <ChevronDown
+                  class="h-3.5 w-3.5 transition-transform"
+                  :class="showErrorDetail ? 'rotate-180' : ''"
+                  aria-hidden="true"
+                />
+              </button>
+              <p
+                v-if="showErrorDetail"
+                :id="errorDetailId"
+                class="mt-1 break-words rounded-control border border-edge bg-bench px-2.5 py-2 font-mono text-xs leading-relaxed text-ink-2"
+              >
+                {{ state.errorDetail }}
+              </p>
+            </div>
+          </div>
           <button
             type="button"
             :class="PRIMARY_BTN"
