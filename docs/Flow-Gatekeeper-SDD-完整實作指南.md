@@ -3219,6 +3219,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 10 | `fix/20261018-review03-quickfix` | `09d5a7e` | 第三輪審查報告 §6 Batch E（quick-fix）：P1 與日誌遮蔽、HTTP 錯誤回應、relay 與 Gateway 入站限速、worker 終態事件順序、關閉總時限、web 結果未送達收尾、測試門檻 ratchet；契約升 1.3.0 | 第三輪審查 quick-fix |
 | — | `docs/20261018-release-2.1.0` | （以 `git log --first-parent --merges` 為準） | 2.1.0 release 準備（版號、CHANGELOG、文件版本註記，以及首次 Linux CI 抓到的 `ThemeToggle.test.ts` localStorage 洩漏修正；版號由原規劃的 2.0.1 改為 2.1.0，見下方「第三輪審查 quick-fix」裁決 14） | — |
 | 11 | `fix/20261021-ci-and-flaky` | （以 `git log --first-parent --merges` 為準） | `ci.yml` 恢復所有分支 push 自動觸發（DOC-18）、修正 nightly mutation 抓到的 `TopBar.test.ts` 不穩定測試、§15.5 roadmap 註記更新 | CI 恢復自動觸發與 flaky 測試 |
+| 12 | `fix/20261022-ui-zero-count-neutral` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：機群健康四類計數為 0 時數字改中性 `ink-3` | 零值計數中性色 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」與「012-lite 串流韌性」；後者的完整藍圖與落地摘要在 §15.7），但不列入本表。
 
@@ -3460,6 +3461,13 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   1. （推翻紀錄）CI 恢復 **push** 自動觸發，保留 `workflow_dispatch`、**不加** `pull_request`。原提案為第三輪報告附錄 C 的 (a)「恢復 `pull_request`（加 `paths-ignore`）、不恢復 push」；使用者問「為何不建議恢復 push」後改為 push。
      理由（Claude 回答使用者提問「為何不建議恢復 push」時提出，使用者採納）：本 repo 從未開過 PR，合併一律本機 `--no-ff` 後 push `develop`，只恢復 `pull_request` 等於 CI 永不自動跑；當初關閉的理由「私有 repo 期間節省 Actions 分鐘」（`6417069`）在 repo 公開後已不成立；push 自動跑一次約 2 分鐘（2026-10-18 實測），公開 repo 不計費，連續 push 由 concurrency 取消舊 run。不加 `pull_request` 是因為同 repo 分支的 PR 會讓同一個 commit 跑兩次。
 - **仍未處理**（不在本分支範圍）：第三輪報告 Batch F 第 6 點其餘的 INF-14（nightly 不論 `develop` 有無變更每日照跑；180 分 timeout 為私有 repo 2 vCPU 時的推估值，公開 repo 4 vCPU 下 2026-10-15～20 成功的 run 實測 7 分 08 秒～10 分 22 秒）、INF-15（重跑 mutation、更新基準），以及 §3.8 DOC-18 條目的 `compose config -q`、e2e 進 CI 的方式；ADR-002 §6.5.1 infra Low 列的 INF-8 餘項同樣未處理。
+
+**零值計數中性色**（`fix/20261022-ui-zero-count-neutral`，merge 以 `git log --first-parent --merges` 為準，2026-10-22；自 `develop` `eb60786`；變更明細見 `CHANGELOG.md` `[Unreleased]`）：
+
+- **做了什麼**：`FleetHealth.vue` 的四類計數（rail 面板與手機 `compact` 摘要條共用同一組 segment）在計數為 0 時，數字由狀態色（`text-ok-fg`／`text-warn-fg`／`text-crit-fg`，停滯 `text-ink`）改為中性 `text-ink-3`，非 0 維持原色；比例條與摘要條的可讀名稱（`barLabel`／`toggleLabel`）不變。`apps/web/DESIGN.md` FleetHealth 段補上零值規則。
+- **依據**：013 critique 快照 `apps/web/.impeccable/critique/2026-10-17T05-27-46Z__src-app-vue.md` 第 29 行（Aesthetic and Minimalist Design：「零值計數仍染狀態色」）、第 77 行（Minor Observations：「零值計數用 ink-3」）與色弱者 persona（「『嚴重 0』染紅無意義」）；即上方「013 UI 全面改版」T073 待辦清單的「零值計數改中性色」。
+- **取捨**：狀態圓點**保留**狀態色——它是圖例鍵，對應卡片狀態色與比例條各段，一起中性化會讓四類只剩文字標籤可辨，而 critique 只點名計數文字。比例條**不動**——0 佔比的段寬度本來就是 0、不會出現。ink-3 對玻璃的對比為淺色 6.90、深色 5.77（`theme.css` 檔頭量測表），仍 ≥ 4.5:1。
+- **驗證**：`FleetHealth.test.ts` 新增 rail 與 compact 的零值／非零值 class 斷言、計數由 0 變非 0 恢復狀態色、圓點仍為 `bg-ok/warn/crit/stale`；web 全套 vitest（69 檔、1378 測試）、`typecheck`、`lint` 通過。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 

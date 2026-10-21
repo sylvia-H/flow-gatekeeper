@@ -29,9 +29,9 @@
 
 維護分支 `fix/20261021-ci-and-flaky`（自 `develop` `27bc587`）；現況摘要與裁決見指南 §15.6「CI 恢復自動觸發與 flaky 測試」。
 
-維護分支 `fix/20261022-ui-zero-count-neutral`（自 `develop` `eb60786`）：013 UI 待辦「零值計數改中性色」。
-
 SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1cdb69`；spec／plan／tasks 見 `specs/012-stream-resilience/`，設計決策見 `docs/adr-003-completion-semantics.md`，代理裁決第 1～63 條待使用者覆核）；契約升 asyncapi **1.4.0**。修掉 2.1.0 帶著發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治（含失敗終態寬限）。
+
+維護分支 `fix/20261022-ui-zero-count-neutral`（自 `develop` `eb60786`）：013 UI 待辦「零值計數改中性色」；現況摘要見指南 §15.6「零值計數中性色」。
 
 ### 相容性注意（升級前必讀）
 
