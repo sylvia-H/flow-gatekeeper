@@ -69,7 +69,7 @@ beforeAll(async () => {
     getJob: vi.fn(async () => undefined),
     add: vi.fn(async () => ({})),
   } as unknown as Queue<DiagnosisJobPayload>;
-  const bindings = { bindJobToClient: vi.fn(), getBinding: () => undefined, deleteBinding: vi.fn() };
+  const bindings = { bind: vi.fn(), get: () => undefined, delete: vi.fn() };
   const presence = { isAuthorized: (id: string) => id === SOCKET_ID };
 
   @Module({

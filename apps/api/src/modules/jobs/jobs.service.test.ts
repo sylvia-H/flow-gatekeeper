@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConflictException, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
 import type { Queue } from "bullmq";
 import type { DiagnosisJobPayload } from "@flow-gatekeeper/contracts";
-import { ENQUEUE_TIMEOUT_MS, JobsService } from "./jobs.service.js";
+import { ENQUEUE_TIMEOUT_MS, JobsService, SOCKET_UNAVAILABLE_MESSAGE } from "./jobs.service.js";
 import type { ClientPresence, JobBindingStore } from "./jobs.service.js";
-import type { JobBinding } from "../websocket/ai-stream-relay.service.js";
+import type { JobBinding } from "../websocket/job-routing-registry.js";
 import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
 
 const SOCKET_A = "5b1f9c1e-8a53-4c43-9f0e-2d1c3b4a5e6f";
@@ -17,11 +17,11 @@ function makeBindings(): FakeBindings {
   const map = new Map<string, JobBinding>();
   return {
     map,
-    bindJobToClient: (jobId, clientId, machineId) => {
+    bind: (jobId, clientId, machineId) => {
       map.set(jobId, { clientId, machineId, boundAt: Date.now() });
     },
-    getBinding: (jobId) => map.get(jobId),
-    deleteBinding: (jobId) => {
+    get: (jobId) => map.get(jobId),
+    delete: (jobId) => {
       map.delete(jobId);
     },
   };
@@ -141,18 +141,26 @@ describe("JobsService.createDiagnosis", () => {
     expect(bindings.map.has(JOB_ID)).toBe(false);
   });
 
-  it("綁定仍在但已標 completed（AR-5 寬限保留中）→ 409「已使用過」，不查佇列、不入列、綁定原樣保留", async () => {
-    const queue = makeQueue();
-    const { service, bindings } = makeService(queue);
-    const original: JobBinding = { clientId: SOCKET_A, machineId: "mixer-01", boundAt: 1, completedAt: 2 };
-    bindings.map.set(JOB_ID, original);
-    const attempt = service.createDiagnosis({ jobId: JOB_ID, machineId: "mixer-01", socketId: SOCKET_B });
-    await expect(attempt).rejects.toBeInstanceOf(ConflictException);
-    await expect(attempt).rejects.toMatchObject({ message: expect.stringContaining("已使用過") });
-    expect(queue.getJob).not.toHaveBeenCalled();
-    expect(queue.add).not.toHaveBeenCalled();
-    expect(bindings.map.get(JOB_ID)).toBe(original); // 寬限內晚到的 ai/done 仍要送給原連線
-  });
+  it.each(["completed", "failed"] as const)(
+    "綁定仍在但已標 %s（AR-5／D12 寬限保留中）→ 409「已使用過」，不查佇列、不入列、綁定原樣保留",
+    async (kind) => {
+      const queue = makeQueue();
+      const { service, bindings } = makeService(queue);
+      const original: JobBinding = {
+        clientId: SOCKET_A,
+        machineId: "mixer-01",
+        boundAt: 1,
+        terminal: { kind, at: 2 },
+      };
+      bindings.map.set(JOB_ID, original);
+      const attempt = service.createDiagnosis({ jobId: JOB_ID, machineId: "mixer-01", socketId: SOCKET_B });
+      await expect(attempt).rejects.toBeInstanceOf(ConflictException);
+      await expect(attempt).rejects.toMatchObject({ message: expect.stringContaining("已使用過") });
+      expect(queue.getJob).not.toHaveBeenCalled();
+      expect(queue.add).not.toHaveBeenCalled();
+      expect(bindings.map.get(JOB_ID)).toBe(original); // 寬限內晚到的 ai/* 仍要送給原連線
+    },
+  );
 
   it("Redis 不可用（add reject）→ 503 並解除綁定", async () => {
     const queue = makeQueue({
@@ -227,6 +235,8 @@ describe("JobsService.createDiagnosis", () => {
       error: "Conflict",
       message: "WebSocket 連線不存在或未授權，請重新連線後再發起診斷",
     });
+    // 文字由匯出常數提供（GET /diagnoses/:jobId 共用），內容不變。
+    expect(SOCKET_UNAVAILABLE_MESSAGE).toBe("WebSocket 連線不存在或未授權，請重新連線後再發起診斷");
     expect(bindings.map.size).toBe(0);
     expect(queue.getJob).not.toHaveBeenCalled();
     expect(queue.add).not.toHaveBeenCalled();

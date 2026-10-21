@@ -1,11 +1,12 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Logger } from "@nestjs/common";
+import type { JobRoutingRegistry as JobRoutingRegistryClass } from "./job-routing-registry.js";
 
 /**
  * TQ-6：以假 `QueueEvents`（EventEmitter 替身）驅動 `JobStatusRelayService` 的真實接線——
- * `onModuleInit` 內的事件監聽、`sweepOrphans` 與 keepalive 計時器都經由真正的 `onModuleInit`
- * 掛上，測試只負責 emit 事件與推時間，不直接呼叫私有方法。
+ * `onModuleInit` 內的事件監聽與 keepalive 計時器、`JobRoutingRegistry` 的孤兒回收與終態寬限計時器都經由
+ * 真正的 `onModuleInit`／`markTerminal` 掛上，測試只負責 emit 事件與推時間，不直接呼叫私有方法。
  */
 
 /** 假 QueueEvents 的底層 ioredis 連線：只需要 `on('ready')` 與 `status`。 */
@@ -27,6 +28,8 @@ class FakeQueueEvents extends EventEmitter {
 }
 
 const created: FakeQueueEvents[] = [];
+/** 各測試建立的 registry：afterEach 一律停掉它的計時器。 */
+const registries: JobRoutingRegistryClass[] = [];
 
 // 被測程式以 `new QueueEvents()` 建構：vitest 4 起箭頭函式實作的 vi.fn 不能被 `new`，須用 function 實作。
 vi.mock("bullmq", async (importOriginal) => {
@@ -49,9 +52,8 @@ vi.mock("../../logging/app-logger.js", () => ({
 
 const { Job } = await import("bullmq");
 const { AiStreamRelayService } = await import("./ai-stream-relay.service.js");
-const { JobStatusRelayService, DELAYED_KEEPALIVE_MS, COMPLETED_BINDING_GRACE_MS } = await import(
-  "./job-status-relay.service.js"
-);
+const { JobStatusRelayService, DELAYED_KEEPALIVE_MS } = await import("./job-status-relay.service.js");
+const { JobRoutingRegistry, TERMINAL_BINDING_GRACE_MS } = await import("./job-routing-registry.js");
 const { RELAY_CLOSE_DEADLINE_MS } = await import("./relay-close.js");
 const { JobsService } = await import("../jobs/jobs.service.js");
 
@@ -73,10 +75,13 @@ function setup() {
       sent.push({ clientId, payload });
     }),
   };
-  const aiRelay = new AiStreamRelayService({} as never, gateway as never);
-  aiRelay.bindJobToClient(JOB_ID, CLIENT_ID, "cnc-01");
+  const registry = new JobRoutingRegistry();
+  registries.push(registry);
+  registry.onModuleInit();
+  const aiRelay = new AiStreamRelayService({} as never, gateway as never, registry);
+  registry.bind(JOB_ID, CLIENT_ID, "cnc-01");
   const config = { redisOptions: vi.fn(() => ({ host: "fake" })) };
-  const relay = new JobStatusRelayService(config as never, gateway as never, aiRelay, {} as never);
+  const relay = new JobStatusRelayService(config as never, gateway as never, registry, {} as never);
   relay.onModuleInit();
   const qe = created.at(-1);
   if (!qe) throw new Error("QueueEvents 未被建立");
@@ -84,7 +89,7 @@ function setup() {
     sent
       .filter((s) => s.payload.type === "job/status")
       .map((s) => s.payload.status as string);
-  return { relay, aiRelay, gateway, qe, sent, statuses, config };
+  return { relay, registry, aiRelay, gateway, qe, sent, statuses, config };
 }
 
 beforeEach(() => {
@@ -96,6 +101,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const registry of registries.splice(0)) registry.onModuleDestroy();
   vi.useRealTimers();
   vi.restoreAllMocks();
   plog.warn.mockClear();
@@ -115,7 +121,7 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
   });
 
   it("waiting → active → progress(數值) → completed：依序轉發 job/status，progress 保留數值，寬限期滿才刪綁定", async () => {
-    const { qe, aiRelay, sent, relay } = setup();
+    const { qe, registry, sent, relay } = setup();
     qe.emit("waiting", { jobId: JOB_ID });
     qe.emit("active", { jobId: JOB_ID });
     qe.emit("progress", { jobId: JOB_ID, data: 42 });
@@ -131,10 +137,10 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
       { clientId: CLIENT_ID, payload: { ...base, status: "completed" } },
     ]);
     // AR-5：completed 後綁定仍保留，直到寬限期滿（恰差 1 ms 仍在）。
-    vi.advanceTimersByTime(COMPLETED_BINDING_GRACE_MS - 1);
-    expect(aiRelay.getBinding(JOB_ID)).toBeDefined();
+    vi.advanceTimersByTime(TERMINAL_BINDING_GRACE_MS - 1);
+    expect(registry.get(JOB_ID)).toBeDefined();
     vi.advanceTimersByTime(1);
-    expect(aiRelay.getBinding(JOB_ID)).toBeUndefined();
+    expect(registry.get(JOB_ID)).toBeUndefined();
 
     // 綁定已清：之後同一 job 的遲到事件不再轉發。
     qe.emit("active", { jobId: JOB_ID });
@@ -155,7 +161,7 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
       (aiRelay as unknown as AiRelayInternals).handleMessage(`ai-stream:${JOB_ID}`, JSON.stringify(aiDone));
 
     qe.emit("completed", { jobId: JOB_ID });
-    vi.advanceTimersByTime(COMPLETED_BINDING_GRACE_MS - 1);
+    vi.advanceTimersByTime(TERMINAL_BINDING_GRACE_MS - 1);
     publishAiDone();
     expect(sent.map((s) => [s.clientId, s.payload.type])).toEqual([
       [CLIENT_ID, "job/status"],
@@ -170,13 +176,13 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
   });
 
   it("AR-5：寬限內同 jobId 重送 POST /diagnoses → 409「已使用過」（不是 200 waiting），且不影響遲到 ai/done 的轉發", async () => {
-    const { qe, aiRelay, sent, relay } = setup();
+    const { qe, registry, aiRelay, sent, relay } = setup();
     const queue = { getJob: vi.fn(async () => undefined), add: vi.fn(async () => ({})) };
-    const jobs = new JobsService(queue as never, aiRelay, { isAuthorized: () => true });
-    aiRelay.bindJobToClient(JOB_ID, CLIENT_ID, "mixer-01"); // JobsService 先查名冊，須是已知機台
+    const jobs = new JobsService(queue as never, registry, { isAuthorized: () => true });
+    registry.bind(JOB_ID, CLIENT_ID, "mixer-01"); // JobsService 先查名冊，須是已知機台
 
     qe.emit("completed", { jobId: JOB_ID });
-    expect(aiRelay.getBinding(JOB_ID)?.completedAt).toBeDefined();
+    expect(registry.get(JOB_ID)?.terminal?.kind).toBe("completed");
     await expect(
       jobs.createDiagnosis({ jobId: JOB_ID, machineId: "mixer-01", socketId: CLIENT_ID }),
     ).rejects.toMatchObject({ status: 409, message: expect.stringContaining("已使用過") });
@@ -200,25 +206,25 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
     const fakeSetTimeout = globalThis.setTimeout;
     const spy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn: () => void, ms?: number) => {
       const t = fakeSetTimeout(fn, ms);
-      if (ms === COMPLETED_BINDING_GRACE_MS) graceTimers.push(t);
+      if (ms === TERMINAL_BINDING_GRACE_MS) graceTimers.push(t);
       return t;
     });
-    const { qe, aiRelay, relay } = setup();
+    const { qe, registry, relay } = setup();
     qe.emit("completed", { jobId: JOB_ID });
     spy.mockRestore();
     expect(graceTimers).toHaveLength(1);
     expect(graceTimers[0]?.hasRef()).toBe(false);
 
-    aiRelay.deleteBinding(JOB_ID); // 例如孤兒回收
-    aiRelay.bindJobToClient(JOB_ID, "another-client", "cnc-02");
-    vi.advanceTimersByTime(COMPLETED_BINDING_GRACE_MS);
-    expect(aiRelay.getBinding(JOB_ID)).toMatchObject({ clientId: "another-client" });
+    registry.delete(JOB_ID); // 例如孤兒回收
+    registry.bind(JOB_ID, "another-client", "cnc-02");
+    vi.advanceTimersByTime(TERMINAL_BINDING_GRACE_MS);
+    expect(registry.get(JOB_ID)).toMatchObject({ clientId: "another-client" });
     await relay.onModuleDestroy();
   });
 
-  it("failed：先送 ai/error(worker_failed) 帶原因、再送 job/status failed 帶 error，最後刪綁定", async () => {
+  it("failed：先送 ai/error(worker_failed) 帶原因、再送 job/status failed 帶 error，最後標 terminal、寬限期滿才刪（D12）", async () => {
     vi.spyOn(Job, "fromId").mockResolvedValue({ attemptsMade: 2 } as never);
-    const { qe, aiRelay, sent, relay } = setup();
+    const { qe, registry, sent, relay } = setup();
     qe.emit("failed", { jobId: JOB_ID, failedReason: "stalled too many times" });
     await vi.waitFor(() => expect(sent).toHaveLength(2));
 
@@ -238,7 +244,55 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
         error: "stalled too many times",
       },
     ]);
-    expect(aiRelay.getBinding(JOB_ID)).toBeUndefined();
+    expect(registry.get(JOB_ID)?.terminal?.kind).toBe("failed");
+    vi.advanceTimersByTime(TERMINAL_BINDING_GRACE_MS);
+    expect(registry.get(JOB_ID)).toBeUndefined();
+    await relay.onModuleDestroy();
+  });
+
+  it("D12：failed 先於 worker 的 ai/error(persist_failed) 到達 → 寬限內仍轉發到原 client，期滿後不再轉發", async () => {
+    vi.spyOn(Job, "fromId").mockResolvedValue({ attemptsMade: 1 } as never);
+    const { qe, registry, aiRelay, sent, relay } = setup();
+    const persistFailed = {
+      type: "ai/error",
+      jobId: JOB_ID,
+      attempt: 1,
+      code: "persist_failed",
+      message: "診斷結果寫入失敗",
+    };
+    const publishPersistFailed = () =>
+      (aiRelay as unknown as AiRelayInternals).handleMessage(`ai-stream:${JOB_ID}`, JSON.stringify(persistFailed));
+
+    qe.emit("failed", { jobId: JOB_ID, failedReason: "persist failed" });
+    await vi.waitFor(() => expect(sent).toHaveLength(2)); // ai/error(worker_failed) + job/status failed
+    // fake timers 下 vi.waitFor 每輪會推進時間：寬限自標記時刻起算，推到恰差 1 ms。
+    const markedAt = registry.get(JOB_ID)?.terminal?.at ?? Number.NaN;
+    vi.advanceTimersByTime(markedAt + TERMINAL_BINDING_GRACE_MS - 1 - Date.now());
+    publishPersistFailed();
+    expect(sent.at(-1)).toEqual({ clientId: CLIENT_ID, payload: persistFailed });
+
+    vi.advanceTimersByTime(1);
+    publishPersistFailed(); // 寬限已過：綁定已刪，不再轉發
+    expect(sent).toHaveLength(3);
+    await relay.onModuleDestroy();
+  });
+
+  it("D12：failed 寬限內同 jobId 重送 POST /diagnoses → 409「已使用過」，綁定原樣保留", async () => {
+    vi.spyOn(Job, "fromId").mockResolvedValue({ attemptsMade: 1 } as never);
+    const { qe, registry, sent, relay } = setup();
+    const queue = { getJob: vi.fn(async () => undefined), add: vi.fn(async () => ({})) };
+    const jobs = new JobsService(queue as never, registry, { isAuthorized: () => true });
+    registry.bind(JOB_ID, CLIENT_ID, "mixer-01"); // JobsService 先查名冊，須是已知機台
+
+    qe.emit("failed", { jobId: JOB_ID, failedReason: "boom" });
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    const terminal = registry.get(JOB_ID);
+    expect(terminal?.terminal?.kind).toBe("failed");
+    await expect(
+      jobs.createDiagnosis({ jobId: JOB_ID, machineId: "mixer-01", socketId: CLIENT_ID }),
+    ).rejects.toMatchObject({ status: 409, message: expect.stringContaining("已使用過") });
+    expect(queue.add).not.toHaveBeenCalled();
+    expect(registry.get(JOB_ID)).toBe(terminal);
     await relay.onModuleDestroy();
   });
 
@@ -268,20 +322,20 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
   });
 
   it("sweepOrphans：每 60 秒掃描，只回收超過 10 分鐘安全期的綁定（剛好等於安全期不回收）", async () => {
-    const { aiRelay, relay } = setup();
+    const { registry, relay } = setup();
     // 5 分鐘後才綁定的另一個 job：第一個被回收時它仍在安全期內。
     vi.advanceTimersByTime(5 * 60_000);
-    aiRelay.bindJobToClient(OTHER_JOB_ID, CLIENT_ID, "cnc-02");
+    registry.bind(OTHER_JOB_ID, CLIENT_ID, "cnc-02");
 
     // 推到 t = 10 分鐘（第 10 次掃描）：age 恰等於 ORPHAN_TTL_MS，不回收。
     vi.advanceTimersByTime(ORPHAN_TTL_MS - 5 * 60_000);
-    expect(aiRelay.getBinding(JOB_ID)).toBeDefined();
+    expect(registry.get(JOB_ID)).toBeDefined();
     expect(plog.warn).not.toHaveBeenCalled();
 
     // 再一輪掃描（t = 11 分鐘）：超過安全期 → 回收並記 warn（jobId 為獨立欄位）。
     vi.advanceTimersByTime(SWEEP_INTERVAL_MS);
-    expect(aiRelay.getBinding(JOB_ID)).toBeUndefined();
-    expect(aiRelay.getBinding(OTHER_JOB_ID)).toBeDefined();
+    expect(registry.get(JOB_ID)).toBeUndefined();
+    expect(registry.get(OTHER_JOB_ID)).toBeDefined();
     expect(plog.warn).toHaveBeenCalledTimes(1);
     expect(plog.warn).toHaveBeenCalledWith({ jobId: JOB_ID }, "swept orphan job binding");
     await relay.onModuleDestroy();
@@ -307,21 +361,22 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
     await relay.onModuleDestroy();
   });
 
-  it("onModuleDestroy 停止計時器（含 completed 寬限）並關閉 QueueEvents：之後推時間不再回收或補送", async () => {
-    const { qe, aiRelay, gateway, relay } = setup();
+  it("onModuleDestroy（relay 與 registry）停止計時器（含終態寬限）並關閉 QueueEvents：之後推時間不再回收或補送", async () => {
+    const { qe, registry, gateway, relay } = setup();
     qe.emit("delayed", { jobId: JOB_ID, delay: Date.now() + ORPHAN_TTL_MS * 2 });
-    aiRelay.bindJobToClient(OTHER_JOB_ID, CLIENT_ID, "cnc-02");
+    registry.bind(OTHER_JOB_ID, CLIENT_ID, "cnc-02");
     qe.emit("completed", { jobId: OTHER_JOB_ID });
     gateway.send.mockClear();
     await relay.onModuleDestroy();
+    registry.onModuleDestroy();
     expect(qe.close).toHaveBeenCalledTimes(1);
     expect(qe.disconnect).not.toHaveBeenCalled(); // 如期關閉：不需強制斷線
     expect(vi.getTimerCount()).toBe(0);
 
     vi.advanceTimersByTime(ORPHAN_TTL_MS + SWEEP_INTERVAL_MS);
     expect(gateway.send).not.toHaveBeenCalled();
-    expect(aiRelay.getBinding(JOB_ID)).toBeDefined();
-    expect(aiRelay.getBinding(OTHER_JOB_ID)).toBeDefined();
+    expect(registry.get(JOB_ID)).toBeDefined();
+    expect(registry.get(OTHER_JOB_ID)).toBeDefined();
   });
 
   it("API-12：QueueEvents.close() 卡住（Redis 不可達）→ 逾 RELAY_CLOSE_DEADLINE_MS 改 disconnect()，destroy 如期返回", async () => {

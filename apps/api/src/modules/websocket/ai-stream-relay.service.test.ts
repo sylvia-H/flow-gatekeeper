@@ -19,13 +19,18 @@ vi.mock("ioredis", () => ({
 
 const { AiStreamRelayService } = await import("./ai-stream-relay.service.js");
 const { RELAY_CLOSE_DEADLINE_MS } = await import("./relay-close.js");
+const { JobRoutingRegistry } = await import("./job-routing-registry.js");
 
 const fire = (event: string, ...args: unknown[]): void => {
   for (const l of listeners.get(event) ?? []) l(...args);
 };
 
 function makeRelay() {
-  const relay = new AiStreamRelayService({ redisOptions: () => ({}) } as never, { send: vi.fn() } as never);
+  const relay = new AiStreamRelayService(
+    { redisOptions: () => ({}) } as never,
+    { send: vi.fn() } as never,
+    new JobRoutingRegistry(),
+  );
   relay.onModuleInit();
   return relay;
 }
@@ -48,7 +53,7 @@ describe("AiStreamRelayService.onModuleInit", () => {
   it("psubscribe 被 reject 時自行吸收，不變成浮空 rejection（否則會被致命守門 exit(1)）", async () => {
     process.on("unhandledRejection", onUnhandled);
     const config = { redisOptions: () => ({}) };
-    const relay = new AiStreamRelayService(config as never, { send: vi.fn() } as never);
+    const relay = new AiStreamRelayService(config as never, { send: vi.fn() } as never, new JobRoutingRegistry());
     relay.onModuleInit();
     // 讓 rejection 與 unhandledRejection 偵測都有機會跑完。
     await new Promise((r) => setTimeout(r, 20));

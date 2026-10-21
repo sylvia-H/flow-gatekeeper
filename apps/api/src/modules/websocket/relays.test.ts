@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Job } from "bullmq";
 import { AiStreamRelayService } from "./ai-stream-relay.service.js";
 import { JobStatusRelayService } from "./job-status-relay.service.js";
+import { JobRoutingRegistry, TERMINAL_BINDING_GRACE_MS } from "./job-routing-registry.js";
 import { attachThrottledErrorLog, bullmqConnection } from "../../lib/connection-error-throttle.js";
 
 const JOB_ID = "0e6c2b7a-1f3d-4d8e-a9b0-c1d2e3f4a5b6";
@@ -14,19 +15,21 @@ type StatusRelayInternals = { handleFailed(jobId: string, failedReason: string):
 
 function makeAiRelay() {
   const gateway = { send: vi.fn() };
-  const relay = new AiStreamRelayService({} as never, gateway as never);
-  relay.bindJobToClient(JOB_ID, CLIENT_ID, "cnc-01");
+  const registry = new JobRoutingRegistry();
+  const relay = new AiStreamRelayService({} as never, gateway as never, registry);
+  registry.bind(JOB_ID, CLIENT_ID, "cnc-01");
   const handle = (channel: string, payload: unknown) =>
     (relay as unknown as AiRelayInternals).handleMessage(
       channel,
       typeof payload === "string" ? payload : JSON.stringify(payload),
     );
-  return { relay, gateway, handle };
+  return { relay, registry, gateway, handle };
 }
 
 const validToken = { type: "ai/token", jobId: JOB_ID, attempt: 1, seq: 0, text: "hi" };
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -67,25 +70,26 @@ describe("JobStatusRelayService.handleFailed", () => {
     const gateway = {
       send: vi.fn((_clientId: string, payload: { type: string }) => calls.push(payload.type)),
     };
-    const aiRelay = new AiStreamRelayService({} as never, gateway as never);
-    aiRelay.bindJobToClient(JOB_ID, CLIENT_ID, "cnc-01");
-    const originalDelete = aiRelay.deleteBinding.bind(aiRelay);
-    vi.spyOn(aiRelay, "deleteBinding").mockImplementation((jobId) => {
-      calls.push("deleteBinding");
-      originalDelete(jobId);
+    const registry = new JobRoutingRegistry();
+    const aiRelay = new AiStreamRelayService({} as never, gateway as never, registry);
+    registry.bind(JOB_ID, CLIENT_ID, "cnc-01");
+    const originalMarkTerminal = registry.markTerminal.bind(registry);
+    vi.spyOn(registry, "markTerminal").mockImplementation((jobId, kind, now) => {
+      calls.push(`markTerminal:${kind}`);
+      originalMarkTerminal(jobId, kind, now);
     });
-    const statusRelay = new JobStatusRelayService({} as never, gateway as never, aiRelay, {} as never);
+    const statusRelay = new JobStatusRelayService({} as never, gateway as never, registry, {} as never);
     const handleFailed = (reason: string) =>
       (statusRelay as unknown as StatusRelayInternals).handleFailed(JOB_ID, reason);
-    return { gateway, aiRelay, calls, handleFailed };
+    return { gateway, aiRelay, registry, calls, handleFailed };
   }
 
-  it("依序送 ai/error → job/status failed → deleteBinding，attempt 取 attemptsMade", async () => {
+  it("依序送 ai/error → job/status failed → markTerminal(failed)，attempt 取 attemptsMade", async () => {
     vi.spyOn(Job, "fromId").mockResolvedValue({ attemptsMade: 3 } as never);
-    const { gateway, aiRelay, calls, handleFailed } = makeStatusRelay();
+    const { gateway, registry, calls, handleFailed } = makeStatusRelay();
     await handleFailed("boom");
 
-    expect(calls).toEqual(["ai/error", "job/status", "deleteBinding"]);
+    expect(calls).toEqual(["ai/error", "job/status", "markTerminal:failed"]);
     expect(gateway.send).toHaveBeenNthCalledWith(1, CLIENT_ID, {
       type: "ai/error",
       jobId: JOB_ID,
@@ -100,7 +104,8 @@ describe("JobStatusRelayService.handleFailed", () => {
       status: "failed",
       error: "boom",
     });
-    expect(aiRelay.getBinding(JOB_ID)).toBeUndefined();
+    // D12：failed 不再立即刪綁定，改標 terminal 保留寬限。
+    expect(registry.get(JOB_ID)?.terminal?.kind).toBe("failed");
   });
 
   it("查詢 attemptsMade 失敗 → attempt 回退 1，仍照常通知與清理", async () => {
@@ -108,21 +113,44 @@ describe("JobStatusRelayService.handleFailed", () => {
     const { gateway, calls, handleFailed } = makeStatusRelay();
     await handleFailed("boom");
 
-    expect(calls).toEqual(["ai/error", "job/status", "deleteBinding"]);
+    expect(calls).toEqual(["ai/error", "job/status", "markTerminal:failed"]);
     expect(gateway.send.mock.calls[0]?.[1]).toMatchObject({ type: "ai/error", attempt: 1 });
   });
 
-  it("failed 不給寬限（AR-5 寬限只用在 completed）：刪綁定後遲到的 ai/* 不再轉發", async () => {
+  it("D12：failed 後 10 s 寬限內遲到的 ai/error(persist_failed) 仍轉發到原連線，期滿後不再轉發", async () => {
+    vi.useFakeTimers();
     vi.spyOn(Job, "fromId").mockResolvedValue({ attemptsMade: 1 } as never);
-    const { gateway, aiRelay, handleFailed } = makeStatusRelay();
+    const { gateway, aiRelay, registry, handleFailed } = makeStatusRelay();
     await handleFailed("boom");
-    expect(aiRelay.getBinding(JOB_ID)).toBeUndefined();
     gateway.send.mockClear();
-    (aiRelay as unknown as AiRelayInternals).handleMessage(
-      `ai-stream:${JOB_ID}`,
-      JSON.stringify({ type: "ai/error", jobId: JOB_ID, attempt: 1, code: "provider_error", message: "late" }),
-    );
+    const late = { type: "ai/error", jobId: JOB_ID, attempt: 1, code: "persist_failed", message: "late" };
+    const publishLate = () =>
+      (aiRelay as unknown as AiRelayInternals).handleMessage(`ai-stream:${JOB_ID}`, JSON.stringify(late));
+
+    vi.advanceTimersByTime(TERMINAL_BINDING_GRACE_MS - 1);
+    publishLate();
+    expect(gateway.send).toHaveBeenCalledWith(CLIENT_ID, late);
+
+    vi.advanceTimersByTime(1);
+    expect(registry.isBound(JOB_ID)).toBe(false);
+    gateway.send.mockClear();
+    publishLate();
     expect(gateway.send).not.toHaveBeenCalled();
+  });
+
+  it("查詢 attemptsMade 期間綁定被改綁（GET rebind）→ ai/error 與 job/status failed 都送到新連線", async () => {
+    const NEW_CLIENT = "7c2e4d6f-1a3b-4c5d-8e9f-0a1b2c3d4e5f";
+    const { gateway, registry, handleFailed } = makeStatusRelay();
+    vi.spyOn(Job, "fromId").mockImplementation(async () => {
+      registry.rebind(JOB_ID, NEW_CLIENT);
+      return { attemptsMade: 2 } as never;
+    });
+    await handleFailed("boom");
+
+    expect(gateway.send.mock.calls.map(([clientId, payload]) => [clientId, payload.type])).toEqual([
+      [NEW_CLIENT, "ai/error"],
+      [NEW_CLIENT, "job/status"],
+    ]);
   });
 
   it("job 已被清除（fromId 回 undefined）→ attempt 回退 1", async () => {
@@ -142,13 +170,13 @@ describe("JobStatusRelayService delayed keepalive", () => {
 
   function makeRelay() {
     const gateway = { send: vi.fn() };
-    const aiRelay = new AiStreamRelayService({} as never, gateway as never);
-    aiRelay.bindJobToClient(JOB_ID, CLIENT_ID, "cnc-01");
-    const statusRelay = new JobStatusRelayService({} as never, gateway as never, aiRelay, {} as never);
+    const registry = new JobRoutingRegistry();
+    registry.bind(JOB_ID, CLIENT_ID, "cnc-01");
+    const statusRelay = new JobStatusRelayService({} as never, gateway as never, registry, {} as never);
     const internals = statusRelay as unknown as DelayedInternals;
     const statuses = () =>
       gateway.send.mock.calls.map((c) => (c[1] as { status?: string }).status);
-    return { gateway, aiRelay, internals, statuses };
+    return { gateway, registry, internals, statuses };
   }
 
   it("限流延後：立即送 waiting，延後期間每輪補送，到期逾寬限後停止", () => {
@@ -171,9 +199,9 @@ describe("JobStatusRelayService delayed keepalive", () => {
   });
 
   it("綁定已清除（終態或孤兒回收）→ 不補送", () => {
-    const { aiRelay, internals, gateway } = makeRelay();
+    const { registry, internals, gateway } = makeRelay();
     internals.handleDelayed(JOB_ID, 60_000);
-    aiRelay.deleteBinding(JOB_ID);
+    registry.delete(JOB_ID);
     gateway.send.mockClear();
     internals.keepDelayedAlive(15_000);
     expect(gateway.send).not.toHaveBeenCalled();

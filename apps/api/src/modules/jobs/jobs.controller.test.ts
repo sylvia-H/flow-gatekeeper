@@ -113,9 +113,9 @@ describe("JobsController.create", () => {
     const add = vi.fn(async () => ({}));
     const queue = { getJob: vi.fn(async () => undefined), add } as unknown as Queue<DiagnosisJobPayload>;
     const bindings = {
-      bindJobToClient: vi.fn(),
-      getBinding: () => undefined,
-      deleteBinding: vi.fn(),
+      bind: vi.fn(),
+      get: () => undefined,
+      delete: vi.fn(),
     };
     const presence = { isAuthorized: () => true };
     const controller = new JobsController(new JobsService(queue, bindings, presence));
@@ -123,7 +123,7 @@ describe("JobsController.create", () => {
     expect(err).toBeInstanceOf(NotFoundException);
     expect((err as NotFoundException).getStatus()).toBe(404);
     expect(add).not.toHaveBeenCalled();
-    expect(bindings.bindJobToClient).not.toHaveBeenCalled();
+    expect(bindings.bind).not.toHaveBeenCalled();
 
     await expect(
       controller.create(JSON_TYPE, { machineId: "mixer-01", socketId: SOCKET_ID }),
@@ -135,9 +135,9 @@ describe("JobsController.create", () => {
     const add = vi.fn(async () => ({}));
     const queue = { getJob: vi.fn(async () => undefined), add } as unknown as Queue<DiagnosisJobPayload>;
     const bindings = {
-      bindJobToClient: vi.fn(),
-      getBinding: () => undefined,
-      deleteBinding: vi.fn(),
+      bind: vi.fn(),
+      get: () => undefined,
+      delete: vi.fn(),
     };
     const authorized = new Set<string>();
     const presence = { isAuthorized: (clientId: string) => authorized.has(clientId) };
@@ -146,12 +146,12 @@ describe("JobsController.create", () => {
     expect(err).toBeInstanceOf(ConflictException);
     expect((err as ConflictException).getStatus()).toBe(409);
     expect(add).not.toHaveBeenCalled();
-    expect(bindings.bindJobToClient).not.toHaveBeenCalled();
+    expect(bindings.bind).not.toHaveBeenCalled();
 
     authorized.add(SOCKET_ID);
     await expect(
       controller.create(JSON_TYPE, { machineId: "mixer-01", socketId: SOCKET_ID }),
     ).resolves.toMatchObject({ machineId: "mixer-01", status: "waiting" });
-    expect(bindings.bindJobToClient).toHaveBeenCalledTimes(1);
+    expect(bindings.bind).toHaveBeenCalledTimes(1);
   });
 });
