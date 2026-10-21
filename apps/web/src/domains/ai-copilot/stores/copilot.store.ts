@@ -71,7 +71,7 @@ export type LookupPurpose = "resume" | "undelivered" | "watchdog";
 
 /**
  * GET 取不到結果時（非 2xx、網路錯誤、逾時、格式不符，或手上沒有 socketId）依用途對映的使用者文案（ui-copy §3）。
- * 回 failed 時不走這裡（一律 `humanizeError(error)`）；`undelivered` 的 waiting／active 也對映成 `UNDELIVERED_ERROR`（P21），
+ * GET 回 failed 時不走這裡，一律交給 reducer 的 `humanizeFailure`；`undelivered` 的 waiting／active 也對映成 `UNDELIVERED_ERROR`（P21），
  * 由呼叫端處理。純函式，便於單元測試。
  */
 export function lookupFailureMessage(purpose: LookupPurpose, err: unknown): string {

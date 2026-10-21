@@ -225,7 +225,7 @@ components:
 
 整個監控台是一張冷色的實驗桌：桌面鋪著 24px 的極細格線，桌邊（rail 與工具列）是比桌面更深一階的鋼灰，面板是一片片放在桌上的磨砂白玻璃——72% 不透明的白、1px 的桌邊色細框、內側上緣一條 1px 高光，格線隱約從玻璃後透出。玻璃沒有模糊、沒有光暈、沒有投影；它「在桌上」這件事靠的是框線與高光，不是陰影。數字像量筒的液面一樣沿著蝕刻刻度讀取：背壓帶的下緣是一支 0–60 的比值刻度，25% 深青的液柱自 0 斟到合併比、液位線停在液面上，1:1 錨點與近 60 秒最高水位各一條 ink-3 短線作參照；每張機台卡片的四個數值旁都有三格蝕刻小刻度，超標時刻度與數字一起換成狀態色；事件列每行左側一條蝕刻短線依嚴重度上色。
 
-密度中高、語氣穩重：面板間距 12px、面板內距 14px，所有機器產生的值（id、數值、時間、串流）一律 JetBrains Mono 等寬並開 `tabular-nums`，人寫的標籤與說明用 Source Sans 3 配 Noto Sans TC；UI 文案一律繁體中文，只有機台 id、單位、`Mock`／`AI`／`WS`、queue 名與 LLM 輸出保留英文。整個畫面只有一種 accent（深青）：它擁有主要動作、選取、液位線與串流游標，其餘一切都是墨色三階與桌邊灰。狀態三色（正常綠、警告琥珀、嚴重紅）只出現在刻度、液位線、徽章與邊框，從不當作大面積底色——嚴重卡片的 crit-bg 是唯一例外，而且它仍是 80% 透明、透得出格線。
+密度中高、語氣穩重：面板間距 12px、面板內距 14px，所有機器產生的值（id、數值、時間、串流）一律 JetBrains Mono 等寬並開 `tabular-nums`，人寫的標籤與說明用 Source Sans 3 配 Noto Sans TC；UI 文案一律繁體中文，只有機台 id、單位、`Mock`／`AI`／`WS`、queue 名、LLM 輸出與失敗態「技術細節」裡的錯誤原文保留英文。整個畫面只有一種 accent（深青）：它擁有主要動作、選取、液位線與串流游標，其餘一切都是墨色三階與桌邊灰。狀態三色（正常綠、警告琥珀、嚴重紅）只出現在刻度、液位線、徽章與邊框，從不當作大面積底色——嚴重卡片的 crit-bg 是唯一例外，而且它仍是 80% 透明、透得出格線。
 
 淺色為首次載入預設、深色為次要（深鋼灰桌面與煙燻玻璃，同一組 token 名換值），切換只改 `<html data-theme>` 一個屬性並在那一幀停用所有過渡。明確拒絕的東西（direction contract OWN-WORLD 與 PRODUCT.md）：`backdrop-filter`、光暈（零位移外擴陰影）、色彩漸層（唯一例外是桌面格線的兩道 1px 實線）、超過 6px 的一般圓角、大面積紫色漸層與裝飾光球、Argo CD 品牌資產、landing page 式首屏。
 
@@ -286,7 +286,7 @@ components:
 - **Heading**（600, 16px/24px）：卡片機台中文名、Copilot 標頭「AI 診斷」與面板內機台名、進行中的進度百分比（mono 500）。
 - **Body**（400, 14px/20px）：按鈕文字（600）、搜尋框、事件訊息、結果摘要與條列（`leading-relaxed`）、stage 標題與面板區段標頭（600、ink-2；stage 標題在 < md 升為 16px，手機單欄堆疊時作區段分界）。全站 `body` base 字級即此階（14px）。
 - **Label**（400, 12px/16px）：數值標籤、meta、刻度數字（mono）、走勢「近 60 秒」；徽章、chip、異常標記、「主題」與 peek 條的「AI 診斷」用 600。**12px 是最小功能性字級**，10／11px 已退役。
-- **Mono**（400, 12px/16px, mono tabular）：machine id、時間戳、單位、事件時刻與合併列的起訖「HH:mm:ss–HH:mm:ss」、暫停橫幅的「暫停於 HH:mm:ss」、`N/50`、`×N`、刻度數字與「1:1」、證據摘錄、原始串流、快捷鍵 kbd。
+- **Mono**（400, 12px/16px, mono tabular）：machine id、時間戳、單位、事件時刻與合併列的起訖「HH:mm:ss–HH:mm:ss」、暫停橫幅的「暫停於 HH:mm:ss」、`N/50`、`×N`、刻度數字與「1:1」、證據摘錄、原始串流、失敗態「技術細節」的錯誤原文、快捷鍵 kbd。
 
 ### Named Rules
 **The Machine-Speaks-Mono Rule.** 凡是 id、數值、時間、單位、log、AI 原始輸出，一律 JetBrains Mono + `tabular-nums`；凡是人寫的標籤與說明，一律 sans。
@@ -339,7 +339,7 @@ components:
 - **Secondary**（Copilot「中止診斷」／「再次診斷」、暫停橫幅「恢復」）：精簡的 Tool 鈕 `rounded-control border-edge bg-surface/72 px-2.5 py-1 text-sm font-medium text-ink shadow-glass`，hover `bg-rim/60`，停用 `bg-rim text-ink-3`；橫幅內的「恢復」為 28px 高 `bg-surface-strong font-semibold` 配 `Play` 圖示，hover `border-etch bg-surface`。完成態的「再次診斷」是次要鈕：主角是結果本身，不與失敗態的主要「重試」搶層級。
 - **Icon-only**（關閉、確認異常（`Check`）、卡片右下診斷、收合把手）：`p-1.5` 或 `h-7 w-7`／`h-8 w-8`，`text-ink-2`／`text-ink-3`，hover 轉 `text-ink` 或 `text-accent`、底轉 `bg-surface/72` 或 `bg-rim`；卡片上的那顆預設 `opacity-0`，hover／focus-within 或無 hover 裝置時顯示，並有 `bg-surface-strong border-edge` 底。
 - **Segmented**（主題切換「淺色｜深色」）：兩段各自帶 1px edge 框、高 32px，選中段 `bg-ink text-surface-strong font-semibold`，未選 `bg-surface/72 text-ink-2`；焦點環 `ring-offset-2 ring-offset-rim`。
-- **Disclosure**（原始串流展開、「還有 N 筆」）：無底無框的 14px 文字鈕，`text-ink-2` hover `text-ink`；「還有 N 筆」帶 `decoration-etch` 底線。
+- **Disclosure**（原始串流展開、「還有 N 筆」）：無底無框的 14px 文字鈕，`text-ink-2` hover `text-ink`；「還有 N 筆」帶 `decoration-etch` 底線。失敗態的「技術細節」是較小一階的變體：12px `text-ink-3` hover `text-ink-2`、尾隨 14px `ChevronDown`，緊貼在失敗訊息下方、預設收合，展開後原文放在內凹區塊（mono 12px `text-ink-2`、`break-words`）；只在主訊息改顯通用句「診斷失敗，請重試。」而原文是短的英文句時出現（`fix/20261022-ui-humanize-error-zh`）。用按鈕＋`aria-expanded`，不用 `<details>`（焦點陷阱的 `FOCUSABLE_SELECTOR` 不含 `summary`，Tab 循環會跳過它）。
 - **Focus:** 全站 `focus:outline-none focus-visible:ring-2 focus-visible:ring-focus`；列表列與捲動區用 `ring-inset`。
 
 ### Chips（pill）

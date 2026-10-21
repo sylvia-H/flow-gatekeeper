@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DiagnosisResult, JobStatus } from "@flow-gatekeeper/contracts";
 import {
+  GENERIC_DIAGNOSIS_ERROR,
   LOOKUP_DISCONNECTED_ERROR,
   LOOKUP_ELSEWHERE_ERROR,
   LOOKUP_EXPIRED_ERROR,
@@ -14,6 +15,7 @@ import {
   WATCHDOG_UNKNOWN_ERROR,
   copilotReducer,
   humanizeError,
+  humanizeFailure,
   isLookupInProgress,
   isStaleJobEvent,
   isUndeliveredFailure,
@@ -832,12 +834,62 @@ describe("humanizeError（FR-007 可讀訊息，非原始堆疊）", () => {
   it("schema code → 友善句（不論原文多長）", () => {
     expect(humanizeError("ZodError: ...\n at parse", "schema_invalid")).toBe("AI 回傳格式不符，請重試。");
   });
-  it("未知短訊息 → 沿用原文", () => {
-    expect(humanizeError("Worker crashed unexpectedly")).toBe("Worker crashed unexpectedly");
+  it("未知英文短句 → 通用繁中句，不照顯英文原文（fix/20261022-ui-humanize-error-zh）", () => {
+    expect(humanizeError("Worker crashed unexpectedly")).toBe(GENERIC_DIAGNOSIS_ERROR);
+    expect(GENERIC_DIAGNOSIS_ERROR).toBe("診斷失敗，請重試。");
   });
-  it("未知長／多行堆疊 → 通用句", () => {
+  it("未知中文短句 → 照顯原文", () => {
+    expect(humanizeError("  機台名冊載入失敗  ")).toBe("機台名冊載入失敗");
+    expect(humanizeError("Mongo 寫入被拒")).toBe("Mongo 寫入被拒");
+  });
+  it("未知長／多行堆疊 → 通用句（含中文也一樣）", () => {
     expect(humanizeError("Error x\n".repeat(30))).toBe("診斷失敗，請重試。");
+    expect(humanizeError("錯誤\n    at worker.ts:1")).toBe("診斷失敗，請重試。");
+    expect(humanizeError("中".repeat(120))).toBe("診斷失敗，請重試。");
     expect(humanizeError(undefined)).toBe("診斷失敗，請重試。");
+  });
+});
+
+describe("humanizeFailure（失敗態 error＋技術細節；fix/20261022-ui-humanize-error-zh）", () => {
+  it("未知英文短句 → 通用句，原文（trim 後）放 errorDetail", () => {
+    expect(humanizeFailure("  Worker crashed unexpectedly ")).toEqual({
+      error: GENERIC_DIAGNOSIS_ERROR,
+      errorDetail: "Worker crashed unexpectedly",
+    });
+  });
+  it("命中已知簽章 → 只帶固定句，不帶 errorDetail（含 012 兩條）", () => {
+    expect(humanizeFailure("request timed out")).toEqual({ error: "AI 診斷逾時，請重試。" });
+    expect(humanizeFailure("x", "persist_failed")).toEqual({ error: PERSIST_FAILED_ERROR });
+    expect(humanizeFailure("job stalled more than allowable limit")).toEqual({ error: STALLED_LIMIT_ERROR });
+  });
+  it("worker 空脈絡短路（no_context）的中文訊息 → 照顯、不帶 errorDetail", () => {
+    // 照抄 apps/worker/src/processor.ts 的 NO_CONTEXT_MESSAGE（web 不能 import worker）；含漢字照顯的實際正式訊息。
+    const NO_CONTEXT_MESSAGE = "此機台近期沒有遙測、異常事件或維修紀錄，無資料可供診斷（未呼叫 AI）";
+    expect(humanizeFailure(NO_CONTEXT_MESSAGE, "no_context")).toEqual({ error: NO_CONTEXT_MESSAGE });
+  });
+  it("中文短句 → 照顯、不重複放 errorDetail（原文剛好是通用句也一樣）", () => {
+    expect(humanizeFailure("機台名冊載入失敗")).toEqual({ error: "機台名冊載入失敗" });
+    expect(humanizeFailure(GENERIC_DIAGNOSIS_ERROR)).toEqual({ error: GENERIC_DIAGNOSIS_ERROR });
+  });
+  it("長堆疊／多行／空 → 通用句、不帶 errorDetail（長原文不上畫面，FR-007）", () => {
+    expect(humanizeFailure("Error x\n".repeat(30))).toEqual({ error: GENERIC_DIAGNOSIS_ERROR });
+    expect(humanizeFailure("E".repeat(120))).toEqual({ error: GENERIC_DIAGNOSIS_ERROR });
+    expect(humanizeFailure(undefined)).toEqual({ error: GENERIC_DIAGNOSIS_ERROR });
+    expect(humanizeFailure("   ")).toEqual({ error: GENERIC_DIAGNOSIS_ERROR });
+  });
+  it("reducer 三條失敗路徑（ai/error、job/status failed、lookup failed）都帶上 errorDetail", () => {
+    const events: CopilotEvent[] = [
+      { type: "ai/error", jobId: "job-1", attempt: 1, code: "worker_failed", message: "boom" },
+      { type: "job/status", jobId: "job-1", machineId: "mixer-01", status: "failed", error: "boom" },
+      { type: "lookup/result", jobId: "job-1", response: { status: "failed", jobId: "job-1", error: "boom" } },
+    ];
+    for (const event of events) {
+      expect(copilotReducer(active(), event)).toMatchObject({
+        status: "failed",
+        error: GENERIC_DIAGNOSIS_ERROR,
+        errorDetail: "boom",
+      });
+    }
   });
 });
 

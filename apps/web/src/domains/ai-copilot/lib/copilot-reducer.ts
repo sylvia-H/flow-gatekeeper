@@ -86,6 +86,11 @@ export type CopilotJobState =
       streamText: string;
       error: string;
       /**
+       * 未能分類的錯誤原文（`fix/20261022-ui-humanize-error-zh`；只由 `humanizeFailure` 設起）：`error` 改顯通用句時，
+       * 短原文（< 120 字、單行、不含漢字（`\p{Script=Han}`））收在失敗態預設收合的「技術細節」裡供排錯，不再當主訊息照顯英文。
+       */
+      errorDetail?: string;
+      /**
        * 失敗原因標記（web 內部呈現狀態，不是通訊契約）。`"undelivered"`：後端已回報
        * `job/status: completed`，但寬限期內等不到同 jobId 的結果（store `checkStalls` 判定）。
        * 只有這一種失敗允許同 jobId 遲到的結果（`ai/done`、帶 `result` 的 `job/status: completed`）把狀態
@@ -157,10 +162,25 @@ export function STALLED_NOTICE(n: number): string {
   return `後端處理程序中斷，任務已重新排入佇列（第 ${n} 次執行）`;
 }
 
+/** 未能分類的錯誤一律顯示的通用句（FR-007）。 */
+export const GENERIC_DIAGNOSIS_ERROR = "診斷失敗，請重試。";
+
+/**
+ * 原文含漢字即視為已是中文訊息，可直接給使用者看——目前實際走這條的是 worker 空脈絡短路的
+ * `no_context` 訊息（`apps/worker/src/processor.ts` `NO_CONTEXT_MESSAGE`）。
+ */
+const HAN_RE = /\p{Script=Han}/u;
+
+/** 短（< 120 字）且單行的原文：不是長堆疊或多行 JSON，才有給人看的價值。 */
+function isShortSingleLine(msg: string): boolean {
+  return msg.length > 0 && msg.length < 120 && !msg.includes("\n");
+}
+
 /**
  * 把 provider／worker 原始錯誤對應成簡潔的使用者訊息（FR-007「非原始堆疊之可讀訊息」）。
- * 命中已知簽章 → 對應友善句；否則短原文（<120 字、非多行堆疊）沿用，過長／堆疊 → 通用句。
- * 純函式，決定性、便於單元測試。
+ * 命中已知簽章 → 對應友善句；未知錯誤只在原文已是中文（含漢字）且短（< 120 字、單行）時照顯，
+ * 其餘（英文原文、過長、多行堆疊）→ 通用句（`fix/20261022-ui-humanize-error-zh`：畫面文案一律繁中；
+ * 英文短原文改由 `humanizeFailure` 放進「技術細節」）。純函式，決定性、便於單元測試。
  */
 export function humanizeError(raw: string | undefined, code?: string): string {
   const msg = (raw ?? "").trim();
@@ -183,9 +203,26 @@ export function humanizeError(raw: string | undefined, code?: string): string {
   if (hay.includes("econn") || hay.includes("network") || hay.includes("fetch") || hay.includes("socket") || hay.includes("enotfound"))
     return "無法連線 AI 服務，請稍後重試。";
 
-  // 未知錯誤：短且非多行堆疊 → 沿用原文；否則通用句（避免把長堆疊/JSON 丟給使用者）。
-  if (msg.length > 0 && msg.length < 120 && !msg.includes("\n")) return msg;
-  return "診斷失敗，請重試。";
+  // 未知錯誤：已是中文的短句照顯；英文原文、長堆疊／JSON 一律通用句（畫面文案一律繁中）。
+  if (isShortSingleLine(msg) && HAN_RE.test(msg)) return msg;
+  return GENERIC_DIAGNOSIS_ERROR;
+}
+
+/**
+ * 失敗態的錯誤欄位：`error` 同 `humanizeError`；未知錯誤改顯通用句、而原文是短的單行非中文訊息時，
+ * 另帶 `errorDetail`＝原文，由 drawer 收在預設收合的「技術細節」裡供排錯（本分支以前這段原文直接當主訊息顯示）。
+ * 長堆疊／多行 JSON 維持不上畫面（FR-007），只留後端日誌。
+ */
+export function humanizeFailure(
+  raw: string | undefined,
+  code?: string,
+): { error: string; errorDetail?: string } {
+  const error = humanizeError(raw, code);
+  const msg = (raw ?? "").trim();
+  if (error === GENERIC_DIAGNOSIS_ERROR && isShortSingleLine(msg) && !HAN_RE.test(msg)) {
+    return { error, errorDetail: msg };
+  }
+  return { error };
 }
 
 /**
@@ -428,7 +465,7 @@ function reduceActive(state: Extract<CopilotJobState, { status: "active" }>, eve
           machineId: state.machineId,
           jobId: state.jobId,
           streamText: state.streamText,
-          error: humanizeError(event.error),
+          ...humanizeFailure(event.error),
         };
       }
       // 帶 result 的 completed 是權威完成（ADR-003 D3）：Pub/Sub 斷線、ai/done 遺失時畫面照樣收尾。
@@ -473,7 +510,7 @@ function reduceActive(state: Extract<CopilotJobState, { status: "active" }>, eve
         machineId: state.machineId,
         jobId: state.jobId,
         streamText: streamTextFor(state, event.attempt),
-        error: humanizeError(event.message, event.code),
+        ...humanizeFailure(event.message, event.code),
       };
 
     case "lookup/result": {
@@ -493,7 +530,7 @@ function reduceActive(state: Extract<CopilotJobState, { status: "active" }>, eve
             machineId: state.machineId,
             jobId: state.jobId,
             streamText: state.streamText,
-            error: humanizeError(response.error),
+            ...humanizeFailure(response.error),
           };
         case "waiting":
         case "active": {
