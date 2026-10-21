@@ -14,6 +14,7 @@ import type {
   DiagnosisJobReturnValue,
   DiagnosisResult,
 } from "@flow-gatekeeper/contracts";
+import { AiProviderError } from "../ai/provider.js";
 import type { AiProvider, AiStreamRequest, AiStreamResult } from "../ai/provider.js";
 import { createRedisStore } from "../cache/redis-store.js";
 import type { DiagnosisContext } from "../context/context-builder.js";
@@ -87,7 +88,13 @@ class MemoryRepo implements DiagnosisRepository {
 class OneShotAi implements AiProvider {
   readonly id = "int-lifecycle";
   readonly model = `int-lifecycle-${RUN_ID}`; // 每輪不同：不會命中前一輪留下的快取
+  /** 接下來幾次呼叫以可重試的 provider 錯誤失敗（每次遞減）。 */
+  failNext = 0;
   async streamDiagnosis(req: AiStreamRequest): Promise<AiStreamResult> {
+    if (this.failNext > 0) {
+      this.failNext -= 1;
+      throw new AiProviderError("503 overloaded", { retryable: true, code: "provider_error" });
+    }
     const text = JSON.stringify(VALID_RESULT);
     req.onToken(text.slice(0, 10));
     req.onToken(text.slice(10));
@@ -101,6 +108,7 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("BullMQ lifecycle × 真 Redi
   let queue: Queue<DiagnosisJobPayload, DiagnosisJobReturnValue>;
   let events: QueueEvents;
   let worker: Worker<DiagnosisJobPayload, DiagnosisJobReturnValue>;
+  const ai = new OneShotAi();
 
   beforeAll(async () => {
     if (!INTEGRATION_DB_VALID) {
@@ -132,7 +140,7 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("BullMQ lifecycle × 真 Redi
         store: createRedisStore(storeRedis),
         publisher,
         repo: new MemoryRepo(),
-        ai: new OneShotAi(),
+        ai,
         buildContext: async () => CONTEXT,
         logger: silentLogger,
         metrics: { recordCacheHit: () => {}, recordCacheMiss: () => {}, recordLatency: () => {} },
@@ -204,7 +212,6 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("BullMQ lifecycle × 真 Redi
     events.off("progress", onProgress);
 
     expect(DiagnosisJobReturnValueSchema.parse(returnvalue)).toEqual({ result: VALID_RESULT, cached: false });
-    expect(progress.length).toBeGreaterThanOrEqual(5);
     const parsed = progress.map((p) => DiagnosisJobProgressSchema.parse(p));
     expect(parsed.map((p) => p.value)).toEqual([0, 20, 40, 60, 80, 100]);
     expect(parsed.every((p) => p.attempt === 1 && p.execution === 1)).toBe(true);
@@ -213,5 +220,45 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("BullMQ lifecycle × 真 Redi
     const job = await queue.getJob(jobId);
     expect(DiagnosisJobProgressSchema.parse(job?.progress)).toMatchObject({ value: 100, attempt: 1, execution: 1 });
     expect(job?.returnvalue).toEqual({ result: VALID_RESULT, cached: false });
+  });
+
+  it("第 1 次嘗試拋錯、BullMQ 重試：第 2 次的 progress 為 { attempt: 2, execution: 2 }", async () => {
+    const jobId = randomUUID();
+    const progress: unknown[] = [];
+    const onProgress = ({ jobId: id, data }: { jobId: string; data: unknown }) => {
+      if (id === jobId) progress.push(data);
+    };
+    events.on("progress", onProgress);
+    let onCompleted: ((args: { jobId: string; returnvalue: unknown }) => void) | undefined;
+    const completed = new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("等待 completed 逾時")), 20_000);
+      onCompleted = ({ jobId: id, returnvalue }) => {
+        if (id !== jobId) return;
+        clearTimeout(timer);
+        resolve(returnvalue);
+      };
+      events.on("completed", onCompleted);
+    });
+
+    ai.failNext = 1;
+    await queue.add(
+      "diagnose",
+      // 不同 machineId → 不同簽章：不會命中上一條測試寫下的快取，第 1 次一定走到 LLM。
+      { jobId, machineId: `int-retry-${RUN_ID}`, requestedBy: "integration", requestedAt: new Date().toISOString(), windowMinutes: 5 },
+      { jobId, attempts: 2 },
+    );
+    const returnvalue = await completed.finally(() => {
+      if (onCompleted) events.off("completed", onCompleted);
+    });
+    events.off("progress", onProgress);
+
+    expect(DiagnosisJobReturnValueSchema.parse(returnvalue)).toEqual({ result: VALID_RESULT, cached: false });
+    const parsed = progress.map((p) => DiagnosisJobProgressSchema.parse(p));
+    const first = parsed.filter((p) => p.attempt === 1);
+    const second = parsed.filter((p) => p.attempt === 2);
+    expect(first.length).toBeGreaterThan(0);
+    expect(first.every((p) => p.execution === 1)).toBe(true);
+    expect(second.map((p) => p.value)).toEqual([0, 20, 40, 60, 80, 100]);
+    expect(second.every((p) => p.execution === 2)).toBe(true);
   });
 });

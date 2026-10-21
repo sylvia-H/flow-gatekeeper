@@ -2,6 +2,7 @@ import { MongoServerError } from "mongodb";
 import type { Collection, Db } from "mongodb";
 import { DiagnosisResultSchema } from "@flow-gatekeeper/contracts";
 import type { DiagnosisResult } from "@flow-gatekeeper/contracts";
+import { CONTEXT_QUERY_MAX_TIME_MS } from "./context/context-builder.js";
 
 /**
  * processor 對 Mongo 的寫入需求（diagnoses／diagnosisTriggers）。抽成介面讓 processor
@@ -215,7 +216,10 @@ export function createMongoDiagnosisRepository(db: Db): DiagnosisRepository {
       }
     },
     async findDiagnosisResult(jobId, onInvalid) {
-      const doc = await db.collection("diagnoses").findOne({ jobId }, { projection: { _id: 0, result: 1 } });
+      // maxTimeMS 比照 context 查詢：Mongo 卡頓時冪等短路不該無限期掛著（失敗照常拋出走重試）。
+      const doc = await db
+        .collection("diagnoses")
+        .findOne({ jobId }, { projection: { _id: 0, result: 1 }, maxTimeMS: CONTEXT_QUERY_MAX_TIME_MS });
       if (!doc) return null;
       const checked = DiagnosisResultSchema.safeParse(doc.result);
       if (checked.success) return checked.data;

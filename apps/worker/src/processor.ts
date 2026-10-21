@@ -231,6 +231,9 @@ export function createProcessor(deps: ProcessorDeps) {
 
     /** 把 job 交回佇列（不消耗 attempts）；沒有 token 時（非 BullMQ 呼叫）退回一般 throw。 */
     const requeueAt = async (timestamp: number, reason: string): Promise<never> => {
+      // 交回佇列前先停 keepalive（冪等，finally 會再停一次）：moveToDelayed 之後若還補送 progress，api 會把已延後的 job
+      // 轉成 `active` 送到前端，蓋掉 relay 的 waiting 語意。
+      keepalive.stop();
       if (token === undefined) throw new Error(reason);
       await job.moveToDelayed(timestamp, token);
       throw new DelayedError(reason);
@@ -579,6 +582,12 @@ export function createProcessor(deps: ProcessorDeps) {
             // 對同一 signature 再打一次 LLM，去重形同虛設。
             const lockedHit = await replyCached();
             if (lockedHit) return lockedHit;
+            // 再執行且快取未命中：前一次執行可能已落地 diagnoses 卻在之後失敗（例如 SET ai-cache 失敗）並放鎖——不再查一次
+            // 冪等短路就會吃 AI_RPM、重打 LLM（ADR-003 D3／D6；裁決 49 延伸到未命中路徑）。
+            if (isReExecution) {
+              const late = await replayCompleted();
+              if (late) return await finishReplay(late);
+            }
             // (b) 取鎖後、限流 INCR 前：擋「持鎖者寫標記放鎖、等待者恰好在 (a) 與取鎖之間」的窗口，被擋下的 job 不吃 AI_RPM。
             await checkFailMarker();
 

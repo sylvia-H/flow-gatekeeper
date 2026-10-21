@@ -1330,6 +1330,31 @@ describe("createProcessor：再執行在快取命中時先重查短路（M1；AD
     expect(metrics.recordCacheMiss).toHaveBeenCalledTimes(1);
   });
 
+  it("取鎖後快取未命中的再執行：exec1 寫完 diagnoses 後 SET ai-cache 失敗放鎖 → exec2 取鎖後由短路沿用，不重打 LLM、不吃 AI_RPM", async () => {
+    const holder = gatedScript();
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, store, repo, clock, processor } = setup([holder.script], { logger });
+    store.failSetWithTtl = (key) => key.startsWith("ai-cache:");
+    const exec1 = processor(makeJob("miss")).catch((e: unknown) => e);
+    await flush();
+    const exec2 = processor(makeJob("miss", { attemptsStarted: 2 }));
+    await flush();
+    expect(clock.pending).toBe(1); // exec2 等鎖
+
+    holder.release();
+    expect(await exec1).toBeInstanceOf(Error); // 卡在 SET ai-cache
+    expect(repo.diagnoses).toHaveLength(1);
+    const windowKey = `ai-rpm:${Math.floor(CLOCK_START / 60_000)}`;
+    const usedBefore = store.counters.get(windowKey);
+    clock.advance(CONFIG.pollIntervalMs);
+
+    expect(await exec2).toEqual({ result: VALID_RESULT, cached: false });
+    expect(shortCircuits()).toEqual(["diagnoses"]);
+    expect(ai.calls).toHaveLength(1);
+    expect(store.counters.get(windowKey)).toBe(usedBefore);
+    expect(repo.triggers.map((t) => t.cached)).toEqual([false]);
+  });
+
   it("第一次執行（非再執行）命中他人寫的快取：不重查短路，照常 cached:true", async () => {
     const { store, repo, processor } = setup([okScript()]);
     store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
@@ -1672,6 +1697,35 @@ describe("createProcessor：keepalive 與 progress 物件（012 T055；FR-019、
     const count2 = job2.progress.length;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(job2.progress).toHaveLength(count2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ["限流延後", { aiRpm: 1 }],
+    ["關閉中交回佇列", {}],
+  ] as const)("%s：moveToDelayed 期間與之後都不再補送 progress", async (label, extra) => {
+    vi.useFakeTimers();
+    const closing = label === "關閉中交回佇列";
+    const { store, processor } = setup([okScript()], {
+      realClock: true,
+      pollIntervalMs: 300,
+      aiTimeoutMs: 60_000,
+      isClosing: () => closing,
+      ...extra,
+    });
+    const { lockKey } = keysFor(CONTEXT);
+    if (closing) store.data.set(lockKey, "other-replica"); // 等待者 → 關閉中交回
+    else store.counters.set(`ai-rpm:${Math.floor(Date.now() / 60_000)}`, 1); // 本窗已滿
+    const job = makeJob("q");
+    // moveToDelayed 本身慢 15 s：期間若 keepalive 還在跑就會補送一則 active。
+    job.moveToDelayed = vi.fn(() => new Promise<void>((r) => setTimeout(r, 15_000)));
+    const run = processor(job, "bull-token").catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const count = job.progress.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await run).toBeInstanceOf(DelayedError);
+    expect(job.moveToDelayed).toHaveBeenCalledTimes(1);
+    expect(job.progress).toHaveLength(count);
     expect(vi.getTimerCount()).toBe(0);
   });
 

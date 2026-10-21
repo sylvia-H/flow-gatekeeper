@@ -241,7 +241,7 @@ describe("createMongoDiagnosisRepository.findDiagnosisResult（FR-024）", () =>
     const { db, findOne, collections } = fakeRepoDb({ findOne: async () => ({ result: VALID_RESULT }) });
     expect(await createMongoDiagnosisRepository(db).findDiagnosisResult("j1")).toEqual(VALID_RESULT);
     expect(collections).toEqual(["diagnoses"]);
-    expect(findOne).toHaveBeenCalledWith({ jobId: "j1" }, { projection: { _id: 0, result: 1 } });
+    expect(findOne).toHaveBeenCalledWith({ jobId: "j1" }, { projection: { _id: 0, result: 1 }, maxTimeMS: 5000 });
   });
 
   it("查無：回 null、不呼叫 onInvalid", async () => {
