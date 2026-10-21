@@ -11,7 +11,7 @@
 | --- | --- | --- | --- |
 | `STALLED_NOTICE(n)` | 後端處理程序中斷，任務已重新排入佇列（第 N 次執行） | active 且 `stalledNotice` 存在（只由 `reason:"stalled"` 設起） | `CopilotDrawer.vue` 進行中區塊、步驟列下 |
 | `RESUMING_NOTICE` | 已重新連線，正在取回診斷狀態… | active 且 `resume === "pending"`（與上一行同時成立時只顯示這行） | 同上 |
-| `RECOVERED_META` | 重新連線後取回 | completed 且 `source === "lookup"` | `CopilotDrawer.vue` 完成 meta（中性小字） |
+| `RECOVERED_META` | 重新連線後取回 | completed 且 `source === "lookup"` 且 `reconnected`（代理裁決 53） | `CopilotDrawer.vue` 完成 meta（中性小字） |
 | `STREAM_LABEL_INCOMPLETE` | 原始串流（不完整） | completed 且 `streamIncomplete` | `StreamDisclosure` 的 `label` |
 | `WATCHDOG_UNKNOWN_ERROR` | 超過 45 秒沒有收到進度，結果未知，請重試 | 45 s 無進展 → GET 回 404、409、503、429、網路錯誤或格式不符（回 failed 時改用 `humanizeError(error)`；取代「診斷逾時或無回應，請重試」，舊字串與其測試斷言移除） | failed `error` |
 | `LOOKUP_EXPIRED_ERROR` | 連線中斷期間的診斷結果已無法取回，請重試 | 續接 GET 404 | failed `error` |
@@ -53,7 +53,7 @@
 
 - 卡片診斷 chip 不新增種類：重派、取回、重連續接期間都顯示「診斷中 N%」（FR-037）。
 - 面板 chip 維持「進行中」；job meta `<dl>` 維持「佇列」「嘗試」兩項，「嘗試 N / 3」由 `state.attempt` 推進（`job/status.attempt` 或 `ai/token.attempt`）。
-- 螢幕閱讀器公告只在 active → completed／failed 的那一次轉移觸發（`CopilotDrawer.vue` 既有 watch），`ai/done` 重複不再公告。
+- 螢幕閱讀器公告在 active → completed／failed 的那一次轉移觸發（`CopilotDrawer.vue` 既有 watch），`ai/done` 重複不再公告；另在進度說明行出現或換句（正在取回、重新排入佇列、N 校正）時經同一 polite 區朗讀一次（R10，實作時補，2026-10-21）。
 - 結果整塊直接出現、不走逐字動畫（既有完成態行為）；GET 收尾的耗時照常顯示，但不成為「上一次」對比基準（data-model §6.4）。
 - 畫面不出現「worker」「stalled」字樣；「停滯」只用於機台資料 10 秒未更新（FR-036）。新術語「重新排入佇列」（內部稱重新派送）「取回」「結果未知」補進 `apps/web/PRODUCT.md`。
 

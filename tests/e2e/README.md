@@ -12,6 +12,7 @@ corepack pnpm test:e2e        # 等同 corepack pnpm --filter @flow-gatekeeper/e
 
 前置：Docker Engine 25+、Compose 2.24.4+（override 用到 `!reset`／`!override` 與 healthcheck `start_interval`）。
 **不需要** `GEMINI_API_KEY`，也**不需要**先建立 `apps/worker/.env`、`apps/api/.env.demo`。
+worker 用 fake provider，且 e2e 把首 token 延後 2 秒（`FAKE_AI_FIRST_TOKEN_DELAY_MS=2000`，場景 3b 的 kill 窗口，見「fake AiProvider」段）。
 
 流程（`src/harness/global-setup.ts`）：
 
@@ -42,7 +43,7 @@ harness 讀後端證據的兩處做法（`src/harness/infra.ts`，與 012 tasks 
 | compose 專案名 | `flow-gatekeeper-e2e`（容器／網路／volume 都帶此前綴） | `flow-gatekeeper` |
 | 對外埠 | 只有 web `127.0.0.1:18080` | web 8080、redis 6379、mongo 27017 |
 | env 檔 | 已提交的 `apps/worker/.env.example`、`apps/api/.env.demo.example` | 開發者自己的 `.env`／`.env.demo` |
-| AI provider | `AI_PROVIDER=fake`（20 段 × 500ms） | gemini |
+| AI provider | `AI_PROVIDER=fake`（首 token 前 2s、20 段 × 500ms） | gemini |
 | 映像 tag | `:e2e` | `:local` |
 | Redis 密碼 | 強制關閉 | 依 root `.env` |
 
@@ -60,8 +61,12 @@ harness 讀後端證據的兩處做法（`src/harness/infra.ts`，與 012 tasks 
 | `AI_PROVIDER` | `gemini` | `fake` 啟用測試替身；production 下仍允許但啟動時 warn。**僅供測試／演練** |
 | `FAKE_AI_TOKENS` | `20` | 切成幾段送出（1–1000；超過假診斷 JSON 字元數時以字元數為上限） |
 | `FAKE_AI_TOKEN_DELAY_MS` | `500` | 相鄰兩段的延遲（0–60000 ms） |
+| `FAKE_AI_FIRST_TOKEN_DELAY_MS` | `0` | 只延遲第一段；e2e 設 `2000`（見下） |
 
-e2e 另把 `AI_TIMEOUT_MS=15000`、`AI_DEDUPE_LOCK_SECONDS=20`（縮短 kill 場景等待死鎖過期的時間）。
+e2e 另把 `AI_TIMEOUT_MS=15000`、`AI_DEDUPE_LOCK_SECONDS=20`（縮短 kill 場景等待死鎖過期的時間），
+`FAKE_AI_FIRST_TOKEN_DELAY_MS=2000`：場景 3b 要在 context 已建好、首 token 之前 kill worker（research P24），但 fake 原本
+一呼叫就送出首 token，progress 20 → 首 token 只差幾十 ms，從 Windows host 下 `docker compose kill`（數百 ms）打不進這個窗口；
+P24「首 token 約在 progress 40 後 500ms」的前提與實作不符，2026-10-21 以這個延遲修正。整段串流因此約 11.5s（仍 < `AI_TIMEOUT_MS`）。
 
 ## 場景
 
@@ -76,7 +81,7 @@ e2e 另把 `AI_TIMEOUT_MS=15000`、`AI_DEDUPE_LOCK_SECONDS=20`（縮短 kill 場
 | 同上 | 6b job 仍在佇列時重啟 api（P18） | 停 worker → POST → `restart api` → 重連 GET → 200 `waiting`、`rebound:true` → 啟動 worker → 新連線收到帶 `result` 的 `completed`，api healthy 後 60 s 內 |
 | `redis-pause.e2e.test.ts` | 7 Redis 停頓 50 s（`oven-04`，SC-004；執行點在 US3 checkpoint） | 第 3 個 token 後 `pause redis` 50 s → `unpause`；`diagnosisTriggers` 該 jobId 1 筆、worker 日誌 `LLM call` 1 則、POST 前與完成後兩個 `worker metrics summary` 窗界之間 `cache.hits + cache.misses` 合計 1、`completed.cached === false`；收到 `reason:"stalled"` 或 `execution ≥ 2`（否則印「未重現 AR-4」並失敗）；印出重派那次 `idempotent short-circuit` 的 `source` |
 | `diagnosis-lookup.e2e.test.ts` | 8 GET 回應形狀（`press-02`，SC-005） | 隨機 jobId → 404；`socketId=abc` → 400（帶 `issues`、不回顯）；不在線 socketId → 409 `socket_unauthorized`；停 worker 製造進行中 job（綁 A）：B 查 → 409 `job_bound_elsewhere`、B 帶 `previousSocketId`＝A → 200 `waiting` `rebound:true`、之後 `completed` 只送 B；完成後 A 查 → 200 `completed`＋`result` |
-| `worker-kill.e2e.test.ts` | 3a 串流中 SIGKILL（第 3 個 token 後）、3b 首 token 前 SIGKILL（收到 progress 20 即 kill，P24）（`sorter-05`，SC-001） | 每題 POST 前清 `ai-cache:*`；`docker compose kill -s SIGKILL worker` → `start worker` → 收到 `completed`（帶通過 schema 的 `result`、`cached:false`）、無 `failed`／`ai/error`；`waiting`＋`reason:"stalled"` 或 `execution ≥ 2`；整個 job 的 `maxGap < 45 s`；印出 `W`（kill 後第一則 `worker ready` − 容器 `State.FinishedAt`），W > 25 s 印「上界失效」並失敗。3a 另斷言第二輪 `seq` 0–19 重播、`attempt` 皆 1、串接全文＝`completed.result`；3b 斷言 kill 前零 token、只有重派那一輪 |
+| `worker-kill.e2e.test.ts` | 3a 串流中 SIGKILL（第 3 個 token 後）、3b 首 token 前 SIGKILL（收到 progress 20 即 kill，P24；靠 e2e 的 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 留出窗口）（`sorter-05`，SC-001） | 每題 POST 前清 `ai-cache:*`；`docker compose kill -s SIGKILL worker` → `start worker` → 收到 `completed`（帶通過 schema 的 `result`、`cached:false`）、無 `failed`／`ai/error`；`waiting`＋`reason:"stalled"` 或 `execution ≥ 2`；整個 job 的 `maxGap < 45 s`；印出 `W`（kill 後第一則 `worker ready` − 容器 `State.FinishedAt`），W > 25 s 印「上界失效」並失敗。3a 另斷言第二輪 `seq` 0–19 重播、`attempt` 皆 1、串接全文＝`completed.result`；3b 斷言 kill 前零 token、只有重派那一輪 |
 
 每則 WS 訊息都以契約 schema `safeParse`（遙測批次以 `isTelemetryBatch`），不符者記入 `violations`，各場景結尾斷言為空。
 
@@ -88,12 +93,27 @@ e2e 另把 `AI_TIMEOUT_MS=15000`、`AI_DEDUPE_LOCK_SECONDS=20`（縮短 kill 場
 
 ### 場景 3 反映的現況語意
 
+（012-lite 改寫，2026-10-21；設計見 `docs/adr-003-completion-semantics.md` D4、D7。）
+
+- **relay 監聽 `stalled`**：重派時 api 送 `job/status { status: "waiting", reason: "stalled" }`，接著第二次 `active`；
+  `job/status` 另帶 `attempt`（＝`attemptsMade + 1`，stalled 重派不遞增，維持 1）與 `execution`（＝`attemptsStarted`，重派後為 2），
+  場景以「`reason: "stalled"` 或 `execution ≥ 2`」判定重派確實發生。
+- **最長無事件間隔斷言 < 45 s**：client 為每則訊息記收到時間，`maxGap` 取整個 job 期間相鄰兩則訊息的最大間隔。BullMQ lock 15 s、
+  stalled 檢查每 5 s、worker keepalive 10 s，設計上界 `K + L + 2S` ＝ 35 s（`W ≤ L` 時；`W > L` 時為 `K + W + 2S`，`W` 須 < 25 s）。
+  `W`＝kill 後第一則 `worker ready` − 容器 `State.FinishedAt`，`W > 25 s` 時場景印「上界失效」並失敗（不放寬判準）。
+- **重播**：3a 的第二輪 `ai/token` 仍帶 `attempt: 1`、`seq` 從 0 重播（同一 attempt 內 `seq <= 上一個 seq` 即新一次執行，契約 1.3.0 起；
+  `execution` 遞增同樣會清空串流）；3b 在首 token 前 kill，kill 前零 token，只有重派那一輪。
+- **實測（012-lite）**：3a `maxGap` **（第 3 輪實測後填）**、3b `maxGap` **（第 3 輪實測後填）**、`W` **（第 3 輪實測後填）**、
+  kill → `reason: "stalled"` **（第 3 輪實測後填）**、kill → `completed` **（第 3 輪實測後填）**、本檔耗時 **（第 3 輪實測後填）**。
+
+以下為 012-lite 之前（2.1.0）的語意與實測，保留作對照：
+
 - BullMQ stalled 重派**不遞增** `attemptsMade`，所以重跑的 `ai/token` 仍帶 `attempt: 1`，靠「同一 attempt 內再見 `seq: 0`」
   判定換輪（契約 `packages/contracts/src/ai-stream.ts` 已寫明）。契約 1.3.0 起規則為同一 attempt 內 `seq <= 上一個 seq`
   即視為新一次執行，`seq: 0` 是其特例；本場景斷言的 `seq: 0` 重播在新規則下照樣成立。
-- api 的 job-status relay 沒有監聽 `stalled`（審查報告 AR-3）；前端看到的是 BullMQ `moveJobToWait` 附帶的 `waiting`，
+- （當時）api 的 job-status relay 沒有監聽 `stalled`（審查報告 AR-3）；前端看到的是 BullMQ `moveJobToWait` 附帶的 `waiting`，
   接著第二次 `active`。
-- 實測 kill → 重派的 `waiting`／第二次 `active` 約 **92 秒**、→ `completed` 約 101 秒（兩輪一致）：BullMQ job lock（30s）
+- （當時）實測 kill → 重派的 `waiting`／第二次 `active` 約 **92 秒**、→ `completed` 約 101 秒（兩輪一致）：BullMQ job lock（30s）
   過期後，還要經過 stalled 檢查（每 30s，先標記、下一輪才搬回 wait）才認定 stalled。這段期間前端**收不到任何事件**，
   已超過前端 45 秒的無進展 watchdog（審查報告 AR-1／AR-3 的實測佐證）。各段等待上限：第 3 個 token 30s、
   重派 `waiting` 150s、第二次 `active` 60s、完成 60s；場景 timeout 360s（大於各段總和，逾時時先看到具名的 waitFor 訊息）。

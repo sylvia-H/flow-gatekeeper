@@ -3219,7 +3219,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | — | `docs/20261018-release-2.1.0` | （以 `git log --first-parent --merges` 為準） | 2.1.0 release 準備（版號、CHANGELOG、文件版本註記，以及首次 Linux CI 抓到的 `ThemeToggle.test.ts` localStorage 洩漏修正；版號由原規劃的 2.0.1 改為 2.1.0，見下方「第三輪審查 quick-fix」裁決 14） | — |
 | 11 | `fix/20261021-ci-and-flaky` | （以 `git log --first-parent --merges` 為準） | `ci.yml` 恢復所有分支 push 自動觸發（DOC-18）、修正 nightly mutation 抓到的 `TopBar.test.ts` 不穩定測試、§15.5 roadmap 註記更新 | CI 恢復自動觸發與 flaky 測試 |
 
-之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」），但不列入本表。
+之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」與「012-lite 串流韌性」；後者的完整藍圖與落地摘要在 §15.7），但不列入本表。
 
 **第一輪審查修復**（`fix/20260927-research-review`，報告 `docs/20260927-research-review.md`）：
 
@@ -3366,7 +3366,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **第二段**：Fable 5.1 對上述 fix commit 跑 `/code-review high`，8 項 findings 全修（`f2d9cb0`、`11223ca`）：關閉逾期回收改為**逐連線計時器**（見上方 code-review findings 第一點）；`packages/contracts` `collectedAt` 註解與 asyncapi 同步；api 新增 `src/test-support/nest-logger.ts`（`overrideNestLogger`／`silenceNestLogger`）取代三處手抄；e2e ws-client 握手階段加逾時並 terminate。
   - **未修、待決**：`AI_PROVIDER=fake` 在 production 只 warn、是否改為須 opt-in 旗標（需使用者決策）；`@vitest/coverage-v8` 釘死而 `vitest` 用 caret，下次升級相依時統一；兩項重構類建議。報告第二輪其餘未排程項已集中到 ADR-002 §6.5.1。
   - **收尾數字**（2026-09-28 實跑）：`pnpm test:coverage` 94 檔 982 測試通過，lines 81.52％、branches 76.56％；整合測試 27（worker 20＋api 7）；e2e 5 場景；契約 lint／typecheck／lint／`pnpm -r build` 全綠。
-- **e2e 實測發現（留給 012-lite）**：worker 被 `SIGKILL` 後，BullMQ 需等 job lock（30 s）過期、再經 stalled 檢查（每 30 s，先標記、下一輪才搬回 wait），重派的 `waiting`／第二次 `active` 約在 kill 後 **92 秒**才出現、`completed` 約 101 秒；這段期間前端**收不到任何事件**，已超過前端 45 秒無進展 watchdog。stalled 重派**不遞增** `attemptsMade`，重跑的 `ai/*` `attempt` 維持 1、`seq` 從 0 重播。這是審查報告 AR-1／AR-3（relay 未監聽 `stalled`、等待者無 keepalive）的實測佐證，處理排入 roadmap 012-lite（ADR-002 §6.5）。
+- **e2e 實測發現（留給 012-lite）**：worker 被 `SIGKILL` 後，BullMQ 需等 job lock（30 s）過期、再經 stalled 檢查（每 30 s，先標記、下一輪才搬回 wait），重派的 `waiting`／第二次 `active` 約在 kill 後 **92 秒**才出現、`completed` 約 101 秒；這段期間前端**收不到任何事件**，已超過前端 45 秒無進展 watchdog。stalled 重派**不遞增** `attemptsMade`，重跑的 `ai/*` `attempt` 維持 1、`seq` 從 0 重播。這是審查報告 AR-1／AR-3（relay 未監聽 `stalled`、等待者無 keepalive）的實測佐證，處理排入 roadmap 012-lite（ADR-002 §6.5）。**已落地（012-lite，2026-10-21）**：relay 監聽 `stalled` 並送 `reason: "stalled"`、worker keepalive 10 s、BullMQ lock 15／5／2，設計上界約 35 s；`attempt`／`execution` 改由 `job/status` 帶（見 §15.7.6）。上述 92 s 為當時的實測。
 
 **Gemini 3.5 flash-lite 升級**（`upgrade/20261017-gemini-3.5-flash-lite`，merge `7d9f9d9`，2026-10-17；使用者裁決：2.5 系列已舊，改用另一專案每天穩定使用的 `gemini-3.5-flash-lite`）：
 
@@ -3537,9 +3537,12 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 - **T073 critique 結果與後續待辦（2026-10-17）**：改版前基準 20/40，四輪修正後最後一次評分 29/40（趨勢 20→28→29→29→29，快照在 `apps/web/.impeccable/critique/`）。門檻 30 未達，使用者裁決結案不再追分：四位獨立審查者的 P1 互不重疊且各輪都已修掉，分數停滯的結構性原因是「說明與文件」四輪皆 2 分（概念說明只靠 tooltip）。留給後續 feature 的待辦：768 高視窗的卡片密度（第二排卡片與異常標記被裁切）、AI 結果與機台現況脫鉤的交代（依據時刻、之後已回復）、側欄確認鈕改文字鈕並在確認後顯示「已確認」tag、桌機面板展開時工具列「診斷」主鈕降級、分頁 title／favicon 嚴重告警、卡片三線刻度改迷你量筒（閾值分段＋液位）、768 堆疊改 2 欄、進行中步驟清單加小標、零值計數改中性色、`humanizeError` 的英文原文後援改繁中。
 
+**012-lite 串流韌性**（SDD feature `012-stream-resilience`，spec／plan／tasks 見 `specs/012-stream-resilience/`；屬 SDD feature 而非維護分支，不列入上表；2026-10-21 implement 完成）：完成語意改以 BullMQ `returnvalue` 為權威（`job/status: completed` 帶 `result`、`ai/done` 降為 best-effort）、新增 `GET /diagnoses/:jobId` 與重連 rebind（`JobRoutingRegistry`）、BullMQ lock 15／5／2＋keepalive 10 s（SIGKILL 後設計上界 35 s）、jobId 冪等與 `ai-fail` 負向標記；契約 asyncapi **1.4.0**。帶著 2.1.0 發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治由此修掉。設計決策見 ADR-003，藍圖與落地摘要見 §15.7（§15.7.6）。
+
 ### 15.7 Feature 012-lite：串流韌性（Stream Resilience）藍圖
 
-> **狀態：藍圖已定案、已立案、尚未落地**（2026-10-21 自 `develop` `e1cdb69` 開 branch `012-stream-resilience`；
+> **狀態：已落地**（2026-10-21 implement 完成，落地摘要見 §15.7.6；merge 回 `develop` 的 commit 於 merge 時補記）。
+> 撰寫時的狀態：藍圖已定案、已立案、尚未落地（2026-10-21 自 `develop` `e1cdb69` 開 branch `012-stream-resilience`；
 > 規格見 [`specs/012-stream-resilience/spec.md`](../specs/012-stream-resilience/spec.md)）。設計決策見
 > **[ADR-003](adr-003-completion-semantics.md)**（Accepted，2026-10-21 使用者離席期間代理裁決、待覆核）；
 > 現況對照、行號與驗收細節以 spec 為準，本節只放方向與邊界（第三輪報告 DOC-16）。
@@ -3624,7 +3627,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 13. **「重新派送」說明** → 只看 `reason: "stalled"`，`execution` 遞增不據以顯示。
 14. **keepalive 殘餘風險** → Pub/Sub 斷線且串流中 SIGKILL 時最長約 55 s 無事件，接受、不加機制。
 
-以上為 2026-10-21 使用者離席期間的代理裁決（第 12～14 條與第 9 條的改寫為同日補裁），覆核後若有推翻，於 ADR-003 §7 與本節同步更新。
+以上為 2026-10-21 使用者離席期間的代理裁決（第 12～14 條與第 9 條的改寫為同日補裁），覆核後若有推翻，於 ADR-003 §7 與本節同步更新。（2026-10-21 更新：之後 specify／clarify 階段補裁第 15～21 條、plan 階段設計點 P1～P25 補錄為第 22～46 條、checklist 推導為第 47～48 條、實作交叉審查補裁第 49～51 條、web 交叉審查補裁第 52～54 條，全文只在 ADR-003 §7，本節不逐條重列。）
 
 #### 15.7.4 驗收（判準以 spec SC-001～SC-011 為準）
 
@@ -3660,6 +3663,19 @@ e2e 仍只在本機跑（CI 不含 e2e）；改寫場景 3（SC-001）並新增�
   `persist_failed`「診斷結果無法寫入資料庫，請稍後重試」；「結果未送達」文案不變，只在 GET 退路也失敗時出現。
 - **嘗試 N / 3** 由 `job/status.attempt` 推進；job meta `<dl>` 維持兩項（佇列、嘗試）。
 - **卡片診斷 chip 不新增種類**；新術語定案後補進 PRODUCT.md，「已知產品限制」改寫（清單見 ADR-003 §6）。
+
+#### 15.7.6 落地摘要（2026-10-21）
+
+以下為 implement 之後的現況；設計理由與代理裁決（第 1～54 條，待覆核）見 ADR-003，逐條細節以 spec 與 `CHANGELOG.md` `[Unreleased]` 為準。
+
+- **契約 asyncapi 1.4.0**（向後相容的 minor）：`job/status` 新增 optional `attempt`／`execution`／`reason`（開放字串，已知值 `"stalled"`）／`cached`，`completed` 帶 `result`；`ai/done` 改為可重複、可遺失的 best-effort；`ai/error.code` 新增 `persist_failed`；`http.ts` 新增 `DiagnosisLookupQuerySchema`／`DiagnosisLookupResponseSchema`；傳輸型別 `DiagnosisJobReturnValue`、`DiagnosisJobProgress`。
+- **完成語意**：worker 以 BullMQ `returnvalue` 回傳 `{ result, cached }`，api relay 驗證後放進 `job/status: completed`；web 以 `ai/done`、帶 `result` 的 `completed`、GET 回 completed 三者先到者收尾，之後的忽略；`completed` 不帶 result 時 2 s 後先 GET。
+- **讀取與續接**：`GET /diagnoses/:jobId?socketId=[&previousSocketId=]`（BullMQ → Mongo → 404；409 分 `socket_unauthorized`／`job_bound_elsewhere`；503 為依賴故障或 BullMQ 5 s／Mongo 3 s 逾時）；先綁定後查詢、回 `rebound:true` 前核對 owner；綁定由新抽出的 `JobRoutingRegistry` 持有，`completed` 與 `failed` 共用 10 s 終態寬限。nginx 為 GET 另設 `diag_read` 60 r/m、burst 10。web 在授權成功後逐台 GET 續接，GET 帶 `previousSocketId`。
+- **重派與 keepalive**：`apps/worker/src/lib/bullmq-options.ts` 的 lock 15 s／stalled 5 s／maxStalled 2、keepalive 10 s；relay 監聽 `stalled`；45 s watchdog 觸發先 GET、文案改「結果未知」。
+- **冪等與成本**：processor 開頭以 jobId 查 `ai-result:<jobId>` → `diagnoses`；再執行命中快取前先查自己的結果；trigger 以 jobId upsert；hit／miss 以 `ai-metric:<jobId>` 只計一次；`ai-fail:<sig>` 負向標記（TTL 10 s）；`ai-result` 暫存寫入 best-effort。
+- **UI**：說明行「後端處理程序中斷，任務已重新排入佇列（第 N 次執行）」「已重新連線，正在取回診斷狀態…」、完成 meta「重新連線後取回」、「原始串流（不完整）」（以 `job/status`／GET 收尾或執行期間經歷過重連）、新失敗文案；術語補進 PRODUCT.md；DESIGN.md 補記進度說明行允許改變進行中區塊高度。
+- **e2e**：場景 3 改寫為 3a（串流中 kill）／3b（首 token 前 kill，fake provider 以 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 留出窗口），新增 5（Pub/Sub 斷線迴圈）、6a／6b（api 重啟）、7（Redis 停頓 50 s）、8（GET 回應形狀）。實測數字：3a `maxGap` **（第 3 輪實測後填）**、3b `maxGap` **（第 3 輪實測後填）**、`W` **（第 3 輪實測後填）**、場景 7 重派證據 **（第 3 輪實測後填）**、全套耗時 **（第 3 輪實測後填）**。
+- **文件回補**：ADR-002（§3 第 5 列、§6.1、§6.2、§6.5、§6.5.1）、README、PRODUCT.md、DESIGN.md、`tests/e2e/README.md`、`CHANGELOG.md`、009 `log-fields.md`；憲章 Principle III 補列 GET 仍為**建議、待使用者**（未執行 `/speckit-constitution`）。
 
 ---
 
@@ -3748,7 +3764,7 @@ docker compose ps -a                          # 判讀就緒：seed Exited(0) + 
 | 3 | **金鑰缺席**：`apps/worker/.env` 的 `GEMINI_API_KEY` 留空後 `docker compose --profile demo up -d worker` | worker 正常啟動、只記一則 warn；遙測、背壓、`/healthz` 全部正常；按 Diagnose 後**第一次嘗試就**失敗（不重試、不等退避），drawer 顯示指名 `GEMINI_API_KEY` 的可讀訊息 | drawer 訊息、`docker compose logs worker`（`provider_error`、無 attempt 2／3） |
 | 4 | **畸形 WS 輸入**：在監控台頁面的 DevTools console 執行 `const s = new WebSocket(location.origin.replace('http','ws') + '/ws'); s.onopen = () => { s.send('{not json'); s.send(JSON.stringify({ type: 'machine/subscribe', token: 1, machineIds: 'x' })); s.send('x'.repeat(20000)); }` | api **不崩潰**、容器 `RestartCount` 不變：前兩則被記一則 `ignored client message`（`invalid-json`／`schema`）後忽略，超過 `maxPayload` 16 KiB 的那則使該連線被關閉；原本的監控台連線與遙測不受影響 | `docker inspect --format "{{.RestartCount}}" <api 容器名>`、`docker compose logs api` |
 | 5 | **worker 致命注入**（007）：`apps/worker/.env` 設 `WORKER_CHAOS=uncaught`（或 `rejection`）、`WORKER_CHAOS_AT=job`，**並同時設 `WORKER_CHAOS_ALLOW_IN_PRODUCTION=true`**，後重建 worker（`docker compose --profile demo up -d worker`），再按 Diagnose。worker 映像內建 `ENV NODE_ENV=production`，而 chaos 守衛在 production 預設拒絕武裝（只記一則 error）——不加這個開關，容器內演練**不會生效** | worker 同步寫出致命訊息後 `exit(1)`，Docker 依退避重啟；in-flight job 由 BullMQ stalled 機制重派，最終完成或以 `ai/error` 收尾；`WORKER_CHAOS_AT=startup` 則可演練連續 5 次失敗後停止重啟。若 log 只出現「WORKER_CHAOS 於 production 預設忽略」而沒有致命訊息，即漏設開關。**演練後務必清空三個變數（`WORKER_CHAOS`、`WORKER_CHAOS_AT`、`WORKER_CHAOS_ALLOW_IN_PRODUCTION`）再重建** | `docker inspect --format "{{.RestartCount}} {{.State.Status}}" <worker 容器名>`、`docker compose logs worker`；細節見 `specs/007-worker-process-supervision/quickstart.md` 場景 3／4 |
-| 6 | **Gateway 崩潰**（008）：見 §16.2 第 12 步（`docker exec <api 容器名> pkill -KILL -f "dist/main.js"`） | 監督者重啟 api，前端經 nginx 自行重連；重連前的進行中診斷顯示「中斷 + Retry」（目前無結果讀取端點，Retry 若簽章相同會命中快取） | 同上 |
+| 6 | **Gateway 崩潰**（008）：見 §16.2 第 12 步（`docker exec <api 容器名> pkill -KILL -f "dist/main.js"`） | 監督者重啟 api，前端經 nginx 自行重連；**已變更（012-lite，2026-10-21）**：重連並授權成功後，進行中的診斷以 `GET /diagnoses/:jobId` 續接——api 重啟期間已完成就直接顯示結果，仍在進行就改綁到新連線、之後照常收到 `completed`。（撰寫時：重連前的進行中診斷顯示「中斷 + Retry」，目前無結果讀取端點，Retry 若簽章相同會命中快取） | 同上 |
 
 ---
 
@@ -3757,7 +3773,7 @@ docker compose ps -a                          # 判讀就緒：seed Exited(0) + 
 | 問題 | 解法 |
 | --- | --- |
 | 前端 `new WebSocket` 連不上後端 | 後端不能用 Socket.IO，要用原生 `ws`（見 1.5）。兩者協定不相容。 |
-| streaming 推不到前端 | 檢查 `POST /diagnoses` 有沒有帶 `socketId`（必須是 `system/connected` 給的 uuid），以及 relay 是否 `bindJobToClient`；重連後舊 jobId 不會改綁，需以新 jobId 重發。 |
+| streaming 推不到前端 | 檢查 `POST /diagnoses` 有沒有帶 `socketId`（必須是 `system/connected` 給的 uuid），以及 relay 是否 `bindJobToClient`（012-lite 起綁定改由 `JobRoutingRegistry` 持有）；**已變更（012-lite，2026-10-21）**：重連後以 `GET /diagnoses/:jobId?socketId=<新 clientId>&previousSocketId=<舊 clientId>` 續接——原連線已離線、綁定不存在或原連線等於 `previousSocketId` 時改綁；原連線仍在線且不是 `previousSocketId` 時回 409 `job_bound_elsewhere`、不改綁。GET 的 `socketId` 必須是已授權連線（有 `WS_AUTH_SECRET` 時要等 `machine/subscribed`），否則 409 `socket_unauthorized`。（撰寫時：重連後舊 jobId 不會改綁，需以新 jobId 重發。） |
 | `.env` 不小心出現在 `git status` | 立刻確認 `.gitignore`，不要 commit；若已 commit，要移除歷史或換 key。 |
 | Worker 想直接 emit WebSocket | 不要。Worker 透過 Redis Pub/Sub，Gateway 負責 WebSocket。 |
 | Pub/Sub connection 卡住 | Redis subscriber connection 不要拿去做一般 command。 |

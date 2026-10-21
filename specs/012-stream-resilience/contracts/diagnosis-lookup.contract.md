@@ -38,6 +38,9 @@ jobId（UUID v4）即 bearer capability：持有一條在線、已授權的 WS �
 5. 依 state 回應並處置 claim（data-model §2.4）；BullMQ 查無 job、state 不在 §4 列舉內（例如 `unknown`，視同查無 job），或
    `returnvalue` 不合法 → Mongo `diagnoses.findOne({ jobId })`（`maxTimeMS` 3 s）→ 合法結果 200 completed（`cached:false`），否則 404。
 6. 任何回應前，非保留的 claim 一律 `revertClaim`（只撤回本次請求自己的動作）。
+7. **回 `rebound: true` 前核對 owner**（實作交叉審查補，2026-10-21；data-model §2.4、ADR-003 D8 第 4 點）：查到進行中、claim 為
+   `created`／`rebound`／`unchanged` 時，回 200 之前 MUST 確認 registry 目前的 owner 仍是本次 `socketId`；BullMQ 查詢期間綁定已被
+   另一個 GET（例如以 `previousSocketId`）改綁走時，回 409 `job_bound_elsewhere`（與衝突相同）。
 
 ## 4. 成功回應（200，`DiagnosisLookupResponseSchema`）
 
@@ -100,7 +103,13 @@ location ~ ^/diagnoses/[0-9a-fA-F-]{36}$ {
 ## 8. web 用戶端（`apps/web/src/domains/ai-copilot/lib/diagnose-api.ts`）
 
 - `getDiagnosis(jobId, socketId, previousSocketId?)`：同源 `fetch`、逾時 15 s（`DIAGNOSE_REQUEST_TIMEOUT_MS`）；回應以
-  `DiagnosisLookupResponseSchema.safeParse` 並比對 `jobId`；非 2xx 拋 `DiagnoseLookupError { status, code? }`（409 讀 body 的 `code`）。
+  `DiagnosisLookupResponseSchema.safeParse` 並比對 `jobId`；任何失敗都拋 `DiagnoseLookupError { kind, status?, code? }`（實作時補
+  `kind`，2026-10-21）：
+  - `kind: "http"`：非 2xx；`status` 必有，409 時 `code` 為 body 的 `socket_unauthorized`／`job_bound_elsewhere`（讀不到或不在已知集合則 undefined）。
+  - `kind: "network"`：fetch reject（離線、DNS、連線被拒）。
+  - `kind: "timeout"`：超過 `DIAGNOSE_REQUEST_TIMEOUT_MS`。
+  - `kind: "invalid"`：2xx 但回應不合 `DiagnosisLookupResponseSchema`，或 `jobId` 與查詢的不一致（research P3）。
+  - 錯誤只帶分類、不帶使用者文案：同一個失敗在續接、2 s 未送達、45 s watchdog 三種用途下顯示不同句子，由 store 依用途對映。
 - 呼叫時機與文案對映見 [ui-copy.contract.md](./ui-copy.contract.md) §3。
 
 ## 9. CHANGELOG 契約小節（1.4.0，HTTP 部分）
@@ -108,4 +117,6 @@ location ~ ^/diagnoses/[0-9a-fA-F-]{36}$ {
 - 新增 `GET /diagnoses/:jobId?socketId=[&previousSocketId=]`：200 completed／failed／waiting／active、400、404、409（`code`
   兩種）、429（nginx 獨立 60 r/m 桶）、503。
 - jobId 即存取憑證：任何已授權連線知道 jobId 即可讀已完成的結果；jobId 會出現在 nginx access log 的路徑。
+  （2026-10-21 補，spec FR-034）`previousSocketId` 在 query 裡、會進同一份 access log：能讀 log 的人可在原連線**仍在線**時以它
+  改綁進行中的任務；與 jobId 同一模型、同一曝險面，接受（plan 風險 3）。
 - 快取命中的結果 1 小時後（`removeOnComplete`）GET 回 404；LLM 路徑的結果由 Mongo 取回。

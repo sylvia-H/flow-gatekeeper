@@ -72,6 +72,9 @@
 | 5 | 有 | `clientId === previousSocketId`（仍在線） | `rebound`（`viaPreviousSocketId: true`） | 同上；不主動終止舊連線 |
 | 6 | 有 | 其他（原連線在線、不是本 socket、不等於 `previousSocketId`） | `conflict` | 不動 |
 
+`claim` 只代表「await 之前」的判斷；BullMQ 查詢期間綁定可能被另一個 GET 改綁走，所以 §2.4「進行中」列回 `rebound:true` 前
+MUST 再核對一次 owner（實作交叉審查補，2026-10-21）。
+
 ### 2.4 查詢結果 × claim 的處置（FR-010）
 
 | 查詢結果 | `created` | `rebound` | `unchanged` | `terminal` | `conflict` |
@@ -84,6 +87,11 @@
 | Redis／Mongo 錯誤或逾時 | 撤回 → 503 | 撤回 → 503 | 503 | 503 | 503 |
 
 「撤回」＝`revertClaim`：`created` 只在目前綁定仍是自己建立的那份時刪除；`rebound` 只在目前綁定仍是自己改綁的那份時還原原綁定。
+
+**回 `rebound:true` 前核對 owner**（實作交叉審查補，2026-10-21；ADR-003 D8 第 4 點、§7.1）：「進行中」列的 `created`／`rebound`／
+`unchanged` 三欄，回 200 之前 MUST 確認 `registry.owner(jobId) === socketId`；BullMQ 查詢期間綁定已被另一個 GET（例如以
+`previousSocketId`）改綁走時，與 `conflict` 同樣回 **409** `job_bound_elsewhere`。不核對時兩個 GET 都會回 `rebound:true`，
+其中一個分頁以為自己在收事件、實際收不到，只能等 45 s watchdog。
 
 ---
 
@@ -128,7 +136,7 @@
 | 7 | 取鎖迴圈每輪開頭：查 `ai-fail:<sig>`（非自己）→ 命中即 `fail(marker.code, marker.message, true)` | — |
 | 8 | 取得鎖 → double-check `replyCached()` → 查 `ai-fail` → 限流 INCR（超限 → 延後，不變） | — |
 | 9 | `report(40)` → `setIfAbsent(ai-metric)` 為真才記 miss → LLM 串流（每個 token `touch()`；首 token `report(60)`） | LLM 失敗：寫 `ai-fail` → `fail(code, …)`（不變的分類） |
-| 10 | `parseResult` → `report(80)` → SET `ai-result` → `insertDiagnosis` → DEL `ai-result` → SET `ai-cache` → DEL `ai-fail` → `upsertTrigger(cached:false)` → `report(100)` → `ai/done(cached:false)` → `return { result, cached:false }` | `insertDiagnosis` 失敗 → `fail("persist_failed", …)`；其他寫入失敗 → 拋出 → 重試（下次步驟 2 或 3 短路） |
+| 10 | `parseResult` → `report(80)` → SET `ai-result` → `insertDiagnosis` → DEL `ai-result` → SET `ai-cache` → DEL `ai-fail` → `upsertTrigger(cached:false)` → `report(100)` → `ai/done(cached:false)` → `return { result, cached:false }` | （實作交叉審查更新，2026-10-21；ADR-003 代理裁決第 50 條）SET `ai-result` 失敗 → 只 warn、照常 `insertDiagnosis`（best-effort）；`insertDiagnosis` 失敗 → `fail("persist_failed", PERSIST_FAILED_MESSAGE, true, err)`（重試時若暫存在，步驟 2 只重做寫庫）；DEL `ai-result`、DEL `ai-fail` 失敗 → 只 warn、由 TTL 回收；SET `ai-cache`、`upsertTrigger`、`report(100)` 失敗 → 拋出 → 重試（`diagnoses` 已落地，下次步驟 3 短路、不打 LLM） |
 | 11 | 未取得鎖：`replyCached()` → 關閉中交回（不變）→ deadline（不變）→ sleep → 回步驟 7 | 不變 |
 | finally | keepalive `stop()`、`liveness.end` | — |
 
@@ -154,7 +162,7 @@
 | `active` | `execution: number`（起始 1） | 目前呈現的執行序號；`job/status.execution` 更大時清串流 |
 | `active` | `resume?: "pending"` | 重連後、續接 GET 回應前；面板顯示「已重新連線，正在取回診斷狀態…」 |
 | `active` | `reconnected?: true` | 執行期間經歷過 WS 重連（FR-016）；收尾時轉成 `streamIncomplete` |
-| `active` | `stalledNotice?: { execution: number }` | 收到 `reason:"stalled"`；面板顯示「…（第 N 次執行）」（P15） |
+| `active` | `stalledNotice?: { execution: number; confirmed?: true }` | 收到 `reason:"stalled"`；面板顯示「…（第 N 次執行）」（P15） |
 | `completed` | `source: "ai/done" \| "status" \| "lookup"` | 收尾來源；`lookup` 時完成 meta 加「重新連線後取回」 |
 | `completed` | `streamIncomplete: boolean` | `source !== "ai/done"` 或 `reconnected` 時為 true → 標題「原始串流（不完整）」（FR-038） |
 | `failed` | `reason?: "undelivered"`（不變） | 只有它可被三種結果來源救回 |
@@ -169,7 +177,7 @@
 | active | `job/status` completed 無 `result` | active（progress 更新；store 記 2 s 寬限起點，不變） |
 | active | `job/status` 帶 `attempt > state.attempt` | active，換輪：清 `streamText`、`lastSeq=-1`、`attempt` 更新 |
 | active | `job/status` 帶 `execution > state.execution` | active，清 `streamText`、`lastSeq=-1`、`execution` 更新；若 `stalledNotice.execution < 新 execution` 且本則不是 stalled → 移除說明 |
-| active | `job/status` waiting＋`reason:"stalled"` | active，`stalledNotice = { execution: state.execution + 1 }` |
+| active | `job/status` waiting＋`reason:"stalled"` | active，`stalledNotice = { execution: max(state.execution, 既有 N) + 1 }`（未確認）；之後帶 `execution ≥ 估計值` 的事件校正並 `confirmed`，小於者視為遲到事件忽略；確認後 execution 再增且無新 stalled 才移除（實作時依 P15 修正，2026-10-21） |
 | active | `lookup/result` completed | completed（`source:"lookup"`、`streamIncomplete:true`） |
 | active | `lookup/result` failed | failed（`humanizeError(error)`） |
 | active | `lookup/result` waiting／active | active，清 `resume`，更新 progress／attempt／execution（遞增規則同上） |
@@ -188,6 +196,6 @@
 
 ### 6.4 耗時（`diagnosis-timing.ts`）
 
-`DiagnosisTiming` 新增 `lastRecoveredMs: number | null`，`lastKind` 增加 `"recovered"`。`settleTiming(timing, jobId, cached, now, opts?)`
+`DiagnosisTiming` 新增 `lastRecoveredMs?: number`、`lastRecoveredCached?: boolean`（實作時改為 optional 並補快取旗標供 `compareLabel` 決定主字，2026-10-21），`lastKind` 增加 `"recovered"`；recovered 判定為「以 GET 收尾或執行期間經歷過重連」（代理裁決 52）。`settleTiming(timing, jobId, cached, now, opts?)`
 的 `opts.recovered === true` 時只寫 `lastRecoveredMs`／`lastKind:"recovered"`，不動 `lastUncachedMs`／`lastCachedMs`；`compareLabel`
 對 `recovered` 回主字（快取與否照 `cached`）、`compareBars` 回 null（P16）。
