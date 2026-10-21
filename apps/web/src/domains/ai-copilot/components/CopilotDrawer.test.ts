@@ -164,6 +164,14 @@ function stubDesktop(): void {
   );
 }
 
+/** bottom sheet（< 1366px）：matchMedia 明確命中 sheet 斷點，不依賴 happy-dom 的預設視窗寬度。 */
+function stubSheet(): void {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({ matches: true, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  );
+}
+
 describe("CopilotDrawer 空狀態與 idle", () => {
   beforeEach(stubDesktop);
 
@@ -743,12 +751,16 @@ describe("CopilotDrawer 處理步驟小標（fix/20261022-ui-steps-heading）", 
     return w.findAll("h3").find((h) => h.text() === "處理步驟");
   }
 
-  it.each<[string, () => void]>([
-    ["推擠式側欄（≥ 1366px）", stubDesktop],
-    ["bottom sheet（< 1366px）", () => {}],
-  ])("%s：進行中有「處理步驟」小標，清單以 aria-labelledby 指向它，且以分隔線與原始串流區塊分開", (_name, layout) => {
+  it.each<[string, () => void, boolean]>([
+    ["推擠式側欄（≥ 1366px）", stubDesktop, false],
+    ["bottom sheet（< 1366px）", stubSheet, true],
+  ])("%s：進行中有「處理步驟」小標，清單以 aria-labelledby 指向它，且以分隔線與原始串流區塊分開", async (_name, layout, isSheet) => {
     layout();
     const w = mountDrawer({ state: ACTIVE });
+    // isSheet 在 onMounted 讀 matchMedia 後才更新，等重繪
+    await flushPromises();
+    // 確認真的落在該版面：sheet 根節點帶 role=dialog，推擠式側欄不帶
+    expect(w.find('[role="dialog"]').exists()).toBe(isSheet);
     const heading = stepsHeading(w);
     expect(heading).toBeDefined();
     const id = heading!.attributes("id");
