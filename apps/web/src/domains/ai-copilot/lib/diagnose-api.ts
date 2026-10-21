@@ -1,7 +1,9 @@
 import {
   CreateDiagnosisResponseSchema,
+  DiagnosisLookupResponseSchema,
   type CreateDiagnosisBody,
   type CreateDiagnosisResponse,
+  type DiagnosisLookupResponse,
 } from "@flow-gatekeeper/contracts";
 
 /**
@@ -112,6 +114,86 @@ export async function postDiagnose(
   if (parsed.data.jobId !== jobId) {
     // 後端應回傳我們送出的同一個 jobId；不一致代表 idempotency 失效，後續事件會對不上。
     throw new DiagnoseRequestError("診斷請求回應的 jobId 與送出不一致");
+  }
+  return parsed.data;
+}
+
+/** GET 的 409 body 帶的機器可讀 `code`（contracts/diagnosis-lookup §5、research P2）；只有這兩種值會被採信。 */
+export type DiagnoseLookupConflictCode = "socket_unauthorized" | "job_bound_elsewhere";
+
+/**
+ * `getDiagnosis` 失敗的種類：
+ * - `http`：非 2xx（`status` 必有；409 時 `code` 為 body 的機器可讀碼，讀不到則 undefined）；
+ * - `network`：fetch reject（離線、DNS、連線被拒）；
+ * - `timeout`：超過 `DIAGNOSE_REQUEST_TIMEOUT_MS`；
+ * - `invalid`：2xx 但回應不合 `DiagnosisLookupResponseSchema`，或 `jobId` 與查詢的不一致（research P3）。
+ */
+export type DiagnoseLookupErrorKind = "http" | "network" | "timeout" | "invalid";
+
+/**
+ * `GET /diagnoses/:jobId` 的失敗（contracts/diagnosis-lookup §8）。只帶分類，不帶使用者文案：
+ * 同一個失敗在續接、2 s 未送達、45 s watchdog 三種用途下顯示不同句子，由 store 依用途對映（contracts/ui-copy §3）。
+ * `message` 只供除錯，不呈現給使用者。
+ */
+export class DiagnoseLookupError extends Error {
+  constructor(
+    readonly kind: DiagnoseLookupErrorKind,
+    readonly status?: number,
+    readonly code?: DiagnoseLookupConflictCode,
+  ) {
+    super(`diagnosis lookup failed: ${kind}${status !== undefined ? ` ${status}` : ""}${code ? ` (${code})` : ""}`);
+    this.name = "DiagnoseLookupError";
+  }
+}
+
+/** 讀 GET 409 body 的 `code`；body 不是 JSON 或值不在已知集合內時回 undefined（交給呼叫端當「其他失敗」）。 */
+async function readConflictCode(res: Response): Promise<DiagnoseLookupConflictCode | undefined> {
+  try {
+    const body: unknown = await res.json();
+    const code = typeof body === "object" && body !== null ? (body as { code?: unknown }).code : undefined;
+    if (code === "socket_unauthorized" || code === "job_bound_elsewhere") return code;
+  } catch {
+    // 非 JSON（proxy 錯誤頁）→ 無 code
+  }
+  return undefined;
+}
+
+/**
+ * 讀回某個診斷的目前狀態並（進行中時）把後續事件改綁到本連線（012 FR-007～FR-017、contracts/diagnosis-lookup）。
+ *
+ * 同源 `GET /diagnoses/<jobId>?socketId=…[&previousSocketId=…]`，逾時沿用 POST 的 15 s。200 回應同樣是外部輸入：
+ * 以 `DiagnosisLookupResponseSchema.safeParse` 驗證（四分支：completed／failed／waiting／active），`jobId` 不符視為格式錯誤——
+ * 與 `postDiagnose` 的 jobId 比對是同一道防線（proxy 錯路由時不會把別人的結果當成這筆）。
+ * 任何失敗都拋 `DiagnoseLookupError`（見其 `kind`）；狀態碼對使用者文案的對映由 store 依用途決定。
+ */
+export async function getDiagnosis(
+  jobId: string,
+  socketId: string,
+  previousSocketId?: string,
+): Promise<DiagnosisLookupResponse> {
+  const query = new URLSearchParams({ socketId });
+  if (previousSocketId) query.set("previousSocketId", previousSocketId);
+
+  let res: Response;
+  try {
+    res = await fetch(`/diagnoses/${encodeURIComponent(jobId)}?${query.toString()}`, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      signal: timeoutSignal(),
+    });
+  } catch (err) {
+    const name = err instanceof Error ? err.name : "";
+    throw new DiagnoseLookupError(name === "TimeoutError" || name === "AbortError" ? "timeout" : "network");
+  }
+
+  if (!res.ok) {
+    const code = res.status === 409 ? await readConflictCode(res) : undefined;
+    throw new DiagnoseLookupError("http", res.status, code);
+  }
+
+  const parsed = DiagnosisLookupResponseSchema.safeParse(await res.json().catch(() => null));
+  if (!parsed.success || parsed.data.jobId !== jobId) {
+    throw new DiagnoseLookupError("invalid");
   }
   return parsed.data;
 }
