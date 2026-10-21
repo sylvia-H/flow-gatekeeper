@@ -396,7 +396,7 @@ describe("CopilotDrawer 終態", () => {
     expect(w.text()).toContain("無建議動作。"); // 空陣列以空狀態文字呈現、不崩潰
     expect(timing.text()).toMatch(/^結果來自快取 · /); // 視覺隱藏前綴＋可見「快取 · N ms」
     expect(w.text()).not.toMatch(LEGACY_EN_LABEL);
-    expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷完成（快取）：${RESULT.summary}`);
+    expect(w.get('[data-testid="copilot-announcement"]').text()).toBe(`${LABEL} 診斷完成（快取）：${RESULT.summary}`);
   });
 
   it("完成公告的機台名取自事件的 machineId（繁中名），不讀 machineLabel prop（合併門第 2 輪 #4：watch 觸發時 prop 可能已換台）", async () => {
@@ -404,7 +404,7 @@ describe("CopilotDrawer 終態", () => {
     const jobId = await startJob();
     useCopilotStore().applyEvent({ type: "ai/done", jobId, attempt: 1, cached: false, result: RESULT });
     await flushPromises();
-    const live = w.get('[aria-live="polite"]').text();
+    const live = w.get('[data-testid="copilot-announcement"]').text();
     expect(live).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
     expect(live).not.toContain(MACHINE);
     expect(live).not.toContain("別台");
@@ -425,12 +425,12 @@ describe("CopilotDrawer 終態", () => {
     // 後端已完成、串流是完整的：展開鈕標「原始串流」，不加「（中斷前）」
     expect(buttonExact(w, "原始串流")!.attributes("aria-expanded")).toBe("true");
     expect(buttonExact(w, "原始串流（中斷前）")).toBeUndefined();
-    expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷失敗：${message}`);
+    expect(w.get('[data-testid="copilot-announcement"]').text()).toBe(`${LABEL} 診斷失敗：${message}`);
 
     copilot.applyEvent({ type: "ai/done", jobId, attempt: 1, cached: false, result: RESULT });
     await flushPromises();
     expect(headerText(w)).toContain("已完成");
-    expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
+    expect(w.get('[data-testid="copilot-announcement"]').text()).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
   });
 
   it("ai/error → 失敗、可讀錯誤與重試；重試走 store 重回進行中；不可診斷時重試停用並說明原因", async () => {
@@ -442,7 +442,7 @@ describe("CopilotDrawer 終態", () => {
     expect(headerText(w)).toContain("失敗");
     expect(w.text()).not.toMatch(LEGACY_EN_LABEL);
     expect(w.text()).toContain("AI 診斷逾時，請重試。");
-    expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷失敗：AI 診斷逾時，請重試。`);
+    expect(w.get('[data-testid="copilot-announcement"]').text()).toBe(`${LABEL} 診斷失敗：AI 診斷逾時，請重試。`);
     const retry = buttonExact(w, "重試")!;
     expect(retry.attributes("disabled")).toBeUndefined();
     await retry.trigger("click");
@@ -675,7 +675,7 @@ describe("CopilotDrawer 原始串流標題（012 FR-038、contracts/ui-copy §2�
     await flushPromises();
     expect(headerText(w)).toContain("已完成");
     expect(streamToggleLabel(w)).toBe("原始串流（不完整）");
-    expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
+    expect(w.get('[data-testid="copilot-announcement"]').text()).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
   });
 });
 
@@ -717,7 +717,7 @@ describe("CopilotDrawer 重連續接說明行與取回 meta（012 T044、FR-035�
     const note = w.get('[data-testid="copilot-progress-note"]');
     expect(note.text()).toBe("已重新連線，正在取回診斷狀態…");
     expect(note.classes()).toEqual(expect.arrayContaining(["text-xs", "text-ink-3"]));
-    expect(w.get('[aria-live="polite"]').text()).toBe("已重新連線，正在取回診斷狀態…");
+    expect(w.get('[data-testid="copilot-announcement"]').text()).toBe("已重新連線，正在取回診斷狀態…");
     expect(headerText(w)).toContain("進行中");
     expect(diagnosisBadgeText(useCopilotStore().badgeFor(MACHINE))).toBe("診斷中 40%");
   });
@@ -737,7 +737,7 @@ describe("CopilotDrawer 重連續接說明行與取回 meta（012 T044、FR-035�
     const w = mountWithStore();
     await startThenReconnect();
     const copilot = useCopilotStore();
-    const live = () => w.get('[aria-live="polite"]').text();
+    const live = () => w.get('[data-testid="copilot-announcement"]').text();
     expect(live()).toBe("已重新連線，正在取回診斷狀態…");
     copilot.onAuthorized(SOCKET_2);
     await flushPromises();
@@ -771,7 +771,7 @@ describe("CopilotDrawer 重連續接說明行與取回 meta（012 T044、FR-035�
     expect(w.get('[data-fg="timing"]').text()).toContain("重新連線後取回");
     expect(w.find('[data-fg="timing-bars"]').exists()).toBe(false); // 取回的耗時不畫對比橫條（P16）
     expect(w.findAll("button").some((b) => b.text() === "原始串流（不完整）")).toBe(true);
-    expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
+    expect(w.get('[data-testid="copilot-announcement"]').text()).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
   });
 
   it("以 ai/done 收尾的完成態不顯示「重新連線後取回」", async () => {
@@ -812,14 +812,14 @@ describe("CopilotDrawer 重新排入佇列說明行與嘗試次數（012 T059、
     copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "waiting", reason: "stalled" });
     await flushPromises();
     expect(noteText(w)).toBe("後端處理程序中斷，任務已重新排入佇列（第 2 次執行）");
-    expect(w.get('[aria-live="polite"]').text()).toBe("後端處理程序中斷，任務已重新排入佇列（第 2 次執行）");
+    expect(w.get('[data-testid="copilot-announcement"]').text()).toBe("後端處理程序中斷，任務已重新排入佇列（第 2 次執行）");
     expect(headerText(w)).toContain("進行中");
     expect(diagnosisBadgeText(copilot.badgeFor(MACHINE))).toBe("診斷中 40%");
 
     copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "active", progress: 20, execution: 3 });
     await flushPromises();
     expect(noteText(w)).toBe("後端處理程序中斷，任務已重新排入佇列（第 3 次執行）");
-    expect(w.get('[aria-live="polite"]').text()).toBe("後端處理程序中斷，任務已重新排入佇列（第 3 次執行）");
+    expect(w.get('[data-testid="copilot-announcement"]').text()).toBe("後端處理程序中斷，任務已重新排入佇列（第 3 次執行）");
 
     // execution 再遞增而沒有新的 stalled → 說明消失
     copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "active", progress: 20, execution: 4 });

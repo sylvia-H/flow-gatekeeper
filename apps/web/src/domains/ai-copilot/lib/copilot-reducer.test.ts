@@ -14,6 +14,7 @@ import {
   WATCHDOG_UNKNOWN_ERROR,
   copilotReducer,
   humanizeError,
+  isLookupInProgress,
   isStaleJobEvent,
   isUndeliveredFailure,
   progressLabel,
@@ -737,6 +738,56 @@ describe("copilotReducer — execution、stalled 說明與 attempt 推進（012 
   it("completed+result 來自更新的一次執行 → 不保留中斷那次的文字", () => {
     const s = copilotReducer(withText(), status({ status: "completed", result: RESULT, cached: false, execution: 2 }));
     expect(s).toMatchObject({ status: "completed", streamText: "" });
+  });
+});
+
+describe("copilotReducer — 合併門第 2 輪（L2 清 resume、L3 進度只往前、L6 窮舉 helper）", () => {
+  const pending = (over: Partial<Extract<CopilotJobState, { status: "active" }>> = {}) =>
+    active("job-1", { resume: "pending", reconnected: true, ...over });
+
+  it.each<[string, CopilotEvent]>([
+    ["ai/token", { type: "ai/token", jobId: "job-1", attempt: 1, seq: 0, text: "x" }],
+    ["舊輪遲到的 ai/token", { type: "ai/token", jobId: "job-1", attempt: 0, seq: 0, text: "x" }],
+    ["job/status active", { type: "job/status", jobId: "job-1", machineId: "mixer-01", status: "active", progress: 50 }],
+    ["job/status completed 無 result", { type: "job/status", jobId: "job-1", machineId: "mixer-01", status: "completed" }],
+  ])("同 jobId 的 %s 抵達 → 清 resume、保留 reconnected", (_name, event) => {
+    const s = copilotReducer(pending(), event);
+    expect(s).toMatchObject({ status: "active", reconnected: true });
+    expect(s).not.toHaveProperty("resume");
+  });
+
+  it("過期 jobId 的事件不清 resume", () => {
+    const s0 = pending();
+    expect(copilotReducer(s0, { type: "ai/token", jobId: "job-x", attempt: 1, seq: 0, text: "x" })).toBe(s0);
+  });
+
+  it("lookup/result 的進度只往前：小於目前值時維持、目前為 null 時採用、較大時採用", () => {
+    const at = (progress: number | null, value?: number) =>
+      copilotReducer(pending({ progress }), {
+        type: "lookup/result",
+        jobId: "job-1",
+        response: { status: "active", jobId: "job-1", rebound: true, ...(value === undefined ? {} : { progress: value }) },
+      });
+    expect(at(80, 40)).toMatchObject({ progress: 80 });
+    expect(at(null, 40)).toMatchObject({ progress: 40 });
+    expect(at(40, 80)).toMatchObject({ progress: 80 });
+    expect(at(60)).toMatchObject({ progress: 60 });
+  });
+
+  it("lookup/result 讓任務換到新一次執行時，較小的進度照回應採用（新執行從頭計）", () => {
+    const s = copilotReducer(pending({ progress: 80 }), {
+      type: "lookup/result",
+      jobId: "job-1",
+      response: { status: "waiting", jobId: "job-1", progress: 20, execution: 2, rebound: true },
+    });
+    expect(s).toMatchObject({ progress: 20, execution: 2 });
+  });
+
+  it("isLookupInProgress：waiting／active 為 true，completed／failed 為 false", () => {
+    expect(isLookupInProgress({ status: "waiting", jobId: "j", rebound: true })).toBe(true);
+    expect(isLookupInProgress({ status: "active", jobId: "j", rebound: true })).toBe(true);
+    expect(isLookupInProgress({ status: "completed", jobId: "j", result: RESULT, cached: false })).toBe(false);
+    expect(isLookupInProgress({ status: "failed", jobId: "j", error: "x" })).toBe(false);
   });
 });
 

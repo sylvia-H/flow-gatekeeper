@@ -316,6 +316,29 @@ function toCompleted(
   };
 }
 
+/** GET 回應是否為「仍在進行」（waiting／active）；reducer 與 store 共用同一判斷（合併門第 2 輪 L6）。 */
+export function isLookupInProgress(
+  response: DiagnosisLookupResponse,
+): response is Extract<DiagnosisLookupResponse, { status: "waiting" | "active" }> {
+  return response.status === "waiting" || response.status === "active";
+}
+
+/**
+ * GET（waiting／active）帶的進度只往前採用（合併門第 2 輪 L3）：GET 讀的是發出當下的快照，往返期間 WS 可能已送來更新的
+ * 進度，回應較小時不可把畫面拉回去。唯一例外是這則回應讓任務換到新一輪或新一次執行（`advanceRound` 換了物件且輪次變了），
+ * 新的執行從頭計進度，照回應採用。未帶進度時維持既值。
+ */
+function lookupProgress(
+  before: Extract<CopilotJobState, { status: "active" }>,
+  advanced: Extract<CopilotJobState, { status: "active" }>,
+  progress: number | undefined,
+): number | null {
+  if (progress === undefined) return before.progress;
+  const newRound = advanced.attempt !== before.attempt || advanced.execution !== before.execution;
+  if (newRound || before.progress === null || progress > before.progress) return progress;
+  return before.progress;
+}
+
 /** `job/status`／`lookup/result` 帶的輪次資訊。 */
 interface RoundInfo {
   attempt?: number;
@@ -386,7 +409,17 @@ export function copilotReducer(
     return payload ? toCompleted(state, event.jobId, payload) : state;
   }
   if (state.status !== "active") return state; // 只有 active 消費 WS 事件
+  // 同 jobId 的 ai/token／job/status 抵達：這條連線已在收這個任務的事件，「正在取回」說明不再成立（合併門第 2 輪 L2）。
+  // 續接 GET 之後若失敗，store 也不再以 resume 文案轉失敗、改交給 watchdog（`onLookupFailure`）。
+  if ((event.type === "ai/token" || event.type === "job/status") && state.resume !== undefined) {
+    const { resume: _resume, ...rest } = state;
+    return reduceActive(rest, event);
+  }
+  return reduceActive(state, event);
+}
 
+/** active 狀態收到同 jobId 事件的轉移（`copilotReducer` 已過濾過期片段與非 active）。 */
+function reduceActive(state: Extract<CopilotJobState, { status: "active" }>, event: CopilotEvent): CopilotJobState {
   switch (event.type) {
     case "job/status":
       if (event.status === "failed") {
@@ -445,28 +478,35 @@ export function copilotReducer(
 
     case "lookup/result": {
       const { response } = event;
-      if (response.status === "completed") {
-        return toCompleted(state, state.jobId, {
-          result: response.result,
-          cached: response.cached,
-          attempt: undefined,
-          source: "lookup",
-        });
+      switch (response.status) {
+        case "completed":
+          return toCompleted(state, state.jobId, {
+            result: response.result,
+            cached: response.cached,
+            attempt: undefined,
+            source: "lookup",
+          });
+        case "failed":
+          // GET 的 failed 只帶 BullMQ `failedReason` 原文，與 `job/status: failed` 同一套對映（FR-005、FR-022）。
+          return {
+            status: "failed",
+            machineId: state.machineId,
+            jobId: state.jobId,
+            streamText: state.streamText,
+            error: humanizeError(response.error),
+          };
+        case "waiting":
+        case "active": {
+          // 任務仍在後端進行，續接完成——清掉「正在取回」說明、推進輪次、更新進度。`reconnected` 保留到任務結束（FR-016）。
+          const advanced = advanceRound(state, response);
+          const { resume: _resume, ...rest } = advanced;
+          return { ...rest, progress: lookupProgress(state, advanced, response.progress) };
+        }
+        default: {
+          const unreachable: never = response;
+          return unreachable;
+        }
       }
-      if (response.status === "failed") {
-        // GET 的 failed 只帶 BullMQ `failedReason` 原文，與 `job/status: failed` 同一套對映（FR-005、FR-022）。
-        return {
-          status: "failed",
-          machineId: state.machineId,
-          jobId: state.jobId,
-          streamText: state.streamText,
-          error: humanizeError(response.error),
-        };
-      }
-      // waiting／active：任務仍在後端進行，續接完成——清掉「正在取回」說明、推進輪次、更新進度（未帶則維持既值）。
-      // `reconnected` 保留到任務結束（FR-016）。
-      const { resume: _resume, ...rest } = advanceRound(state, response);
-      return { ...rest, progress: response.progress ?? state.progress };
     }
   }
 }

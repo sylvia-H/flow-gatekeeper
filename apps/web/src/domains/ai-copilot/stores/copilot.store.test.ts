@@ -1071,6 +1071,25 @@ describe("copilot store 重連續接與 GET 退路（012 T041／T042、FR-005、
       expect(lookups).toHaveLength(1);
     });
 
+    it("續接 GET 往返中收到同任務的 token → 清「正在取回」；GET 之後逾時也不轉失敗，最後由 ai/done 收尾（合併門第 2 輪 L2）", async () => {
+      const store = useCopilotStore();
+      const jobId = await connectAndDiagnose(store);
+      let fail: ((err: Error) => void) | undefined;
+      reply = () => new Promise<Response>((_resolve, reject) => (fail = reject));
+      store.onReconnect(SOCKET_2);
+      store.onAuthorized(SOCKET_2);
+      await flushAsync();
+      store.applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 0, text: "新連線收到的" });
+      expect(store.stateFor("mixer-01")).toMatchObject({ status: "active", streamText: "新連線收到的" });
+      expect(store.stateFor("mixer-01")).not.toHaveProperty("resume");
+
+      fail?.(new DOMException("signal timed out", "TimeoutError"));
+      await flushAsync();
+      expect(store.stateFor("mixer-01").status).toBe("active");
+      store.applyEvent({ type: "ai/done", jobId, attempt: 1, cached: false, result: RESULT });
+      expect(store.stateFor("mixer-01")).toMatchObject({ status: "completed", source: "ai/done", streamIncomplete: true });
+    });
+
     it("重連後到授權前，任務已由 ai/done 收尾 → 不 GET；收尾仍標不完整（重連旗標）", async () => {
       const store = useCopilotStore();
       const jobId = await connectAndDiagnose(store);
@@ -1406,18 +1425,56 @@ describe("copilot store 重連續接與 GET 退路（012 T041／T042、FR-005、
       expect(store.stateFor("mixer-01")).toMatchObject({ status: "completed", source: "ai/done", streamIncomplete: true });
     });
 
-    it("沒有 clientId 時不發 GET，直接轉「結果未送達」", async () => {
+    it("斷線期間寬限到期 → 不發 GET、不轉失敗，任務維持進行中（代理裁決第 63 條）", async () => {
       const store = useCopilotStore();
-      await store.diagnose("mixer-01", SOCKET); // 未呼叫 onReconnect：lastClientId 為 null
-      store.applyEvent({ type: "job/status", jobId: jobIdOf(store), machineId: "mixer-01", status: "completed", progress: 100 });
-      tickPastGrace(store);
-      expect(store.stateFor("mixer-01")).toMatchObject({ status: "failed", reason: "undelivered" });
+      await backendCompleted(store);
+      store.checkStalls(T0 + 3_000, 45_000, P0 + UNDELIVERED_GRACE_MS + 1, false);
+      await flushAsync();
       expect(lookups).toHaveLength(0);
+      expect(store.stateFor("mixer-01")).toMatchObject({ status: "active", progress: 100 });
+    });
+
+    it("completed 無 result 後重連到 B → 寬限起點作廢：B 授權前不以它發 GET（合併門第 2 輪 L1）", async () => {
+      const store = useCopilotStore();
+      const jobId = await backendCompleted(store);
+      store.onReconnect(SOCKET_2);
+      store.checkStalls(T0 + 2_100, 45_000, P0 + 2_100);
+      await flushAsync();
+      expect(lookups).toHaveLength(0);
+      expect(store.stateFor("mixer-01")).toMatchObject({ status: "active", resume: "pending" });
+      // 授權後由續接 GET 處理 completed
+      reply = json(completedBody(jobId));
+      store.onAuthorized(SOCKET_2);
+      await flushAsync();
+      expect(lookups).toHaveLength(1);
+      expect(store.stateFor("mixer-01")).toMatchObject({ status: "completed", source: "lookup", reconnected: true });
     });
   });
 
   describe("45 s watchdog 退路", () => {
     const tickWatchdog = (store: ReturnType<typeof useCopilotStore>) => store.checkStalls(T0 + 46_000, 45_000, P0);
+
+    it("斷線期間 46 s 無進展 → 不發 GET、任務維持進行中；重連並授權後才續接（代理裁決第 63 條）", async () => {
+      const store = useCopilotStore();
+      const jobId = await connectAndDiagnose(store);
+      store.checkStalls(T0 + 46_000, 45_000, P0, false);
+      store.checkStalls(T0 + 90_000, 45_000, P0, false);
+      await flushAsync();
+      expect(lookups).toHaveLength(0);
+      expect(store.stateFor("mixer-01").status).toBe("active");
+
+      dateNow.mockReturnValue(T0 + 90_000);
+      store.onReconnect(SOCKET_2);
+      store.checkStalls(T0 + 91_000, 45_000, P0, true); // 重連重設了 watchdog：不觸發
+      await flushAsync();
+      expect(lookups).toHaveLength(0);
+      reply = json({ status: "active", jobId, progress: 60, rebound: true });
+      store.onAuthorized(SOCKET_2);
+      await flushAsync();
+      expect(lookups).toHaveLength(1);
+      expect(lookups[0]!.searchParams.get("socketId")).toBe(SOCKET_2);
+      expect(store.stateFor("mixer-01")).toMatchObject({ status: "active", progress: 60, reconnected: true });
+    });
 
     it("回 completed → 照常完成", async () => {
       const store = useCopilotStore();

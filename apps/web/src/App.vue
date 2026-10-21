@@ -242,7 +242,8 @@ let tickTimer: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
   tickTimer = setInterval(() => {
     store.tickNow();
-    copilot.checkStalls(Date.now(), STALL_TIMEOUT_MS);
+    // 斷線期間不跑兩種退路（代理裁決第 63 條）：GET 只會以舊連線 409，把仍在跑的任務誤轉失敗。
+    copilot.checkStalls(Date.now(), STALL_TIMEOUT_MS, performance.now(), store.connectionStatus === "connected");
   }, 1000);
 });
 onUnmounted(() => {

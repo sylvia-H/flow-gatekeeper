@@ -14,6 +14,7 @@ import {
   UNDELIVERED_ERROR,
   WATCHDOG_UNKNOWN_ERROR,
   copilotReducer,
+  isLookupInProgress,
   isUndeliveredFailure,
   startActiveState,
   type CopilotEvent,
@@ -518,6 +519,9 @@ export const useCopilotStore = defineStore("copilot", () => {
   function onLookupFailure(machineId: string, jobId: string, purpose: LookupPurpose, err: unknown): void {
     const state = stillAwaiting(machineId, jobId, purpose);
     if (state?.status !== "active") return; // 已是可救回的未送達失敗：維持原樣，等遲到的結果
+    // 續接 GET 往返期間已收到這個任務的事件（reducer 清了 resume）：新連線確實在收事件，GET 的失敗不代表取不回，
+    // 不以續接文案轉失敗，交給 45 s watchdog（合併門第 2 輪 L2）。
+    if (purpose === "resume" && state.resume !== "pending") return;
     failActive(machineId, state, lookupFailureMessage(purpose, err), purpose === "undelivered");
   }
 
@@ -567,7 +571,7 @@ export const useCopilotStore = defineStore("copilot", () => {
       return;
     }
     lookupInFlight.delete(jobId);
-    const stillRunning = response.status === "waiting" || response.status === "active";
+    const stillRunning = isLookupInProgress(response);
     // 後端已改綁到本次 socket：之後的 GET 以它當 previousSocketId（P22）。任務已被換掉或中止時不記（綁定紀錄跟著任務走）。
     // 必須在下面的重查之前記：往返期間重連過時，補發的 GET 要帶「剛被改綁到」的這個 socket，api 才認得出是同一分頁。
     if (stillRunning && boundSocketIds.has(jobId)) boundSocketIds.set(jobId, socketId);
@@ -594,10 +598,19 @@ export const useCopilotStore = defineStore("copilot", () => {
    *   後端可能其實已完成，因此先查；仍在進行就重設計時、維持 active。
    *
    * GET 往返期間（`lookupInFlight`）不重複觸發任一種退路。沒有 `lastClientId` 時直接走該用途的失敗文案。
+   * 即時通道不在 connected（斷線、重連中）時兩種退路都跳過（代理裁決第 63 條）：此時 GET 只會以舊 socket 409，把其實
+   * 還在跑的任務誤轉失敗；重連後由 `onReconnect`（重設 watchdog、待續接）與 `onAuthorized` 承接。已連線但未授權
+   * 不在此列，仍照常觸發，讓授權失敗交給 watchdog（代理裁決第 47 條）。
    * 兩種判定用不同時鐘：2 s 寬限比 `monoNowMs`（單調時鐘，預設當下 `performance.now()`，測試可傳入）；
    * 45 s watchdog 維持牆上時鐘 `nowMs`（觸發後先 GET，時鐘跳動的誤觸只會得到「仍在進行」，D11）。
    */
-  function checkStalls(nowMs: number, thresholdMs: number, monoNowMs: number = performance.now()): void {
+  function checkStalls(
+    nowMs: number,
+    thresholdMs: number,
+    monoNowMs: number = performance.now(),
+    connected = true,
+  ): void {
+    if (!connected) return;
     for (const [machineId, state] of jobs.value) {
       if (state.status !== "active" || lookupInFlight.has(state.jobId)) continue;
       const done = backendCompletedAt.get(machineId);
@@ -625,6 +638,8 @@ export const useCopilotStore = defineStore("copilot", () => {
       if (state.status !== "active") continue;
       jobs.value.set(machineId, { ...state, resume: "pending", reconnected: true });
       touch(machineId);
+      // 2 s 未送達的寬限起點作廢：續接 GET 會處理 completed；留著的話新連線授權前就會以它發 GET 而 409（合併門第 2 輪 L1）。
+      backendCompletedAt.delete(machineId);
       pendingResume.set(machineId, state.jobId);
     }
   }

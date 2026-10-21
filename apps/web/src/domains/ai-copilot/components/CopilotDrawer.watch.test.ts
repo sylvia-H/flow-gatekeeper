@@ -130,7 +130,7 @@ describe("CopilotDrawer 完成公告只一次（012 FR-004、SC-006）", () => {
       attachTo: document.body,
     });
     await flushPromises();
-    const live = wrapper.get('[aria-live="polite"]');
+    const live = wrapper.get('[data-testid="copilot-announcement"]');
     expect(live.text()).toBe("");
     // 以 MutationObserver 計數 live region 的寫入：重念同一句時文字不變，單看 text 看不出重複公告
     let mutations = 0;

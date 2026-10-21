@@ -379,7 +379,7 @@ watch(
     @keydown="onKeydown"
   >
     <!-- 完成／失敗摘要公告（視覺隱藏；常駐掛載，live region 才能在內容變化時被念出） -->
-    <div class="sr-only" aria-live="polite" aria-atomic="true">{{ announcement }}</div>
+    <div class="sr-only" aria-live="polite" aria-atomic="true" data-testid="copilot-announcement">{{ announcement }}</div>
     <!-- 非 modal sheet 開啟公告：焦點留在卡片時，告知面板已開與可用按鍵 -->
     <div class="sr-only" aria-live="polite" aria-atomic="true">{{ sheetHint }}</div>
 
@@ -505,7 +505,7 @@ watch(
             </div>
             <!-- 說明行（重連後正在取回／重新排入佇列）：text-xs ink-3、不加 chip 或色值；出現或換句時由上方既有的 polite 公告區朗讀。
                進度說明行屬進行中區塊內容、非 DESIGN.md 所稱「標記」（徽章出現或消失不改變容器高度的那條），允許改變高度，
-               維持 v-if、不預留佔位；DESIGN.md 第 309 行已記此例外（代理裁決第 54 條）。 -->
+               維持 v-if、不預留佔位；DESIGN.md 已記此「進度說明行」例外（代理裁決第 54 條）。 -->
             <p v-if="progressNote" data-testid="copilot-progress-note" class="text-xs text-ink-3">
               {{ progressNote }}
             </p>
