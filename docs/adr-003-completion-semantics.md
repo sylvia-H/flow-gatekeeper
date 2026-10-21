@@ -709,9 +709,9 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - 替代方案：`onReconnect` 也續接「結果未送達」失敗態（重連後對它們 GET 一次；要改 FR-016 與對應測試）。
 
 **56. 路徑類文字與 BullMQ 原文不算違反「畫面不出現 worker」**（D13；spec FR-036；來源：合併門第 1 輪 web 審查）
-- 影響範圍：spec FR-036「畫面 MUST NOT 出現『worker』『stalled』字樣」的判準；既有金鑰錯誤文案（指名 `apps/worker/.env` 的 `GEMINI_API_KEY`）與 `humanizeError` 對短英文 `failedReason` 原文的照顯。
+- 影響範圍：spec FR-036「畫面 MUST NOT 出現『worker』『stalled』字樣」的判準；既有金鑰錯誤文案（指名 `apps/worker/.env` 的 `GEMINI_API_KEY`）與 `humanizeError` 對短英文 `failedReason` 原文的照顯（已變更：`fix/20261022-ui-humanize-error-zh` 起未對映的英文 failedReason 只出現在預設收合的「技術細節」，現況見指南 §15.6）。
 - 裁決：FR-036 加註——路徑類文字（如 `apps/worker/.env`）與 BullMQ 原文 `failedReason` 不視為違反。禁用的是拿「worker」「stalled」當說明用語描述任務狀態。
-- 理由：金鑰文案要讓操作者知道去哪個檔案改設定，路徑是操作指引、不是狀態說明；BullMQ 原文只在沒有對映時照顯（`maxStalledCount` 用盡那句已有中文對映），全面改寫屬 010-lite `AiErrorCode` 的範圍。
+- 理由：金鑰文案要讓操作者知道去哪個檔案改設定，路徑是操作指引、不是狀態說明；BullMQ 原文只在沒有對映時照顯（`maxStalledCount` 用盡那句已有中文對映），全面改寫屬 010-lite `AiErrorCode` 的範圍（已變更：`fix/20261022-ui-humanize-error-zh` 起未對映的英文 failedReason 只出現在預設收合的「技術細節」，現況見指南 §15.6）。
 - 替代方案：把既有金鑰文案改寫為「AI 服務的 .env」（操作者要自己找是哪個檔案，且動到 2.1.0 起的既有文案與測試）。
 
 **57. 瀏覽器端 UI 演練交給使用者**（D13；tasks T081、quickstart §4；來源：合併門第 1 輪 契約／文件審查）

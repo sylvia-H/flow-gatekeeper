@@ -87,7 +87,7 @@ export type CopilotJobState =
       error: string;
       /**
        * 未能分類的錯誤原文（`fix/20261022-ui-humanize-error-zh`；只由 `humanizeFailure` 設起）：`error` 改顯通用句時，
-       * 短原文（< 120 字、單行、不含中日韓文字）收在失敗態預設收合的「技術細節」裡供排錯，不再當主訊息照顯英文。
+       * 短原文（< 120 字、單行、不含漢字（`\p{Script=Han}`））收在失敗態預設收合的「技術細節」裡供排錯，不再當主訊息照顯英文。
        */
       errorDetail?: string;
       /**

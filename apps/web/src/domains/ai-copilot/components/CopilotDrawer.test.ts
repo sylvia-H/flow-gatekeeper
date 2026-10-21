@@ -511,10 +511,17 @@ describe("CopilotDrawer 終態", () => {
     expect(buttonExact(w, "技術細節")!.attributes("aria-expanded")).toBe("false");
   });
 
-  it("已分類或中文的錯誤 → 不顯示「技術細節」", () => {
-    const w = mountDrawer({
-      state: { status: "failed", machineId: MACHINE, streamText: "", error: "AI 診斷逾時，請重試。" },
-    });
+  it.each([
+    ["已分類（逾時）", "request timed out", "AI 診斷逾時，請重試。"],
+    ["中文短句", "機台名冊載入失敗", "機台名冊載入失敗"],
+  ])("%s的錯誤經 store／reducer → 不顯示「技術細節」", async (_name, message, shown) => {
+    const w = mountWithStore();
+    const jobId = await startJob();
+    useCopilotStore().applyEvent({ type: "ai/error", jobId, attempt: 1, code: "worker_failed", message });
+    await flushPromises();
+
+    expect(useCopilotStore().stateFor(MACHINE).status).toBe("failed");
+    expect(w.text()).toContain(shown);
     expect(w.find('[data-testid="copilot-error-detail"]').exists()).toBe(false);
     expect(buttonExact(w, "技術細節")).toBeUndefined();
   });

@@ -3481,7 +3481,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **含漢字照顯**：api 回的中文 message 等本來就是給人看的句子，改成通用句反而丟資訊；判斷用 `\p{Script=Han}`，含日文漢字也算，日韓文錯誤在本專案不會出現。
   - **用按鈕而非 `<details>`**：sheet 焦點陷阱的 `FOCUSABLE_SELECTOR` 不含 `summary`，Tab 循環會跳過它；按鈕寫法與原始串流的展開鈕一致。
   - **store 自己組的 POST 失敗句不動**：`failureMessage` 回的都是 web／api 端的中文固定句，不經 `humanizeError`。
-- **驗證**：`copilot-reducer.test.ts` 改寫「未知短訊息」案例（英文短句 → 通用句），新增中文短句照顯、含中文的長句／多行 → 通用句，以及 `humanizeFailure` 的英文短句帶 `errorDetail`、已知分類（含 012 兩條）不帶、中文與恰為通用句的原文不重複帶、長／多行／空不帶、reducer 三條失敗路徑都帶；`CopilotDrawer.test.ts` 新增「技術細節」預設收合、展開後顯示原文（mono、內凹）、公告只念通用句、重試後消失、再失敗回到收合，以及已分類錯誤不顯示；web 全套 vitest（69 檔、1386 測試）、`typecheck`、`lint` 通過。
+- **驗證**：`copilot-reducer.test.ts` 改寫「未知短訊息」案例（英文短句 → 通用句），新增中文短句照顯、含中文的長句／多行 → 通用句，以及 `humanizeFailure` 的英文短句帶 `errorDetail`、已知分類（含 012 兩條）不帶、中文與恰為通用句的原文不重複帶、長／多行／空不帶、reducer 三條失敗路徑都帶；`CopilotDrawer.test.ts` 新增「技術細節」預設收合、展開後顯示原文（mono、內凹）、公告只念通用句、重試後消失、再失敗回到收合，以及經 store／reducer 實跑的已分類錯誤與中文短句都不顯示；web 全套 vitest（69 檔、1387 測試）、`typecheck`、`lint` 通過。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 
