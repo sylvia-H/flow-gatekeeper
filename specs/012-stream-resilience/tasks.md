@@ -244,7 +244,7 @@ pnpm monorepo：`packages/contracts/src/`、`apps/api/src/`、`apps/worker/src/`
   1. **勾選前**先把 §6 各項文字改到與 spec FR-039、FR-034 一致：`apps/web/PRODUCT.md` 項補「重新整理頁面後不續接」，術語改「重新排入佇列（內部稱重新派送）」；README「已知限制」項補「重新整理不續接」「jobId 與 `previousSocketId` 進 access log」；新增「指南 §16.3 第 6 列、§17『streaming 推不到前端』列」一項；`asyncapi.yaml` 與 `CHANGELOG.md` 項的相容性注意改為 FR-034 的 7 條。
   2. **同步 ADR-003 本文、消除矛盾**（以「（clarify／checklist 階段更新，2026-10-21）」標註、不刪原敘述；GET 回 failed 的規則標「（analyze 階段更新，2026-10-21）」）：§2(e) 端點改 `?socketId=[&previousSocketId=]` 並補 rebind 條件（原綁定已離線、綁定不存在，或原綁定等於 `previousSocketId`）；D8 第 1 點補 `previousSocketId` 的 UUID 驗證；第 3 點補第 17 條列（原綁定在線但等於 `previousSocketId` → 暫定改綁、不主動終止舊連線）；第 2／4 點補 409 兩種 `code`（`socket_unauthorized`／`job_bound_elsewhere`）與 503（BullMQ 5 s、Mongo 3 s，spec FR-010），第 4 點的進行中 state 補 `waiting-children`、未知 state 視同查無 job；D10 失敗對映補 503 與 409 依 `code` 分流，並補「GET 回 failed → 依 `humanizeError(error)` 轉失敗，其餘才用『結果未送達』」（spec FR-005）；D11 同 spec FR-022 補 failed 分支（failed → `humanizeError(error)`，其餘才用「結果未知」文案）；D13「不完整」補「或執行期間經歷過重連（第 20 條）」。
   3. §6 清單逐項勾選（對照上表）；§7 補記 research P1～P25 為第 22～46 條（每條含影響範圍、裁決、理由、替代方案，標「待覆核」），另記 checklist 階段推導的兩點（重連後授權失敗交給 watchdog、SC-004 必須證明重派發生）為第 47、48 條；檔頭與 §7 的「代理裁決、待覆核」註保留；確認 spec FR-041 與 ADR-003 §6 憲章項保留「建議修訂、待使用者」註記（FR-039、FR-040、FR-041）
-- [ ] T076 repo `CLAUDE.md` 開頭現況段：merge 前改為「最近一次完成的是 012-stream-resilience（…）」並保留 013 為前一次；只改現況段、不動規則內文（FR-039）
+- [X] T076 repo `CLAUDE.md` 開頭現況段：merge 前改為「最近一次完成的是 012-stream-resilience（…）」並保留 013 為前一次；只改現況段、不動規則內文（FR-039）
 
 **Checkpoint**：ADR-003 §6 全勾（憲章項除外，保留待使用者）；`docs-contract-version.test.ts` 綠。建議 commit：`docs(012): [Phase 9: 文件回補] ADR-002／README／PRODUCT／e2e README／指南`、`docs(012): [Phase 9: 文件回補] CHANGELOG 契約 1.4.0 與相容性注意、ADR-003 §7 補記 P1～P25 與本文同步`。
 
