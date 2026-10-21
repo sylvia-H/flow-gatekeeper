@@ -213,7 +213,10 @@ watch(
     // 同一任務的進行中說明行出現或換句（重連後正在取回、重新排入佇列與其 N 的校正）：沿用這個公告區朗讀（R10），不另開 live region。
     if (next.status === "active") {
       const note = progressNoteOf(next);
-      if (note !== null && note !== progressNoteOf(prev)) announcement.value = note;
+      const prevNote = progressNoteOf(prev);
+      if (note !== null && note !== prevNote) announcement.value = note;
+      // 說明行消失：清空公告區，下次出現同一句（例如第二次重連的「正在取回」）時 live region 才會重念。
+      else if (note === null && prevNote !== null) announcement.value = "";
       return;
     }
     // 「結果未送達」失敗被遲到的結果救回（AR-6、FR-005）也算同一任務的完成轉移，照樣公告。

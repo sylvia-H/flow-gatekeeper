@@ -1186,6 +1186,67 @@ describe("copilot store 重連續接與 GET 退路（012 T041／T042、FR-005、
       expect(store.stateFor("mixer-01")).toMatchObject({ status: "active", progress: 50 });
     });
 
+    it("重連＋授權發生在 POST 往返中 → 不先發（會 404 的）GET；POST 成功後才續接（合併門第 1 輪 L1）", async () => {
+      const store = useCopilotStore();
+      store.onReconnect(SOCKET);
+      let respondPost: (() => void) | undefined;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init?: RequestInit) => {
+          if (init?.method === "POST") {
+            return new Promise<Response>((resolve) => (respondPost = () => resolve(okResponse(bodyOf(init)))));
+          }
+          lookups.push(new URL(url, "http://localhost"));
+          return Promise.resolve(reply());
+        }),
+      );
+      const posting = store.diagnose("mixer-01", SOCKET);
+      const jobId = jobIdOf(store);
+      store.onReconnect(SOCKET_2);
+      store.onAuthorized(SOCKET_2);
+      await flushAsync();
+      expect(lookups).toHaveLength(0);
+      expect(store.stateFor("mixer-01")).toMatchObject({ status: "active", resume: "pending" });
+
+      reply = json({ status: "waiting", jobId, rebound: true });
+      respondPost?.();
+      await posting;
+      await flushAsync();
+      expect(lookups).toHaveLength(1);
+      expect(lookups[0]!.searchParams.get("socketId")).toBe(SOCKET_2);
+      expect(lookups[0]!.searchParams.get("previousSocketId")).toBe(SOCKET);
+      expect(store.stateFor("mixer-01")).toMatchObject({ status: "active", reconnected: true });
+      expect(store.stateFor("mixer-01")).not.toHaveProperty("resume");
+    });
+
+    it("POST 往返中重連但尚未授權 → POST 結束時不續接；授權後才 GET", async () => {
+      const store = useCopilotStore();
+      store.onReconnect(SOCKET);
+      let respondPost: (() => void) | undefined;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init?: RequestInit) => {
+          if (init?.method === "POST") {
+            return new Promise<Response>((resolve) => (respondPost = () => resolve(okResponse(bodyOf(init)))));
+          }
+          lookups.push(new URL(url, "http://localhost"));
+          return Promise.resolve(reply());
+        }),
+      );
+      const posting = store.diagnose("mixer-01", SOCKET);
+      const jobId = jobIdOf(store);
+      store.onReconnect(SOCKET_2);
+      respondPost?.();
+      await posting;
+      await flushAsync();
+      expect(lookups).toHaveLength(0);
+      reply = json(completedBody(jobId));
+      store.onAuthorized(SOCKET_2);
+      await flushAsync();
+      expect(lookups).toHaveLength(1);
+      expect(store.stateFor("mixer-01")).toMatchObject({ status: "completed", source: "lookup" });
+    });
+
     it("舊 GET 在新連線授權前就回來 → 只作廢；授權時才以新 socket 續接", async () => {
       const store = useCopilotStore();
       const jobId = await connectAndDiagnose(store);

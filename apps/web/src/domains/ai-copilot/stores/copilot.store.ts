@@ -161,6 +161,11 @@ export const useCopilotStore = defineStore("copilot", () => {
    * 多次授權（`machine/subscribed`）只續接一次（P20）。記 jobId 是為了消化時確認任務沒被換掉。
    */
   const pendingResume = new Map<string, string>();
+  /**
+   * 目前這條連線已授權時為其 socketId（`onAuthorized` 設、clientId 變更時清）。POST 往返中重連的任務會留在待續接清單，
+   * POST 結束時據此判斷「新連線已授權、可以續接了」（合併門第 1 輪 L1）。
+   */
+  let authorizedSocketId: string | null = null;
   /** GET 往返中的 jobId：同一 jobId 同時只有一個 GET，`checkStalls` 每秒 tick 也不重複觸發（ui-copy §3）。 */
   const lookupInFlight = new Set<string>();
   /** 某台離開 active（完成／失敗／中止）：清掉兩個 watchdog 計時與待續接標記。 */
@@ -389,7 +394,20 @@ export const useCopilotStore = defineStore("copilot", () => {
       }
     } finally {
       inFlight.value.delete(machineId);
+      resumeAfterPost(machineId, jobId);
     }
+  }
+
+  /**
+   * POST 往返中發生重連並已授權：`onAuthorized` 當時略過了這台（job 可能還沒入列，GET 會 404 而誤判「無法取回」），
+   * POST 結束後才補一次續接。POST 失敗時任務已轉失敗、`clearWatch` 已把它移出待續接清單，這裡不會動作。
+   */
+  function resumeAfterPost(machineId: string, jobId: string): void {
+    if (pendingResume.get(machineId) !== jobId) return;
+    if (authorizedSocketId === null || authorizedSocketId !== lastClientId.value) return; // 新連線尚未授權：等 onAuthorized
+    pendingResume.delete(machineId);
+    const state = stateFor(machineId);
+    if (state.status === "active" && state.jobId === jobId) void lookup(machineId, jobId, authorizedSocketId, "resume");
   }
 
   /**
@@ -601,6 +619,7 @@ export const useCopilotStore = defineStore("copilot", () => {
   function onReconnect(newClientId: string): void {
     const prev = lastClientId.value;
     lastClientId.value = newClientId;
+    if (prev !== newClientId) authorizedSocketId = null; // 新連線在 onAuthorized 之前都視為未授權
     if (prev === null || prev === newClientId) return;
     for (const [machineId, state] of jobs.value) {
       if (state.status !== "active") continue;
@@ -612,13 +631,14 @@ export const useCopilotStore = defineStore("copilot", () => {
 
   /**
    * 連線授權成功（App 在 `onAuthResult(true)` 呼叫，P20）：逐台對待續接清單中仍 active、jobId 未變的任務發續接 GET，
-   * 並清空清單——同一連線多次授權只消化一次。`socketId` 為已授權的這條連線。
+   * 並移出清單——同一連線多次授權只消化一次。`socketId` 為已授權的這條連線。
+   * POST 仍在往返的台先留在清單：job 可能還沒入列，此時 GET 會 404 而誤轉「無法取回」；由 `resumeAfterPost` 在 POST 結束後補發。
    */
   function onAuthorized(socketId: string): void {
-    if (pendingResume.size === 0) return;
-    const entries = [...pendingResume];
-    pendingResume.clear();
-    for (const [machineId, jobId] of entries) {
+    authorizedSocketId = socketId;
+    for (const [machineId, jobId] of [...pendingResume]) {
+      if (inFlight.value.has(machineId)) continue;
+      pendingResume.delete(machineId);
       const state = stateFor(machineId);
       if (state.status === "active" && state.jobId === jobId) void lookup(machineId, jobId, socketId, "resume");
     }

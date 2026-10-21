@@ -235,8 +235,8 @@ function onBannerResume(): void {
 // 凍結只作用在 `store.staleNow`（卡片／機群健康），watchdog 與 metrics 面板仍用真實時間。
 // 同一個 tick 順帶跑診斷逾時 watchdog：active 任務逾 STALL_TIMEOUT_MS 無進展即自動收尾為
 // failed（可重試），避免後端卡住時面板永遠停在進行中（門檻取 worker AI_TIMEOUT 30s + 餘裕）。
-// 「後端已完成、ai/done 未送達」的 2 s 寬限（AR-6，`UNDELIVERED_GRACE_MS`）也由這個 tick 檢查，
-// 每秒一次的解析度讓它在完成後 2–3 s 內轉失敗，不需另起計時器。
+// 「後端已完成、結果未送達」的 2 s 寬限（AR-6，`UNDELIVERED_GRACE_MS`）也由這個 tick 檢查，
+// 每秒一次的解析度讓它在完成後 2–3 s 內先 GET 一次（012 FR-005），不需另起計時器。
 const STALL_TIMEOUT_MS = 45_000;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {

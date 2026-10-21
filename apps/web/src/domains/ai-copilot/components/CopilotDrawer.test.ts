@@ -733,6 +733,22 @@ describe("CopilotDrawer 重連續接說明行與取回 meta（012 T044、FR-035�
     expect(w.text()).toContain("60%");
   });
 
+  it("說明行消失時清空公告區：第二次重連的「正在取回」會再朗讀一次（合併門第 1 輪 L2）", async () => {
+    const w = mountWithStore();
+    await startThenReconnect();
+    const copilot = useCopilotStore();
+    const live = () => w.get('[aria-live="polite"]').text();
+    expect(live()).toBe("已重新連線，正在取回診斷狀態…");
+    copilot.onAuthorized(SOCKET_2);
+    await flushPromises();
+    await flushPromises();
+    expect(w.find('[data-testid="copilot-progress-note"]').exists()).toBe(false);
+    expect(live()).toBe("");
+    copilot.onReconnect("33333333-3333-4333-8333-333333333333");
+    await flushPromises();
+    expect(live()).toBe("已重新連線，正在取回診斷狀態…");
+  });
+
   it("沒有重連的進行中任務不顯示說明行", async () => {
     const w = mountWithStore();
     await startJob();
