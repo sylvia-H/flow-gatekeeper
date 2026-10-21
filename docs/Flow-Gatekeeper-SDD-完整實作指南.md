@@ -1028,7 +1028,8 @@ jobs:
       - run: pnpm build   # 走一次 production 建置路徑（packages build → apps 依 dist 編譯）
 ```
 
-> 現況：本 repo 的 workflow 目前只保留 `workflow_dispatch`（私有 repo 期間暫停自動觸發，見 ADR-002 §7），實際內容見 `.github/workflows/ci.yml`。
+> 現況：本 repo 的 workflow 由**所有分支的 push** 自動觸發，另保留 `workflow_dispatch`、不設 `pull_request`；只改文件（`docs/**`、`**/*.md`）的 push 不跑，但測試會讀的 `README.md`、`CHANGELOG.md` 與本指南仍會觸發。實際內容見 `.github/workflows/ci.yml`。
+> **已變更（2026-10-21）**：2026-06-30 起曾只保留 `workflow_dispatch`（私有 repo 期間暫停自動觸發，見 ADR-002 §7）；第三輪審查 DOC-18 後恢復 push 觸發，理由與推翻紀錄見 §15.6「CI 恢復自動觸發與 flaky 測試」。
 
 > 標榜 SDD 卻沒測試會站不住腳。每個 feature 至少補幾個 **純函式單元測試**當驗收佐證，例如：
 >
@@ -3184,10 +3185,12 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 >
 > **已變更（2026-09-27 第二輪審查）**：roadmap 修訂為 **010-lite → 012-lite → 011**（`docs/20260927-research-review02.md` §5.4）；
 > 012-lite 改為優先採 BullMQ `returnvalue`＋`GET /diagnoses/:jobId`＋`stalled` 監聽，Redis Streams 降為備選。延後項總表見 ADR-002 §6.5。
+>
+> **已變更（2026-10，第三輪審查）**：roadmap 再修訂為 **quick-fix → 012-lite → 010-lite（縮小）→ 011**（`docs/20260927-research-review03.md` §5.4）。quick-fix 已於 2.1.0 落地（`fix/20261018-review03-quickfix`，見 §15.6「第三輪審查 quick-fix」）；它用掉契約 1.3.0，其餘三項的契約版號各順延一號為 012-lite＝1.4.0、010-lite＝1.5.0、011＝1.6.0（見 §15.6「第三輪審查 quick-fix」的「roadmap 版號順延」）。上一則的 010-lite → 012-lite → 011 已由本則取代。
 
 ### 15.6 1.0.0 之後的現況摘要
 
-本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；表中第 1～5 列與其後的 1.1.0 release 準備列於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第 6～9 列、2.0.0 release 準備列與 SDD feature 013 於 2026-10-17 以產品版本 **2.0.0**（tag `2.0.0`）發布；第 10 列與 2.1.0 release 準備列於 2026-10-18 以產品版本 **2.1.0**（tag `2.1.0`）發布。只改版號與文件的 release 準備分支、及直接 commit 以「—」列出、不編號。變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
+本節彙整 **1.0.0（`3e94ac2`，tag 原名 `v1.0.0`、2026-09-28 更名）之後**所有非 SDD 維護分支（fix／upgrade／docs）落地的現況；表中第 1～5 列與其後的 1.1.0 release 準備列於 2026-09-28 以產品版本 **1.1.0**（tag `1.1.0`）發布；第 6～9 列、2.0.0 release 準備列與 SDD feature 013 於 2026-10-17 以產品版本 **2.0.0**（tag `2.0.0`）發布；第 10 列與 2.1.0 release 準備列於 2026-10-18 以產品版本 **2.1.0**（tag `2.1.0`）發布；第 11 列起尚未發布（`CHANGELOG.md` `[Unreleased]`）。只改版號與文件的 release 準備分支、及直接 commit 以「—」列出、不編號。變更明細見 repo 根 `CHANGELOG.md`。這些分支都不是 SDD feature，
 但改動了多處跨 feature 的行為；各章 reference code 保留，另以「已變更」註記指回本節。依 `develop` 的 merge 順序
 （`git log --oneline --first-parent --merges 3e94ac2..HEAD` 核對）：
 
@@ -3207,6 +3210,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | — | `docs/20261017-release-2.0.0` | `45b1460` | 2.0.0 release 準備（版號、CHANGELOG、文件版本註記） | — |
 | 10 | `fix/20261018-review03-quickfix` | `09d5a7e` | 第三輪審查報告 §6 Batch E（quick-fix）：P1 與日誌遮蔽、HTTP 錯誤回應、relay 與 Gateway 入站限速、worker 終態事件順序、關閉總時限、web 結果未送達收尾、測試門檻 ratchet；契約升 1.3.0 | 第三輪審查 quick-fix |
 | — | `docs/20261018-release-2.1.0` | （以 `git log --first-parent --merges` 為準） | 2.1.0 release 準備（版號、CHANGELOG、文件版本註記，以及首次 Linux CI 抓到的 `ThemeToggle.test.ts` localStorage 洩漏修正；版號由原規劃的 2.0.1 改為 2.1.0，見下方「第三輪審查 quick-fix」裁決 14） | — |
+| 11 | `fix/20261021-ci-and-flaky` | （以 `git log --first-parent --merges` 為準） | `ci.yml` 恢復所有分支 push 自動觸發（DOC-18）、修正 nightly mutation 抓到的 `TopBar.test.ts` 不穩定測試、§15.5 roadmap 註記更新 | CI 恢復自動觸發與 flaky 測試 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」），但不列入本表。
 
@@ -3342,7 +3346,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **fake AiProvider**：`apps/worker/src/ai/fake-provider.ts` 實作 `AiProvider`（硬規則 4），固定假診斷逐段串流；由 `AI_PROVIDER`（`gemini`｜`fake`，預設 `gemini`）、`FAKE_AI_TOKENS`（20，1–1000）、`FAKE_AI_TOKEN_DELAY_MS`（500，0–60000）控制，production 下允許但啟動 warn、非法值拒絕啟動。`id`／`model` 進快取簽章，不與 gemini 快取互相命中。
   - **變異測試**：`stryker.config.mjs` 只變異五個接線層核心檔、`break` 70；`.github/workflows/nightly-mutation.yml` 每日由 `main` 排程、checkout `develop`。首跑總分約 72，`monitoring.gateway`（66.5）與 `processor`（62.7）單檔低於 70，列追蹤。
   - **斷言面補齊**（報告 TQ-4～TQ-9）：`processor` 事件序列與重試分支、`job-status-relay`、`HistoryService`、pino logger 包裝、web 元件測試（`CopilotDrawer`、`MachineNodeCard`、`MetricsPanel`、metrics store）。
-  - **CI**：`ci.yml` 改為契約 lint → typecheck → lint → `test:coverage`（含門檻、上傳 lcov）→ build，加 `permissions: contents: read`、`concurrency`、`timeout-minutes: 20`；仍只保留 `workflow_dispatch`。
+  - **CI**：`ci.yml` 改為契約 lint → typecheck → lint → `test:coverage`（含門檻、上傳 lcov）→ build，加 `permissions: contents: read`、`concurrency`、`timeout-minutes: 20`；當時仍只保留 `workflow_dispatch`（**已變更（2026-10-21）**：恢復所有分支 push 自動觸發，見下方「CI 恢復自動觸發與 flaky 測試」）。
 - **code-review findings（6 項，行為與結構收斂）**：
   - Gateway「已發 close(1008) 但對端不回 close frame」的逾期回收：**現況為逐連線計時器**——`requestClose()` 發出 close 時掛 `setTimeout(min(WS_HEARTBEAT_MS, WS_AUTH_GRACE_MS)).unref()`，到期即以 `close-not-honoured` terminate，對端正常回 close 時由 `cleanup` 清掉計時器；**未設 `WS_AUTH_SECRET` 時違規關閉也適用**，且不依賴心跳或授權 sweep 的檢查間隔（`f2d9cb0`）。演進：`12dcdd5` 先把回收放在心跳 sweep，final-review（`620d4b6`）補回授權 sweep 共用檢查，final-review-2 再改為逐連線計時器並移除兩個 sweep 的回收分支。
   - Gateway 以逐連線 `closeTimer` 為「關閉中」的單一來源（`isClosing()` 由其推導），違規與授權逾期共用唯一關閉入口 `requestClose()`，移除重複的 `closing` 旗標（原以 `closeRequestedAt` 時戳表示，`f2d9cb0` 改為計時器）。
@@ -3431,6 +3435,23 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   `machine/subscribe`／`ping` 描述每連線入站限速（20 則／秒、容量 40，超速計違規，達 `WS_MAX_VIOLATIONS` 以 1008 關閉）；`ping`／`pong` 描述 client 送的協定層 ping frame 不回應、應用層 pong 不受背壓影響（裁決 13 併入 1.3.0）；
   `ai/*` 的 `attempt` 描述改為同一 attempt 內 `seq` 未遞增（`seq <= 上一個 seq`）即視為新一次執行；`POST /diagnoses` 新增 413、壞 JSON 400 的 body 改為固定形狀、body 上限 16 kb。明細見 `CHANGELOG.md`「asyncapi 契約版本」1.3.0。
 - **roadmap 版號順延**：第三輪審查 roadmap（報告 §5.4：quick-fix → 012-lite → 010-lite → 011）原定 012-lite＝契約 1.3.0、010-lite＝1.4.0、011＝1.5.0；1.3.0 已由本 quick-fix 使用，三者各順延一號為 **012-lite＝1.4.0、010-lite＝1.5.0、011＝1.6.0**（報告本身凍結不改）。
+
+**CI 恢復自動觸發與 flaky 測試**（`fix/20261021-ci-and-flaky`，merge 以 `git log --first-parent --merges` 為準，2026-10-21；自 `develop` `27bc587`；變更明細見 `CHANGELOG.md` `[Unreleased]`）：
+
+- **做了什麼**：
+  - CI 觸發（第三輪報告 DOC-18／TQ-19）：`ci.yml` 的 `on:` 由只有 `workflow_dispatch` 改為 `push`（`branches: ["**"]`，tag 不觸發）＋`workflow_dispatch`，不設 `pull_request`；`concurrency: cancel-in-progress` 照舊。
+    只改文件的 push 不跑：GitHub 的 `paths-ignore` 不支援 `!` 例外，所以改用 `paths`——先 `**` 全收、再 `!docs/**`、`!**/*.md` 排除，最後加回測試會讀的三個檔：`README.md`（`apps/{api,worker}` 的 `readme-env-table.test.ts`、contracts 的 `docs-contract-version.test.ts`）、`CHANGELOG.md` 與本指南（`docs-contract-version.test.ts`）。新增讀取 Markdown 或 `docs/` 檔案的測試時 MUST 把該檔加回 `ci.yml` 的清單，否則改壞那份文件時 CI 不會跑。
+    tag 不觸發的理由：release 的 `git push origin main --follow-tags` 中 `main` 那次已經會跑，tag 再跑一次只是重複。`nightly-mutation.yml` 只改檔頭註解，排程不變。
+  - 不穩定測試：`apps/web/src/shared/components/TopBar.test.ts`「Escape 收回：攔截按鍵（defaultPrevented）…」在 2026-10-19 nightly mutation（run `39330345679`）的 Stryker dry run 失敗（`expected false to be true`），同一 commit 在 10-18、10-20 都通過。
+    根因：Vue runtime-dom 的事件 invoker 會略過「事件時間戳 ≤ 該監聽器掛上時間」的事件（防止傳遞途中才掛上的 handler 處理同一事件），時間戳由路徑上第一個 Vue invoker 以 `Date.now()` 記下，精度只到毫秒。覆蓋外框（`@keydown.esc`）與輸入框（`@keydown.enter`）在點圖示鈕展開時才掛載；keydown 若在掛載的同一毫秒內從輸入框送出，輸入框的 invoker 先記下時間戳，冒泡到外框時被判成「掛上前的事件」略過，`preventDefault` 沒有執行。機器越快越容易落在同一毫秒；固定 `Date` 後可百分之百重現同一則錯誤訊息。
+    真實按鍵不可能與掛載同一毫秒，所以是測試問題，元件不改。修法：該 describe 以 `vi.useFakeTimers({ toFake: ["Date"] })` 固定時鐘（計時器與 microtask 照常），`openByClick` 展開後以 `vi.advanceTimersByTime(1)` 明確推進 1 ms；漏推進時改為穩定失敗，不再偶發。同組「輸入法組字中的 Escape 不收回」原本可能因同一原因空過，現在確實走到元件的組字判斷。
+    掃過 web 其他元件：巢狀的同型別鍵盤／focusout 監聽只在 TopBar 這一處。
+  - 文件回補：ADR-002 §3 第 9 列、§6.5.1 infra Low 列與 §7 末段；本指南 §6.10 現況註記、上方「Batch C／D」的 CI 條、§15.5 roadmap 註記（改為第三輪的 quick-fix → 012-lite → 010-lite（縮小）→ 011，並指向「roadmap 版號順延」）；README「一鍵全檢」的 CI 敘述；`CHANGELOG.md` `[Unreleased]`。第三輪報告凍結不改。
+- **驗證**：`TopBar.test.ts` 單檔在本機 Node 26 與 Node 22.23.3（CI 版本）各連跑 10 次（各 5 次加 `--sequence.shuffle`）全數通過（45／45）；拿掉 1 ms 推進則「Escape 收回」穩定失敗、訊息與 CI 相同；`stryker run --dryRunOnly`（與 nightly 相同設定，只跑 initial test run）526 支通過。
+- **使用者裁決（2026-10-21）**：
+  1. （推翻紀錄）CI 恢復 **push** 自動觸發，保留 `workflow_dispatch`、**不加** `pull_request`。原提案為第三輪報告附錄 C 的 (a)「恢復 `pull_request`（加 `paths-ignore`）、不恢復 push」；使用者問「為何不建議恢復 push」後改為 push，使用者採納。
+     理由：本 repo 從未開過 PR，合併一律本機 `--no-ff` 後 push `develop`，只恢復 `pull_request` 等於 CI 永不自動跑；當初關閉的理由「私有 repo 期間節省 Actions 分鐘」（`6417069`）在 repo 公開後已不成立；push 自動跑每次約 10 分鐘，公開 repo 不計費，連續 push 由 concurrency 取消舊 run。不加 `pull_request` 是因為同 repo 分支的 PR 會讓同一個 commit 跑兩次。
+- **仍未處理**：INF-14（nightly 不論 `develop` 有無變更每日照跑、180 分 timeout 為推估值）與第三輪報告 Batch F 第 6 點的其餘建議（`compose config -q`、e2e 進 CI 的方式）不在本分支範圍；ADR-002 §6.5.1 infra Low 列的 INF-8 餘項同樣未處理。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 
