@@ -17,7 +17,8 @@ import { createDiagnosis, E2eClient, sleep } from "./harness/ws-client.js";
  * BullMQ 判 stalled 重派，冪等短路吸收第二次執行——trigger 1 筆、LLM 1 次、cache hit＋miss 合計 1、結果非快取。
  *
  * 時序（P25）：收到該 jobId 第 3 個 `ai/token` 後才 `pause`，停頓落在 exec1 首 token 之後——exec1 在停頓期間跑完
- * LLM 串流、停在 `report(80)`；恢復後 exec1 的 SET `ai-result` 先於 exec2 的短路查詢送進 Redis，exec2 一定在短路命中。
+ * LLM 串流、停在 `report(80)`；恢復後 exec1 的 SET `ai-result` 領先 exec2 的短路查詢至少 1 個 Redis 往返，exec2 在短路命中。
+ * 實測（2026-10-21 兩次）皆由短路 (ii) `diagnoses` 命中——exec1 已寫庫並 DEL `ai-result` 後 exec2 才查。
  *
  * 停頓期間 client 收不到任何事件（api 的 Redis 也凍住）：本場景不量 `maxGap`。
  * 本檔撰寫於 Phase 5（US4），執行點在 US3 checkpoint（鎖參數 15／5／2 就位後才是驗收條件）。

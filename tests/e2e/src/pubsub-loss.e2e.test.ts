@@ -21,7 +21,7 @@ import { createDiagnosis, E2eClient, sleep } from "./harness/ws-client.js";
 const MACHINE = "pack-03";
 /** POST 前的硬等：同 diagnosis.e2e.test.ts（api 每秒 flush 遙測進 Mongo，無可觀測訊號確認已落地）。 */
 const TELEMETRY_FLUSH_WAIT_MS = 3_000;
-/** 斷線迴圈長度：涵蓋 fake 串流（20 段 × 500 ms ≈ 10 s）與前後的取鎖、寫庫。 */
+/** 斷線迴圈長度：涵蓋 fake 串流（首 token 前 2 s＋20 段 × 500 ms ≈ 11.5 s，`FAKE_AI_FIRST_TOKEN_DELAY_MS`）與前後的取鎖、寫庫。 */
 const KILL_SECONDS = 20;
 
 describe.skipIf(!process.env.E2E)("跨 process e2e：Redis Pub/Sub 持續斷線", () => {

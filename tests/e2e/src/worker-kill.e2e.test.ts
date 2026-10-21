@@ -10,7 +10,8 @@ import { createDiagnosis, E2eClient, sleep } from "./harness/ws-client.js";
  * 場景 3（012 US3、SC-001；plan 風險 1、research P24）：SIGKILL worker → compose 重啟 → BullMQ stalled 偵測重派 → 完成。
  *
  * - 3a 串流中 kill（第 3 個 token 後）；3b 首 token 前 kill（收到 `job/status` progress 20 即 kill：context 已返回、尚未呼叫
- *   LLM；fake 第一個 token 約在 progress 40 後 500 ms，以 20 為觸發點確定落在首 token 前，P24）。
+ *   LLM，P24）。e2e override 以 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 把 fake 首 token 延後 2 s（原本一呼叫就送出，progress 20
+ *   → 首 token 只差幾十 ms），以 progress 20 為觸發點、`docker kill` 數百 ms 內生效，確定落在首 token 前。
  * - SC-001：使用者看到的最長無事件間隔 `maxGap < 45_000`（前端 watchdog 門檻；設計上界 `K + W + 2S` ≈ 35 s，前提 W ≤ 25 s）。
  *   間隔量整個 job 到 completed 為止（含 kill 前最後一則事件 → kill 後第一則事件那一段，正是要量的空窗）。
  * - `W`（worker 冷啟動，含 compose 重啟延遲）＝ kill 後第一則 `worker ready`（則數基線判定）− 容器 `State.FinishedAt`，
