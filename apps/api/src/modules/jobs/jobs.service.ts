@@ -15,6 +15,7 @@ import type {
   DiagnosisJobPayload,
 } from "@flow-gatekeeper/contracts";
 import { JobRoutingRegistry } from "../websocket/job-routing-registry.js";
+import type { JobBinding } from "../websocket/job-routing-registry.js";
 import { MonitoringGateway } from "../websocket/monitoring.gateway.js";
 import { ERROR_LOG_THROTTLE_MS, LogThrottle } from "@flow-gatekeeper/shared/logging";
 import { throttledFields } from "../../lib/throttled-log.js";
@@ -28,7 +29,7 @@ import { withTimeout } from "./with-timeout.js";
 export const ENQUEUE_TIMEOUT_MS = 5_000;
 
 /** 綁定查詢／建立／清理——JobsService 只需要 registry 的這三個能力（測試可注入 fake）。 */
-export type JobBindingStore = Pick<JobRoutingRegistry, "bind" | "get" | "delete">;
+export type JobBindingStore = Pick<JobRoutingRegistry, "bind" | "get" | "deleteIfCurrent">;
 
 /** 發起連線的在線／授權查詢——JobsService 只需要 Gateway 的這個能力（測試可注入 fake）。 */
 export type ClientPresence = Pick<MonitoringGateway, "isAuthorized">;
@@ -135,7 +136,7 @@ export class JobsService {
 
     // 綁定必須在任何 await 之前建立：早到的 job/status／ai/* 要能找到對象，同一 jobId 的
     // 併發重送也會在上面的檢查命中，而不是各自入列。
-    this.bindings.bind(jobId, body.socketId, machineId);
+    const binding = this.bindings.bind(jobId, body.socketId, machineId);
 
     const payload: DiagnosisJobPayload = {
       jobId,
@@ -145,7 +146,7 @@ export class JobsService {
       windowMinutes: 5,
     };
 
-    const work = this.enqueueOrUnbind(payload);
+    const work = this.enqueueOrUnbind(payload, binding);
     this.enqueuing.set(jobId, work);
     try {
       await work;
@@ -157,13 +158,16 @@ export class JobsService {
     return { jobId, machineId, status: "waiting" };
   }
 
-  /** 有時限地入列；失敗時解除綁定並轉成對外的 409／503。 */
-  private async enqueueOrUnbind(payload: DiagnosisJobPayload): Promise<void> {
+  /**
+   * 有時限地入列；失敗時解除綁定並轉成對外的 409／503。只刪自己建立的那份（`deleteIfCurrent`）：等待入列期間
+   * 綁定可能已被 GET `/diagnoses/:jobId` 改綁到別的連線，那份不屬於這次失敗的請求。
+   */
+  private async enqueueOrUnbind(payload: DiagnosisJobPayload, binding: Readonly<JobBinding>): Promise<void> {
     const { jobId, machineId } = payload;
     try {
       await withTimeout(this.enqueueOnce(payload), ENQUEUE_TIMEOUT_MS, "enqueue");
     } catch (err) {
-      this.bindings.delete(jobId);
+      this.bindings.deleteIfCurrent(jobId, binding);
       if (err instanceof ConflictException) throw err;
       this.plog.warn({ jobId, machineId, err }, "diagnosis enqueue failed, redis unavailable");
       // 逾時後底層的 add 仍可能在 Redis 恢復時完成（無法撤回），此時 job 會在無綁定下跑完；

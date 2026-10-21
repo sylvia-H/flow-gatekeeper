@@ -37,11 +37,10 @@ type FakeJob = {
   machineId?: unknown;
 };
 
-/** `queue.getJob` 的替身：回 `getState` 與欄位；`undefined` 表示 BullMQ 查無 job。 */
+/** `queue.getJob` 的替身（job hash 的欄位）；`undefined` 表示 BullMQ 查無 job。state 由 `queue.getJobState` 另回。 */
 function toJob(fake: FakeJob | undefined) {
   if (!fake) return undefined;
   return {
-    getState: async () => fake.state,
     data: { machineId: fake.machineId ?? "cnc-01" },
     returnvalue: fake.returnvalue,
     failedReason: fake.failedReason,
@@ -55,14 +54,39 @@ function setup(opts: { authorized?: string[]; online?: string[] } = {}) {
   const authorized = new Set(opts.authorized ?? [SOCKET_OLD, SOCKET_NEW, SOCKET_OTHER]);
   const online = new Set(opts.online ?? [SOCKET_NEW]);
   const registry = new JobRoutingRegistry();
-  const queue = { getJob: vi.fn(async (_jobId: string): Promise<unknown> => undefined) };
+  const queue = {
+    getJobState: vi.fn(async (_jobId: string): Promise<string> => "unknown"),
+    getJob: vi.fn(async (_jobId: string): Promise<unknown> => undefined),
+  };
   const reader = { findDiagnosisResult: vi.fn(async (_jobId: string): Promise<unknown> => null) };
   const presence = { isAuthorized: (id: string) => authorized.has(id), isOnline: (id: string) => online.has(id) };
   const service = new DiagnosisLookupService(queue as never, registry, presence, reader);
-  const jobReturns = (fake: FakeJob | undefined) => queue.getJob.mockImplementation(async () => toJob(fake));
+  /** state 與 hash 一致的 job（`undefined` → state unknown、查無 job）。 */
+  const jobReturns = (fake: FakeJob | undefined) => {
+    queue.getJobState.mockImplementation(async () => fake?.state ?? "unknown");
+    queue.getJob.mockImplementation(async () => toJob(fake));
+  };
+  /**
+   * 讀取停在 `getJobState`，由測試逐一放行：`releases[i](fake)` 回 fake 的 state，緊接著的 `getJob` 回同一份 fake。
+   */
+  const pendingReads = () => {
+    const releases: Array<(fake: FakeJob | undefined) => void> = [];
+    let latest: FakeJob | undefined;
+    queue.getJobState.mockImplementation(
+      () =>
+        new Promise<string>((resolve) =>
+          releases.push((fake) => {
+            latest = fake;
+            resolve(fake?.state ?? "unknown");
+          }),
+        ),
+    );
+    queue.getJob.mockImplementation(async () => toJob(latest));
+    return releases;
+  };
   const lookup = (socketId = SOCKET_NEW, previousSocketId?: string) =>
     service.lookup({ jobId: JOB_ID, socketId, ...(previousSocketId ? { previousSocketId } : {}) });
-  return { registry, queue, reader, presence, service, online, jobReturns, lookup };
+  return { registry, queue, reader, presence, service, online, jobReturns, pendingReads, lookup };
 }
 
 async function captureError(promise: Promise<unknown>): Promise<unknown> {
@@ -272,6 +296,7 @@ describe("DiagnosisLookupService：409", () => {
       message: "WebSocket 連線不存在或未授權，請重新連線後再發起診斷",
     });
     expect(registry.isBound(JOB_ID)).toBe(false);
+    expect(queue.getJobState).not.toHaveBeenCalled();
     expect(queue.getJob).not.toHaveBeenCalled();
 
     for (let i = 0; i < 3; i += 1) await captureError(lookup());
@@ -307,7 +332,7 @@ describe("DiagnosisLookupService：409", () => {
 describe("DiagnosisLookupService：503", () => {
   it("BullMQ 查詢逾時（5 s）→ 503 並撤回暫定綁定", async () => {
     const { registry, queue, lookup } = setup();
-    queue.getJob.mockImplementation(() => new Promise(() => undefined));
+    queue.getJobState.mockImplementation(() => new Promise(() => undefined));
     const pending = captureError(lookup());
     expect(registry.isBound(JOB_ID)).toBe(true); // 先綁定後查詢
     await vi.advanceTimersByTimeAsync(ENQUEUE_TIMEOUT_MS);
@@ -328,7 +353,7 @@ describe("DiagnosisLookupService：503", () => {
   it("Redis 錯誤 → 503；rebound 的改綁一併撤回", async () => {
     const { registry, queue, lookup } = setup();
     registry.bind(JOB_ID, SOCKET_OLD, "cnc-01");
-    queue.getJob.mockRejectedValue(new Error("Connection is closed."));
+    queue.getJobState.mockRejectedValue(new Error("Connection is closed."));
     await expect(lookup()).rejects.toBeInstanceOf(ServiceUnavailableException);
     expect(registry.owner(JOB_ID)).toBe(SOCKET_OLD);
   });
@@ -375,20 +400,19 @@ describe("DiagnosisLookupService：先綁定後查詢與 deferred（FR-009、P1�
     return { gateway, relay: relay as unknown as StatusRelayInternals };
   }
 
-  it("Job.fromId 尚未 resolve 時 relay 收到 completed → job/status 送到新 socket；GET 回 completed，撤回不還原終態綁定", async () => {
+  it("BullMQ 讀取尚未 resolve 時 relay 收到 completed → job/status 送到新 socket；GET 回 completed，撤回不還原終態綁定", async () => {
     const ctx = setup();
-    const { registry, queue, lookup } = ctx;
+    const { registry, pendingReads, lookup } = ctx;
     const { gateway, relay } = withRelay(ctx);
     registry.bind(JOB_ID, SOCKET_OLD, "cnc-01");
-    let release: (job: unknown) => void = () => undefined;
-    queue.getJob.mockImplementation(() => new Promise((resolve) => (release = resolve)));
+    const releases = pendingReads();
 
     const pending = lookup();
     expect(registry.owner(JOB_ID)).toBe(SOCKET_NEW); // 任何 await 之前已改綁
     relay.handleCompleted(JOB_ID, { result: RESULT, cached: false });
     expect(gateway.send).toHaveBeenCalledWith(SOCKET_NEW, expect.objectContaining({ type: "job/status", status: "completed" }));
 
-    release(toJob({ state: "completed", returnvalue: { result: RESULT, cached: false } }));
+    releases[0]?.({ state: "completed", returnvalue: { result: RESULT, cached: false } });
     await expect(pending).resolves.toMatchObject({ status: "completed" });
     // 綁定已標終態：撤回不還原到舊連線，寬限期滿照刪。
     expect(registry.get(JOB_ID)).toMatchObject({ clientId: SOCKET_NEW, terminal: { kind: "completed" } });
@@ -397,30 +421,29 @@ describe("DiagnosisLookupService：先綁定後查詢與 deferred（FR-009、P1�
 
   it("deferred：暫定綁定期間 relay 有 job/status 被擱置 → resolveClaim 回 deferred，重讀一次 job 以最新 state 回應", async () => {
     const ctx = setup();
-    const { registry, queue, lookup } = ctx;
+    const { registry, queue, pendingReads, lookup } = ctx;
     const { gateway, relay } = withRelay(ctx);
-    let release: (job: unknown) => void = () => undefined;
-    queue.getJob
-      .mockImplementationOnce(() => new Promise((resolve) => (release = resolve)))
-      .mockImplementationOnce(async () => toJob({ state: "completed", returnvalue: { result: RESULT, cached: true } }));
+    const releases = pendingReads();
 
     const pending = lookup();
     relay.handleProgress(JOB_ID, { value: 90, attempt: 1, execution: 1 }); // machineId 尚為 null → 擱置
     expect(gateway.send).not.toHaveBeenCalled();
     expect(registry.get(JOB_ID)?.deferred).toBe(true);
 
-    release(toJob({ state: "active" }));
+    releases[0]?.({ state: "active" });
+    await vi.waitFor(() => expect(releases).toHaveLength(2)); // deferred → 重讀
+    releases[1]?.({ state: "completed", returnvalue: { result: RESULT, cached: true } });
     await expect(pending).resolves.toEqual({ status: "completed", jobId: JOB_ID, result: RESULT, cached: true });
+    expect(queue.getJobState).toHaveBeenCalledTimes(2);
     expect(queue.getJob).toHaveBeenCalledTimes(2);
     expect(registry.isBound(JOB_ID)).toBe(false); // 非保留結果：撤回暫定綁定
   });
 
   it("同 socket 並發兩個 GET（created＋unchanged）：deferred 歸 created，unchanged 不補 machineId、不搶旗標", async () => {
     const ctx = setup();
-    const { registry, queue, service } = ctx;
+    const { registry, pendingReads, service } = ctx;
     const { relay } = withRelay(ctx);
-    const releases: Array<(job: unknown) => void> = [];
-    queue.getJob.mockImplementation(() => new Promise((resolve) => releases.push(resolve)));
+    const releases = pendingReads();
     const lookupNew = () => service.lookup({ jobId: JOB_ID, socketId: SOCKET_NEW });
 
     const created = lookupNew(); // claim created（machineId null）
@@ -428,13 +451,13 @@ describe("DiagnosisLookupService：先綁定後查詢與 deferred（FR-009、P1�
     relay.handleProgress(JOB_ID, { value: 50, attempt: 1, execution: 1 }); // 擱置 → deferred
     expect(releases).toHaveLength(2);
 
-    releases[1]?.(toJob({ state: "active", machineId: "press-02" })); // unchanged 先拿到 job
+    releases[1]?.({ state: "active", machineId: "press-02" }); // unchanged 先拿到 job
     await expect(unchanged).resolves.toMatchObject({ status: "active", rebound: true });
     expect(registry.get(JOB_ID)).toMatchObject({ machineId: null, deferred: true });
 
-    releases[0]?.(toJob({ state: "active", machineId: "press-02" })); // created：resolveClaim 得到 deferred → 重讀
+    releases[0]?.({ state: "active", machineId: "press-02" }); // created：resolveClaim 得到 deferred → 重讀
     await vi.waitFor(() => expect(releases).toHaveLength(3));
-    releases[2]?.(toJob({ state: "active", progress: 70, machineId: "press-02" }));
+    releases[2]?.({ state: "active", progress: 70, machineId: "press-02" });
     await expect(created).resolves.toMatchObject({ status: "active", progress: 70, rebound: true });
     expect(registry.get(JOB_ID)).toMatchObject({ clientId: SOCKET_NEW, machineId: "press-02" });
     expect(registry.get(JOB_ID)).not.toHaveProperty("deferred");
@@ -442,18 +465,17 @@ describe("DiagnosisLookupService：先綁定後查詢與 deferred（FR-009、P1�
 
   it("GET1 等 Redis 期間被 GET2 以 previousSocketId 改綁走 → GET1 回 409 job_bound_elsewhere，不撤回 GET2 的綁定", async () => {
     const ctx = setup({ online: [SOCKET_NEW, SOCKET_OTHER] }); // 原綁定 SOCKET_OLD 已離線
-    const { registry, queue, service } = ctx;
+    const { registry, pendingReads, service } = ctx;
     registry.bind(JOB_ID, SOCKET_OLD, "cnc-01");
-    const releases: Array<(job: unknown) => void> = [];
-    queue.getJob.mockImplementation(() => new Promise((resolve) => releases.push(resolve)));
+    const releases = pendingReads();
 
     const first = service.lookup({ jobId: JOB_ID, socketId: SOCKET_NEW }); // rebound OLD → NEW
     const second = service.lookup({ jobId: JOB_ID, socketId: SOCKET_OTHER, previousSocketId: SOCKET_NEW }); // NEW → OTHER
     expect(registry.owner(JOB_ID)).toBe(SOCKET_OTHER);
 
-    releases[1]?.(toJob({ state: "active" }));
+    releases[1]?.({ state: "active" });
     await expect(second).resolves.toMatchObject({ status: "active", rebound: true });
-    releases[0]?.(toJob({ state: "active" }));
+    releases[0]?.({ state: "active" });
     const err = await captureError(first);
     expect(err).toBeInstanceOf(ConflictException);
     expect((err as ConflictException).getResponse()).toMatchObject({ code: "job_bound_elsewhere" });
@@ -464,6 +486,37 @@ describe("DiagnosisLookupService：先綁定後查詢與 deferred（FR-009、P1�
     const { queue, jobReturns, lookup } = setup();
     jobReturns({ state: "active" });
     await lookup();
+    expect(queue.getJobState).toHaveBeenCalledTimes(1);
     expect(queue.getJob).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("DiagnosisLookupService：先讀 state 再讀 hash（完成落在兩次讀取之間）", () => {
+  it.each([
+    ["快取命中而完成（Mongo 無紀錄）", { returnvalue: { result: RESULT, cached: true } }],
+    ["失敗", { failedReason: "boom" }],
+  ])("state 讀到 active、hash 已是%s → 200 active rebound（不誤回 404／空 error），保留綁定、不查 Mongo", async (_label, hash) => {
+    const { registry, queue, reader, lookup } = setup();
+    queue.getJobState.mockResolvedValue("active");
+    queue.getJob.mockResolvedValue(toJob({ state: "active", ...hash }));
+    await expect(lookup()).resolves.toMatchObject({ status: "active", jobId: JOB_ID, rebound: true });
+    expect(registry.owner(JOB_ID)).toBe(SOCKET_NEW); // 之後 WS 照常收到 completed／failed
+    expect(reader.findDiagnosisResult).not.toHaveBeenCalled();
+    expect(queue.getJobState.mock.invocationCallOrder[0]).toBeLessThan(queue.getJob.mock.invocationCallOrder[0] ?? 0);
+  });
+
+  it("state unknown → 不讀 hash，直接 Mongo 後援", async () => {
+    const { queue, reader, lookup } = setup();
+    reader.findDiagnosisResult.mockResolvedValue(RESULT);
+    await expect(lookup()).resolves.toMatchObject({ status: "completed", cached: false });
+    expect(queue.getJob).not.toHaveBeenCalled();
+  });
+
+  it("讀到 state 後 job 被 removeOn* 清掉（getJob 回 undefined）→ Mongo 後援", async () => {
+    const { queue, reader, lookup } = setup();
+    queue.getJobState.mockResolvedValue("completed");
+    queue.getJob.mockResolvedValue(undefined);
+    await expect(lookup()).rejects.toBeInstanceOf(NotFoundException);
+    expect(reader.findDiagnosisResult).toHaveBeenCalledWith(JOB_ID);
   });
 });

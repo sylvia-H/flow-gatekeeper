@@ -94,6 +94,13 @@ export default defineConfig({
         "packages/shared/src/logging/index.ts": { lines: 94, branches: 89 },
         // 100／97.22
         "apps/api/src/logging/pino-logger.service.ts": { lines: 97, branches: 94 },
+        // 012 新增的核心檔（2026-10-22 合併門第 1 輪量測，同規則「實測 −3、取整」）。
+        // 100／94.82
+        "apps/api/src/modules/websocket/job-routing-registry.ts": { lines: 97, branches: 91 },
+        // 98.88／94.59
+        "apps/api/src/modules/jobs/diagnosis-lookup.service.ts": { lines: 95, branches: 91 },
+        // 100／100
+        "apps/api/src/modules/websocket/job-status-payload.ts": { lines: 97, branches: 97 },
       },
     },
   },

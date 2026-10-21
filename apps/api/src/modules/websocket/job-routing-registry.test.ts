@@ -49,6 +49,27 @@ describe("JobRoutingRegistry：bind／get／owner／isBound／delete", () => {
     expect(registry.get(JOB_ID)?.machineId).toBeNull();
   });
 
+  it("bind 回傳建立的那份物件；deleteIfCurrent 只在目前仍是那份時刪除", () => {
+    const mine = registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    expect(registry.get(JOB_ID)).toBe(mine);
+
+    registry.rebind(JOB_ID, CLIENT_B); // 他人改綁：換成新物件
+    expect(registry.deleteIfCurrent(JOB_ID, mine)).toBe(false);
+    expect(registry.owner(JOB_ID)).toBe(CLIENT_B);
+
+    const current = registry.get(JOB_ID);
+    if (!current) throw new Error("binding missing");
+    expect(registry.deleteIfCurrent(JOB_ID, current)).toBe(true);
+    expect(registry.isBound(JOB_ID)).toBe(false);
+  });
+
+  it("deleteIfCurrent：已被標終態（換成副本）→ 不刪，交給寬限", () => {
+    const mine = registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    registry.markTerminal(JOB_ID, "failed");
+    expect(registry.deleteIfCurrent(JOB_ID, mine)).toBe(false);
+    expect(registry.get(JOB_ID)?.terminal?.kind).toBe("failed");
+  });
+
   it("delete 只刪指定 jobId", () => {
     registry.bind(JOB_ID, CLIENT_A, "cnc-01");
     registry.bind(OTHER_JOB_ID, CLIENT_B, "cnc-02");

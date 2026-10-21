@@ -124,10 +124,15 @@ export class JobRoutingRegistry implements OnModuleInit, OnModuleDestroy {
     this.graceTimers.clear();
   }
 
-  /** 建立（或覆蓋）綁定：`clientId` 即 WS `clientId`（data-model §4）。 */
-  bind(jobId: string, clientId: string, machineId: string | null, now: number = Date.now()): void {
+  /**
+   * 建立（或覆蓋）綁定：`clientId` 即 WS `clientId`（data-model §4）。回傳建立的那份物件，供呼叫端之後以
+   * `deleteIfCurrent` 只刪自己那份。
+   */
+  bind(jobId: string, clientId: string, machineId: string | null, now: number = Date.now()): Readonly<JobBinding> {
     this.clearGraceTimer(jobId);
-    this.bindings.set(jobId, { clientId, machineId, boundAt: now });
+    const binding: JobBinding = { clientId, machineId, boundAt: now };
+    this.bindings.set(jobId, binding);
+    return binding;
   }
 
   /**
@@ -215,8 +220,7 @@ export class JobRoutingRegistry implements OnModuleInit, OnModuleDestroy {
     const { jobId, socketId, previousSocketId, isOnline } = input;
     const existing = this.bindings.get(jobId);
     if (!existing) {
-      this.bind(jobId, socketId, null, now);
-      return { kind: "created", jobId, socketId, binding: this.mustGet(jobId) };
+      return { kind: "created", jobId, socketId, binding: this.bind(jobId, socketId, null, now) };
     }
     if (existing.terminal !== undefined) return { kind: "terminal", jobId, socketId };
     if (existing.clientId === socketId) return { kind: "unchanged", jobId, socketId };
@@ -261,7 +265,7 @@ export class JobRoutingRegistry implements OnModuleInit, OnModuleDestroy {
   revertClaim(claim: LookupClaim): void {
     const current = this.bindings.get(claim.jobId);
     if (claim.kind === "created") {
-      if (current === claim.binding) this.delete(claim.jobId);
+      this.deleteIfCurrent(claim.jobId, claim.binding);
       return;
     }
     if (claim.kind === "rebound") {
@@ -274,7 +278,17 @@ export class JobRoutingRegistry implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** 立即刪除綁定（例如入列失敗時解除自己剛建立的綁定）。 */
+  /**
+   * 目前綁定仍是 `binding` 這一份（參照比對）才刪除，回傳是否刪了：期間被他人改綁、重新綁定或標終態（換成副本）
+   * 都不動。POST 入列失敗時以它解除自己剛建立的綁定（語意同 `revertClaim` 的 created）。
+   */
+  deleteIfCurrent(jobId: string, binding: Readonly<JobBinding>): boolean {
+    if (this.bindings.get(jobId) !== binding) return false;
+    this.delete(jobId);
+    return true;
+  }
+
+  /** 立即刪除綁定，不論目前是哪一份。 */
   delete(jobId: string): void {
     this.clearGraceTimer(jobId);
     this.bindings.delete(jobId);

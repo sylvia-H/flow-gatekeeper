@@ -118,7 +118,7 @@ describe("JobsController.create", () => {
     const bindings = {
       bind: vi.fn(),
       get: () => undefined,
-      delete: vi.fn(),
+      deleteIfCurrent: vi.fn(),
     };
     const presence = { isAuthorized: () => true };
     const controller = new JobsController(new JobsService(queue, bindings, presence), noLookup);
@@ -140,7 +140,7 @@ describe("JobsController.create", () => {
     const bindings = {
       bind: vi.fn(),
       get: () => undefined,
-      delete: vi.fn(),
+      deleteIfCurrent: vi.fn(),
     };
     const authorized = new Set<string>();
     const presence = { isAuthorized: (clientId: string) => authorized.has(clientId) };

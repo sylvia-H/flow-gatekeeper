@@ -44,7 +44,7 @@ const IN_FLIGHT_STATES: ReadonlySet<string> = new Set([
 ]);
 
 /** lookup 只需要的依賴切面（測試可注入 fake）。 */
-export type LookupJobSource = Pick<Queue<DiagnosisJobPayload>, "getJob">;
+export type LookupJobSource = Pick<Queue<DiagnosisJobPayload>, "getJobState" | "getJob">;
 export type LookupRegistry = Pick<JobRoutingRegistry, "claimForLookup" | "resolveClaim" | "revertClaim" | "owner">;
 export type LookupPresence = Pick<MonitoringGateway, "isAuthorized" | "isOnline">;
 export type DiagnosisReader = Pick<HistoryService, "findDiagnosisResult">;
@@ -72,7 +72,7 @@ type InFlightResponse = Extract<DiagnosisLookupResponse, { status: "waiting" | "
  * 處理順序：
  * 1. `socketId` 非在線且已授權 → 409 `socket_unauthorized`（warn 走 30 s 全域節流，同 POST）。
  * 2. **任何 await 之前** `registry.claimForLookup`：之後抵達的 `job/status`／`ai/*` 已會送到本次 socket（先綁定後查詢）。
- * 3. BullMQ `getJob` → `getState`（producer command 連線，全程上限 `ENQUEUE_TIMEOUT_MS`）；有 job 時 `resolveClaim`
+ * 3. BullMQ `getJobState` → `getJob`（producer command 連線，全程上限 `ENQUEUE_TIMEOUT_MS`）；有 job 時 `resolveClaim`
  *    補上暫定綁定的 machineId，回 `deferred` 就重讀一次 job（P1）。
  * 4. 依 state × claim 回應（data-model §2.4），job 不存在／未知 state／`returnvalue` 不合法 → Mongo（上限 3 s）→ 200 或 404。
  * 5. 回應前（含拋錯），非保留的 claim 一律 `revertClaim`（只撤回本次請求自己的動作）。
@@ -240,10 +240,18 @@ export class DiagnosisLookupService {
     return new ServiceUnavailableException(LOOKUP_UNAVAILABLE_MESSAGE);
   }
 
+  /**
+   * 先讀 state、再讀 job hash：state 永遠不比資料新。兩者是兩個獨立的 Redis 指令，完成可能落在中間；反過來（先 hash
+   * 後 state）會讀到「hash 尚無 returnvalue／failedReason、state 卻已是 completed／failed」，快取命中的 job（不寫 Mongo）
+   * 因此誤回 404、failed 回空的 error。依此順序，最壞情況是 state 仍為進行中而 hash 已完成——回 `rebound: true`，之後
+   * WS 照常收到 `completed`／`failed`；讀到終態時 hash 必已寫好（BullMQ 以單一 Lua 腳本原子地寫 hash 並搬移 state）。
+   * `unknown` 視同查無 job；兩次讀取之間 job 被 removeOn* 清掉（`getJob` 回 undefined）也一樣，交給 Mongo 後援。
+   */
   private async snapshot(jobId: string): Promise<JobSnapshot | undefined> {
+    const state = await this.queue.getJobState(jobId);
+    if (state === "unknown") return undefined;
     const job = await this.queue.getJob(jobId);
     if (!job) return undefined;
-    const state = await job.getState();
     // 資料來自 Redis：快照欄位一律以 unknown 看待（JobSnapshot 的型別），使用前各自檢查。
     const data = job.data as unknown;
     return {

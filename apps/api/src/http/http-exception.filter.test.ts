@@ -71,9 +71,10 @@ function logLines(): Record<string, unknown>[] {
 beforeAll(async () => {
   const queue = {
     getJob: vi.fn(async () => undefined),
+    getJobState: vi.fn(async () => "unknown"),
     add: vi.fn(async () => ({})),
   } as unknown as Queue<DiagnosisJobPayload>;
-  const bindings = { bind: vi.fn(), get: () => undefined, delete: vi.fn() };
+  const bindings = { bind: vi.fn(), get: () => undefined, deleteIfCurrent: vi.fn() };
   const presence = { isAuthorized: (id: string) => id === SOCKET_ID, isOnline: (id: string) => id === SOCKET_ID };
   const lookup = new DiagnosisLookupService(queue, new JobRoutingRegistry(), presence, {
     findDiagnosisResult: async () => null,

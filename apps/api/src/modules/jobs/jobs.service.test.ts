@@ -5,6 +5,7 @@ import type { DiagnosisJobPayload } from "@flow-gatekeeper/contracts";
 import { ENQUEUE_TIMEOUT_MS, JobsService, SOCKET_UNAVAILABLE_MESSAGE } from "./jobs.service.js";
 import type { ClientPresence, JobBindingStore } from "./jobs.service.js";
 import type { JobBinding } from "../websocket/job-routing-registry.js";
+import { JobRoutingRegistry } from "../websocket/job-routing-registry.js";
 import { MACHINE_IDS } from "@flow-gatekeeper/contracts";
 
 const SOCKET_A = "5b1f9c1e-8a53-4c43-9f0e-2d1c3b4a5e6f";
@@ -18,11 +19,15 @@ function makeBindings(): FakeBindings {
   return {
     map,
     bind: (jobId, clientId, machineId) => {
-      map.set(jobId, { clientId, machineId, boundAt: Date.now() });
+      const binding: JobBinding = { clientId, machineId, boundAt: Date.now() };
+      map.set(jobId, binding);
+      return binding;
     },
     get: (jobId) => map.get(jobId),
-    delete: (jobId) => {
+    deleteIfCurrent: (jobId, binding) => {
+      if (map.get(jobId) !== binding) return false;
       map.delete(jobId);
+      return true;
     },
   };
 }
@@ -161,6 +166,27 @@ describe("JobsService.createDiagnosis", () => {
       expect(bindings.map.get(JOB_ID)).toBe(original); // 寬限內晚到的 ai/* 仍要送給原連線
     },
   );
+
+  it("入列等待期間綁定被 GET 改綁走、之後入列失敗 → 503，但只刪自己那份、不刪 GET 的綁定", async () => {
+    const registry = new JobRoutingRegistry();
+    let rejectAdd: (e: Error) => void = () => undefined;
+    const queue = makeQueue({
+      add: () =>
+        new Promise((_, reject) => {
+          rejectAdd = reject;
+        }),
+    });
+    const service = new JobsService(queue as unknown as Queue<DiagnosisJobPayload>, registry, makePresence());
+    const posting = service.createDiagnosis({ jobId: JOB_ID, machineId: "mixer-01", socketId: SOCKET_A });
+    const assertion = expect(posting).rejects.toBeInstanceOf(ServiceUnavailableException);
+    await vi.waitFor(() => expect(queue.add).toHaveBeenCalledTimes(1));
+
+    // GET 以 previousSocketId 把綁定改到 SOCKET_B（原連線仍在線）。
+    registry.claimForLookup({ jobId: JOB_ID, socketId: SOCKET_B, previousSocketId: SOCKET_A, isOnline: () => true });
+    rejectAdd(new Error("Connection is closed."));
+    await assertion;
+    expect(registry.owner(JOB_ID)).toBe(SOCKET_B);
+  });
 
   it("Redis 不可用（add reject）→ 503 並解除綁定", async () => {
     const queue = makeQueue({
