@@ -5,7 +5,7 @@ name: ci
 #   2026-06-30 起曾只留 workflow_dispatch（`6417069`），理由「私有 repo 期間節省 Actions 分鐘」在 repo 公開後已不成立：
 #   公開 repo 的標準 runner 不計分鐘，一次約 2 分鐘（2026-10-18 實測），連續 push 由下方 concurrency 取消舊 run。
 # - 為何不加 pull_request：同 repo 分支開 PR 時 push 與 pull_request 會讓同一個 commit 跑兩次。
-#   代價：外部 fork 的 PR 不會自動跑；需要時由維護者手動觸發或改用 pull_request。
+#   代價：外部 fork 的 PR 不會自動跑；需要時由維護者把 fork 分支拉進本 repo 後手動觸發（workflow_dispatch 只能跑本 repo 的 ref），或改用 pull_request。
 # - 為何只限 branches：tag 不觸發。release 時 `git push origin main --follow-tags` 的 main 已經會跑，tag 再跑一次是重複。
 on:
   push:
