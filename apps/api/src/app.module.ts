@@ -6,6 +6,7 @@ import { MetricsModule } from "./modules/metrics/metrics.module.js";
 import { JobsModule } from "./modules/jobs/jobs.module.js";
 import { JobsController } from "./modules/jobs/jobs.controller.js";
 import { JobsService } from "./modules/jobs/jobs.service.js";
+import { DiagnosisLookupService } from "./modules/jobs/diagnosis-lookup.service.js";
 import { MockTelemetryService } from "./modules/telemetry/mock-telemetry.service.js";
 import { MonitoringGateway } from "./modules/websocket/monitoring.gateway.js";
 import { AiStreamRelayService } from "./modules/websocket/ai-stream-relay.service.js";
@@ -31,6 +32,7 @@ import { JobRoutingRegistry } from "./modules/websocket/job-routing-registry.js"
     AiStreamRelayService,
     JobStatusRelayService,
     JobsService,
+    DiagnosisLookupService,
   ],
 })
 export class AppModule {}

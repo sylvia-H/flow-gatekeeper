@@ -499,3 +499,74 @@ describe("JobStatusRelayService：completed returnvalue 與 progress 物件（T0
     await relay.onModuleDestroy();
   });
 });
+
+describe("JobStatusRelayService：machineId 尚未補上的暫定綁定（T032、P1）", () => {
+  const NEW_CLIENT = "7c2e4d6f-1a3b-4c5d-8e9f-0a1b2c3d4e5f";
+
+  /** 模擬 api 重啟後 GET 的 created claim：原綁定不在，以 machineId null 暫定綁定到 NEW_CLIENT。 */
+  function setupProvisional() {
+    const ctx = setup();
+    ctx.registry.delete(JOB_ID);
+    const claim = ctx.registry.claimForLookup({ jobId: JOB_ID, socketId: NEW_CLIENT, isOnline: () => true });
+    return { ...ctx, claim };
+  }
+
+  it("job/status 擱置不送並記 deferred；ai/* 照常送到暫定連線", async () => {
+    const { qe, registry, aiRelay, sent, relay } = setupProvisional();
+    qe.emit("active", { jobId: JOB_ID });
+    qe.emit("progress", { jobId: JOB_ID, data: { value: 30, attempt: 1, execution: 1 } });
+    expect(sent).toEqual([]);
+    expect(registry.get(JOB_ID)?.deferred).toBe(true);
+
+    const token = { type: "ai/token", jobId: JOB_ID, attempt: 1, seq: 0, text: "hi" };
+    (aiRelay as unknown as AiRelayInternals).handleMessage(`ai-stream:${JOB_ID}`, JSON.stringify(token));
+    expect(sent).toEqual([{ clientId: NEW_CLIENT, payload: token }]);
+    await relay.onModuleDestroy();
+  });
+
+  it("resolveClaim 補上 machineId 後回報 deferred，之後的 job/status 照常送到暫定連線（不補送被擱置的那幾則）", async () => {
+    const { qe, registry, claim, sent, relay } = setupProvisional();
+    qe.emit("active", { jobId: JOB_ID });
+    expect(registry.resolveClaim(claim, "cnc-01")).toEqual({ deferred: true });
+    expect(sent).toEqual([]);
+
+    qe.emit("progress", { jobId: JOB_ID, data: { value: 60, attempt: 1, execution: 2 } });
+    expect(sent).toEqual([
+      {
+        clientId: NEW_CLIENT,
+        payload: {
+          type: "job/status",
+          jobId: JOB_ID,
+          machineId: "cnc-01",
+          status: "active",
+          progress: 60,
+          attempt: 1,
+          execution: 2,
+        },
+      },
+    ]);
+    expect(registry.get(JOB_ID)).not.toHaveProperty("deferred");
+    await relay.onModuleDestroy();
+  });
+
+  it("擱置期間到 completed → 不送、仍標 terminal；GET 隨後 resolveClaim 得到 deferred，撤回不刪終態副本", async () => {
+    const { qe, registry, claim, sent, relay } = setupProvisional();
+    qe.emit("completed", { jobId: JOB_ID, returnvalue: null });
+    expect(sent).toEqual([]);
+    expect(registry.get(JOB_ID)).toMatchObject({ terminal: { kind: "completed" }, deferred: true });
+    expect(registry.resolveClaim(claim, "cnc-01")).toEqual({ deferred: true });
+    registry.revertClaim(claim);
+    expect(registry.get(JOB_ID)?.terminal?.kind).toBe("completed");
+    await relay.onModuleDestroy();
+  });
+
+  it("擱置期間到 failed → ai/error(worker_failed) 照送暫定連線，job/status failed 擱置", async () => {
+    vi.spyOn(Job, "fromId").mockResolvedValue({ attemptsMade: 1 } as never);
+    const { qe, registry, sent, relay } = setupProvisional();
+    qe.emit("failed", { jobId: JOB_ID, failedReason: "boom" });
+    await vi.waitFor(() => expect(registry.get(JOB_ID)?.terminal?.kind).toBe("failed"));
+    expect(sent.map((s) => [s.clientId, s.payload.type])).toEqual([[NEW_CLIENT, "ai/error"]]);
+    expect(registry.get(JOB_ID)?.deferred).toBe(true);
+    await relay.onModuleDestroy();
+  });
+});

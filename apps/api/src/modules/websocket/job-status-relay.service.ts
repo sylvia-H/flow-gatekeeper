@@ -247,12 +247,20 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
     this.gateway.send(target.binding.clientId, jobStatus);
   }
 
-  /** 可送 `job/status` 的綁定；無綁定或尚無 machineId 時回 undefined。 */
+  /**
+   * 可送 `job/status` 的綁定；無綁定或尚無 machineId 時回 undefined。
+   *
+   * 綁定尚無 machineId（GET 在 api 重啟後暫定建立，`resolveClaim` 之前，P1）時組不出合法的 `job/status`：這則
+   * 擱置不送、也不事後補送，只在綁定記 `deferred`；GET 由 `resolveClaim` 得知後再查一次 state，以最新 state 回應。
+   * 擱置窗只有一個 Redis 往返。`ai/*` 只看 `clientId`，不受影響。
+   */
   private routable(jobId: string): { binding: Readonly<JobBinding>; machineId: string } | undefined {
     const binding = this.registry.get(jobId);
     if (!binding) return undefined; // 純後端 smoke 或已終態清理：略過
-    // GET 在 api 重啟後暫定建立的綁定尚無 machineId（P1）：無法組出合法的 job/status，先不送（T032 補擱置記錄）。
-    if (binding.machineId === null) return undefined;
+    if (binding.machineId === null) {
+      this.registry.markDeferred(jobId);
+      return undefined;
+    }
     return { binding, machineId: binding.machineId };
   }
 }

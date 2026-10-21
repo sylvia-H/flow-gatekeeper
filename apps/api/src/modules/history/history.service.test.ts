@@ -12,6 +12,9 @@ type InsertImpl = (collection: string, docs: unknown[]) => Promise<unknown>;
 
 const inserts: InsertCall[] = [];
 let insertImpl: InsertImpl = () => Promise.resolve({ acknowledged: true });
+type FindOneCall = { collection: string; filter: unknown; opts: unknown };
+const findOnes: FindOneCall[] = [];
+let findOneImpl: () => Promise<unknown> = () => Promise.resolve(null);
 
 function fakeCollection(name: string) {
   return {
@@ -20,6 +23,10 @@ function fakeCollection(name: string) {
       return insertImpl(name, docs);
     }),
     createIndex: vi.fn(() => Promise.resolve("ok")),
+    findOne: vi.fn((filter: unknown, opts: unknown) => {
+      findOnes.push({ collection: name, filter, opts });
+      return findOneImpl();
+    }),
   };
 }
 
@@ -88,6 +95,8 @@ const errorlogInserts = () => inserts.filter((c) => c.collection === "errorlogs"
 
 beforeEach(() => {
   inserts.length = 0;
+  findOnes.length = 0;
+  findOneImpl = () => Promise.resolve(null);
   insertImpl = () => Promise.resolve({ acknowledged: true });
   vi.spyOn(Logger.prototype, "log").mockImplementation(() => undefined);
   vi.spyOn(Logger.prototype, "warn").mockImplementation(() => undefined);
@@ -272,6 +281,42 @@ describe("HistoryService 寫入路徑計數協調（TQ-7）", () => {
     expect(telemetryInserts().map((c) => c.docs.length)).toEqual([3, 4]);
     expect(svc.getWriteStats().bufferedPoints).toBe(0);
     vi.useRealTimers();
+    await svc.onModuleDestroy();
+  });
+});
+
+describe("HistoryService.findDiagnosisResult（012 GET 的 Mongo 後援，P5）", () => {
+  it("以 jobId 查 diagnoses，只投影 result、帶 maxTimeMS 3 s，回傳 result 原值（不驗證）", async () => {
+    const svc = await started();
+    const result = { summary: "s", anything: 1 };
+    findOneImpl = () => Promise.resolve({ result });
+    await expect(svc.findDiagnosisResult("job-1")).resolves.toBe(result);
+    expect(findOnes).toEqual([
+      { collection: "diagnoses", filter: { jobId: "job-1" }, opts: { projection: { _id: 0, result: 1 }, maxTimeMS: 3_000 } },
+    ]);
+    await svc.onModuleDestroy();
+  });
+
+  it.each([
+    ["查無文件", null],
+    ["文件沒有 result", {}],
+  ])("%s → null", async (_label, doc) => {
+    const svc = await started();
+    findOneImpl = () => Promise.resolve(doc);
+    await expect(svc.findDiagnosisResult("job-1")).resolves.toBeNull();
+    await svc.onModuleDestroy();
+  });
+
+  it("db 未就緒（onModuleInit 之前）→ reject，不查詢", async () => {
+    const svc = new HistoryService(config as never);
+    await expect(svc.findDiagnosisResult("job-1")).rejects.toThrow("mongo not ready");
+    expect(findOnes).toEqual([]);
+  });
+
+  it("查詢失敗（例如 maxTimeMS 逾時）→ 原錯誤 reject", async () => {
+    const svc = await started();
+    findOneImpl = () => Promise.reject(new Error("operation exceeded time limit"));
+    await expect(svc.findDiagnosisResult("job-1")).rejects.toThrow("operation exceeded time limit");
     await svc.onModuleDestroy();
   });
 });

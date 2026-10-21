@@ -122,6 +122,8 @@ export class JobsService {
       if (existing.terminal !== undefined) {
         throw new ConflictException(JOB_ID_USED_MESSAGE);
       }
+      // GET 暫定綁定（machineId null，api 重啟後、resolveClaim 之前）期間同 jobId 的 POST 也會走到這裡、得到「另一台機台」
+      // 訊息；web 每次 POST 都用新 jobId，實務上不可達。
       if (existing.machineId !== machineId) {
         throw new ConflictException("jobId 已用於另一台機台的診斷");
       }

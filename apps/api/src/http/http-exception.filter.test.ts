@@ -9,16 +9,20 @@ import { createLogger } from "@flow-gatekeeper/shared/logging";
 import type { DiagnosisJobPayload } from "@flow-gatekeeper/contracts";
 import { JobsController } from "../modules/jobs/jobs.controller.js";
 import { JobsService } from "../modules/jobs/jobs.service.js";
+import { DiagnosisLookupService } from "../modules/jobs/diagnosis-lookup.service.js";
+import { JobRoutingRegistry } from "../modules/websocket/job-routing-registry.js";
 import { RequestBodyError, createHttpApp, normalizeBodyParserError } from "./http-exception.filter.js";
 
 /**
  * API-7／API-17：以真 Nest app（platform-express、真 body-parser）經 HTTP 驗證全域 filter 與 body 上限，
- * 並以真 JobsService（假 queue／綁定／在線查詢）確認 JobsController 既有回應形狀與文字不變。
+ * 並以真 JobsService（假 queue／綁定／在線查詢）確認 JobsController 既有回應形狀與文字不變。GET `/diagnoses/:jobId`
+ * 以真 DiagnosisLookupService（假 queue／reader、真 registry）驗證 express 的 query 解析與錯誤 body 經 filter 原樣送出。
  */
 
 const SECRET = "SECRET";
 const SOCKET_ID = "5b1f9c1e-8a53-4c43-9f0e-2d1c3b4a5e6f";
 const OFFLINE_SOCKET = "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a";
+const JOB_ID = "0e6c2b7a-1f3d-4d8e-a9b0-c1d2e3f4a5b6";
 
 @Controller("test")
 class ProbeController {
@@ -70,11 +74,17 @@ beforeAll(async () => {
     add: vi.fn(async () => ({})),
   } as unknown as Queue<DiagnosisJobPayload>;
   const bindings = { bind: vi.fn(), get: () => undefined, delete: vi.fn() };
-  const presence = { isAuthorized: (id: string) => id === SOCKET_ID };
+  const presence = { isAuthorized: (id: string) => id === SOCKET_ID, isOnline: (id: string) => id === SOCKET_ID };
+  const lookup = new DiagnosisLookupService(queue, new JobRoutingRegistry(), presence, {
+    findDiagnosisResult: async () => null,
+  });
 
   @Module({
     controllers: [JobsController, ProbeController],
-    providers: [{ provide: JobsService, useValue: new JobsService(queue, bindings, presence) }],
+    providers: [
+      { provide: JobsService, useValue: new JobsService(queue, bindings, presence) },
+      { provide: DiagnosisLookupService, useValue: lookup },
+    ],
   })
   class TestModule {}
 
@@ -219,6 +229,33 @@ describe("全域 HttpExceptionFilter：既有 HttpException 回應不變", () =>
       message: "WebSocket 連線不存在或未授權，請重新連線後再發起診斷",
     });
     // 409／404 的 warn 由 JobsService 自己記（已節流）；filter 不再重複記一則
+    expect(logLines()).toEqual([]);
+  });
+
+  it("GET /diagnoses/:jobId：重複的 query key 被解析成陣列 → 400，issues 只帶 path／code", async () => {
+    const res = await fetch(`${baseUrl}/diagnoses/${JOB_ID}?socketId=${SOCKET_ID}&socketId=${OFFLINE_SOCKET}`);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      statusCode: 400,
+      error: "Bad Request",
+      message: "request 不符合 GET /diagnoses/:jobId 契約",
+      issues: [{ path: "socketId", code: "invalid_type" }],
+    });
+  });
+
+  it("GET /diagnoses/:jobId：409 body 帶 code、message 與 POST 同句；查無 → 404", async () => {
+    const conflict = await fetch(`${baseUrl}/diagnoses/${JOB_ID}?socketId=${OFFLINE_SOCKET}`);
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toEqual({
+      statusCode: 409,
+      error: "Conflict",
+      code: "socket_unauthorized",
+      message: "WebSocket 連線不存在或未授權，請重新連線後再發起診斷",
+    });
+
+    const notFound = await fetch(`${baseUrl}/diagnoses/${JOB_ID}?socketId=${SOCKET_ID}`);
+    expect(notFound.status).toBe(404);
+    expect(await notFound.json()).toEqual({ statusCode: 404, error: "Not Found", message: "查無此診斷（可能已過期）" });
     expect(logLines()).toEqual([]);
   });
 

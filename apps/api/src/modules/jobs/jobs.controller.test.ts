@@ -14,7 +14,10 @@ import type {
 import type { Queue } from "bullmq";
 import { JobsService } from "./jobs.service.js";
 import { JobsController } from "./jobs.controller.js";
-import type { DiagnosisCreator } from "./jobs.controller.js";
+import type { DiagnosisCreator, DiagnosisLookup } from "./jobs.controller.js";
+
+/** 不該被呼叫的 lookup（POST 測試用）。 */
+const noLookup: DiagnosisLookup = { lookup: vi.fn(() => Promise.reject(new Error("lookup not expected"))) };
 
 const SOCKET_ID = "5b1f9c1e-8a53-4c43-9f0e-2d1c3b4a5e6f";
 const JOB_ID = "0e6c2b7a-1f3d-4d8e-a9b0-c1d2e3f4a5b6";
@@ -26,7 +29,7 @@ async function defaultCreate(body: CreateDiagnosisBody): Promise<CreateDiagnosis
 
 function makeController(impl: DiagnosisCreator["createDiagnosis"] = defaultCreate) {
   const createDiagnosis = vi.fn(impl);
-  const controller = new JobsController({ createDiagnosis });
+  const controller = new JobsController({ createDiagnosis }, noLookup);
   return { controller, createDiagnosis };
 }
 
@@ -118,7 +121,7 @@ describe("JobsController.create", () => {
       delete: vi.fn(),
     };
     const presence = { isAuthorized: () => true };
-    const controller = new JobsController(new JobsService(queue, bindings, presence));
+    const controller = new JobsController(new JobsService(queue, bindings, presence), noLookup);
     const err = await captureError(controller.create(JSON_TYPE, { machineId: "ghost-01", socketId: SOCKET_ID }));
     expect(err).toBeInstanceOf(NotFoundException);
     expect((err as NotFoundException).getStatus()).toBe(404);
@@ -141,7 +144,7 @@ describe("JobsController.create", () => {
     };
     const authorized = new Set<string>();
     const presence = { isAuthorized: (clientId: string) => authorized.has(clientId) };
-    const controller = new JobsController(new JobsService(queue, bindings, presence));
+    const controller = new JobsController(new JobsService(queue, bindings, presence), noLookup);
     const err = await captureError(controller.create(JSON_TYPE, { machineId: "mixer-01", socketId: SOCKET_ID }));
     expect(err).toBeInstanceOf(ConflictException);
     expect((err as ConflictException).getStatus()).toBe(409);
@@ -153,5 +156,62 @@ describe("JobsController.create", () => {
       controller.create(JSON_TYPE, { machineId: "mixer-01", socketId: SOCKET_ID }),
     ).resolves.toMatchObject({ machineId: "mixer-01", status: "waiting" });
     expect(bindings.bind).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("JobsController.lookup（GET /diagnoses/:jobId）", () => {
+  const PREV_SOCKET_ID = "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a";
+
+  function makeLookupController(impl: DiagnosisLookup["lookup"] = async () => ({ status: "waiting", jobId: JOB_ID, rebound: true })) {
+    const lookup = vi.fn(impl);
+    const controller = new JobsController({ createDiagnosis: vi.fn(defaultCreate) }, { lookup });
+    return { controller, lookup };
+  }
+
+  it("合法 params／query → 委派 lookup（previousSocketId 可選、未列出的 key 忽略），回傳原樣", async () => {
+    const { controller, lookup } = makeLookupController();
+    await expect(controller.lookup({ jobId: JOB_ID }, { socketId: SOCKET_ID, extra: "x" })).resolves.toEqual({
+      status: "waiting",
+      jobId: JOB_ID,
+      rebound: true,
+    });
+    expect(lookup).toHaveBeenLastCalledWith({ jobId: JOB_ID, socketId: SOCKET_ID });
+    await controller.lookup({ jobId: JOB_ID }, { socketId: SOCKET_ID, previousSocketId: PREV_SOCKET_ID });
+    expect(lookup).toHaveBeenLastCalledWith({ jobId: JOB_ID, socketId: SOCKET_ID, previousSocketId: PREV_SOCKET_ID });
+  });
+
+  it.each([
+    ["jobId 非 uuid", { jobId: "job-1" }, { socketId: SOCKET_ID }, ["jobId"]],
+    ["缺 socketId", { jobId: JOB_ID }, {}, ["socketId"]],
+    ["socketId 非 uuid", { jobId: JOB_ID }, { socketId: "<script>alert(1)</script>" }, ["socketId"]],
+    ["重複 query key（express 解析成陣列）", { jobId: JOB_ID }, { socketId: [SOCKET_ID, PREV_SOCKET_ID] }, ["socketId"]],
+    ["previousSocketId 非 uuid", { jobId: JOB_ID }, { socketId: SOCKET_ID, previousSocketId: "abc" }, ["previousSocketId"]],
+    ["params 與 query 同時不合法", { jobId: "x" }, { socketId: "y" }, ["jobId", "socketId"]],
+  ])("%s → 400（issues 只帶 path／code、不回顯輸入），不呼叫 lookup", async (_label, params, query, paths) => {
+    const { controller, lookup } = makeLookupController();
+    const err = await captureError(controller.lookup(params, query));
+    expect(err).toBeInstanceOf(BadRequestException);
+    const response = (err as BadRequestException).getResponse() as {
+      statusCode: number;
+      message: string;
+      issues: { path: string; code: string }[];
+    };
+    expect(response.statusCode).toBe(400);
+    expect(response.message).toBe("request 不符合 GET /diagnoses/:jobId 契約");
+    expect(response.issues.map((i) => i.path)).toEqual(paths);
+    for (const issue of response.issues) expect(Object.keys(issue).sort()).toEqual(["code", "path"]);
+    expect(JSON.stringify(response)).not.toContain("script");
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["404", new NotFoundException("查無此診斷（可能已過期）")],
+    ["409 socket_unauthorized", new ConflictException({ statusCode: 409, error: "Conflict", code: "socket_unauthorized", message: "m" })],
+    ["503", new ServiceUnavailableException("診斷狀態暫時無法查詢，請稍後再試")],
+  ])("service 拋 %s → 原樣上拋（body 不改寫）", async (_label, error) => {
+    const { controller } = makeLookupController(async () => {
+      throw error;
+    });
+    await expect(controller.lookup({ jobId: JOB_ID }, { socketId: SOCKET_ID })).rejects.toBe(error);
   });
 });

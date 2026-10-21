@@ -41,6 +41,42 @@ export const ORPHAN_TTL_MS = 10 * 60_000;
 /** 孤兒回收的掃描間隔。 */
 export const ORPHAN_SWEEP_INTERVAL_MS = 60_000;
 
+/** `claimForLookup` 的輸入（GET `/diagnoses/:jobId`，FR-009）。 */
+export type LookupClaimInput = {
+  jobId: string;
+  /** 本次請求的連線（呼叫端已確認在線且已授權）。 */
+  socketId: string;
+  /** web 記得的上一條連線（重連前的 clientId）；與在線的原綁定相同時也允許改綁（P22）。 */
+  previousSocketId?: string | undefined;
+  /** 連線是否在線——由呼叫端以 `gateway.isOnline` 提供，registry 不依賴 Gateway。 */
+  isOnline: (clientId: string) => boolean;
+};
+
+/**
+ * `claimForLookup` 的結果（data-model §2.3）。`binding` 是本次請求建立或改綁出來的那一份物件參照，
+ * `revertClaim` 以它判斷「目前綁定仍是自己的那份」。
+ *
+ * - `created`：原本無綁定，已以 `machineId: null` 暫定建立（P1）。
+ * - `terminal`：綁定已標終態（寬限中），不動。
+ * - `unchanged`：綁定本來就是本 socket，不動（GET 仍回 `rebound: true`，P22）。
+ * - `rebound`：已改綁到本 socket；`previous` 是被取代的原綁定，`viaPreviousSocketId` 表示原連線仍在線、
+ *   因等於 `previousSocketId` 而改綁（不主動終止舊連線）。
+ * - `conflict`：原連線在線、不是本 socket、也不等於 `previousSocketId`，不動。
+ */
+export type LookupClaim =
+  | { kind: "created"; jobId: string; socketId: string; binding: Readonly<JobBinding> }
+  | { kind: "terminal"; jobId: string; socketId: string }
+  | { kind: "unchanged"; jobId: string; socketId: string }
+  | {
+      kind: "rebound";
+      jobId: string;
+      socketId: string;
+      binding: Readonly<JobBinding>;
+      previous: Readonly<JobBinding>;
+      viaPreviousSocketId: boolean;
+    }
+  | { kind: "conflict"; jobId: string; socketId: string; ownerClientId: string };
+
 /**
  * 綁定的單一持有者（FR-014；research R3）：POST（`JobsService`）、GET、兩支 relay 都經它讀寫，
  * 不再由 `AiStreamRelayService` 持有一個三方共用的 Map。
@@ -52,8 +88,18 @@ export const ORPHAN_SWEEP_INTERVAL_MS = 60_000;
  * 狀態是一般 `Map`（非 reactive）。
  *
  * **換物件 vs 就地改寫**：會改變「這是哪一份綁定」語意的操作（`bind`、`rebind`、`markTerminal`）換新物件；
- * 只補充資訊的操作（`noteProgress`，以及 T031／T032 要加的 `markDeferred`、`resolveClaim` 補 machineId）
- * MUST 就地改寫——寬限計時器與 `revertClaim` 都以參照比對，換物件會讓它們認不得這份綁定。
+ * 只補充資訊的操作（`noteProgress`、`markDeferred`、`resolveClaim` 補 machineId）MUST 就地改寫——寬限計時器與
+ * `revertClaim` 都以參照比對，換物件會讓它們認不得這份綁定。
+ *
+ * **GET `/diagnoses/:jobId` 的用法（T034，contracts/diagnosis-lookup §3）**：
+ * 1. 授權檢查通過後、**任何 await 之前**呼叫 `claimForLookup`（同步，FR-009）——之後抵達的 `job/status`／`ai/*`
+ *    才會送到本次 socket（先綁定後查詢）。
+ * 2. `Job.fromId` 取得 job 後呼叫 `resolveClaim(claim, job.data.machineId)` 補上暫定綁定的 machineId；回傳
+ *    `deferred: true` 表示補上之前 relay 有 `job/status` 被擱置（不會補送），呼叫端 MUST 再查一次 state，以最新
+ *    state 回應（P1）。
+ * 3. 依 data-model §2.4：保留的只有「進行中 × created／rebound」；其餘回應前一律 `revertClaim(claim)`
+ *    （unchanged／terminal／conflict 為 no-op，可無條件呼叫）。進行中 × `conflict` 回 409 `job_bound_elsewhere`。
+ * 4. rebind 的 info 日誌取 `claim.previous.clientId` → `claim.socketId` 與 `claim.viaPreviousSocketId`。
  */
 @Injectable()
 export class JobRoutingRegistry implements OnModuleInit, OnModuleDestroy {
@@ -88,9 +134,7 @@ export class JobRoutingRegistry implements OnModuleInit, OnModuleDestroy {
    * 把既有綁定改送到 `clientId`，並把 `boundAt` 更新為 `now`（孤兒回收自改綁起算，P23）。以新物件
    * 取代舊綁定，回傳被取代的那一份（供呼叫端撤回時還原）；無綁定、或綁定已標終態時不動、回 undefined
    * （終態綁定只等寬限期滿刪除，不可改綁——與 data-model §2.3 第 2 列「terminal → 不動」一致）。
-   *
-   * T031 提醒：`revertClaim` 還原 rebind 時以 `{ ...current, clientId: previous.clientId, boundAt: previous.boundAt }`
-   * 寫回，保留改綁期間 `noteProgress` 記下的 `attempt`／`execution`，不要直接把 `previous` 物件放回去。
+   * 還原見 `revertClaim`（以 `{ ...current, clientId, boundAt }` 寫回，不直接放回 `previous` 物件）。
    */
   rebind(jobId: string, clientId: string, now: number = Date.now()): JobBinding | undefined {
     const previous = this.bindings.get(jobId);
@@ -145,6 +189,90 @@ export class JobRoutingRegistry implements OnModuleInit, OnModuleDestroy {
     this.graceTimers.set(jobId, timer);
   }
 
+  /**
+   * relay 因綁定尚無 machineId 而擱置了一則 `job/status`（P1）：就地記 `deferred: true`，由 `resolveClaim` 回報給 GET。
+   */
+  markDeferred(jobId: string): void {
+    const binding = this.bindings.get(jobId);
+    if (binding) binding.deferred = true;
+  }
+
+  /**
+   * GET 的同步暫定綁定（data-model §2.3，依序第一個成立者決定 kind）：
+   *
+   * | # | 現有綁定 | 條件 | kind | 動作 |
+   * | 1 | 無 | — | created | `bind(jobId, socketId, null)` |
+   * | 2 | 有 | `terminal` 已設 | terminal | 不動 |
+   * | 3 | 有 | `clientId === socketId` | unchanged | 不動 |
+   * | 4 | 有 | `!isOnline(clientId)` | rebound | 改綁到 socketId |
+   * | 5 | 有 | `clientId === previousSocketId`（仍在線） | rebound（viaPreviousSocketId） | 改綁；不終止舊連線 |
+   * | 6 | 有 | 其他 | conflict | 不動 |
+   *
+   * MUST 在任何 await 之前呼叫（FR-009）；本方法本身完全同步。
+   */
+  claimForLookup(input: LookupClaimInput, now: number = Date.now()): LookupClaim {
+    const { jobId, socketId, previousSocketId, isOnline } = input;
+    const existing = this.bindings.get(jobId);
+    if (!existing) {
+      this.bind(jobId, socketId, null, now);
+      return { kind: "created", jobId, socketId, binding: this.mustGet(jobId) };
+    }
+    if (existing.terminal !== undefined) return { kind: "terminal", jobId, socketId };
+    if (existing.clientId === socketId) return { kind: "unchanged", jobId, socketId };
+    const offline = !isOnline(existing.clientId);
+    if (offline || existing.clientId === previousSocketId) {
+      this.rebind(jobId, socketId, now);
+      return {
+        kind: "rebound",
+        jobId,
+        socketId,
+        binding: this.mustGet(jobId),
+        previous: existing,
+        viaPreviousSocketId: !offline,
+      };
+    }
+    return { kind: "conflict", jobId, socketId, ownerClientId: existing.clientId };
+  }
+
+  /**
+   * 為本次 claim 的暫定綁定補上 machineId（P1），並回報期間是否有 `job/status` 被擱置。
+   *
+   * 作用對象是「目前仍送往 `claim.socketId` 且 machineId 為 null」的綁定——包含 claim 建立的那份、以及期間被
+   * `markTerminal` 換成的終態副本（副本仍是本 socket 的、只是已標終態）。就地改寫、清掉 `deferred`。
+   * 綁定已不存在、已改送別的連線或已有 machineId 時不動、回 `{ deferred: false }`。
+   */
+  resolveClaim(claim: LookupClaim, machineId: string): { deferred: boolean } {
+    const current = this.bindings.get(claim.jobId);
+    if (!current || current.clientId !== claim.socketId || current.machineId !== null) return { deferred: false };
+    current.machineId = machineId;
+    const deferred = current.deferred === true;
+    delete current.deferred;
+    return { deferred };
+  }
+
+  /**
+   * 撤回本次 claim 自己的動作（FR-010；data-model §2.4「撤回」）。以參照比對，只撤回自己的那一份：
+   * - `created`：目前綁定仍是 claim 建立的那份才刪；期間已被標終態（換成副本，交給寬限刪）、被刪或被他人改綁皆不動。
+   * - `rebound`：目前綁定仍是 claim 改綁出的那份、且未標終態，才以 `{ ...current, clientId: previous.clientId,
+   *   boundAt: previous.boundAt }` 還原——保留改綁期間記下的 `attempt`／`execution`／machineId；已標終態就不還原。
+   * - `unchanged`／`terminal`／`conflict`：no-op。
+   */
+  revertClaim(claim: LookupClaim): void {
+    const current = this.bindings.get(claim.jobId);
+    if (claim.kind === "created") {
+      if (current === claim.binding) this.delete(claim.jobId);
+      return;
+    }
+    if (claim.kind === "rebound") {
+      if (current !== claim.binding || current.terminal !== undefined) return;
+      this.bindings.set(claim.jobId, {
+        ...current,
+        clientId: claim.previous.clientId,
+        boundAt: claim.previous.boundAt,
+      });
+    }
+  }
+
   /** 立即刪除綁定（例如入列失敗時解除自己剛建立的綁定）。 */
   delete(jobId: string): void {
     this.clearGraceTimer(jobId);
@@ -164,6 +292,12 @@ export class JobRoutingRegistry implements OnModuleInit, OnModuleDestroy {
       }
     }
     return swept;
+  }
+
+  private mustGet(jobId: string): JobBinding {
+    const binding = this.bindings.get(jobId);
+    if (!binding) throw new Error(`binding for ${jobId} missing right after it was written`);
+    return binding;
   }
 
   private clearGraceTimer(jobId: string): void {

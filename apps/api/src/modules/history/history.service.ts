@@ -34,6 +34,8 @@ const DESTROY_IDLE_DEADLINE_MS = 3_000;
  * 目前寫死於此、未開環境變數（設定集中處 AppConfigService 不在這次修改範圍內）。
  */
 const ERRORLOG_TTL_SECONDS = 30 * 24 * 60 * 60;
+/** `findDiagnosisResult` 的伺服器端查詢上限（contracts/diagnosis-lookup §5：Mongo 查詢超過 3 s → 503）。 */
+export const DIAGNOSIS_READ_MAX_TIME_MS = 3_000;
 
 /** telemetry 文件形狀：只存 time-series 需要的欄位，不重複存 `type`／`machineId`。 */
 type TelemetryDoc = {
@@ -172,6 +174,24 @@ export class HistoryService implements OnModuleInit, OnModuleDestroy {
       throw new Error("mongo not ready");
     }
     await this.db.command({ ping: 1 });
+  }
+
+  /**
+   * 唯讀取回 worker 寫入 `diagnoses` 的診斷結果（012 GET `/diagnoses/:jobId` 在 BullMQ 已清掉 job 時的後援，
+   * FR-012、research P5）：回傳文件的 `result` 欄位原值（**未驗證**，呼叫端 MUST 以 `DiagnosisResultSchema`
+   * `safeParse`），查無文件或文件沒有 `result` 回 `null`。
+   *
+   * 複用既有 `Db`、不另開連線；`maxTimeMS` 3 s 為伺服器端上限（連不上時由 `serverSelectionTimeoutMS` 3 s 收斂）。
+   * `db` 未就緒即 reject，與 `ping` 同一條錯誤路徑。不建索引：`diagnoses.jobId` 的 unique 索引由 worker 擁有。
+   */
+  async findDiagnosisResult(jobId: string): Promise<unknown> {
+    if (!this.db) {
+      throw new Error("mongo not ready");
+    }
+    const doc = await this.db
+      .collection<{ jobId: string; result?: unknown }>("diagnoses")
+      .findOne({ jobId }, { projection: { _id: 0, result: 1 }, maxTimeMS: DIAGNOSIS_READ_MAX_TIME_MS });
+    return doc?.result ?? null;
   }
 
   /**

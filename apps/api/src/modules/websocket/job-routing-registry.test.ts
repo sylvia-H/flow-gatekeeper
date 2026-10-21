@@ -231,3 +231,213 @@ describe("JobRoutingRegistry.onModuleDestroy", () => {
     expect(registry.isBound(OTHER_JOB_ID)).toBe(true);
   });
 });
+
+const CLIENT_C = "3f4e5d6c-7b8a-4c9d-8e1f-2a3b4c5d6e7f";
+/** 在線的 clientId 集合。 */
+const onlineOf = (...ids: string[]) => {
+  const set = new Set(ids);
+  return (clientId: string) => set.has(clientId);
+};
+
+describe("JobRoutingRegistry.claimForLookup（data-model §2.3 六列）", () => {
+  it("第 1 列：無綁定 → created，以 machineId null 暫定綁定到本 socket", () => {
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: onlineOf(CLIENT_B) });
+    expect(claim).toEqual({
+      kind: "created",
+      jobId: JOB_ID,
+      socketId: CLIENT_B,
+      binding: { clientId: CLIENT_B, machineId: null, boundAt: T0 },
+    });
+    expect(claim.kind === "created" && claim.binding).toBe(registry.get(JOB_ID));
+  });
+
+  it.each(["completed", "failed"] as const)("第 2 列：綁定已標 %s → terminal，不動（即使原連線離線）", (kind) => {
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    registry.markTerminal(JOB_ID, kind);
+    const before = registry.get(JOB_ID);
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: onlineOf(CLIENT_B) });
+    expect(claim).toEqual({ kind: "terminal", jobId: JOB_ID, socketId: CLIENT_B });
+    expect(registry.get(JOB_ID)).toBe(before);
+  });
+
+  it("第 3 列：綁定就是本 socket → unchanged，不動", () => {
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    const before = registry.get(JOB_ID);
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_A, isOnline: onlineOf(CLIENT_A) });
+    expect(claim).toEqual({ kind: "unchanged", jobId: JOB_ID, socketId: CLIENT_A });
+    expect(registry.get(JOB_ID)).toBe(before);
+  });
+
+  it("第 4 列：原連線離線 → rebound（viaPreviousSocketId false），改綁並更新 boundAt", () => {
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    const original = registry.get(JOB_ID);
+    vi.advanceTimersByTime(1_000);
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: onlineOf(CLIENT_B) });
+    expect(claim).toMatchObject({ kind: "rebound", socketId: CLIENT_B, viaPreviousSocketId: false });
+    expect(claim.kind === "rebound" && claim.previous).toBe(original);
+    expect(registry.get(JOB_ID)).toMatchObject({ clientId: CLIENT_B, machineId: "cnc-01", boundAt: T0 + 1_000 });
+    expect(claim.kind === "rebound" && claim.binding).toBe(registry.get(JOB_ID));
+  });
+
+  it("第 4 列優先於第 5 列：原連線離線且等於 previousSocketId → viaPreviousSocketId false", () => {
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    const claim = registry.claimForLookup({
+      jobId: JOB_ID,
+      socketId: CLIENT_B,
+      previousSocketId: CLIENT_A,
+      isOnline: onlineOf(CLIENT_B),
+    });
+    expect(claim).toMatchObject({ kind: "rebound", viaPreviousSocketId: false });
+  });
+
+  it("第 5 列：原連線仍在線但等於 previousSocketId → rebound（viaPreviousSocketId true），只改綁、不碰舊連線", () => {
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    const isOnline = vi.fn(onlineOf(CLIENT_A, CLIENT_B));
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, previousSocketId: CLIENT_A, isOnline });
+    expect(claim).toMatchObject({ kind: "rebound", viaPreviousSocketId: true });
+    expect(registry.owner(JOB_ID)).toBe(CLIENT_B);
+    // registry 不依賴 Gateway：對舊連線只做在線查詢，不終止它。
+    expect(isOnline).toHaveBeenCalledWith(CLIENT_A);
+  });
+
+  it("第 6 列：原連線在線、不是本 socket、不等於 previousSocketId → conflict，不動", () => {
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    const before = registry.get(JOB_ID);
+    for (const previousSocketId of [undefined, CLIENT_C]) {
+      const claim = registry.claimForLookup({
+        jobId: JOB_ID,
+        socketId: CLIENT_B,
+        previousSocketId,
+        isOnline: onlineOf(CLIENT_A, CLIENT_B),
+      });
+      expect(claim).toEqual({ kind: "conflict", jobId: JOB_ID, socketId: CLIENT_B, ownerClientId: CLIENT_A });
+    }
+    expect(registry.get(JOB_ID)).toBe(before);
+  });
+});
+
+describe("JobRoutingRegistry.resolveClaim／markDeferred（P1）", () => {
+  it("created 後補上 machineId（就地改寫，參照不變）；期間無擱置 → deferred false", () => {
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => true });
+    const before = registry.get(JOB_ID);
+    expect(registry.resolveClaim(claim, "cnc-01")).toEqual({ deferred: false });
+    expect(registry.get(JOB_ID)).toBe(before);
+    expect(registry.get(JOB_ID)?.machineId).toBe("cnc-01");
+  });
+
+  it("期間 relay 有擱置（markDeferred 就地改寫）→ deferred true，並清掉旗標", () => {
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => true });
+    const before = registry.get(JOB_ID);
+    registry.markDeferred(JOB_ID);
+    expect(registry.get(JOB_ID)).toBe(before);
+    expect(registry.get(JOB_ID)?.deferred).toBe(true);
+    expect(registry.resolveClaim(claim, "cnc-01")).toEqual({ deferred: true });
+    expect(registry.get(JOB_ID)).not.toHaveProperty("deferred");
+  });
+
+  it("期間已被標終態（換成副本）→ 仍補上副本的 machineId 並回報 deferred，副本照寬限刪", () => {
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => true });
+    registry.markDeferred(JOB_ID);
+    registry.markTerminal(JOB_ID, "completed");
+    expect(registry.resolveClaim(claim, "cnc-01")).toEqual({ deferred: true });
+    expect(registry.get(JOB_ID)).toMatchObject({ machineId: "cnc-01", terminal: { kind: "completed" } });
+    vi.advanceTimersByTime(TERMINAL_BINDING_GRACE_MS);
+    expect(registry.isBound(JOB_ID)).toBe(false);
+  });
+
+  it("綁定已有 machineId、已不存在、或已改送別的連線 → 不動、deferred false", () => {
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    const unchanged = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_A, isOnline: () => true });
+    expect(registry.resolveClaim(unchanged, "press-02")).toEqual({ deferred: false });
+    expect(registry.get(JOB_ID)?.machineId).toBe("cnc-01");
+
+    const created = registry.claimForLookup({ jobId: OTHER_JOB_ID, socketId: CLIENT_B, isOnline: () => true });
+    registry.delete(OTHER_JOB_ID);
+    expect(registry.resolveClaim(created, "cnc-02")).toEqual({ deferred: false });
+    expect(registry.isBound(OTHER_JOB_ID)).toBe(false);
+
+    const again = registry.claimForLookup({ jobId: OTHER_JOB_ID, socketId: CLIENT_B, isOnline: () => true });
+    registry.bind(OTHER_JOB_ID, CLIENT_A, null); // 他人改綁
+    expect(registry.resolveClaim(again, "cnc-02")).toEqual({ deferred: false });
+    expect(registry.get(OTHER_JOB_ID)?.machineId).toBeNull();
+  });
+
+  it("markDeferred 無綁定時不動", () => {
+    registry.markDeferred(JOB_ID);
+    expect(registry.isBound(JOB_ID)).toBe(false);
+  });
+});
+
+describe("JobRoutingRegistry.revertClaim（只撤回自己的那份）", () => {
+  it("created：目前仍是自己建立的那份（含已 resolveClaim 就地補 machineId）→ 刪除", () => {
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => true });
+    registry.resolveClaim(claim, "cnc-01");
+    registry.revertClaim(claim);
+    expect(registry.isBound(JOB_ID)).toBe(false);
+  });
+
+  it("created：期間被他人重新綁定 → 不刪別人的綁定", () => {
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => true });
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    registry.revertClaim(claim);
+    expect(registry.owner(JOB_ID)).toBe(CLIENT_A);
+  });
+
+  it("created：期間已被標終態 → 不刪，交給寬限計時器", () => {
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => true });
+    registry.markTerminal(JOB_ID, "failed");
+    registry.revertClaim(claim);
+    expect(registry.get(JOB_ID)?.terminal?.kind).toBe("failed");
+    vi.advanceTimersByTime(TERMINAL_BINDING_GRACE_MS);
+    expect(registry.isBound(JOB_ID)).toBe(false);
+  });
+
+  it("rebound：還原原 clientId 與 boundAt，保留改綁期間記下的 attempt／execution", () => {
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    vi.advanceTimersByTime(1_000);
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => false });
+    registry.noteProgress(JOB_ID, 2, 3);
+    registry.revertClaim(claim);
+    expect(registry.get(JOB_ID)).toEqual({
+      clientId: CLIENT_A,
+      machineId: "cnc-01",
+      boundAt: T0,
+      attempt: 2,
+      execution: 3,
+    });
+  });
+
+  it("rebound：期間已被他人再改綁 → 不還原", () => {
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => false });
+    registry.rebind(JOB_ID, CLIENT_C);
+    registry.revertClaim(claim);
+    expect(registry.owner(JOB_ID)).toBe(CLIENT_C);
+  });
+
+  it.each(["completed", "failed"] as const)("rebound：撤回時綁定已被標 %s → 不還原原綁定，照寬限刪", (kind) => {
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    const claim = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => false });
+    registry.markTerminal(JOB_ID, kind);
+    registry.revertClaim(claim);
+    expect(registry.get(JOB_ID)).toMatchObject({ clientId: CLIENT_B, terminal: { kind } });
+    vi.advanceTimersByTime(TERMINAL_BINDING_GRACE_MS);
+    expect(registry.isBound(JOB_ID)).toBe(false);
+  });
+
+  it("unchanged／terminal／conflict → no-op", () => {
+    registry.bind(JOB_ID, CLIENT_A, "cnc-01");
+    const before = registry.get(JOB_ID);
+    const unchanged = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_A, isOnline: () => true });
+    const conflict = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => true });
+    registry.revertClaim(unchanged);
+    registry.revertClaim(conflict);
+    expect(registry.get(JOB_ID)).toBe(before);
+
+    registry.markTerminal(JOB_ID, "completed");
+    const terminalBefore = registry.get(JOB_ID);
+    const terminal = registry.claimForLookup({ jobId: JOB_ID, socketId: CLIENT_B, isOnline: () => true });
+    registry.revertClaim(terminal);
+    expect(registry.get(JOB_ID)).toBe(terminalBefore);
+  });
+});
