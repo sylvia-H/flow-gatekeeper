@@ -1,7 +1,7 @@
 import { DelayedError, UnrecoverableError } from "bullmq";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AiStreamEventSchema } from "@flow-gatekeeper/contracts";
-import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisResult } from "@flow-gatekeeper/contracts";
+import { AiStreamEventSchema, DiagnosisJobProgressSchema, DiagnosisJobReturnValueSchema } from "@flow-gatekeeper/contracts";
+import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisJobProgress, DiagnosisResult } from "@flow-gatekeeper/contracts";
 import { GeminiProvider } from "./ai/gemini-provider.js";
 import { PROMPT_VERSION } from "./ai/prompt.js";
 import { AiProviderError } from "./ai/provider.js";
@@ -11,7 +11,16 @@ import { buildDiagnosisSignature } from "./cache/signature.js";
 import type { DiagnosisContext } from "./context/context-builder.js";
 import type { DiagnosisRepository } from "./diagnosis-repository.js";
 import type { LivenessTracker } from "./lib/liveness.js";
-import { createProcessor, isNoContextFailure, isTerminalFailure, NO_CONTEXT_CODE, NO_CONTEXT_MESSAGE } from "./processor.js";
+import {
+  AiFailMarkerSchema,
+  createProcessor,
+  isNoContextFailure,
+  isTerminalFailure,
+  NO_CONTEXT_CODE,
+  NO_CONTEXT_MESSAGE,
+  PERSIST_FAILED_CODE,
+  PERSIST_FAILED_MESSAGE,
+} from "./processor.js";
 import type { ProcessorConfig, ProcessorJob, ProcessorLogger } from "./processor.js";
 
 // ---------------------------------------------------------------------------
@@ -29,7 +38,7 @@ const RESULT_TEXT = JSON.stringify(VALID_RESULT);
 
 /** 每次帶 TTL 的寫入（cache SET EX／鎖 SET NX EX／限流窗首次 EXPIRE）都記下來，TTL 參數接錯才測得出。 */
 interface TtlRecord {
-  op: "cache" | "lock" | "window";
+  op: "cache" | "lock" | "window" | "marker";
   key: string;
   ttlSeconds: number;
 }
@@ -39,13 +48,15 @@ class FakeStore implements ProcessorStore {
   readonly counters = new Map<string, number>();
   readonly deleted: string[] = [];
   readonly ttls: TtlRecord[] = [];
-  failSetWithTtl = false;
+  /** true＝所有 setWithTtl 失敗；函式＝依 key 決定（例如只讓 ai-cache 寫入失敗）。 */
+  failSetWithTtl: boolean | ((key: string) => boolean) = false;
 
   async get(key: string) {
     return this.data.get(key) ?? null;
   }
   async setWithTtl(key: string, value: string, ttlSeconds: number) {
-    if (this.failSetWithTtl) throw new Error("redis down");
+    const shouldFail = typeof this.failSetWithTtl === "function" ? this.failSetWithTtl(key) : this.failSetWithTtl;
+    if (shouldFail) throw new Error("redis down");
     this.ttls.push({ op: "cache", key, ttlSeconds });
     this.data.set(key, value);
   }
@@ -69,6 +80,12 @@ class FakeStore implements ProcessorStore {
     if (n === 1) this.ttls.push({ op: "window", key, ttlSeconds: windowSeconds });
     this.counters.set(key, n);
     return n;
+  }
+  async setIfAbsent(key: string, value: string, ttlSeconds: number) {
+    if (this.data.has(key)) return false;
+    this.ttls.push({ op: "marker", key, ttlSeconds });
+    this.data.set(key, value);
+    return true;
   }
   cacheKeys() {
     return [...this.data.keys()].filter((k) => k.startsWith("ai-cache:"));
@@ -106,18 +123,51 @@ interface TriggerDoc {
   cached: boolean;
 }
 
+/** 模擬 Mongo 拒寫的錯誤：訊息帶連線細節，斷言它不會外洩到 ai/error 或 throw 的訊息（裁決第 18 條）。 */
+const MONGO_WRITE_ERROR_TEXT = "MongoServerError: not primary (mongodb://admin:s3cret@mongo:27017)";
+
+/**
+ * 與真 repository 同語意的 fake：`insertDiagnosis` 以 jobId 冪等（重複視為成功、不覆寫）、`upsertTrigger` 先寫者勝
+ * （`$setOnInsert`）、`findDiagnosisResult` 讀回已落地者。
+ */
 class FakeRepo implements DiagnosisRepository {
   readonly diagnoses: { machineId: string; jobId: string; result: DiagnosisResult }[] = [];
+  /** 實際存在的 trigger（每個 jobId 至多一筆）。 */
   readonly triggers: TriggerDoc[] = [];
-  failInsertTrigger = false;
+  /** 每次 upsertTrigger 呼叫（含被 $setOnInsert 吸收者）。 */
+  readonly upsertCalls: TriggerDoc[] = [];
+  failUpsertTrigger = false;
+  /** 接下來幾次 insertDiagnosis 要失敗（每次遞減）。 */
+  failInsertDiagnosis = 0;
+  insertDiagnosisCalls = 0;
+  findCalls = 0;
   order: string[] | undefined;
   async insertDiagnosis(doc: { machineId: string; jobId: string; result: DiagnosisResult }) {
+    this.insertDiagnosisCalls += 1;
+    this.order?.push("insertDiagnosis");
+    if (this.failInsertDiagnosis > 0) {
+      this.failInsertDiagnosis -= 1;
+      throw new Error(MONGO_WRITE_ERROR_TEXT);
+    }
+    if (this.diagnoses.some((d) => d.jobId === doc.jobId)) return;
     this.diagnoses.push(doc);
   }
-  async insertTrigger(doc: TriggerDoc) {
-    this.order?.push("insertTrigger");
-    if (this.failInsertTrigger) throw new Error("mongo down");
+  async upsertTrigger(doc: TriggerDoc) {
+    this.order?.push("upsertTrigger");
+    if (this.failUpsertTrigger) throw new Error("mongo down");
+    this.upsertCalls.push(doc);
+    if (this.triggers.some((t) => t.jobId === doc.jobId)) return;
     this.triggers.push(doc);
+  }
+  /** 這些 jobId 的 diagnoses 紀錄視為「存在但不合法」。 */
+  readonly invalidJobIds = new Set<string>();
+  async findDiagnosisResult(jobId: string, onInvalid?: () => void) {
+    this.findCalls += 1;
+    if (this.invalidJobIds.has(jobId)) {
+      onInvalid?.();
+      return null;
+    }
+    return this.diagnoses.find((d) => d.jobId === jobId)?.result ?? null;
   }
 }
 
@@ -255,10 +305,10 @@ function keysFor(ctx: DiagnosisContext) {
     providerId: "fake",
     model: "fake-model",
   });
-  return { cacheKey: `ai-cache:${sig}`, lockKey: `ai-lock:${sig}` };
+  return { sig, cacheKey: `ai-cache:${sig}`, lockKey: `ai-lock:${sig}`, failKey: `ai-fail:${sig}` };
 }
 
-function makeJob(jobId: string, opts: { attemptsMade?: number; attempts?: number } = {}) {
+function makeJob(jobId: string, opts: { attemptsMade?: number; attempts?: number; attemptsStarted?: number } = {}) {
   const data: DiagnosisJobPayload = {
     jobId,
     machineId: "press-02",
@@ -266,13 +316,32 @@ function makeJob(jobId: string, opts: { attemptsMade?: number; attempts?: number
     requestedAt: new Date(0).toISOString(),
     windowMinutes: 5,
   };
-  const job: ProcessorJob & { progress: number[]; moveToDelayed: ReturnType<typeof vi.fn> } = {
+  const job: ProcessorJob & {
+    /** 每次 progress 的 value（里程碑序列斷言用）。 */
+    progress: number[];
+    /** 原始參數（形狀斷言用：012 起一律為 DiagnosisJobProgress 物件）。 */
+    progressRaw: DiagnosisJobProgress[];
+    /** 每次 progress 的時間（Date.now；fake timer 下為虛擬時間）。 */
+    progressAt: number[];
+    /** 測試掛勾：記錄順序或讓某次 progress 失敗（拋錯即 reject）。 */
+    progressHook: ((value: number) => void) | undefined;
+    moveToDelayed: ReturnType<typeof vi.fn>;
+  } = {
     data,
     attemptsMade: opts.attemptsMade ?? 0,
+    // BullMQ 於 moveToActive 遞增：處理中至少為 attemptsMade + 1。
+    attemptsStarted: opts.attemptsStarted ?? (opts.attemptsMade ?? 0) + 1,
     opts: { attempts: opts.attempts ?? 3 },
     progress: [],
-    async updateProgress(p: number) {
-      this.progress.push(p);
+    progressRaw: [],
+    progressAt: [],
+    progressHook: undefined,
+    async updateProgress(p: DiagnosisJobProgress) {
+      const value = p.value;
+      this.progressHook?.(value);
+      this.progressRaw.push(p);
+      this.progressAt.push(Date.now());
+      this.progress.push(value);
     },
     moveToDelayed: vi.fn(async () => {}),
   };
@@ -330,6 +399,8 @@ function setup(
     liveness?: LivenessTracker;
     clock?: FakeClock;
     logger?: ProcessorLogger;
+    /** true＝用全域 Date.now 與 setTimeout（搭配 vi.useFakeTimers，讓 keepalive 與輪詢 sleep 同一條時間軸）。 */
+    realClock?: boolean;
   } = {},
 ) {
   const store = new FakeStore();
@@ -344,6 +415,7 @@ function setup(
     liveness,
     clock = new FakeClock(CLOCK_START),
     logger = silentLogger,
+    realClock = false,
     ...config
   } = overrides;
   const processor = createProcessor({
@@ -357,8 +429,7 @@ function setup(
     config: { ...CONFIG, ...config },
     isClosing,
     liveness,
-    now: clock.now,
-    sleep: clock.sleep,
+    ...(realClock ? {} : { now: clock.now, sleep: clock.sleep }),
   });
   return { store, publisher, repo, ai, metrics, processor, clock };
 }
@@ -382,10 +453,13 @@ describe("createProcessor：去重", () => {
     expect(clock.pending).toBe(1); // b 取不到鎖，在等待迴圈裡 sleep
 
     holder.release();
-    await a;
+    const ra = await a;
     clock.advance(CONFIG.pollIntervalMs);
-    await b;
+    const rb = await b;
 
+    // returnvalue（ADR-003 D1）：持鎖者回 LLM 結果、等待者回共用的快取結果
+    expect(ra).toEqual({ result: VALID_RESULT, cached: false });
+    expect(rb).toEqual({ result: VALID_RESULT, cached: true });
     expect(ai.calls).toHaveLength(1);
     expect(publisher.ofType("ai/done").map((e) => [e.jobId, e.cached])).toEqual([
       ["a", false],
@@ -402,6 +476,31 @@ describe("createProcessor：去重", () => {
     expect(metrics.recordLatency).toHaveBeenCalledTimes(1);
   });
 
+  it("去重鎖撐完整條 LLM 路徑：串流中途鎖仍在，processor resolve 後才釋放", async () => {
+    let open: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      open = r;
+    });
+    const midStream: Script = async ({ onToken }) => {
+      onToken(RESULT_TEXT.slice(0, 10));
+      await gate; // 串流停在中途
+      onToken(RESULT_TEXT.slice(10));
+      return { text: RESULT_TEXT, finishReason: "stop" };
+    };
+    const { store, publisher, processor } = setup([midStream]);
+    const run = track(processor(makeJob("a")));
+    await flush();
+
+    // `return await callLlmAndReply()` 少了 await 時，finally 會在串流途中就放鎖——這裡會抓到。
+    expect(publisher.ofType("ai/token")).toHaveLength(1);
+    expect(run.state.settled).toBe(false);
+    expect(store.lockKeys()).toHaveLength(1);
+
+    open();
+    expect(await run.promise).toEqual({ result: VALID_RESULT, cached: false });
+    expect(store.lockKeys()).toEqual([]);
+  });
+
   it("等待者搶到鎖時先 double-check cache（持鎖者剛寫完並放鎖）", async () => {
     const holder = gatedScript();
     const { ai, store, publisher, clock, processor } = setup([holder.script]);
@@ -416,7 +515,7 @@ describe("createProcessor：去重", () => {
     await a;
     expect(store.lockKeys()).toEqual([]);
     clock.advance(CONFIG.pollIntervalMs);
-    await b;
+    expect(await b).toEqual({ result: VALID_RESULT, cached: true }); // 持鎖下 double-check 命中也回 returnvalue
 
     // a 取鎖成功、b 第一次失敗、b 醒來第二次成功——b 是在持鎖狀態下 double-check 命中的
     expect(await Promise.all(acquire.mock.results.map((r) => r.value))).toEqual([true, false, true]);
@@ -440,7 +539,7 @@ describe("createProcessor：去重", () => {
     clock.advance(CONFIG.pollIntervalMs);
     await flush();
     expect(run.state.settled).toBe(true);
-    await run.promise;
+    expect(await run.promise).toEqual({ result: VALID_RESULT, cached: true });
 
     expect(ai.calls).toHaveLength(0);
     expect(store.data.get(lockKey)).toBe("other-replica");
@@ -455,26 +554,34 @@ describe("createProcessor：去重", () => {
     expect(liveness.touch).toHaveBeenCalledTimes(1 + (clock.sleeps.length + 1));
   });
 
-  it("持鎖者失敗後，等待者接手重算", async () => {
+  it("持鎖者失敗後：等待者看到 ai-fail 標記即以同 code 失敗（不接手重打）；標記過期後的重試才重算", async () => {
     const holder = gatedScript(new AiProviderError("503 overloaded", { retryable: true, code: "provider_error" }));
-    const { ai, publisher, metrics, clock, processor } = setup([holder.script, okScript()]);
+    const { ai, store, publisher, metrics, clock, processor } = setup([holder.script, okScript()]);
     const a = processor(makeJob("a")).catch((e: unknown) => e);
-    const b = processor(makeJob("b"));
+    const b = processor(makeJob("b")).catch((e: unknown) => e);
     await flush();
     expect(clock.pending).toBe(1);
 
     holder.release();
     expect(await a).toBeInstanceOf(Error);
     clock.advance(CONFIG.pollIntervalMs);
-    await b;
-
-    expect(ai.calls).toHaveLength(2);
-    expect(publisher.ofType("ai/done")).toEqual([expect.objectContaining({ jobId: "b", cached: false, attempt: 1 })]);
-    // a 是非最終嘗試：不送 ai/error
+    const errB = await b;
+    expect(errB).toBeInstanceOf(Error);
+    expect(errB).not.toBeInstanceOf(UnrecoverableError);
+    expect((errB as Error).message).toBe("503 overloaded");
+    expect(ai.calls).toHaveLength(1);
+    // 兩者都是非最終嘗試：不送 ai/error
     expect(publisher.ofType("ai/error")).toEqual([]);
-    // 兩個 job 都真的要打 LLM → 各一筆未命中；延遲只記成功的那一次
+
+    // 標記 TTL（10 s）過期後，b 的重試照常打 LLM 並成功。
+    store.data.delete(`ai-fail:${keysFor(CONTEXT).sig}`);
+    await expect(processor(makeJob("b", { attemptsMade: 1, attempts: 3 }))).resolves.toEqual({
+      result: VALID_RESULT,
+      cached: false,
+    });
+    expect(ai.calls).toHaveLength(2);
+    // a 打過 LLM 記一筆未命中；b 第一次被標記擋在取鎖前（未記），重試打 LLM 時記一筆
     expect(metrics.recordCacheMiss).toHaveBeenCalledTimes(2);
-    expect(metrics.recordCacheHit).not.toHaveBeenCalled();
     expect(metrics.recordLatency).toHaveBeenCalledTimes(1);
   });
 
@@ -564,7 +671,13 @@ describe("createProcessor：全欄位斷言（進度／trigger／metrics／活�
     expect(liveness.touch).toHaveBeenCalledTimes(1 + 1 + publisher.ofType("ai/token").length);
 
     const { cacheKey, lockKey } = keysFor(CONTEXT);
-    expect(store.ttlsOf("cache")).toEqual([{ op: "cache", key: cacheKey, ttlSeconds: CONFIG.cacheTtlSeconds }]);
+    // setWithTtl 兩次：先暫存 ai-result（3600 s），寫庫後才寫 ai-cache；暫存於寫庫成功後刪除。
+    expect(store.ttlsOf("cache")).toEqual([
+      { op: "cache", key: "ai-result:m", ttlSeconds: 3600 },
+      { op: "cache", key: cacheKey, ttlSeconds: CONFIG.cacheTtlSeconds },
+    ]);
+    expect(store.data.has("ai-result:m")).toBe(false);
+    expect(store.ttlsOf("marker")).toEqual([{ op: "marker", key: "ai-metric:m", ttlSeconds: 86_400 }]);
     expect(store.ttlsOf("lock")).toEqual([{ op: "lock", key: lockKey, ttlSeconds: CONFIG.lockTtlSeconds }]);
     // 限流窗：key 帶窗序號、TTL 取兩個窗長（120 秒）
     expect(store.ttlsOf("window")).toEqual([
@@ -586,14 +699,18 @@ describe("createProcessor：全欄位斷言（進度／trigger／metrics／活�
     expect(metrics.recordCacheHit).toHaveBeenCalledTimes(1);
     expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
     expect(metrics.recordLatency).not.toHaveBeenCalled();
-    expect(store.ttls).toEqual([]); // 不取鎖、不寫 cache、不吃限流額度
+    // 不取鎖、不寫 cache、不吃限流額度；只有 hit／miss 的一次性標記
+    expect(store.ttls).toEqual([{ op: "marker", key: "ai-metric:hit", ttlSeconds: 86_400 }]);
     expectLivenessPaired(liveness);
     // 命中於迴圈前：只有 context 後那 1 次
     expect(liveness.touch).toHaveBeenCalledTimes(1);
   });
 
-  it("重試（非第一次嘗試）不重複計 hit／miss，但成功的 LLM 呼叫仍記延遲樣本", async () => {
+  it("同 jobId 已計過 hit／miss（ai-metric 標記存在）不重複計，但成功的 LLM 呼叫仍記延遲樣本", async () => {
     const { store, metrics, processor } = setup([okScript()]);
+    // 前一次嘗試（失敗）已計過：標記由 SET NX 留下。
+    store.data.set("ai-metric:r", "1");
+    store.data.set("ai-metric:r2", "1");
     await processor(makeJob("r", { attemptsMade: 1, attempts: 3 })); // 未命中路徑
     expect(store.cacheKeys()).toHaveLength(1);
     await processor(makeJob("r2", { attemptsMade: 2, attempts: 3 })); // 命中路徑
@@ -864,12 +981,73 @@ describe("createProcessor：cache", () => {
     expect(JSON.parse(store.data.get(key) ?? "null")).toEqual(VALID_RESULT);
   });
 
-  it("先寫 diagnoses 再寫 cache：寫 cache 失敗時 diagnoses 已落地、cache 仍空（重試會重算）", async () => {
-    const { store, repo, processor } = setup([okScript()]);
-    store.failSetWithTtl = true;
-    await expect(processor(makeJob("a"))).rejects.toThrow("redis down");
+  it("SET ai-cache 失敗（best-effort）：只 warn、diagnoses 已落地，job 照常完成 cached:false——attempts 1 也成功", async () => {
+    const { logger, warns } = recordingLogger();
+    const { ai, store, repo, processor } = setup([okScript()], { logger });
+    store.failSetWithTtl = (key) => key.startsWith("ai-cache:");
+    await expect(processor(makeJob("a", { attempts: 1 }))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(warns.map((w) => w.msg)).toContain("ai-cache 寫入失敗（diagnoses 已落地，照常完成）");
     expect(repo.diagnoses).toHaveLength(1);
+    expect(repo.triggers.map((t) => t.cached)).toEqual([false]);
     expect(store.cacheKeys()).toHaveLength(0);
+    expect(store.data.has("ai-result:a")).toBe(false); // 寫庫成功後暫存已刪
+    expect(ai.calls).toHaveLength(1);
+  });
+
+  it("diagnoses 落地後 trigger 寫入失敗：拋出走重試，重試由冪等短路沿用、不重打 LLM、不回填 ai-cache", async () => {
+    const { ai, store, repo, processor } = setup([okScript()]);
+    store.failSetWithTtl = (key) => key.startsWith("ai-cache:");
+    const upsert = repo.upsertTrigger.bind(repo);
+    let failTriggerOnce = true;
+    vi.spyOn(repo, "upsertTrigger").mockImplementation(async (doc) => {
+      if (failTriggerOnce) {
+        failTriggerOnce = false;
+        throw new Error("mongo down");
+      }
+      await upsert(doc);
+    });
+    await expect(processor(makeJob("a"))).rejects.toThrow("mongo down");
+    expect(repo.diagnoses).toHaveLength(1);
+
+    await expect(processor(makeJob("a", { attemptsMade: 1, attempts: 3 }))).resolves.toEqual({
+      result: VALID_RESULT,
+      cached: false,
+    });
+    expect(ai.calls).toHaveLength(1);
+    expect(store.cacheKeys()).toHaveLength(0); // 短路不回填 ai-cache（P11）
+  });
+
+  it("暫存 ai-result 寫入失敗（Redis 錯誤）只 warn：照常寫 diagnoses、快取與 trigger，job 成功", async () => {
+    const { logger, warns } = recordingLogger();
+    const { store, repo, processor } = setup([okScript()], { logger });
+    store.failSetWithTtl = (key) => key.startsWith("ai-result:");
+    await expect(processor(makeJob("a"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(repo.diagnoses).toHaveLength(1);
+    expect(store.cacheKeys()).toHaveLength(1);
+    expect(repo.triggers.map((t) => t.cached)).toEqual([false]);
+    expect(warns.map((w) => w.msg)).toContain("ai-result 暫存寫入失敗（照常寫 diagnoses）");
+  });
+
+  it("暫存寫入失敗且之後的步驟也失敗：diagnoses 已落地者由短路 (ii) 回收，不重打 LLM", async () => {
+    const { ai, store, repo, processor } = setup([okScript()]);
+    store.failSetWithTtl = () => true; // ai-result 與 ai-cache 都寫不進去（皆 best-effort）
+    const upsert = repo.upsertTrigger.bind(repo);
+    let failTriggerOnce = true;
+    vi.spyOn(repo, "upsertTrigger").mockImplementation(async (doc) => {
+      if (failTriggerOnce) {
+        failTriggerOnce = false;
+        throw new Error("mongo down");
+      }
+      await upsert(doc);
+    });
+    await expect(processor(makeJob("a"))).rejects.toThrow("mongo down"); // 卡在 trigger
+
+    store.failSetWithTtl = false;
+    await expect(processor(makeJob("a", { attemptsMade: 1, attempts: 3 }))).resolves.toEqual({
+      result: VALID_RESULT,
+      cached: false,
+    });
+    expect(ai.calls).toHaveLength(1);
   });
 
   it("provider 收到由 DiagnosisResultSchema 推導的 responseJsonSchema", async () => {
@@ -914,7 +1092,7 @@ describe("createProcessor：LLM 限流與關閉", () => {
     expect(clock.sleeps).toEqual([]); // 沒有空等任何一輪
 
     holder.release();
-    await expect(holding).resolves.toBeUndefined();
+    await expect(holding).resolves.toEqual({ result: VALID_RESULT, cached: false });
   });
 });
 
@@ -941,7 +1119,7 @@ describe("createProcessor：終態事件 await 送出（AR-5／WK-14）", () => 
     expect(run.state.settled).toBe(false);
 
     done.release();
-    await expect(run.promise).resolves.toBeUndefined();
+    await expect(run.promise).resolves.toEqual({ result: VALID_RESULT, cached: false });
   });
 
   it("cache 命中路徑：ai/done 的 PUBLISH 未完成前 processor 不 resolve", async () => {
@@ -955,7 +1133,7 @@ describe("createProcessor：終態事件 await 送出（AR-5／WK-14）", () => 
     expect(run.state.settled).toBe(false);
 
     done.release();
-    await expect(run.promise).resolves.toBeUndefined();
+    await expect(run.promise).resolves.toEqual({ result: VALID_RESULT, cached: true });
   });
 
   it("終態 ai/error（最終嘗試）：PUBLISH 完成前不 throw——具體錯誤先於 BullMQ failed", async () => {
@@ -988,26 +1166,26 @@ describe("createProcessor：終態事件 await 送出（AR-5／WK-14）", () => 
     await expect(run.promise).rejects.toBeInstanceOf(UnrecoverableError);
   });
 
-  it("ai/done 的 PUBLISH 失敗：記 warn，job 仍成功（不轉失敗重試、不重複落地）", async () => {
+  it("ai/done 的 PUBLISH 失敗：記 warn，job 仍成功並照常回傳 returnvalue（不轉失敗重試、不重複落地）", async () => {
     const { logger, warns } = recordingLogger();
     const { publisher, repo, store, processor } = setup([okScript()], { logger });
     const boom = new Error("redis down");
     publisher.respond = (e) => (e.type === "ai/done" ? Promise.reject(boom) : Promise.resolve(1));
 
-    await expect(processor(makeJob("a"))).resolves.toBeUndefined();
+    await expect(processor(makeJob("a"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
     expect(repo.diagnoses).toHaveLength(1);
     expect(repo.triggers).toHaveLength(1);
     expect(store.cacheKeys()).toHaveLength(1);
     expect(warns).toEqual([{ obj: { eventType: "ai/done", err: boom }, msg: "終態事件 publish 失敗（job 結果不變）" }]);
   });
 
-  it("cache 命中時 ai/done 的 PUBLISH 失敗：記 warn，job 仍成功", async () => {
+  it("cache 命中時 ai/done 的 PUBLISH 失敗：記 warn，job 仍成功並照常回傳 returnvalue", async () => {
     const { logger, warns } = recordingLogger();
     const { store, publisher, repo, processor } = setup([okScript()], { logger });
     store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
     publisher.respond = () => Promise.reject(new Error("redis down"));
 
-    await expect(processor(makeJob("hit"))).resolves.toBeUndefined();
+    await expect(processor(makeJob("hit"))).resolves.toEqual({ result: VALID_RESULT, cached: true });
     expect(repo.triggers).toEqual([expect.objectContaining({ jobId: "hit", cached: true })]);
     expect(warns).toEqual([expect.objectContaining({ obj: expect.objectContaining({ eventType: "ai/done" }) })]);
   });
@@ -1038,14 +1216,924 @@ describe("createProcessor：終態事件 await 送出（AR-5／WK-14）", () => 
     const { publisher, processor } = setup([okScript()], { logger });
     publisher.respond = (e) => (e.type === "ai/token" ? Promise.reject(new Error("redis down")) : Promise.resolve(1));
 
-    await expect(processor(makeJob("a"))).resolves.toBeUndefined();
+    await expect(processor(makeJob("a"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
     await flush(); // token 的 catch 是 fire-and-forget，等它落定
     expect(publisher.ofType("ai/done")).toHaveLength(1);
     expect(warns.filter((w) => w.msg === "publish 失敗")).toHaveLength(2);
   });
 });
 
+/** 記下 info 的 fake logger（斷言 `idempotent short-circuit` 的 source）。 */
+function infoLogger() {
+  const infos: { obj: unknown; msg?: string }[] = [];
+  const logger: ProcessorLogger = {
+    info: (obj, msg) => infos.push({ obj, msg }),
+    warn: () => {},
+    error: () => {},
+    child: () => logger,
+  };
+  const shortCircuits = () =>
+    infos.filter((i) => i.msg === "idempotent short-circuit").map((i) => (i.obj as { source?: unknown }).source);
+  return { logger, infos, shortCircuits };
+}
+
+describe("createProcessor：冪等短路（012 T049；FR-024、D6）", () => {
+  it("(i) ai-result 暫存命中：補寫 diagnoses、DEL 暫存、trigger cached:false、ai/done 與回傳值，不建 context／不查快取／不取鎖／不打 LLM", async () => {
+    const buildContext = vi.fn(async () => CONTEXT);
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, store, repo, publisher, metrics, processor } = setup([okScript()], { buildContext, logger });
+    store.data.set("ai-result:j", RESULT_TEXT);
+    store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT); // 快取也有值：短路必須先於快取查詢
+    const getSpy = vi.spyOn(store, "get");
+    const acquire = vi.spyOn(store, "tryAcquireLock");
+    const job = makeJob("j", { attemptsMade: 1, attempts: 3 });
+
+    const ret = await processor(job);
+
+    expect(ret).toEqual({ result: VALID_RESULT, cached: false });
+    expect(shortCircuits()).toEqual(["ai-result"]);
+    expect(repo.diagnoses).toEqual([{ machineId: "press-02", jobId: "j", result: VALID_RESULT }]);
+    expect(store.data.has("ai-result:j")).toBe(false);
+    expect(repo.triggers).toEqual([{ machineId: "press-02", jobId: "j", requestedBy: "tester", cached: false }]);
+    expect(job.progress).toEqual([0, 100]);
+    expect(publisher.events).toEqual([{ type: "ai/done", jobId: "j", attempt: 2, cached: false, result: VALID_RESULT }]);
+    expect(ai.calls).toHaveLength(0);
+    expect(buildContext).not.toHaveBeenCalled();
+    expect(acquire).not.toHaveBeenCalled();
+    expect(getSpy.mock.calls.map((c) => c[0])).toEqual(["ai-result:j"]); // 沒讀 ai-cache
+    expect(repo.findCalls).toBe(0); // (i) 命中就不查 (ii)
+    expect(metrics.recordCacheHit).not.toHaveBeenCalled();
+    expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
+    expect(store.ttls).toEqual([]); // 不寫 ai-metric、不回填 ai-cache
+  });
+
+  it("(ii) diagnoses 已有該 jobId：沿用結果、trigger cached:false，不打 LLM、不取鎖、不再 insertDiagnosis", async () => {
+    const buildContext = vi.fn(async () => CONTEXT);
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, store, repo, publisher, processor } = setup([okScript()], { buildContext, logger });
+    repo.diagnoses.push({ machineId: "press-02", jobId: "j", result: VALID_RESULT });
+    const acquire = vi.spyOn(store, "tryAcquireLock");
+
+    const ret = await processor(makeJob("j", { attemptsMade: 1, attempts: 3 }));
+
+    expect(ret).toEqual({ result: VALID_RESULT, cached: false });
+    expect(shortCircuits()).toEqual(["diagnoses"]);
+    expect(repo.insertDiagnosisCalls).toBe(0);
+    expect(repo.triggers.map((t) => t.cached)).toEqual([false]);
+    expect(publisher.ofType("ai/done").map((e) => e.cached)).toEqual([false]);
+    expect(ai.calls).toHaveLength(0);
+    expect(buildContext).not.toHaveBeenCalled();
+    expect(acquire).not.toHaveBeenCalled();
+  });
+
+  it("ai-result 暫存不合法：DEL 並視為無，續查 diagnoses；兩者皆無走一般路徑", async () => {
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, store, repo, processor } = setup([okScript()], { logger });
+    store.data.set("ai-result:j", JSON.stringify({ summary: 42 }));
+
+    const ret = await processor(makeJob("j"));
+
+    expect(store.deleted).toContain("ai-result:j");
+    expect(repo.findCalls).toBe(1);
+    expect(shortCircuits()).toEqual([]);
+    expect(ai.calls).toHaveLength(1);
+    expect(ret).toEqual({ result: VALID_RESULT, cached: false });
+  });
+
+  it("(i) 補寫 diagnoses 失敗：走 persist_failed（非最終 attempt 不送 ai/error），暫存保留給下次重試", async () => {
+    const { ai, store, repo, publisher, processor } = setup([okScript()]);
+    store.data.set("ai-result:j", RESULT_TEXT);
+    repo.failInsertDiagnosis = 1;
+
+    const err = await processor(makeJob("j", { attemptsMade: 0, attempts: 3 })).catch((e: unknown) => e);
+    expect((err as Error).message).toBe(PERSIST_FAILED_MESSAGE);
+    expect(err).not.toBeInstanceOf(UnrecoverableError);
+    expect(publisher.events).toEqual([]);
+    expect(store.data.get("ai-result:j")).toBe(RESULT_TEXT);
+    expect(ai.calls).toHaveLength(0);
+  });
+
+  it("短路後 trigger 寫入失敗：拋出走重試，下次仍短路（不打 LLM）", async () => {
+    const { ai, repo, publisher, processor } = setup([okScript()]);
+    repo.diagnoses.push({ machineId: "press-02", jobId: "j", result: VALID_RESULT });
+    repo.failUpsertTrigger = true;
+    await expect(processor(makeJob("j"))).rejects.toThrow("mongo down");
+    expect(publisher.events).toEqual([]);
+
+    repo.failUpsertTrigger = false;
+    await expect(processor(makeJob("j", { attemptsMade: 1, attempts: 3 }))).resolves.toEqual({
+      result: VALID_RESULT,
+      cached: false,
+    });
+    expect(ai.calls).toHaveLength(0);
+  });
+});
+
+describe("createProcessor：再執行在快取命中時先重查短路（M1；ADR-003 D3）", () => {
+  it("exec1 寫完快取後，等鎖迴圈中的 exec2（stalled 重派）命中快取：照短路語意回 cached:false、trigger 1 筆、ai/done cached:false", async () => {
+    const holder = gatedScript();
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, repo, publisher, metrics, clock, processor } = setup([holder.script], { logger });
+    const exec1 = processor(makeJob("re"));
+    await flush();
+    expect(ai.calls).toHaveLength(1);
+
+    // 舊執行仍持 ai-lock 時被判 stalled、重派：attemptsMade 不變、attemptsStarted 遞增。
+    const exec2 = processor(makeJob("re", { attemptsStarted: 2 }));
+    await flush();
+    expect(clock.pending).toBe(1); // exec2 開頭短路未命中（舊執行尚未落地），取不到鎖而等待
+
+    holder.release();
+    expect(await exec1).toEqual({ result: VALID_RESULT, cached: false });
+    clock.advance(CONFIG.pollIntervalMs);
+    expect(await exec2).toEqual({ result: VALID_RESULT, cached: false });
+
+    expect(shortCircuits()).toEqual(["diagnoses"]);
+    expect(ai.calls).toHaveLength(1);
+    expect(repo.triggers).toEqual([{ machineId: "press-02", jobId: "re", requestedBy: "tester", cached: false }]);
+    expect(publisher.ofType("ai/done").map((e) => [e.jobId, e.cached])).toEqual([
+      ["re", false],
+      ["re", false],
+    ]);
+    expect(metrics.recordCacheHit).not.toHaveBeenCalled();
+    expect(metrics.recordCacheMiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("取鎖後快取未命中的再執行：exec1 寫完 diagnoses 後（ai-cache 未寫成）trigger 失敗放鎖 → exec2 取鎖後由短路沿用，不重打 LLM、不吃 AI_RPM", async () => {
+    const holder = gatedScript();
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, store, repo, clock, processor } = setup([holder.script], { logger });
+    store.failSetWithTtl = (key) => key.startsWith("ai-cache:");
+    const upsert = repo.upsertTrigger.bind(repo);
+    let failTriggerOnce = true;
+    vi.spyOn(repo, "upsertTrigger").mockImplementation(async (doc) => {
+      if (failTriggerOnce) {
+        failTriggerOnce = false;
+        throw new Error("mongo down");
+      }
+      await upsert(doc);
+    });
+    const exec1 = processor(makeJob("miss")).catch((e: unknown) => e);
+    await flush();
+    const exec2 = processor(makeJob("miss", { attemptsStarted: 2 }));
+    await flush();
+    expect(clock.pending).toBe(1); // exec2 等鎖
+
+    holder.release();
+    expect(await exec1).toBeInstanceOf(Error); // 卡在 trigger
+    expect(repo.diagnoses).toHaveLength(1);
+    const windowKey = `ai-rpm:${Math.floor(CLOCK_START / 60_000)}`;
+    const usedBefore = store.counters.get(windowKey);
+    clock.advance(CONFIG.pollIntervalMs);
+
+    expect(await exec2).toEqual({ result: VALID_RESULT, cached: false });
+    expect(shortCircuits()).toEqual(["diagnoses"]);
+    expect(ai.calls).toHaveLength(1);
+    expect(store.counters.get(windowKey)).toBe(usedBefore);
+    expect(repo.triggers.map((t) => t.cached)).toEqual([false]);
+  });
+
+  it("第一次執行（非再執行）命中他人寫的快取：不重查短路，照常 cached:true", async () => {
+    const { store, repo, processor } = setup([okScript()]);
+    store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
+    await expect(processor(makeJob("fresh"))).resolves.toEqual({ result: VALID_RESULT, cached: true });
+    expect(repo.findCalls).toBe(1); // 只有開頭那一次
+  });
+
+  it("再執行但前一次未落地（只有他人的快取）：重查短路未命中，照常 cached:true", async () => {
+    const { store, repo, processor } = setup([okScript()]);
+    store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
+    await expect(processor(makeJob("retry", { attemptsMade: 1, attempts: 3 }))).resolves.toEqual({
+      result: VALID_RESULT,
+      cached: true,
+    });
+    expect(repo.findCalls).toBe(2); // 開頭一次＋命中快取前重查一次
+  });
+});
+
+describe("createProcessor：舊執行落後於重派執行（合併門第 2 輪 M1；ADR-003 D3）", () => {
+  it("exec1（attemptsStarted 1）卡在 buildContext、exec2 跑完全程後放行 exec1：exec1 命中快取時 claim 失敗→重查短路→cached:false", async () => {
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((r) => {
+      releaseFirst = r;
+    });
+    let calls = 0;
+    const buildContext = async () => {
+      calls += 1;
+      if (calls === 1) await firstGate; // 只有 exec1 被擋
+      return CONTEXT;
+    };
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, repo, publisher, metrics, processor } = setup([okScript()], { buildContext, logger });
+    const exec1 = processor(makeJob("lag"));
+    await flush();
+    // 舊執行仍卡著時 lock 過期、重派：exec2 從頭跑完（打 LLM、寫 diagnoses／ai-cache／trigger）。
+    expect(await processor(makeJob("lag", { attemptsStarted: 2 }))).toEqual({ result: VALID_RESULT, cached: false });
+
+    releaseFirst();
+    expect(await exec1).toEqual({ result: VALID_RESULT, cached: false });
+    expect(shortCircuits()).toEqual(["diagnoses"]);
+    expect(ai.calls).toHaveLength(1);
+    expect(repo.triggers).toEqual([{ machineId: "press-02", jobId: "lag", requestedBy: "tester", cached: false }]);
+    expect(publisher.ofType("ai/done").every((e) => !e.cached)).toBe(true);
+    expect(metrics.recordCacheHit).not.toHaveBeenCalled();
+    expect(metrics.recordCacheMiss).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createProcessor：舊執行落後於重派執行——取鎖後未命中路徑（M1）", () => {
+  it("exec2 落地 diagnoses 後 trigger 失敗（ai-cache 未寫成）：放行的 exec1 取鎖後看到 ai-metric 已被計過→重查短路，不打 LLM、不吃 AI_RPM", async () => {
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((r) => {
+      releaseFirst = r;
+    });
+    let calls = 0;
+    const buildContext = async () => {
+      calls += 1;
+      if (calls === 1) await firstGate;
+      return CONTEXT;
+    };
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, store, repo, processor } = setup([okScript()], { buildContext, logger });
+    store.failSetWithTtl = (key) => key.startsWith("ai-cache:");
+    const upsert = repo.upsertTrigger.bind(repo);
+    let failTriggerOnce = true;
+    vi.spyOn(repo, "upsertTrigger").mockImplementation(async (doc) => {
+      if (failTriggerOnce) {
+        failTriggerOnce = false;
+        throw new Error("mongo down");
+      }
+      await upsert(doc);
+    });
+    const exec1 = processor(makeJob("lag2"));
+    await flush();
+    await expect(processor(makeJob("lag2", { attemptsStarted: 2 }))).rejects.toThrow("mongo down");
+    const windowKey = `ai-rpm:${Math.floor(CLOCK_START / 60_000)}`;
+    const usedBefore = store.counters.get(windowKey);
+
+    releaseFirst();
+    expect(await exec1).toEqual({ result: VALID_RESULT, cached: false });
+    expect(shortCircuits()).toEqual(["diagnoses"]);
+    expect(ai.calls).toHaveLength(1);
+    expect(store.counters.get(windowKey)).toBe(usedBefore);
+    expect(repo.triggers.map((t) => t.cached)).toEqual([false]);
+  });
+});
+
+describe("createProcessor：diagnoses 紀錄不合法（L4）", () => {
+  it("短路 (ii) 讀到不合法紀錄：由 processor 的 logger 記 warn、視為查無，走一般路徑", async () => {
+    const { logger, warns } = recordingLogger();
+    const { ai, repo, processor } = setup([okScript()], { logger });
+    repo.invalidJobIds.add("bad");
+    await expect(processor(makeJob("bad"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(warns.map((w) => w.msg)).toContain("diagnoses 既有紀錄的 result 不符 schema，視為查無");
+    expect(ai.calls).toHaveLength(1);
+  });
+});
+
+describe("createProcessor：hit／miss 每個 jobId 只計一次（012 T050；FR-026）", () => {
+  it("stalled 重派（attemptsMade 不變）的第二次執行命中快取：不再記 hit，trigger 仍只一筆", async () => {
+    const { store, repo, metrics, processor } = setup([okScript()]);
+    store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
+    await processor(makeJob("s")); // 第一次執行：記 hit
+    // 第一次執行被判 stalled 重派：attemptsMade 仍為 0（BullMQ 只遞增 attemptsStarted）。
+    await processor(makeJob("s"));
+
+    expect(metrics.recordCacheHit).toHaveBeenCalledTimes(1);
+    expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
+    expect(repo.triggers).toHaveLength(1);
+    expect(repo.upsertCalls).toHaveLength(2);
+  });
+
+  it("限流延後後才打 LLM：延後那次不記、真的打 LLM 的那次記 miss 一次", async () => {
+    const { store, metrics, processor } = setup([okScript()], { aiRpm: 1 });
+    const windowIndex = Math.floor(CLOCK_START / 60_000);
+    store.counters.set(`ai-rpm:${windowIndex}`, 1); // 本窗已用完
+    const delayed = makeJob("d");
+    await expect(processor(delayed, "bull-token")).rejects.toBeInstanceOf(DelayedError);
+    expect(metrics.recordCacheMiss).not.toHaveBeenCalled();
+
+    store.counters.clear(); // 下一窗：moveToDelayed 後再執行（attemptsMade 不變）
+    await processor(makeJob("d"), "bull-token");
+    expect(metrics.recordCacheMiss).toHaveBeenCalledTimes(1);
+    expect(metrics.recordCacheHit).not.toHaveBeenCalled();
+  });
+
+  it("ai-metric 的 SET NX 失敗（Redis 錯誤）：照常拋出走重試", async () => {
+    const { store, processor } = setup([okScript()]);
+    store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
+    vi.spyOn(store, "setIfAbsent").mockRejectedValue(new Error("redis down"));
+    await expect(processor(makeJob("x"))).rejects.toThrow("redis down");
+  });
+});
+
+describe("createProcessor：寫庫暫存與 persist_failed（012 T051；FR-027、裁決 5／18）", () => {
+  it("diagnoses 連續拒寫 3 次：LLM 只打 1 次、只有最終 attempt 送 ai/error(persist_failed)，訊息皆為固定句", async () => {
+    const { ai, store, repo, publisher, processor } = setup([okScript()]);
+    repo.failInsertDiagnosis = 3;
+    const errors: unknown[] = [];
+    for (const attemptsMade of [0, 1, 2]) {
+      errors.push(await processor(makeJob("p", { attemptsMade, attempts: 3 })).catch((e: unknown) => e));
+    }
+
+    expect(ai.calls).toHaveLength(1); // 第 2、3 次由短路 (i) 只重做寫庫
+    expect(repo.insertDiagnosisCalls).toBe(3);
+    for (const err of errors) {
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(UnrecoverableError);
+      expect((err as Error).message).toBe(PERSIST_FAILED_MESSAGE);
+      expect((err as Error).message).not.toContain("s3cret");
+    }
+    expect(publisher.ofType("ai/error")).toEqual([
+      { type: "ai/error", jobId: "p", attempt: 3, code: PERSIST_FAILED_CODE, message: PERSIST_FAILED_MESSAGE },
+    ]);
+    expect(publisher.ofType("ai/done")).toEqual([]);
+    expect(repo.triggers).toEqual([]); // 終態 trigger 由 main.ts failed handler 補
+    expect(store.cacheKeys()).toHaveLength(0); // 快取有值就代表已落庫
+    expect(store.data.get("ai-result:p")).toBe(RESULT_TEXT); // 暫存保留至 TTL
+    expect(PERSIST_FAILED_MESSAGE).toContain(PERSIST_FAILED_CODE);
+  });
+
+  it("拒寫一次後恢復：重試命中暫存只重做寫庫，回 cached:false、ai-result 刪除", async () => {
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, store, repo, publisher, metrics, processor } = setup([okScript()], { logger });
+    repo.failInsertDiagnosis = 1;
+    await expect(processor(makeJob("p"))).rejects.toThrow(PERSIST_FAILED_MESSAGE);
+    expect(store.data.get("ai-result:p")).toBe(RESULT_TEXT);
+
+    const ret = await processor(makeJob("p", { attemptsMade: 1, attempts: 3 }));
+    expect(ret).toEqual({ result: VALID_RESULT, cached: false });
+    expect(shortCircuits()).toEqual(["ai-result"]);
+    expect(ai.calls).toHaveLength(1);
+    expect(repo.diagnoses).toHaveLength(1);
+    expect(store.data.has("ai-result:p")).toBe(false);
+    expect(repo.triggers.map((t) => t.cached)).toEqual([false]);
+    expect(publisher.ofType("ai/done").map((e) => e.cached)).toEqual([false]);
+    expect(metrics.recordCacheMiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("寫庫順序：暫存 → diagnoses → DEL 暫存 → ai-cache → trigger → 進度 100 → ai/done", async () => {
+    const order: string[] = [];
+    const { store, publisher, repo, processor } = setup([okScript()]);
+    publisher.order = order;
+    repo.order = order;
+    const setWithTtl = store.setWithTtl.bind(store);
+    vi.spyOn(store, "setWithTtl").mockImplementation(async (key, value, ttl) => {
+      order.push(`set:${key.split(":")[0] ?? ""}`);
+      await setWithTtl(key, value, ttl);
+    });
+    const del = store.del.bind(store);
+    vi.spyOn(store, "del").mockImplementation(async (key) => {
+      order.push(`del:${key.split(":")[0] ?? ""}`);
+      await del(key);
+    });
+    const job = makeJob("o");
+    job.progressHook = (p) => {
+      if (p >= 80) order.push(`progress:${p}`);
+    };
+
+    await processor(job);
+    expect(order.slice(order.indexOf("progress:80"))).toEqual([
+      "progress:80",
+      "set:ai-result",
+      "insertDiagnosis",
+      "del:ai-result",
+      "set:ai-cache",
+      "del:ai-fail",
+      "upsertTrigger",
+      "progress:100",
+      "publish:ai/done",
+    ]);
+  });
+
+  it("DEL 暫存失敗只 warn：job 照常成功", async () => {
+    const { store, processor } = setup([okScript()]);
+    const del = store.del.bind(store);
+    vi.spyOn(store, "del").mockImplementation(async (key) => {
+      if (key.startsWith("ai-result:")) throw new Error("redis down");
+      await del(key);
+    });
+    await expect(processor(makeJob("w"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(store.cacheKeys()).toHaveLength(1);
+  });
+});
+
+describe("createProcessor：Redis 停頓造成雙重執行（012 T051；US4 情境 1、SC-004）", () => {
+  it("exec1 停在寫庫前、exec2（stalled 重派）開跑：exec2 命中暫存短路——LLM 1 次、trigger 1 筆、hit／miss 1 次、不標 cached", async () => {
+    let releaseInsert: () => void = () => {};
+    const insertGate = new Promise<void>((r) => {
+      releaseInsert = r;
+    });
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, repo, publisher, metrics, processor } = setup([okScript()], { logger });
+    // exec1 的 insertDiagnosis 卡住（模擬停頓）；ai-result 已寫入。
+    const insert = repo.insertDiagnosis.bind(repo);
+    let first = true;
+    vi.spyOn(repo, "insertDiagnosis").mockImplementation(async (doc) => {
+      if (first) {
+        first = false;
+        await insertGate;
+      }
+      await insert(doc);
+    });
+    const exec1 = track(processor(makeJob("dup")));
+    await flush();
+    expect(exec1.state.settled).toBe(false);
+
+    // lock 過期 → stalled 重派：attemptsMade 不變，同 jobId 第二次執行。
+    const ret2 = await processor(makeJob("dup"));
+    expect(ret2).toEqual({ result: VALID_RESULT, cached: false });
+    expect(shortCircuits()).toEqual(["ai-result"]);
+
+    releaseInsert();
+    const ret1 = await exec1.promise;
+    expect(ret1).toEqual({ result: VALID_RESULT, cached: false });
+
+    expect(ai.calls).toHaveLength(1);
+    expect(repo.diagnoses).toHaveLength(1);
+    expect(repo.triggers).toEqual([{ machineId: "press-02", jobId: "dup", requestedBy: "tester", cached: false }]);
+    expect(metrics.recordCacheHit.mock.calls.length + metrics.recordCacheMiss.mock.calls.length).toBe(1);
+    expect(publisher.ofType("ai/done").every((e) => !e.cached)).toBe(true);
+  });
+
+  it("exec1 已完成全部寫入後才重派：exec2 由 diagnoses 短路，同樣只一筆 trigger、不記 hit", async () => {
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, store, repo, metrics, processor } = setup([okScript()], { logger });
+    await processor(makeJob("dup"));
+    expect(store.cacheKeys()).toHaveLength(1); // 快取已有值：exec2 若先查快取就會誤標 cached:true
+
+    const ret2 = await processor(makeJob("dup"));
+    expect(ret2).toEqual({ result: VALID_RESULT, cached: false });
+    expect(shortCircuits()).toEqual(["diagnoses"]);
+    expect(ai.calls).toHaveLength(1);
+    expect(repo.triggers).toHaveLength(1);
+    expect(metrics.recordCacheHit).not.toHaveBeenCalled();
+    expect(metrics.recordCacheMiss).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createProcessor：keepalive 與 progress 物件（012 T055；FR-019、FR-020、SC-009）", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** 相鄰 progress 的最大間隔（含起點與終點）。 */
+  const maxGap = (at: number[], from: number, to: number): number => {
+    const points = [from, ...at.filter((t) => t >= from && t <= to), to];
+    let gap = 0;
+    for (let i = 1; i < points.length; i++) gap = Math.max(gap, (points[i] ?? 0) - (points[i - 1] ?? 0));
+    return gap;
+  };
+
+  it("等待去重鎖 25 s 期間：每 10 s（± 1 s）至少一次 progress，補送值為目前里程碑 20", async () => {
+    vi.useFakeTimers();
+    const { store, processor } = setup([okScript()], { realClock: true, pollIntervalMs: 300, aiTimeoutMs: 60_000 });
+    const { cacheKey, lockKey } = keysFor(CONTEXT);
+    store.data.set(lockKey, "other-replica");
+    const job = makeJob("w");
+    const start = Date.now();
+    const run = processor(job);
+    await vi.advanceTimersByTimeAsync(25_000);
+    store.data.set(cacheKey, RESULT_TEXT); // 25 s 後持鎖者寫好結果
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(run).resolves.toEqual({ result: VALID_RESULT, cached: true });
+
+    expect(maxGap(job.progressAt, start, start + 25_000)).toBeLessThanOrEqual(11_000);
+    const keepalives = job.progress.filter((v, i) => v === 20 && i > 1);
+    expect(keepalives.length).toBeGreaterThanOrEqual(2);
+    // 也不能補送過密：25 s 內至多 3 則，相鄰補送間隔 ≥ 9 s（keepalive 是閒置補送，不是輪詢頻率）。
+    expect(keepalives.length).toBeLessThanOrEqual(3);
+    const keepaliveAt = job.progressAt.filter((_, i) => job.progress[i] === 20 && i > 1);
+    for (let i = 1; i < keepaliveAt.length; i++) {
+      expect((keepaliveAt[i] ?? 0) - (keepaliveAt[i - 1] ?? 0)).toBeGreaterThanOrEqual(9_000);
+    }
+    expect(job.progress.at(-1)).toBe(100);
+  });
+
+  it("首 token 前 20 s 等待：至少補送兩次（值為 40）", async () => {
+    vi.useFakeTimers();
+    const slowFirst: Script = async (req) => {
+      await new Promise<void>((r) => setTimeout(r, 20_500)); // 首 token 前約 20 s
+      return okScript()(req);
+    };
+    const { processor } = setup([slowFirst], { realClock: true, aiTimeoutMs: 60_000 });
+    const job = makeJob("f");
+    const run = processor(job);
+    await vi.advanceTimersByTimeAsync(22_000);
+    await run;
+
+    const i40 = job.progress.indexOf(40);
+    const i60 = job.progress.indexOf(60);
+    expect(job.progress.slice(i40 + 1, i60).filter((v) => v === 40).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("insertDiagnosis 慢 15 s 期間：至少補送一次（值為 80）", async () => {
+    vi.useFakeTimers();
+    const { repo, processor } = setup([okScript()], { realClock: true, aiTimeoutMs: 60_000 });
+    const insert = repo.insertDiagnosis.bind(repo);
+    vi.spyOn(repo, "insertDiagnosis").mockImplementation(async (doc) => {
+      await new Promise<void>((r) => setTimeout(r, 15_000));
+      await insert(doc);
+    });
+    const job = makeJob("s");
+    const run = processor(job);
+    await vi.advanceTimersByTimeAsync(16_000);
+    await run;
+
+    const i80 = job.progress.indexOf(80);
+    const i100 = job.progress.indexOf(100);
+    expect(job.progress.slice(i80 + 1, i100).filter((v) => v === 80).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("串流中 token 每 5 s 一則、持續 30 s：不補送（只有里程碑）", async () => {
+    vi.useFakeTimers();
+    const steady: Script = async ({ onToken }) => {
+      const parts = 7;
+      for (let i = 0; i < parts; i++) {
+        if (i > 0) await new Promise<void>((r) => setTimeout(r, 5_000));
+        onToken(RESULT_TEXT.slice((i * RESULT_TEXT.length) / parts, ((i + 1) * RESULT_TEXT.length) / parts));
+      }
+      return { text: RESULT_TEXT, finishReason: "stop" };
+    };
+    const { processor } = setup([steady], { realClock: true, aiTimeoutMs: 60_000 });
+    const job = makeJob("t");
+    const run = processor(job);
+    await vi.advanceTimersByTimeAsync(31_000);
+    await run;
+    expect(job.progress).toEqual([0, 20, 40, 60, 80, 100]);
+  });
+
+  it("所有 progress 皆為 DiagnosisJobProgress 物件、attempt＝attemptsMade＋1、execution ≥ 1（attemptsStarted 為 0 時以 1 代入）", async () => {
+    vi.useFakeTimers();
+    const { store, processor } = setup([okScript()], { realClock: true, pollIntervalMs: 300, aiTimeoutMs: 60_000 });
+    const { cacheKey, lockKey } = keysFor(CONTEXT);
+    store.data.set(lockKey, "other-replica");
+    const job = makeJob("x", { attemptsMade: 1, attemptsStarted: 0 });
+    const run = processor(job);
+    await vi.advanceTimersByTimeAsync(12_000); // 含一次 keepalive 補送
+    store.data.set(cacheKey, RESULT_TEXT);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await run;
+
+    expect(job.progressRaw.length).toBeGreaterThanOrEqual(4);
+    for (const p of job.progressRaw) {
+      expect(DiagnosisJobProgressSchema.safeParse(p).success).toBe(true);
+      expect(p).toMatchObject({ attempt: 2, execution: 1 });
+    }
+    const stalled = makeJob("y", { attemptsStarted: 3 });
+    store.data.delete(lockKey);
+    await processor(stalled);
+    expect(stalled.progressRaw.every((p) => p.execution === 3)).toBe(true);
+  });
+
+  it("執行結束（成功或失敗）後不再補送；計時器全部清除", async () => {
+    vi.useFakeTimers();
+    const { processor } = setup([okScript()], { realClock: true, aiTimeoutMs: 60_000 });
+    const job = makeJob("done");
+    await processor(job);
+    const count = job.progress.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(job.progress).toHaveLength(count);
+
+    const failing = setup([async () => Promise.reject(new AiProviderError("bad", { retryable: false, code: "provider_error" }))], {
+      realClock: true,
+      aiTimeoutMs: 60_000,
+    });
+    const job2 = makeJob("fail");
+    await expect(failing.processor(job2)).rejects.toBeInstanceOf(UnrecoverableError);
+    const count2 = job2.progress.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(job2.progress).toHaveLength(count2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ["限流延後", { aiRpm: 1 }],
+    ["關閉中交回佇列", {}],
+  ] as const)("%s：moveToDelayed 期間與之後都不再補送 progress", async (label, extra) => {
+    vi.useFakeTimers();
+    const closing = label === "關閉中交回佇列";
+    const { store, processor } = setup([okScript()], {
+      realClock: true,
+      pollIntervalMs: 300,
+      aiTimeoutMs: 60_000,
+      isClosing: () => closing,
+      ...extra,
+    });
+    const { lockKey } = keysFor(CONTEXT);
+    if (closing) store.data.set(lockKey, "other-replica"); // 等待者 → 關閉中交回
+    else store.counters.set(`ai-rpm:${Math.floor(Date.now() / 60_000)}`, 1); // 本窗已滿
+    const job = makeJob("q");
+    // moveToDelayed 本身慢 15 s：期間若 keepalive 還在跑就會補送一則 active。
+    job.moveToDelayed = vi.fn(() => new Promise<void>((r) => setTimeout(r, 15_000)));
+    const run = processor(job, "bull-token").catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const count = job.progress.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(await run).toBeInstanceOf(DelayedError);
+    expect(job.moveToDelayed).toHaveBeenCalledTimes(1);
+    expect(job.progress).toHaveLength(count);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("補送失敗：吞掉、本次執行只 warn 一則，job 照常完成", async () => {
+    vi.useFakeTimers();
+    const { logger, warns } = recordingLogger();
+    const { store, processor } = setup([okScript()], { realClock: true, pollIntervalMs: 300, aiTimeoutMs: 60_000, logger });
+    const { cacheKey, lockKey } = keysFor(CONTEXT);
+    store.data.set(lockKey, "other-replica");
+    const job = makeJob("k");
+    let failing = false;
+    job.progressHook = () => {
+      if (failing) throw new Error("redis down");
+    };
+    const run = processor(job);
+    await vi.advanceTimersByTimeAsync(1_000);
+    failing = true; // 之後的 keepalive 補送都失敗
+    await vi.advanceTimersByTimeAsync(35_000);
+    failing = false;
+    store.data.set(cacheKey, RESULT_TEXT);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(run).resolves.toEqual({ result: VALID_RESULT, cached: true });
+    expect(warns.filter((w) => w.msg === "keepalive 進度補送失敗（本次執行不再重複記錄）")).toHaveLength(1);
+  });
+});
+
+describe("createProcessor：ai-fail 負向標記（012 T062／T063；FR-028、SC-007、D5）", () => {
+  const failing = (code = "provider_error", retryable = true): Script =>
+    async () => Promise.reject(new AiProviderError("503 overloaded", { retryable, code }));
+
+  it("LLM 階段失敗：寫 ai-fail:<sig>（EX 10，{ code, message, jobId, at }），info 記 ai-fail written", async () => {
+    const { logger, infos } = infoLogger();
+    const { store, processor } = setup([failing()], { logger });
+    await expect(processor(makeJob("a"))).rejects.toThrow("503 overloaded");
+    const { failKey } = keysFor(CONTEXT);
+    const marker = JSON.parse(store.data.get(failKey) ?? "null") as unknown;
+    expect(AiFailMarkerSchema.parse(marker)).toEqual({
+      code: "provider_error",
+      message: "503 overloaded",
+      jobId: "a",
+      attempt: 1,
+      retryable: true,
+      at: new Date(CLOCK_START).toISOString(),
+    });
+    expect(store.ttls.filter((t) => t.key === failKey)).toEqual([{ op: "cache", key: failKey, ttlSeconds: 10 }]);
+    expect(infos.some((i) => i.msg === "ai-fail written")).toBe(true);
+  });
+
+  it.each([
+    ["ai_timeout（逾時）", "ai_timeout"],
+    ["schema_invalid（safety，不可重試）", "schema_invalid"],
+    ["schema_invalid（parse 失敗）", "schema_invalid"],
+  ])("%s 也寫標記", async (label, code) => {
+    const scripts: Record<string, Script> = {
+      "ai_timeout（逾時）": () => new Promise<AiStreamResult>(() => {}),
+      "schema_invalid（safety，不可重試）": async () => ({ text: "", finishReason: "safety" }),
+      "schema_invalid（parse 失敗）": async () => ({ text: "not json", finishReason: "stop" }),
+    };
+    const script = scripts[label];
+    if (!script) throw new Error(label);
+    const { store, processor } = setup([script], { aiTimeoutMs: 20 });
+    await expect(processor(makeJob("a"))).rejects.toThrow();
+    const marker = AiFailMarkerSchema.parse(JSON.parse(store.data.get(keysFor(CONTEXT).failKey) ?? "null"));
+    expect(marker.code).toBe(code);
+  });
+
+  it("no_context、persist_failed、限流延後不寫標記", async () => {
+    const empty = setup([okScript()], { context: EMPTY_CONTEXT });
+    await expect(empty.processor(makeJob("n"))).rejects.toBeInstanceOf(UnrecoverableError);
+    expect([...empty.store.data.keys()].some((k) => k.startsWith("ai-fail:"))).toBe(false);
+
+    const persist = setup([okScript()]);
+    persist.repo.failInsertDiagnosis = 1;
+    await expect(persist.processor(makeJob("p"))).rejects.toThrow(PERSIST_FAILED_MESSAGE);
+    expect(persist.store.data.has(keysFor(CONTEXT).failKey)).toBe(false);
+
+    const limited = setup([okScript()], { aiRpm: 1 });
+    limited.store.counters.set(`ai-rpm:${Math.floor(CLOCK_START / 60_000)}`, 1);
+    await expect(limited.processor(makeJob("r"), "tok")).rejects.toBeInstanceOf(DelayedError);
+    expect(limited.store.data.has(keysFor(CONTEXT).failKey)).toBe(false);
+  });
+
+  it("SC-007：兩個同簽章 job、供應商持續失敗——LLM 總數 ≤ 4、第二個 job 最終錯誤碼相同、ai-rpm 不因第二個 job 增加", async () => {
+    const holderGate = gatedScript(new AiProviderError("503 overloaded", { retryable: true, code: "provider_error" }));
+    const { ai, store, publisher, clock, processor } = setup([holderGate.script, failing()]);
+    const windowKey = `ai-rpm:${Math.floor(CLOCK_START / 60_000)}`;
+    // 第 1 輪：A 持鎖打 LLM、B 等待；A 失敗寫標記後 B 被擋。
+    const a1 = processor(makeJob("A")).catch((e: unknown) => e);
+    const b1 = processor(makeJob("B")).catch((e: unknown) => e);
+    await flush();
+    holderGate.release();
+    await a1;
+    clock.advance(CONFIG.pollIntervalMs);
+    await b1;
+    // 第 2、3 輪（退避後重試，標記仍在 10 s 內）：A 忽略自己的標記再打；B 每次都被擋。
+    for (const attemptsMade of [1, 2]) {
+      await processor(makeJob("A", { attemptsMade })).catch(() => {});
+      await processor(makeJob("B", { attemptsMade })).catch(() => {});
+    }
+
+    expect(ai.calls.length).toBeLessThanOrEqual(4);
+    expect(ai.calls).toHaveLength(3); // 全部來自 A
+    expect(store.counters.get(windowKey)).toBe(3); // B 從未吃 AI_RPM
+    const errors = publisher.ofType("ai/error");
+    expect(errors.map((e) => [e.jobId, e.code, e.attempt])).toEqual([
+      ["A", "provider_error", 3],
+      ["B", "provider_error", 3],
+    ]);
+  });
+
+  it("ai-fail 標記寫入失敗：只 warn、持鎖者原本的錯誤不變；等待者看不到標記而接手重打（ai.calls === 2）", async () => {
+    const holder = gatedScript(new AiProviderError("503 overloaded", { retryable: true, code: "provider_error" }));
+    const { logger, warns } = recordingLogger();
+    const { ai, store, clock, processor } = setup([holder.script, okScript()], { logger });
+    store.failSetWithTtl = (key) => key.startsWith("ai-fail:");
+    const a = processor(makeJob("a")).catch((e: unknown) => e);
+    const b = processor(makeJob("b"));
+    await flush();
+    holder.release();
+    const errA = await a;
+    expect(errA).toBeInstanceOf(Error);
+    expect((errA as Error).message).toBe("503 overloaded");
+    expect(warns.map((w) => w.msg)).toContain("ai-fail 標記寫入失敗");
+
+    clock.advance(CONFIG.pollIntervalMs);
+    await expect(b).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(ai.calls).toHaveLength(2);
+  });
+
+  it("成功路徑 DEL ai-fail 拋錯：只 warn，job 照常完成", async () => {
+    const { logger, warns } = recordingLogger();
+    const { store, processor } = setup([okScript()], { logger });
+    const del = store.del.bind(store);
+    vi.spyOn(store, "del").mockImplementation(async (key) => {
+      if (key.startsWith("ai-fail:")) throw new Error("redis down");
+      await del(key);
+    });
+    await expect(processor(makeJob("ok"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(warns.map((w) => w.msg)).toContain("ai-fail 標記刪除失敗（將由 TTL 過期回收）");
+    expect(store.cacheKeys()).toHaveLength(1);
+  });
+
+  it("同 jobId 同 attempt 的兄弟執行（stalled 重派）不忽略標記：照標記失敗、不打 LLM", async () => {
+    const { ai, store, processor } = setup([okScript()]);
+    const { failKey } = keysFor(CONTEXT);
+    store.data.set(
+      failKey,
+      JSON.stringify({ code: "provider_error", message: "503", jobId: "sib", attempt: 1, retryable: true, at: "t" }),
+    );
+    const err = await processor(makeJob("sib", { attemptsStarted: 2 })).catch((e: unknown) => e);
+    expect((err as Error).message).toBe("503");
+    expect(err).not.toBeInstanceOf(UnrecoverableError);
+    expect(ai.calls).toHaveLength(0);
+  });
+
+  it("標記帶 retryable:false（持鎖者 safety）：等待者 B 第一次 attempt 即 UnrecoverableError、送 ai/error，LLM 只 1 次", async () => {
+    let open: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      open = r;
+    });
+    const safety: Script = async () => {
+      await gate;
+      return { text: "", finishReason: "safety" };
+    };
+    const { ai, store, publisher, clock, processor } = setup([safety]);
+    const a = processor(makeJob("A")).catch((e: unknown) => e);
+    const b = processor(makeJob("B")).catch((e: unknown) => e);
+    await flush();
+    open();
+    expect(await a).toBeInstanceOf(UnrecoverableError);
+    expect(AiFailMarkerSchema.parse(JSON.parse(store.data.get(keysFor(CONTEXT).failKey) ?? "null")).retryable).toBe(false);
+    clock.advance(CONFIG.pollIntervalMs);
+    expect(await b).toBeInstanceOf(UnrecoverableError);
+    expect(ai.calls).toHaveLength(1);
+    expect(publisher.ofType("ai/error").map((e) => [e.jobId, e.code, e.attempt])).toEqual([
+      ["A", "schema_invalid", 1],
+      ["B", "schema_invalid", 1],
+    ]);
+  });
+
+  it("持鎖者自己的重試忽略自己的標記；成功時 DEL 標記", async () => {
+    const { ai, store, processor } = setup([okScript()]);
+    const { failKey } = keysFor(CONTEXT);
+    store.data.set(
+      failKey,
+      JSON.stringify({ code: "provider_error", message: "x", jobId: "self", attempt: 1, retryable: true, at: "t" }),
+    );
+    await expect(processor(makeJob("self", { attemptsMade: 1 }))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(ai.calls).toHaveLength(1);
+    expect(store.data.has(failKey)).toBe(false);
+  });
+
+  it("新 job 看到別人的標記：取鎖前就失敗、不取鎖、不吃 AI_RPM；最終 attempt 送同 code 的 ai/error", async () => {
+    const { logger, warns } = recordingLogger();
+    const { ai, store, publisher, processor } = setup([okScript()], { logger });
+    const { failKey } = keysFor(CONTEXT);
+    store.data.set(
+      failKey,
+      JSON.stringify({ code: "ai_timeout", message: "AI streaming timeout", jobId: "other", attempt: 1, retryable: true, at: "t" }),
+    );
+    const acquire = vi.spyOn(store, "tryAcquireLock");
+
+    const err = await processor(makeJob("n", { attemptsMade: 2, attempts: 3 })).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(UnrecoverableError);
+    expect(publisher.ofType("ai/error")).toEqual([
+      { type: "ai/error", jobId: "n", attempt: 3, code: "ai_timeout", message: "AI streaming timeout" },
+    ]);
+    expect(acquire).not.toHaveBeenCalled();
+    expect(store.counters.size).toBe(0);
+    expect(ai.calls).toHaveLength(0);
+    expect(warns.some((w) => w.msg === "ai-fail hit")).toBe(true);
+  });
+
+  it("標記過期（不存在）後新 job 照常呼叫 LLM", async () => {
+    const { ai, store, processor } = setup([okScript()]);
+    const { failKey } = keysFor(CONTEXT);
+    store.data.set(
+      failKey,
+      JSON.stringify({ code: "provider_error", message: "x", jobId: "other", attempt: 1, retryable: true, at: "t" }),
+    );
+    store.data.delete(failKey); // TTL 到期
+    await expect(processor(makeJob("n"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(ai.calls).toHaveLength(1);
+  });
+
+  it("標記內容不合法：DEL 並視為無標記", async () => {
+    const { ai, store, processor } = setup([okScript()]);
+    const { failKey } = keysFor(CONTEXT);
+    store.data.set(failKey, "{oops");
+    await expect(processor(makeJob("n"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(store.deleted).toContain(failKey);
+    expect(ai.calls).toHaveLength(1);
+  });
+
+  it("「持鎖者寫標記放鎖、等待者恰好在 (a) 與取鎖之間」：第二處讀取（取鎖後、限流前）擋下，不吃 AI_RPM", async () => {
+    const { ai, store, processor } = setup([okScript()]);
+    const { failKey, lockKey } = keysFor(CONTEXT);
+    const acquire = store.tryAcquireLock.bind(store);
+    vi.spyOn(store, "tryAcquireLock").mockImplementation(async (key, token, ttl) => {
+      // 等待者剛通過 (a)：此刻持鎖者寫好標記並放鎖。
+      store.data.set(
+        failKey,
+        JSON.stringify({ code: "provider_error", message: "503", jobId: "holder", attempt: 1, retryable: true, at: "t" }),
+      );
+      return acquire(key, token, ttl);
+    });
+    const err = await processor(makeJob("w")).catch((e: unknown) => e);
+    expect((err as Error).message).toBe("503");
+    expect(ai.calls).toHaveLength(0);
+    expect(store.counters.size).toBe(0);
+    expect(store.data.has(lockKey)).toBe(false); // 擋下後照常放鎖
+  });
+});
+
+describe("createProcessor：回傳值 DiagnosisJobReturnValue（012 T023；ADR-003 D1）", () => {
+  it("LLM 路徑：回 { result, cached: false }，通過 DiagnosisJobReturnValueSchema，且與 ai/done 同一份結果", async () => {
+    const { publisher, processor } = setup([okScript()]);
+    const ret = await processor(makeJob("m"));
+
+    expect(ret).toEqual({ result: VALID_RESULT, cached: false });
+    expect(DiagnosisJobReturnValueSchema.safeParse(ret).success).toBe(true);
+    const done = publisher.ofType("ai/done");
+    expect(done).toHaveLength(1);
+    expect(done[0]?.result).toEqual(ret.result);
+  });
+
+  it("快取命中路徑：回 { result, cached: true }，通過 DiagnosisJobReturnValueSchema", async () => {
+    const { store, publisher, processor } = setup([okScript()]);
+    store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
+    const ret = await processor(makeJob("hit"));
+
+    expect(ret).toEqual({ result: VALID_RESULT, cached: true });
+    expect(DiagnosisJobReturnValueSchema.safeParse(ret).success).toBe(true);
+    expect(publisher.ofType("ai/done")[0]?.result).toEqual(ret.result);
+  });
+
+  it("回傳的 result 是通過 DiagnosisResultSchema 後的值：快取裡多出的欄位不會帶進 returnvalue", async () => {
+    const { store, processor } = setup([okScript()]);
+    store.data.set(keysFor(CONTEXT).cacheKey, JSON.stringify({ ...VALID_RESULT, injected: "<script>" }));
+    const ret = await processor(makeJob("hit"));
+
+    expect(ret.cached).toBe(true);
+    expect(ret.result).toEqual(VALID_RESULT);
+    expect(ret.result).not.toHaveProperty("injected");
+  });
+
+  it("LLM 輸出夾雜前後文字：returnvalue 只帶解析並驗證後的物件", async () => {
+    const text = `以下是診斷：\n${RESULT_TEXT}\n（完）`;
+    const wrapped: Script = async ({ onToken }) => {
+      onToken(text);
+      return { text, finishReason: "stop" };
+    };
+    const { processor } = setup([wrapped]);
+    const ret = await processor(makeJob("m"));
+    expect(ret).toEqual({ result: VALID_RESULT, cached: false });
+  });
+});
+
 describe("createProcessor：cache 命中路徑順序（AR-A12）", () => {
+  // 「ai/done 送出後才 return」由「終態事件 await 送出」組的兩支（PUBLISH 未完成前 processor 不 resolve）鎖住。
   it("先寫 trigger、再進度 100，最後才送 ai/done（與 LLM 路徑一致）", async () => {
     const order: string[] = [];
     const { store, publisher, repo, processor } = setup([okScript()]);
@@ -1053,14 +2141,10 @@ describe("createProcessor：cache 命中路徑順序（AR-A12）", () => {
     publisher.order = order;
     repo.order = order;
     const job = makeJob("hit");
-    const updateProgress = job.updateProgress.bind(job);
-    job.updateProgress = async (p: number) => {
-      order.push(`progress:${p}`);
-      await updateProgress(p);
-    };
+    job.progressHook = (p) => order.push(`progress:${p}`);
 
     await processor(job);
-    expect(order).toEqual(["progress:0", "progress:20", "insertTrigger", "progress:100", "publish:ai/done"]);
+    expect(order).toEqual(["progress:0", "progress:20", "upsertTrigger", "progress:100", "publish:ai/done"]);
   });
 
   it("LLM 路徑同樣是 trigger → 進度 100 → ai/done", async () => {
@@ -1069,20 +2153,16 @@ describe("createProcessor：cache 命中路徑順序（AR-A12）", () => {
     publisher.order = order;
     repo.order = order;
     const job = makeJob("m");
-    const updateProgress = job.updateProgress.bind(job);
-    job.updateProgress = async (p: number) => {
-      order.push(`progress:${p}`);
-      await updateProgress(p);
-    };
+    job.progressHook = (p) => order.push(`progress:${p}`);
 
     await processor(job);
-    expect(order.slice(-3)).toEqual(["insertTrigger", "progress:100", "publish:ai/done"]);
+    expect(order.slice(-3)).toEqual(["upsertTrigger", "progress:100", "publish:ai/done"]);
   });
 
   it("cache 命中但 trigger 寫入失敗：不送 ai/done，丟可重試錯誤走既有重試路徑", async () => {
     const { store, publisher, repo, processor } = setup([okScript()]);
     store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
-    repo.failInsertTrigger = true;
+    repo.failUpsertTrigger = true;
     const job = makeJob("hit", { attemptsMade: 0, attempts: 3 });
 
     const err = await processor(job).catch((e: unknown) => e);
@@ -1095,7 +2175,7 @@ describe("createProcessor：cache 命中路徑順序（AR-A12）", () => {
 
   it("LLM 路徑 trigger 寫入失敗：同樣不送 ai/done", async () => {
     const { publisher, repo, processor } = setup([okScript()]);
-    repo.failInsertTrigger = true;
+    repo.failUpsertTrigger = true;
     await expect(processor(makeJob("m"))).rejects.toThrow("mongo down");
     expect(publisher.ofType("ai/done")).toEqual([]);
   });

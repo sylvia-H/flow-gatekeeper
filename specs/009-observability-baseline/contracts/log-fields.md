@@ -35,7 +35,7 @@
 
 | service | context | 對應 |
 | --- | --- | --- |
-| api | `MonitoringGateway`／`HistoryService`／`JobStatusRelayService`／`AiStreamRelayService`／`JobsService`／`api` | Nest `Logger` 既有 context，由 adapter 原樣帶入 |
+| api | `MonitoringGateway`／`HistoryService`／`JobStatusRelayService`／`AiStreamRelayService`／`JobsService`／`JobRoutingRegistry`／`DiagnosisLookupService`／`api` | Nest `Logger` 既有 context，由 adapter 原樣帶入。（012-lite 補，2026-10-21；這兩者以 `getAppLogger().child({ context: <類別名> })` 帶入，不經 Nest `Logger`）`JobRoutingRegistry`：jobId ↔ 連線綁定的孤兒回收 warn 由 `AiStreamRelayService` 移入此 context；`DiagnosisLookupService`：`GET /diagnoses/:jobId` 的 rebind／衝突 409（info）、`returnvalue` 不合法退 Mongo 與依賴失敗 503（warn） |
 | api | `health` | `/healthz` 相關 |
 | api / worker | `metrics` | 週期指標摘要（**專屬 level**，見 §5） |
 | worker | `bootstrap`／`processor`／`heartbeat`／`chaos`／`shutdown` | worker 各階段 |

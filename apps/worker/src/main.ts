@@ -2,9 +2,10 @@ import "dotenv/config";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "bullmq";
+import type { WorkerOptions } from "bullmq";
 import { MongoClient } from "mongodb";
 import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
-import type { DiagnosisJobPayload } from "@flow-gatekeeper/contracts";
+import type { DiagnosisJobPayload, DiagnosisJobReturnValue } from "@flow-gatekeeper/contracts";
 import { createLogger, ERROR_LOG_THROTTLE_MS } from "@flow-gatekeeper/shared/logging";
 import { bullmqConnectionOptions, createCommandConnection, waitForReady } from "./redis.js";
 import type { AiProvider } from "./ai/provider.js";
@@ -19,6 +20,7 @@ import { parseWorkerEnv } from "./lib/env-schema.js";
 import type { WorkerEnv } from "./lib/env-schema.js";
 import { fatal } from "./lib/fatal.js";
 import { startHeartbeat, stopHeartbeat } from "./lib/heartbeat.js";
+import { WORKER_LOCK_OPTIONS } from "./lib/bullmq-options.js";
 import { createLivenessTracker } from "./lib/liveness.js";
 import { createThrottledErrorReporter } from "./lib/log-throttle.js";
 import { createMetricsCollector } from "./lib/metrics-collector.js";
@@ -125,7 +127,7 @@ export async function bootstrap(): Promise<void> {
 
   // 關閉旗標：processor 的 dedupe 等待迴圈讀、buildShutdown 收到訊號時設（見 buildShutdown）。
   const closingState = createClosingState();
-  const worker = new Worker<DiagnosisJobPayload>(
+  const worker = new Worker<DiagnosisJobPayload, DiagnosisJobReturnValue>(
     DIAGNOSIS_QUEUE,
     createProcessor({
       store: createRedisStore(cache),
@@ -144,12 +146,7 @@ export async function bootstrap(): Promise<void> {
       isClosing: closingState.isClosing,
       liveness,
     }),
-    {
-      connection: bullmqConnectionOptions(env),
-      concurrency: env.WORKER_CONCURRENCY,
-      // 刻意不設 BullMQ `limiter`：它計的是 job 啟動數（cache 命中、等待者、重試都吃額度），
-      // 不是 LLM 呼叫數。LLM 限流改在 processor 取鎖後以 Redis 固定窗計數（AI_RPM）。
-    },
+    buildWorkerOptions(env),
   );
 
   // BullMQ 內部錯誤（連線中斷、腳本失敗）預設完全靜默；記下來才查得到「佇列為何不動」。
@@ -216,6 +213,21 @@ export async function bootstrap(): Promise<void> {
   );
 }
 
+/**
+ * BullMQ Worker 參數（抽出供單測）。lock／stalled 參數展開 `WORKER_LOCK_OPTIONS`（15 s／5 s／2，012 FR-018；ADR-003 D4：
+ * 與 keepalive 10 s 合起來，worker 被 SIGKILL 後畫面最長無事件 `K + L + 2S`＝35 s < 45 s watchdog）；`lockRenewTime` 不設，
+ * 維持 BullMQ 預設 `L/2`。
+ * 刻意不設 BullMQ `limiter`：它計的是 job 啟動數（cache 命中、等待者、重試都吃額度），不是 LLM 呼叫數。LLM 限流改在
+ * processor 取鎖後以 Redis 固定窗計數（AI_RPM）。
+ */
+export function buildWorkerOptions(env: WorkerEnv): WorkerOptions {
+  return {
+    connection: bullmqConnectionOptions(env),
+    concurrency: env.WORKER_CONCURRENCY,
+    ...WORKER_LOCK_OPTIONS,
+  };
+}
+
 /** failed handler 用到的 BullMQ Job 子集（沿用 processor 的定義；`Job<DiagnosisJobPayload>` 結構上相容）。 */
 export type FailedJobLike = Pick<ProcessorJob, "data" | "attemptsMade" | "opts">;
 
@@ -228,7 +240,7 @@ export type FailedJobLike = Pick<ProcessorJob, "data" | "attemptsMade" | "opts">
  */
 export function createFailedHandler(deps: {
   logger: ProcessorLogger;
-  repo: Pick<DiagnosisRepository, "insertTrigger">;
+  repo: Pick<DiagnosisRepository, "upsertTrigger">;
 }): (job: FailedJobLike | undefined, err: Error) => void {
   const { logger, repo } = deps;
   return (job, err) => {
@@ -242,8 +254,9 @@ export function createFailedHandler(deps: {
         jl.error({ err }, "job failed (final)");
       }
       // 失敗（含重試用盡、不可重試）也是一次觸發，補寫輕量稽核（cached:false），使每次觸發皆可追溯。
+      // upsert（$setOnInsert）：同 jobId 已有成功紀錄（例如 stalled 重派前那次已完成）時不覆寫，每個 jobId 恰一筆（FR-025）。
       void repo
-        .insertTrigger({ machineId, jobId, requestedBy, cached: false })
+        .upsertTrigger({ machineId, jobId, requestedBy, cached: false })
         .catch((e: unknown) => jl.error({ err: e }, "failure trigger write failed"));
     } else {
       jl.warn({ err }, "job attempt failed (will retry)");
@@ -410,7 +423,11 @@ export function buildShutdown(deps: {
  */
 export function selectAiProvider(env: WorkerEnv): AiProvider {
   if (env.AI_PROVIDER === "fake") {
-    return new FakeAiProvider({ tokenDelayMs: env.FAKE_AI_TOKEN_DELAY_MS, tokenCount: env.FAKE_AI_TOKENS });
+    return new FakeAiProvider({
+      tokenDelayMs: env.FAKE_AI_TOKEN_DELAY_MS,
+      tokenCount: env.FAKE_AI_TOKENS,
+      firstTokenDelayMs: env.FAKE_AI_FIRST_TOKEN_DELAY_MS,
+    });
   }
   return createAiProvider(env);
 }

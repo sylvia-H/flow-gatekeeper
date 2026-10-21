@@ -235,14 +235,19 @@ function onBannerResume(): void {
 // 凍結只作用在 `store.staleNow`（卡片／機群健康），watchdog 與 metrics 面板仍用真實時間。
 // 同一個 tick 順帶跑診斷逾時 watchdog：active 任務逾 STALL_TIMEOUT_MS 無進展即自動收尾為
 // failed（可重試），避免後端卡住時面板永遠停在進行中（門檻取 worker AI_TIMEOUT 30s + 餘裕）。
-// 「後端已完成、ai/done 未送達」的 2 s 寬限（AR-6，`UNDELIVERED_GRACE_MS`）也由這個 tick 檢查，
-// 每秒一次的解析度讓它在完成後 2–3 s 內轉失敗，不需另起計時器。
+// 「後端已完成、結果未送達」的 2 s 寬限（AR-6，`UNDELIVERED_GRACE_MS`）也由這個 tick 檢查，
+// 每秒一次的解析度讓它在完成後 2–3 s 內先 GET 一次（012 FR-005），不需另起計時器。
 const STALL_TIMEOUT_MS = 45_000;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
   tickTimer = setInterval(() => {
     store.tickNow();
-    copilot.checkStalls(Date.now(), STALL_TIMEOUT_MS);
+    // 斷線期間不跑兩種退路（代理裁決第 63 條）：GET 只會以舊連線 409，把仍在跑的任務誤轉失敗。
+    // 「連上」以收到本次連線的 clientId 為準，不只看 socket open：open 到 `system/connected` 之間 copilot 手上仍是舊 clientId，
+    // 這時發的 GET 一樣會 409（合併門第 3 輪 L1）。monitoring store 離開 connected 即清 clientId、收到 `system/connected` 才設回，
+    // 已連線但未授權時 clientId 已在，退路照常觸發（代理裁決第 47 條）。
+    const live = store.connectionStatus === "connected" && store.clientId !== null;
+    copilot.checkStalls(Date.now(), STALL_TIMEOUT_MS, performance.now(), live);
   }, 1000);
 });
 onUnmounted(() => {
@@ -261,7 +266,11 @@ const handle = useHighFrequencyWs({
   isPaused: () => store.paused,
   onLatency: store.setLatency,
   // 訂閱授權結果（system/unauthorized 不再靜默忽略，TopBar 顯示未授權 chip）。
-  onAuthResult: store.setAuthorized,
+  // 012：授權成功後才續接重連前進行中的診斷（新連線授權前 GET 會被 409；同一連線多次授權只續接一次，P20）。
+  onAuthResult: (ok: boolean) => {
+    store.setAuthorized(ok);
+    if (ok && store.clientId) copilot.onAuthorized(store.clientId);
+  },
   // 溢位合併與入口剔除的筆數計入背壓計量（背壓 strip 另列近 60 秒的丟棄數）。
   onDrop: store.recordDropped,
   // 診斷事件分流交 copilot.store（憲章 IV／FR-017：不進遙測 buffer）。
@@ -272,7 +281,7 @@ const handle = useHighFrequencyWs({
   // （dev 送空 token）。
   onConnected: (clientId: string) => {
     store.setClientId(clientId);
-    // 005：重連（新 clientId）使舊綁定失效——把仍 active 的台標中斷＋可重試（FR-012／R7）。
+    // 012：重連（新 clientId）時仍 active 的台不轉失敗，標「正在取回」並等授權成功後續接（FR-016）。
     copilot.onReconnect(clientId);
     handle.send({
       type: "machine/subscribe",

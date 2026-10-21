@@ -2,17 +2,29 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   Headers,
   Inject,
+  Param,
   Post,
+  Query,
   UnsupportedMediaTypeException,
 } from "@nestjs/common";
-import { CreateDiagnosisBodySchema } from "@flow-gatekeeper/contracts";
-import type { CreateDiagnosisResponse } from "@flow-gatekeeper/contracts";
+import {
+  CreateDiagnosisBodySchema,
+  DiagnosisLookupParamsSchema,
+  DiagnosisLookupQuerySchema,
+} from "@flow-gatekeeper/contracts";
+import type { CreateDiagnosisResponse, DiagnosisLookupResponse } from "@flow-gatekeeper/contracts";
 import { JobsService } from "./jobs.service.js";
+import { DiagnosisLookupService } from "./diagnosis-lookup.service.js";
+import { summarizeIssues } from "../websocket/job-status-payload.js";
 
 /** controller 只需要 service 的建立能力（測試可注入 fake）。 */
 export type DiagnosisCreator = Pick<JobsService, "createDiagnosis">;
+/** controller 只需要 lookup service 的查詢能力（測試可注入 fake）。 */
+export type DiagnosisLookup = Pick<DiagnosisLookupService, "lookup">;
+
 
 /**
  * 只接受 `application/json`（可帶 charset 等參數）。express 預設也會解析 urlencoded，而
@@ -35,7 +47,10 @@ function isJsonContentType(contentType: string | undefined): boolean {
  */
 @Controller("diagnoses")
 export class JobsController {
-  constructor(@Inject(JobsService) private readonly jobs: DiagnosisCreator) {}
+  constructor(
+    @Inject(JobsService) private readonly jobs: DiagnosisCreator,
+    @Inject(DiagnosisLookupService) private readonly lookups: DiagnosisLookup,
+  ) {}
 
   @Post()
   async create(
@@ -51,12 +66,33 @@ export class JobsController {
         statusCode: 400,
         error: "Bad Request",
         message: "request body 不符合 POST /diagnoses 契約",
-        issues: parsed.error.issues.map((issue) => ({
-          path: issue.path.join(".") || "(root)",
-          code: issue.code,
-        })),
+        issues: summarizeIssues(parsed.error),
       });
     }
     return this.jobs.createDiagnosis(parsed.data);
+  }
+
+  /**
+   * 結果讀取與重連續接（012 US2，FR-007；contracts/diagnosis-lookup）。params／query 以契約 schema 驗證：
+   * 不符 → 400（`issues` 只帶路徑與代碼、不回顯輸入；重複的 query key 被 express 解析成陣列，同樣 400）。
+   * 其餘狀態碼由 `DiagnosisLookupService` 拋出：404 查無、409 `socket_unauthorized`／`job_bound_elsewhere`（body 帶
+   * `code`）、503 Redis／Mongo 不可用。
+   */
+  @Get(":jobId")
+  async lookup(@Param() params: unknown, @Query() query: unknown): Promise<DiagnosisLookupResponse> {
+    const parsedParams = DiagnosisLookupParamsSchema.safeParse(params);
+    const parsedQuery = DiagnosisLookupQuerySchema.safeParse(query);
+    if (!parsedParams.success || !parsedQuery.success) {
+      throw new BadRequestException({
+        statusCode: 400,
+        error: "Bad Request",
+        message: "request 不符合 GET /diagnoses/:jobId 契約",
+        issues: [
+          ...(parsedParams.success ? [] : summarizeIssues(parsedParams.error)),
+          ...(parsedQuery.success ? [] : summarizeIssues(parsedQuery.error)),
+        ],
+      });
+    }
+    return this.lookups.lookup({ ...parsedQuery.data, jobId: parsedParams.data.jobId });
   }
 }

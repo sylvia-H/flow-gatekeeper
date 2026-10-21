@@ -586,7 +586,7 @@ describe("MonitoringGateway：出口閘門（背壓、授權、違規、連線�
 
     const add = vi.fn(async () => ({}));
     const queue = { getJob: vi.fn(async () => undefined), add } as unknown as Queue<DiagnosisJobPayload>;
-    const bindings = { bindJobToClient: vi.fn(), getBinding: () => undefined, deleteBinding: vi.fn() };
+    const bindings = { bind: vi.fn(), get: () => undefined, deleteIfCurrent: vi.fn() };
     const jobs = new JobsService(queue, bindings, gateway);
     await expect(
       jobs.createDiagnosis({ machineId: "mixer-01", socketId: anonymous.clientId }),

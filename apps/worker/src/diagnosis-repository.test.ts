@@ -1,16 +1,25 @@
 import { MongoServerError } from "mongodb";
 import type { Db } from "mongodb";
 import { describe, expect, it, vi } from "vitest";
-import { ensureDiagnosisIndexes, TRIGGER_TTL_SECONDS } from "./diagnosis-repository.js";
+import type { DiagnosisResult } from "@flow-gatekeeper/contracts";
+import { createMongoDiagnosisRepository, ensureDiagnosisIndexes, TRIGGER_TTL_SECONDS } from "./diagnosis-repository.js";
 
 type IndexCall = { coll: string; keys: Record<string, number>; opts?: Record<string, unknown> };
 type ExistingIndex = { name: string; key: Record<string, number>; unique?: boolean };
 
+/**
+ * `failWhen` 與 `initial` 只作用於 `diagnoses`（既有案例的對象）；`diagnosisTriggers` 的索引失敗另以 `opts.triggerFailWhen`
+ * 注入（預設全部成功）。
+ */
 function fakeDb(
   // `existing` 可就地改動：競態案例用它模擬「另一副本在兩次呼叫之間動了索引」。
   failWhen: (c: IndexCall, existing: ExistingIndex[]) => Error | undefined,
   initial: ExistingIndex[] = [],
-  opts: { duplicates?: boolean; onDrop?: (existing: ExistingIndex[]) => void } = {},
+  opts: {
+    duplicates?: boolean;
+    onDrop?: (existing: ExistingIndex[]) => void;
+    triggerFailWhen?: (c: IndexCall) => Error | undefined;
+  } = {},
 ) {
   const calls: IndexCall[] = [];
   const dropped: string[] = [];
@@ -21,7 +30,7 @@ function fakeDb(
       createIndex: async (keys: Record<string, number>, o?: Record<string, unknown>) => {
         const call = { coll, keys, opts: o };
         calls.push(call);
-        const err = failWhen(call, existing);
+        const err = coll === "diagnoses" ? failWhen(call, existing) : opts.triggerFailWhen?.(call);
         if (err) throw err;
         return "ok";
       },
@@ -50,11 +59,12 @@ const nonUniqueJobIdCalls = (calls: IndexCall[]) =>
   calls.filter((c) => c.coll === "diagnoses" && c.keys.jobId === 1 && !c.opts?.unique);
 
 describe("ensureDiagnosisIndexes", () => {
-  it("正常：jobId unique + diagnosisTriggers createdAt TTL 30 天", async () => {
+  it("正常：diagnoses 與 diagnosisTriggers 的 jobId unique + diagnosisTriggers createdAt TTL 30 天", async () => {
     const { db, calls } = fakeDb(() => undefined);
     const log = { error: vi.fn() };
     await ensureDiagnosisIndexes(db, log);
     expect(calls).toContainEqual({ coll: "diagnoses", keys: { jobId: 1 }, opts: { unique: true } });
+    expect(calls).toContainEqual({ coll: "diagnosisTriggers", keys: { jobId: 1 }, opts: { unique: true } });
     expect(calls).toContainEqual({
       coll: "diagnosisTriggers",
       keys: { createdAt: 1 },
@@ -122,7 +132,7 @@ describe("ensureDiagnosisIndexes", () => {
     const log = { error: vi.fn() };
     await ensureDiagnosisIndexes(db, log);
     expect(dropped).toEqual(["jobId_1"]);
-    expect(calls.filter((c) => c.opts?.unique)).toHaveLength(2);
+    expect(calls.filter((c) => c.coll === "diagnoses" && c.opts?.unique)).toHaveLength(2);
     expect(nonUniqueJobIdCalls(calls)).toEqual([]);
     expect(log.error).not.toHaveBeenCalled();
   });
@@ -157,8 +167,103 @@ describe("ensureDiagnosisIndexes", () => {
     expect(log.error).not.toHaveBeenCalled();
   });
 
+  it("diagnosisTriggers.jobId unique 遇 11000（既有重複 trigger）：記 error（帶集合名）並退回非 unique", async () => {
+    const { db, calls } = fakeDb(() => undefined, [], {
+      triggerFailWhen: (c) => (c.keys.jobId === 1 && c.opts?.unique ? conflict(11000) : undefined),
+    });
+    const log = { error: vi.fn() };
+    await expect(ensureDiagnosisIndexes(db, log)).resolves.toBeUndefined();
+    expect(calls).toContainEqual({ coll: "diagnosisTriggers", keys: { jobId: 1 }, opts: undefined });
+    expect(log.error).toHaveBeenCalledTimes(1);
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ collection: "diagnosisTriggers" }),
+      expect.stringContaining("diagnosisTriggers.jobId"),
+    );
+    // diagnoses 不受影響：仍是 unique、未退回。
+    expect(nonUniqueJobIdCalls(calls)).toEqual([]);
+  });
+
   it("非索引衝突的錯誤照樣拋出（例如連線失敗）", async () => {
     const { db } = fakeDb((c) => (c.opts?.unique ? new Error("network") : undefined));
     await expect(ensureDiagnosisIndexes(db, { error: vi.fn() })).rejects.toThrow("network");
+  });
+});
+
+const VALID_RESULT: DiagnosisResult = {
+  summary: "主軸振動偏高",
+  severity: "warning",
+  likelyCauses: ["軸承磨損"],
+  suggestedActions: [{ label: "安排檢修", priority: "medium" }],
+  evidence: [{ source: "telemetry", excerpt: "振動 max 9.1" }],
+};
+
+/** 只實作 repository 讀寫用到的 collection 方法。 */
+function fakeRepoDb(impl: { updateOne?: (...args: unknown[]) => Promise<unknown>; findOne?: (...args: unknown[]) => Promise<unknown> }) {
+  const updateOne = vi.fn(impl.updateOne ?? (async () => ({ acknowledged: true })));
+  const findOne = vi.fn(impl.findOne ?? (async () => null));
+  const collections: string[] = [];
+  const db = {
+    collection: (name: string) => {
+      collections.push(name);
+      return { updateOne, findOne };
+    },
+  } as unknown as Db;
+  return { db, updateOne, findOne, collections };
+}
+
+describe("createMongoDiagnosisRepository.upsertTrigger（FR-025、P10）", () => {
+  const doc = { machineId: "press-02", jobId: "j1", requestedBy: "tester", cached: true };
+
+  it("updateOne({ jobId }, { $setOnInsert }, { upsert: true })：已有紀錄時不覆寫", async () => {
+    const { db, updateOne, collections } = fakeRepoDb({});
+    await createMongoDiagnosisRepository(db).upsertTrigger(doc);
+    expect(collections).toEqual(["diagnosisTriggers"]);
+    expect(updateOne).toHaveBeenCalledWith(
+      { jobId: "j1" },
+      { $setOnInsert: { ...doc, createdAt: expect.any(Date) as unknown } },
+      { upsert: true },
+    );
+  });
+
+  it("併發 upsert 撞 E11000：視為成功", async () => {
+    const { db } = fakeRepoDb({ updateOne: () => Promise.reject(conflict(11000)) });
+    await expect(createMongoDiagnosisRepository(db).upsertTrigger(doc)).resolves.toBeUndefined();
+  });
+
+  it("其他錯誤照常拋出", async () => {
+    const { db } = fakeRepoDb({ updateOne: () => Promise.reject(new Error("network")) });
+    await expect(createMongoDiagnosisRepository(db).upsertTrigger(doc)).rejects.toThrow("network");
+  });
+});
+
+describe("createMongoDiagnosisRepository.findDiagnosisResult（FR-024）", () => {
+  it("以 jobId 查 diagnoses、只投影 result；合法者回傳", async () => {
+    const { db, findOne, collections } = fakeRepoDb({ findOne: async () => ({ result: VALID_RESULT }) });
+    expect(await createMongoDiagnosisRepository(db).findDiagnosisResult("j1")).toEqual(VALID_RESULT);
+    expect(collections).toEqual(["diagnoses"]);
+    expect(findOne).toHaveBeenCalledWith({ jobId: "j1" }, { projection: { _id: 0, result: 1 }, maxTimeMS: 5000 });
+  });
+
+  it("查無：回 null、不呼叫 onInvalid", async () => {
+    const { db } = fakeRepoDb({});
+    const onInvalid = vi.fn();
+    expect(await createMongoDiagnosisRepository(db).findDiagnosisResult("j1", onInvalid)).toBeNull();
+    expect(onInvalid).not.toHaveBeenCalled();
+  });
+
+  it("result 不符 DiagnosisResultSchema：回 null 並呼叫 onInvalid（由呼叫端記 warn）", async () => {
+    const { db } = fakeRepoDb({ findOne: async () => ({ result: { summary: 42 } }) });
+    const onInvalid = vi.fn();
+    expect(await createMongoDiagnosisRepository(db).findDiagnosisResult("j1", onInvalid)).toBeNull();
+    expect(onInvalid).toHaveBeenCalledTimes(1);
+    // 未提供 callback 時同樣回 null、不拋。
+    expect(await createMongoDiagnosisRepository(db).findDiagnosisResult("j1")).toBeNull();
+  });
+
+  it("讀回多出的欄位不帶出（schema strip）", async () => {
+    const { db } = fakeRepoDb({ findOne: async () => ({ result: { ...VALID_RESULT, injected: "x" } }) });
+    const out = await createMongoDiagnosisRepository(db).findDiagnosisResult("j1");
+    expect(out).toEqual(VALID_RESULT);
+    expect(out).not.toHaveProperty("injected");
   });
 });

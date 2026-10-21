@@ -24,13 +24,34 @@ import type {
 } from "@flow-gatekeeper/contracts";
 import { BASE_URL, WS_URL } from "./compose.js";
 
-/** 通過契約驗證後的單則（非遙測）伺服器訊息。 */
-export type ParsedMessage =
+/**
+ * 通過契約驗證後的單則（非遙測）伺服器訊息。
+ *
+ * `receivedAt`：client 收到該 frame 的時刻（`performance.now()`，單調時鐘、毫秒）——只用來算相鄰事件的間隔
+ * （`maxGap`），不與 Date／容器日誌時間比較。
+ */
+export type ParsedMessage = (
   | { type: "job/status"; msg: JobStatus }
   | { type: "ai/token"; msg: AiToken }
   | { type: "ai/done"; msg: AiDone }
   | { type: "ai/error"; msg: AiError }
-  | { type: "other"; msg: { type: string } };
+  | { type: "other"; msg: { type: string } }
+) & { receivedAt: number };
+
+/**
+ * 一串收到時刻（遞增）中相鄰兩者差的最大值；可選的 `[from, to]` 只取落在區間內的時刻（含端點）。
+ * 少於兩個時刻時回 0（沒有任何間隔可量）。純函式，供 `E2eClient.maxGap` 與單元測試使用。
+ */
+export function computeMaxGap(times: readonly number[], from = -Infinity, to = Infinity): number {
+  let max = 0;
+  let prev: number | undefined;
+  for (const t of times) {
+    if (t < from || t > to) continue;
+    if (prev !== undefined && t - prev > max) max = t - prev;
+    prev = t;
+  }
+  return max;
+}
 
 /** 每則訊息以對應的契約 schema `safeParse`（與 web 入口同一道檢查）；不符者記入 `violations`。 */
 const SCHEMAS = {
@@ -178,7 +199,21 @@ export class E2eClient {
     return this.messages.filter((m) => m.type !== "other" && m.msg.jobId === jobId);
   }
 
+  /**
+   * 該 job 的診斷事件（`job/status`＋`ai/*`）相鄰收到時間差的最大值（毫秒，SC-001 判準 `< 45_000`）。
+   * `from`／`to` 為 `performance.now()` 刻度的可選區間（含端點），只量區間內的事件；不足兩則事件時回 0。
+   */
+  maxGap(jobId: string, from?: number, to?: number): number {
+    return computeMaxGap(
+      this.jobEvents(jobId).map((m) => m.receivedAt),
+      from,
+      to,
+    );
+  }
+
   private onMessage(data: RawData): void {
+    // 先取時間戳再做任何解析：量的是「frame 到達」的間隔，不含 JSON parse／schema 驗證耗時。
+    const receivedAt = performance.now();
     const raw = rawToString(data);
     let value: unknown;
     try {
@@ -195,12 +230,12 @@ export class E2eClient {
         this.violations.push(`畸形 machine/data 批次：${raw.slice(0, 200)}`);
       }
     } else {
-      this.classify(value, raw);
+      this.classify(value, raw, receivedAt);
     }
     this.flushWaiters();
   }
 
-  private classify(value: unknown, raw: string): void {
+  private classify(value: unknown, raw: string, receivedAt: number): void {
     const type = typeof value === "object" && value !== null && "type" in value ? value.type : undefined;
     const fail = (reason: string): void => {
       this.violations.push(`${String(type)} 不符契約（${reason}）：${raw.slice(0, 300)}`);
@@ -208,25 +243,25 @@ export class E2eClient {
     switch (type) {
       case "job/status": {
         const r = JobStatusSchema.safeParse(value);
-        if (r.success) this.messages.push({ type, msg: r.data });
+        if (r.success) this.messages.push({ type, msg: r.data, receivedAt });
         else fail(r.error.message);
         return;
       }
       case "ai/token": {
         const r = AiTokenSchema.safeParse(value);
-        if (r.success) this.messages.push({ type, msg: r.data });
+        if (r.success) this.messages.push({ type, msg: r.data, receivedAt });
         else fail(r.error.message);
         return;
       }
       case "ai/done": {
         const r = AiDoneSchema.safeParse(value);
-        if (r.success) this.messages.push({ type, msg: r.data });
+        if (r.success) this.messages.push({ type, msg: r.data, receivedAt });
         else fail(r.error.message);
         return;
       }
       case "ai/error": {
         const r = AiErrorSchema.safeParse(value);
-        if (r.success) this.messages.push({ type, msg: r.data });
+        if (r.success) this.messages.push({ type, msg: r.data, receivedAt });
         else fail(r.error.message);
         return;
       }
@@ -241,7 +276,7 @@ export class E2eClient {
           return;
         }
         if (r.data.type === "system/connected") this.clientId = r.data.clientId;
-        this.messages.push({ type: "other", msg: r.data });
+        this.messages.push({ type: "other", msg: r.data, receivedAt });
       }
     }
   }
@@ -267,14 +302,87 @@ export async function postDiagnosis(body: CreateDiagnosisBody): Promise<{ status
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+  return { status: res.status, body: await readBody(res) };
+}
+
+/** 回應 body：JSON 就 parse，否則（例如 nginx 的 429／502 HTML）照原文回傳，交給斷言訊息呈現。 */
+async function readBody(res: Response): Promise<unknown> {
   const text = await res.text();
-  let parsed: unknown = text;
   try {
-    parsed = JSON.parse(text);
+    return JSON.parse(text) as unknown;
   } catch {
-    // 非 JSON（例如 nginx 的 429／502 HTML）照原文回傳，交給斷言訊息呈現
+    return text;
   }
-  return { status: res.status, body: parsed };
+}
+
+/** `GET /diagnoses/:jobId` 的 URL（query 以 URLSearchParams 編碼；`previousSocketId` 只在有給時附上）。 */
+export function diagnosisLookupUrl(jobId: string, socketId: string, previousSocketId?: string): string {
+  const query = new URLSearchParams({ socketId });
+  if (previousSocketId !== undefined) query.set("previousSocketId", previousSocketId);
+  return `${BASE_URL}/diagnoses/${encodeURIComponent(jobId)}?${query.toString()}`;
+}
+
+/**
+ * `GET /diagnoses/:jobId?socketId=…[&previousSocketId=…]`（經 nginx 同源入口，FR-005／SC-003／SC-005）。
+ *
+ * 任何 HTTP 狀態碼都照實回傳、不丟錯——404／409／400 由場景自己斷言。連線層失敗（api 重啟中 nginx 之外的
+ * 斷線、ECONNREFUSED）同樣不丟錯，回 `status: 0` 與錯誤訊息，讓「重啟後輪詢到 200」的場景可以直接重試。
+ */
+export async function getDiagnosis(
+  jobId: string,
+  socketId: string,
+  previousSocketId?: string,
+): Promise<{ status: number; body: unknown }> {
+  let res: Response;
+  try {
+    // 10 s 上限：api 重啟中 nginx 收了連線卻遲遲不回時，不讓單次 GET 掛到 vitest 逾時（逾時同樣回 status 0）
+    res = await fetch(diagnosisLookupUrl(jobId, socketId, previousSocketId), { signal: AbortSignal.timeout(10_000) });
+  } catch (err) {
+    return { status: 0, body: err instanceof Error ? err.message : String(err) };
+  }
+  return { status: res.status, body: await readBody(res) };
+}
+
+/** api 重啟期間 nginx／連線層的暫時性回應：`status: 0`（連線失敗、逾時）與 502／503／504。 */
+export const TRANSIENT_LOOKUP_STATUSES: readonly number[] = [0, 502, 503, 504];
+
+/**
+ * 重送 `getDiagnosis`（每 1 s）直到回應不是暫時性狀態碼，或逾時；回最後一次回應（不丟錯，斷言交給場景）。
+ * 給 api 重啟後的第一次查詢用：healthcheck 轉 healthy 與 nginx 能轉發之間可能還有一小段 502。
+ */
+export async function getDiagnosisUntilSettled(
+  jobId: string,
+  socketId: string,
+  previousSocketId: string | undefined,
+  timeoutMs: number,
+): Promise<{ status: number; body: unknown }> {
+  const started = Date.now();
+  for (;;) {
+    const res = await getDiagnosis(jobId, socketId, previousSocketId);
+    if (!TRANSIENT_LOOKUP_STATUSES.includes(res.status) || Date.now() - started >= timeoutMs) return res;
+    await sleep(1_000);
+  }
+}
+
+/**
+ * 重連流程（場景 6a／6b）：關掉舊 client（已被 api 重啟斷開時為 no-op）、新建 `E2eClient`、`connect`＋`subscribe`，
+ * 回傳新 client 與它的 `clientId`（＝之後 GET 要帶的 `socketId`；舊的 `old.clientId` 即 `previousSocketId`）。
+ * 失敗時新 client 會被關閉後再拋出，不留未關的 socket 讓 vitest 掛著。
+ */
+export async function reconnectClient(
+  old: E2eClient,
+  machineIds: string[],
+  timeoutMs = 10_000,
+): Promise<{ client: E2eClient; clientId: string }> {
+  old.close();
+  const client = await E2eClient.connect(timeoutMs);
+  try {
+    await client.subscribe(machineIds, timeoutMs);
+  } catch (err) {
+    client.close();
+    throw err;
+  }
+  return { client, clientId: client.clientId };
 }
 
 /** 成功建立診斷：斷言 201 且回應符合 `CreateDiagnosisResponseSchema`。 */

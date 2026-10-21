@@ -6,7 +6,15 @@ import { useMonitoringStore, type MachineLive } from "../../monitoring/stores/mo
 import { isStale } from "../../monitoring/lib/stale.js";
 import { CARD_ROOT_CLASS } from "../../monitoring/lib/card-style.js";
 import { machineLabel as labelOf } from "../../monitoring/lib/machine-labels.js";
-import { isUndeliveredFailure, progressLabel, type CopilotJobState } from "../lib/copilot-reducer.js";
+import {
+  RECOVERED_META,
+  RESUMING_NOTICE,
+  STALLED_NOTICE,
+  STREAM_LABEL_INCOMPLETE,
+  isUndeliveredFailure,
+  progressLabel,
+  type CopilotJobState,
+} from "../lib/copilot-reducer.js";
 import { jobSteps, type StepStatus } from "../lib/job-steps.js";
 import { parsePartialDiagnosis } from "../lib/partial-json.js";
 import { compareBars, compareLabel } from "../lib/diagnosis-timing.js";
@@ -117,8 +125,23 @@ const resultMeta = computed(() => {
     completedAt: copilot.completedAtFor(s.machineId) ?? null,
     elapsed: compareLabel(timing),
     bars: compareBars(timing),
+    // 重連後以 GET 取回：完成 meta 加中性小字「重新連線後取回」（FR-035、ui-copy §1）。沒有重連過的 2 s／45 s 退路
+    // 雖然也以 GET 收尾，但字面「重新連線後」不成立，不顯示（代理裁決第 53 條）。
+    note: s.source === "lookup" && s.reconnected === true ? RECOVERED_META : null,
   };
 });
+
+/**
+ * 進行中區塊步驟列下的說明行（FR-035、ui-copy §1、R10）：重連後、續接 GET 回應前顯示「已重新連線，正在取回診斷狀態…」；
+ * 任務因後端處理程序中斷而重新排入佇列時顯示「…（第 N 次執行）」。兩者同時成立只顯示前者（ui-copy §1）。
+ * 卡片 chip 與面板 chip 不變（仍是「診斷中 N%」／「進行中」，FR-037）。
+ */
+function progressNoteOf(state: CopilotJobState): string | null {
+  if (state.status !== "active") return null;
+  if (state.resume === "pending") return RESUMING_NOTICE;
+  return state.stalledNotice ? STALLED_NOTICE(state.stalledNotice.execution) : null;
+}
+const progressNote = computed(() => progressNoteOf(props.state));
 
 /**
  * 閒置態只留「機台名 · 狀態徽章（含停滯）」＋診斷鈕，不再重複卡片的 2×2 遙測（critique 第二輪 P1）：
@@ -134,7 +157,7 @@ const summaryStale = computed(() =>
 const MAX_ATTEMPTS = 3;
 
 /**
- * job meta——queue 自契約 import 常數值；attempt 取自串流事件，讓重試換輪時使用者看得出串流
+ * job meta——queue 自契約 import 常數值；attempt 由 ai/token、job/status、lookup/result 推進，讓重試換輪時使用者看得出串流
  * 文字為何從頭開始。不顯示 concurrency：它現在是 worker 端可設定的 `WORKER_CONCURRENCY`，前端拿不到
  * 真實值，寫死數字只會與實際不符。
  * 這組 `<dl>` 只在進行中區塊渲染；非 active 的回退值只為型別收斂（`attempt` 只存在於 active），畫面上不會出現。
@@ -187,7 +210,17 @@ watch(
       announcement.value = "";
       return;
     }
-    // 「結果未送達」失敗被遲到的 ai/done 救回（AR-6）也算同一任務的完成轉移，照樣公告。
+    // 同一任務的進行中說明行出現或換句（重連後正在取回、重新排入佇列與其 N 的校正）：沿用這個公告區朗讀（R10），不另開 live region。
+    if (next.status === "active") {
+      const note = progressNoteOf(next);
+      const prevNote = progressNoteOf(prev);
+      if (note !== null && note !== prevNote) announcement.value = note;
+      // 說明行消失：清空公告區，下次出現同一句（例如第二次重連的「正在取回」）時 live region 才會重念。
+      else if (note === null && prevNote !== null) announcement.value = "";
+      return;
+    }
+    // 「結果未送達」失敗被遲到的結果救回（AR-6、FR-005）也算同一任務的完成轉移，照樣公告。
+    // 三個完成來源先到者才造成轉移；後到者（含重複的 ai/done）reducer 原樣回傳、不觸發 watch，因此只公告一次（FR-004）。
     if (prev.status !== "active" && !isUndeliveredFailure(prev)) return;
     if (next.status === "completed") {
       announcement.value = `${labelOf(next.machineId)} 診斷完成${next.cached ? "（快取）" : ""}：${next.result.summary}`;
@@ -346,7 +379,7 @@ watch(
     @keydown="onKeydown"
   >
     <!-- 完成／失敗摘要公告（視覺隱藏；常駐掛載，live region 才能在內容變化時被念出） -->
-    <div class="sr-only" aria-live="polite" aria-atomic="true">{{ announcement }}</div>
+    <div class="sr-only" aria-live="polite" aria-atomic="true" data-testid="copilot-announcement">{{ announcement }}</div>
     <!-- 非 modal sheet 開啟公告：焦點留在卡片時，告知面板已開與可用按鍵 -->
     <div class="sr-only" aria-live="polite" aria-atomic="true">{{ sheetHint }}</div>
 
@@ -462,7 +495,7 @@ watch(
                （critique 第二輪 Minor）；目前步驟已由下方步驟清單的 aria-current 朗讀，這裡只給視覺 -->
             <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-ink-3">
               <span v-if="currentStep" class="font-medium text-ink-2" aria-hidden="true">{{ currentStep.label }}</span>
-              <!-- job meta（queue 自契約常數；attempt 取自串流事件） -->
+              <!-- job meta（queue 自契約常數；attempt 由 ai/token、job/status、lookup/result 推進） -->
               <dl class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
                 <div v-for="meta in jobMeta" :key="meta.label" class="flex items-baseline gap-1">
                   <dt>{{ meta.label }}</dt>
@@ -470,6 +503,12 @@ watch(
                 </div>
               </dl>
             </div>
+            <!-- 說明行（重連後正在取回／重新排入佇列）：text-xs ink-3、不加 chip 或色值；出現或換句時由上方既有的 polite 公告區朗讀。
+               進度說明行屬進行中區塊內容、非 DESIGN.md 所稱「標記」（徽章出現或消失不改變容器高度的那條），允許改變高度，
+               維持 v-if、不預留佔位；DESIGN.md 已記此「進度說明行」例外（代理裁決第 54 條）。 -->
+            <p v-if="progressNote" data-testid="copilot-progress-note" class="text-xs text-ink-3">
+              {{ progressNote }}
+            </p>
           </div>
 
           <!-- 結果骨架：與完成態同順序的四個區段，隨 token 逐格填入 -->
@@ -521,10 +560,11 @@ watch(
               </button>
             </template>
           </DiagnosisResultView>
+          <!-- 以 job/status／GET 收尾（或執行期間重連過）時串流可能缺段，標「原始串流（不完整）」（FR-038） -->
           <StreamDisclosure
             v-if="state.streamText"
             v-model:expanded="showStream"
-            label="原始串流"
+            :label="state.streamIncomplete ? STREAM_LABEL_INCOMPLETE : '原始串流'"
             :text="state.streamText"
             :streaming="false"
           />

@@ -274,4 +274,18 @@ describe("asyncapi.yaml 與 Zod 契約同步", () => {
       expect((payload.properties as Json).attempt, name).toMatchObject({ type: "integer", minimum: 1 });
     }
   });
+
+  it("job/status 的 reason 是開放字串、不是 enum（1.4.0；封閉列舉會讓舊 web 丟掉整則 completed）", () => {
+    const payload = resolveRef(components.messages.JobStatus?.payload) as Json;
+    const reason = resolveRef((payload.properties as Json).reason) as Json;
+    expect(reason).toMatchObject({ type: "string" });
+    expect(reason).not.toHaveProperty("enum");
+    expect(reason).not.toHaveProperty("const");
+    expect(payload.required).not.toContain("reason");
+    // Zod 端同樣不得收成 enum／literal
+    const zodReason = (fromZod(JobStatusSchema) as { properties: Record<string, Json> }).properties.reason;
+    expect(zodReason).toMatchObject({ type: "string" });
+    expect(zodReason).not.toHaveProperty("enum");
+    expect(zodReason).not.toHaveProperty("const");
+  });
 });

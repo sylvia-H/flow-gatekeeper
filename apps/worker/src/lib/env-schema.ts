@@ -39,6 +39,8 @@ export const DEFAULT_AI_TEMPERATURE = 0.2;
 /** fake provider 預設：20 段 × 500ms ≈ 10s 串流，足以在 e2e 中途 kill worker。 */
 export const DEFAULT_FAKE_AI_TOKEN_DELAY_MS = 500;
 export const DEFAULT_FAKE_AI_TOKENS = 20;
+/** fake provider 首段 token 前的延遲預設：0＝不延遲（e2e compose 設 2000，模擬 LLM 首 token 延遲；代理裁決第 51 條）。 */
+export const DEFAULT_FAKE_AI_FIRST_TOKEN_DELAY_MS = 0;
 
 const emptyToUndefined = (v: unknown): unknown =>
   typeof v === "string" && v.trim() === "" ? undefined : v;
@@ -123,6 +125,11 @@ export const WorkerEnvSchema = RedisEnvSchema.extend({
     emptyToUndefined,
     z.coerce.number().int().positive().max(1000).default(DEFAULT_FAKE_AI_TOKENS),
   ),
+  /** fake provider 首段 token 前的延遲（毫秒，0–60000，預設 0）；之後各段仍用 FAKE_AI_TOKEN_DELAY_MS。AI_PROVIDER=gemini 時不作用。 */
+  FAKE_AI_FIRST_TOKEN_DELAY_MS: z.preprocess(
+    emptyToUndefined,
+    z.coerce.number().int().min(0).max(60_000).default(DEFAULT_FAKE_AI_FIRST_TOKEN_DELAY_MS),
+  ),
 }).superRefine((env, ctx) => {
   // 鎖必須活得比一次 LLM 呼叫**加上收尾**久：否則持鎖者還在串流或寫庫時鎖已過期，等待者搶到鎖
   // 再打一次 LLM，去重直接失效。compare-and-del 只能保證「不刪別人的鎖」，擋不住這種重複呼叫。
@@ -150,18 +157,19 @@ export function parseWorkerEnv(raw: Record<string, string | undefined>): WorkerE
   if (!parsed.success) return { ok: false, error: formatIssues(parsed.error) };
   const warnings: string[] = [];
   if (parsed.data.AI_PROVIDER === "fake") {
-    const { NODE_ENV, FAKE_AI_TOKENS, FAKE_AI_TOKEN_DELAY_MS, AI_TIMEOUT_MS } = parsed.data;
+    const { NODE_ENV, FAKE_AI_TOKENS, FAKE_AI_TOKEN_DELAY_MS, FAKE_AI_FIRST_TOKEN_DELAY_MS, AI_TIMEOUT_MS } = parsed.data;
     warnings.push(
       "AI_PROVIDER=fake：AI 診斷改由測試替身輸出固定假結果（不呼叫 LLM），僅供 e2e／演練" +
         (NODE_ENV === "production" ? "——目前 NODE_ENV=production，正式環境請移除此設定" : ""),
     );
-    // 串流總長（首段不延遲）超過逾時上限時，每筆診斷都會 ai_timeout——設定錯誤但不致命，只 warn。
+    // 串流總長（首段前 FAKE_AI_FIRST_TOKEN_DELAY_MS，之後每段 FAKE_AI_TOKEN_DELAY_MS）超過逾時上限時，每筆診斷都會
+    // ai_timeout——設定錯誤但不致命，只 warn。
     // 實際段數以假診斷 JSON 字元數為上限（splitIntoChunks 不會切出空段），與 provider 行為一致。
     const chunks = Math.min(FAKE_AI_TOKENS, FAKE_DIAGNOSIS_TEXT_LENGTH);
-    const streamMs = (chunks - 1) * FAKE_AI_TOKEN_DELAY_MS;
+    const streamMs = FAKE_AI_FIRST_TOKEN_DELAY_MS + (chunks - 1) * FAKE_AI_TOKEN_DELAY_MS;
     if (streamMs >= AI_TIMEOUT_MS) {
       warnings.push(
-        `fake provider 串流約 ${streamMs}ms（(min(FAKE_AI_TOKENS, ${FAKE_DIAGNOSIS_TEXT_LENGTH}) − 1) × FAKE_AI_TOKEN_DELAY_MS）≥ AI_TIMEOUT_MS（${AI_TIMEOUT_MS}ms）：` +
+        `fake provider 串流約 ${streamMs}ms（FAKE_AI_FIRST_TOKEN_DELAY_MS + (min(FAKE_AI_TOKENS, ${FAKE_DIAGNOSIS_TEXT_LENGTH}) − 1) × FAKE_AI_TOKEN_DELAY_MS）≥ AI_TIMEOUT_MS（${AI_TIMEOUT_MS}ms）：` +
           "每筆診斷都會逾時",
       );
     }

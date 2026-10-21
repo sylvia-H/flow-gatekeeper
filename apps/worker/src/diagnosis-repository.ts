@@ -1,6 +1,8 @@
 import { MongoServerError } from "mongodb";
 import type { Collection, Db } from "mongodb";
+import { DiagnosisResultSchema } from "@flow-gatekeeper/contracts";
 import type { DiagnosisResult } from "@flow-gatekeeper/contracts";
+import { CONTEXT_QUERY_MAX_TIME_MS } from "./context/context-builder.js";
 
 /**
  * processor 對 Mongo 的寫入需求（diagnoses／diagnosisTriggers）。抽成介面讓 processor
@@ -9,8 +11,16 @@ import type { DiagnosisResult } from "@flow-gatekeeper/contracts";
 export interface DiagnosisRepository {
   /** 寫入最終診斷；同一 jobId 重複寫入（重試）視為成功、不覆寫。 */
   insertDiagnosis(doc: { machineId: string; jobId: string; result: DiagnosisResult }): Promise<void>;
-  /** 每次觸發一筆輕量稽核（含 cache 命中與最終失敗）。 */
-  insertTrigger(doc: { machineId: string; jobId: string; requestedBy: string; cached: boolean }): Promise<void>;
+  /**
+   * 每個 jobId 恰一筆輕量稽核（成功：cached true／false；最終失敗：cached false），**先寫者勝**（012 FR-025）：
+   * `updateOne({ jobId }, { $setOnInsert }, { upsert: true })`，已有紀錄時不覆寫；併發 upsert 撞 E11000 視為成功（P10）。
+   */
+  upsertTrigger(doc: { machineId: string; jobId: string; requestedBy: string; cached: boolean }): Promise<void>;
+  /**
+   * 冪等短路 (ii)（012 FR-024、D6）：以 jobId 查 LLM 路徑已落地的診斷，讀回經 `DiagnosisResultSchema.safeParse`；
+   * 查無或不合法都回 null；不合法時另呼叫 `onInvalid`，由呼叫端以自己的 logger（含 machineId 等綁定）記 warn。
+   */
+  findDiagnosisResult(jobId: string, onInvalid?: () => void): Promise<DiagnosisResult | null>;
 }
 
 /** Mongo duplicate key。 */
@@ -39,11 +49,14 @@ function isIndexConflict(err: unknown): boolean {
 }
 
 /**
- * 建立 diagnoses／diagnosisTriggers 所需索引。
+ * 建立 diagnoses／diagnosisTriggers 所需索引。兩個集合的 `{ jobId: 1 }` unique 走同一套邏輯（`ensureUniqueJobIdIndex`）。
+ * `diagnosisTriggers.jobId` unique 是「每個 jobId 恰一筆 trigger」的第二道保證（第一道是 upsert，012 FR-025）；
+ * 退回非 unique 時 upsert 仍冪等，只是併發 upsert 的極窄窗口可能多一筆。
  *
- * `diagnoses.jobId` unique 是冪等的前提：processor 先 insert diagnoses 再寫 cache，若寫 cache
- * 失敗而重試，第二次 insert 會撞 unique 而被視為成功，不會多出重複的診斷紀錄。代價：同一個
- * jobId 在 BullMQ 清掉已完成 job（約 1h）後被重送時，新結果也會被當重複吞掉、diagnoses 只留舊的。
+ * `diagnoses.jobId` unique 擋的是**雙重執行的併發 insert**（012 起）：同 jobId 的重試與重派先走 processor 開頭的
+ * 冪等短路——diagnoses 已有就由短路 (ii) 沿用、不再 insert；但 stalled 重派時舊執行可能還活著，兩者都可能走到
+ * insert（例如短路 (i) 補寫與舊執行的寫庫同時發生），此時後到者撞 unique、被視為成功，不會多出重複的診斷紀錄。
+ * 連帶語意：同一個 jobId 在 BullMQ 清掉已完成 job（約 1h）後被重送時，短路 (ii) 直接回舊結果、不重新診斷。
  *
  * 既有資料若已有重複 jobId（或同名索引選項不同），建 unique 會失敗；若因此讓 bootstrap exit 1，
  * worker 會進 restart loop、整個 AI 功能停擺。所以衝突時記 error 並退回非 unique 索引——insert
@@ -62,37 +75,51 @@ function isIndexConflict(err: unknown): boolean {
 export async function ensureDiagnosisIndexes(db: Db, log: IndexLogger): Promise<void> {
   const diagnoses = db.collection("diagnoses");
   await diagnoses.createIndex({ machineId: 1, createdAt: -1 });
-  await ensureUniqueJobIdIndex(diagnoses, log);
+  await ensureUniqueJobIdIndex(diagnoses, "diagnoses", log);
   await ensureTriggerIndexes(db, log);
 }
 
-async function ensureUniqueJobIdIndex(diagnoses: Collection, log: IndexLogger): Promise<void> {
-  const createUnique = () => tryCreateIndex(diagnoses, { jobId: 1 }, { unique: true });
+/**
+ * 沒有 unique 時各集合失去的保證（日誌措辭）：diagnoses 失去「併發 insert 只留一筆」；diagnosisTriggers 的 upsert 本身
+ * 仍冪等，只剩併發 upsert 的窄窗口可能多一筆。
+ */
+const FALLBACK_CONSEQUENCE: Record<string, string> = {
+  diagnoses: "雙重執行併發寫入時可能多出重複的診斷紀錄",
+  diagnosisTriggers: "trigger 的 upsert 仍冪等，只剩併發 upsert 的窄窗口可能多一筆",
+};
+
+/** `label` 為日誌中的集合名（`diagnoses`／`diagnosisTriggers`）。 */
+async function ensureUniqueJobIdIndex(coll: Collection, label: string, log: IndexLogger): Promise<void> {
+  const consequence = FALLBACK_CONSEQUENCE[label] ?? "冪等不再有保證";
+  const createUnique = () => tryCreateIndex(coll, { jobId: 1 }, { unique: true });
   let lastErr = await createUnique();
   if (lastErr === undefined) return;
 
   // 11000 是資料重複、沒有索引擋路，直接退回；85/86 才需要看是哪個同鍵索引擋住。
   if (mongoCode(lastErr) !== DUPLICATE_KEY) {
-    const existing = await findJobIdIndex(diagnoses);
+    const existing = await findJobIdIndex(coll);
     if (existing?.unique === true) return; // 已有 unique（不同名、或另一副本剛建好）
     if (existing) {
-      if (await hasDuplicateJobIds(diagnoses)) {
+      if (await hasDuplicateJobIds(coll)) {
         log.error(
-          { err: lastErr },
-          "diagnoses.jobId 仍有重複資料，保留既有的非 unique 索引；重試冪等不再有保證，清理後重啟即恢復 unique",
+          { err: lastErr, collection: label },
+          `${label}.jobId 仍有重複資料，保留既有的非 unique 索引（${consequence}）；清理後重啟即恢復 unique`,
         );
         return;
       }
-      await dropIndexIfExists(diagnoses, existing.name);
+      await dropIndexIfExists(coll, existing.name);
     }
     // 擋路的索引已移除（由本副本或併發副本），再建一次。
     lastErr = await createUnique();
     if (lastErr === undefined) return;
-    if (mongoCode(lastErr) !== DUPLICATE_KEY && (await findJobIdIndex(diagnoses))?.unique === true) return;
+    if (mongoCode(lastErr) !== DUPLICATE_KEY && (await findJobIdIndex(coll))?.unique === true) return;
   }
 
-  log.error({ err: lastErr }, "diagnoses.jobId unique 索引建立失敗（既有重複資料或索引衝突），退回非 unique 索引；重試冪等不再有保證");
-  await tryCreateIndex(diagnoses, { jobId: 1 });
+  log.error(
+    { err: lastErr, collection: label },
+    `${label}.jobId unique 索引建立失敗（既有重複資料或索引衝突），退回非 unique 索引；${consequence}`,
+  );
+  await tryCreateIndex(coll, { jobId: 1 });
 }
 
 /** 建索引；索引衝突類錯誤以回傳值交還呼叫端判斷，其餘（連線失敗等）照拋。 */
@@ -152,12 +179,13 @@ async function ensureTriggerIndexes(db: Db, log: IndexLogger): Promise<void> {
   const triggers = db.collection("diagnosisTriggers");
   await triggers.createIndex({ machineId: 1, createdAt: -1 });
   try {
-    // TTL 索引須為單欄位；欄位與 insertTrigger 寫入的 createdAt（Date）一致。
+    // TTL 索引須為單欄位；欄位與 upsertTrigger 寫入的 createdAt（Date）一致。
     await triggers.createIndex({ createdAt: 1 }, { expireAfterSeconds: TRIGGER_TTL_SECONDS });
   } catch (err) {
     if (!isIndexConflict(err)) throw err;
     log.error({ err }, "diagnosisTriggers TTL 索引建立失敗（既有同鍵索引選項不同），稽核紀錄將不會自動過期");
   }
+  await ensureUniqueJobIdIndex(triggers, "diagnosisTriggers", log);
 }
 
 export function createMongoDiagnosisRepository(db: Db): DiagnosisRepository {
@@ -172,10 +200,31 @@ export function createMongoDiagnosisRepository(db: Db): DiagnosisRepository {
         throw err;
       }
     },
-    async insertTrigger({ machineId, jobId, requestedBy, cached }) {
-      await db
-        .collection("diagnosisTriggers")
-        .insertOne({ machineId, jobId, requestedBy, cached, createdAt: new Date() });
+    async upsertTrigger({ machineId, jobId, requestedBy, cached }) {
+      try {
+        await db
+          .collection("diagnosisTriggers")
+          .updateOne(
+            { jobId },
+            { $setOnInsert: { machineId, jobId, requestedBy, cached, createdAt: new Date() } },
+            { upsert: true },
+          );
+      } catch (err) {
+        // 兩個執行同時 upsert 同一 jobId：unique 索引讓後到者撞 E11000——對方已寫入，目的已達成。
+        if (mongoCode(err) === DUPLICATE_KEY) return;
+        throw err;
+      }
+    },
+    async findDiagnosisResult(jobId, onInvalid) {
+      // maxTimeMS 比照 context 查詢：Mongo 卡頓時冪等短路不該無限期掛著（失敗照常拋出走重試）。
+      const doc = await db
+        .collection("diagnoses")
+        .findOne({ jobId }, { projection: { _id: 0, result: 1 }, maxTimeMS: CONTEXT_QUERY_MAX_TIME_MS });
+      if (!doc) return null;
+      const checked = DiagnosisResultSchema.safeParse(doc.result);
+      if (checked.success) return checked.data;
+      onInvalid?.();
+      return null;
     },
   };
 }

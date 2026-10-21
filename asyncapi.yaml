@@ -1,8 +1,40 @@
 asyncapi: 2.6.0
 info:
   title: flow-gatekeeper Realtime Events
-  version: 1.3.0
-  description: WebSocket events for telemetry, diagnosis jobs, and AI streaming.
+  version: 1.4.0
+  description: >-
+    WebSocket events for telemetry, diagnosis jobs, and AI streaming.
+
+    Companion HTTP endpoint (not a WebSocket channel; request and 200 body are defined by Zod in
+    packages/contracts/src/http.ts, error bodies are documented here only):
+    GET /diagnoses/{jobId}?socketId={uuid}[&previousSocketId={uuid}] reads a diagnosis result or re-binds an
+    in-flight job to the calling connection after a reconnect. The jobId (UUID v4) acts as a bearer capability:
+    any online, authorized connection that knows it can read a finished result; it appears in the nginx access log path.
+    socketId must be an online, authorized WebSocket clientId (the same gate as POST /diagnoses). previousSocketId is
+    the socketId the caller's tab last bound to this job; it is only used for the re-bind decision.
+
+    200 responses, discriminated by status (every branch carries jobId):
+    completed carries the validated result and cached (from the BullMQ return value, or from MongoDB with
+    cached false when the job is gone, in an unknown state, or its return value fails validation);
+    failed carries error (the BullMQ failedReason);
+    waiting (also covering delayed, prioritized and waiting-children) and active carry optional progress,
+    attempt and execution, and rebound true, meaning subsequent job/status and ai/* events go to this socketId.
+
+    Error responses (Nest HttpException bodies, no separate schema):
+    400 when params or query do not match the contract (body lists issue path and code only, input is not echoed);
+    404 when neither BullMQ nor MongoDB holds a valid result (completed jobs are removed from BullMQ after 1 hour or
+    once more than 1000 completed jobs are retained, whichever comes first; cache-hit results are not stored in MongoDB, so
+    they return 404 afterwards; failed jobs are removed after 24 hours or beyond 5000 retained failures, after which GET
+    returns 404);
+    409 with code socket_unauthorized when socketId is not online or not authorized (same message as POST /diagnoses);
+    409 with code job_bound_elsewhere when the job is still in flight and bound to another online connection that is
+    neither this socketId nor previousSocketId; the code field appears only on these GET 409 responses, the POST 409
+    body is unchanged;
+    429 when the nginx diag_read limit (60 requests per minute, burst 10, separate from POST) is exceeded (nginx error
+    page, not JSON);
+    503 when Redis or MongoDB is unavailable, or the BullMQ lookup exceeds 5 seconds or the MongoDB query exceeds
+    3 seconds (8 seconds in total at most); also returned for rare inconsistent states (terminal binding while the
+    queue still reports the job in progress; job data without machineId); retry later.
   contact:
     name: flow-gatekeeper
     url: https://github.com/flow-gatekeeper
@@ -50,7 +82,15 @@ channels:
     subscribe:
       operationId: jobStatus
       summary: Server pushes diagnosis job status.
-      description: Server emits lifecycle status updates for a diagnosis job, optionally carrying the final result. When WS_AUTH_SECRET is set, it is sent only to authorized connections (those that passed the machine/subscribe token check).
+      description: >-
+        Server emits lifecycle status updates for a diagnosis job. A `completed` status carries the validated `result` and `cached`
+        whenever the worker's return value passes validation; this is the authoritative completion signal. `attempt`/`execution`
+        accompany progress updates; `reason: stalled` marks a re-dispatch after the worker lost its lock (it is followed by a plain
+        `waiting`, so consumers may see two waiting updates in a row; it is not sent once the job is already terminal). While a worker
+        is alive, an `active` update with an unchanged progress value is repeated about every 10 seconds as a keepalive. Consumers
+        MUST treat the first terminal status (`completed` or `failed`) they receive for a jobId as final. When `completed` arrives
+        without `result` (older worker, or a return value that failed validation), consumers SHOULD fall back to
+        GET /diagnoses/{jobId} to read the result. When WS_AUTH_SECRET is set, it is sent only to authorized connections.
       message:
         $ref: "#/components/messages/JobStatus"
 
@@ -66,7 +106,13 @@ channels:
     subscribe:
       operationId: aiDone
       summary: Server pushes final AI diagnosis.
-      description: Server emits the validated final diagnosis result for a job, flagging whether it was served from cache. When WS_AUTH_SECRET is set, it is sent only to authorized connections (those that passed the machine/subscribe token check).
+      description: >-
+        Server forwards the validated final diagnosis result for a job, flagging whether it was served from cache. `ai/done` is a
+        best-effort notification. It MAY be delivered more than once for the same jobId (re-execution after a stalled lock or a retry
+        normally carries the same result; in a rare residual case documented in ADR-003 section 4 a re-execution may carry a
+        different result, so keep the first one received) and MAY be lost (Redis Pub/Sub is at-most-once). The authoritative completion is `job/status`
+        with `status: completed` and `result`; consumers MUST treat the first completion they receive for a jobId as final and ignore
+        later ones. When WS_AUTH_SECRET is set, it is sent only to authorized connections (those that passed the machine/subscribe token check).
       message:
         $ref: "#/components/messages/AiDone"
 
@@ -74,7 +120,12 @@ channels:
     subscribe:
       operationId: aiError
       summary: Server pushes AI provider or worker errors.
-      description: Server emits an error event when the AI provider or worker fails for a job. When WS_AUTH_SECRET is set, it is sent only to authorized connections (those that passed the machine/subscribe token check).
+      description: >-
+        Server emits an error event when the AI provider or worker fails for a job. Because a failed job keeps its routing
+        binding for a 10-second grace period, the worker's specific `ai/error` MAY arrive after `job/status` `failed`, and a
+        job MAY produce two `ai/error` messages (the worker's specific code plus the api's `worker_failed` safety net).
+        Consumers MUST treat the first terminal event for a jobId as final and ignore later ones. When WS_AUTH_SECRET is set, it
+        is sent only to authorized connections (those that passed the machine/subscribe token check).
       message:
         $ref: "#/components/messages/AiError"
 
@@ -186,6 +237,20 @@ components:
             $ref: "#/components/schemas/DiagnosisResult"
           error:
             type: string
+          attempt:
+            type: integer
+            minimum: 1
+            description: BullMQ attempt number (attemptsMade + 1), same meaning as attempt on ai/* messages. Sent with progress updates on active and, when known, on completed. Clients reset accumulated stream text when it increases.
+          execution:
+            type: integer
+            minimum: 1
+            description: Number of times the job has started executing (BullMQ attemptsStarted). Increments on retries, stalled re-dispatches and rate-limit delays; clients reset accumulated stream text when it increases. An increase does not by itself mean the worker crashed.
+          reason:
+            type: string
+            description: Open-ended reason for the status change (deliberately not an enum, so adding a value never makes old clients drop the whole message). Known value stalled, sent with status waiting when BullMQ re-queues the job after the worker lost its lock. Consumers MUST ignore unknown values.
+          cached:
+            type: boolean
+            description: Whether the result was served from cache. Always present when status is completed and result is present; consumers treat a missing value as false.
 
     AiToken:
       payload:
@@ -238,6 +303,16 @@ components:
             description: BullMQ attempt number (attemptsMade + 1). The job id is reused across retries and seq restarts at 0, so clients reset accumulated stream text when this changes. A stalled re-dispatch (worker crash) does not increment attemptsMade, so seq also restarts at 0 within the same attempt; within the same attempt, seq strictly increases during one execution, so clients treat any seq that does not increase (seq <= the previous seq) as a new execution and reset as well.
           code:
             type: string
+            description: >-
+              Open-ended error code (not an enum). Known values: ai_timeout (worker, stream timed out; retryable);
+              provider_error (worker, AI provider failure; retryability depends on the provider error);
+              schema_invalid (worker, result failed schema validation, safety or max_tokens; retryable for validation
+              failures, not for safety or max_tokens);
+              no_context (worker, empty diagnosis context; not retryable);
+              persist_failed (worker, the diagnoses record could not be written; message is fixed to
+              "persist_failed: diagnosis record could not be written"; retryable; added in 1.4.0);
+              worker_failed (api, final-failure safety net; message is the BullMQ failedReason).
+              A job that hits a same-signature failure marker receives the same code as the lock holder, with no extra flag.
           message:
             type: string
 

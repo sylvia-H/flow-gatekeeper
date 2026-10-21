@@ -30,6 +30,22 @@ describe("createRedisStore", () => {
     expect(r.eval).toHaveBeenCalledWith(RELEASE_LOCK_SCRIPT, 1, "ai-lock:s", "tok");
   });
 
+  it("setIfAbsent 以 SET NX EX 寫入，回 OK → true", async () => {
+    const r = fakeRedis({ set: vi.fn().mockResolvedValue("OK") });
+    expect(await createRedisStore(r).setIfAbsent("ai-metric:j1", "1", 86_400)).toBe(true);
+    expect(r.set).toHaveBeenCalledWith("ai-metric:j1", "1", "EX", 86_400, "NX");
+  });
+
+  it("setIfAbsent 已存在（SET NX 回 null）→ false", async () => {
+    const r = fakeRedis({ set: vi.fn().mockResolvedValue(null) });
+    expect(await createRedisStore(r).setIfAbsent("ai-metric:j1", "1", 86_400)).toBe(false);
+  });
+
+  it("setIfAbsent 的 Redis 錯誤照常拋出（交給 processor 走重試）", async () => {
+    const r = fakeRedis({ set: vi.fn().mockRejectedValue(new Error("redis down")) });
+    await expect(createRedisStore(r).setIfAbsent("ai-metric:j1", "1", 86_400)).rejects.toThrow("redis down");
+  });
+
   it("incrementWindow 以單一腳本 INCR + 首次 EXPIRE", async () => {
     const r = fakeRedis({ eval: vi.fn().mockResolvedValue(3) });
     expect(await createRedisStore(r).incrementWindow("ai-rpm:1", 60)).toBe(3);

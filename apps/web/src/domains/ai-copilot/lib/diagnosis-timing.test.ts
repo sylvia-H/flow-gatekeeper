@@ -98,6 +98,41 @@ describe("compareLabel", () => {
   });
 });
 
+describe("diagnosis-timing — 以 GET 取回（012 P16、data-model §6.4）", () => {
+  const history: DiagnosisTiming = { pending: null, lastUncachedMs: 8_200, lastCachedMs: 14, lastKind: "cached" };
+
+  it("settleTiming recovered：只寫 lastRecoveredMs／lastRecoveredCached／lastKind，不動非快取與快取兩欄", () => {
+    const t = settleTiming(startTiming(history, "job-9", 1_000), "job-9", false, 31_000, { recovered: true });
+    expect(t).toEqual({
+      pending: null,
+      lastUncachedMs: 8_200,
+      lastCachedMs: 14,
+      lastRecoveredMs: 30_000,
+      lastRecoveredCached: false,
+      lastKind: "recovered",
+    });
+  });
+
+  it("settleTiming recovered：jobId 不符時原樣回傳", () => {
+    const started = startTiming(history, "job-9", 0);
+    expect(settleTiming(started, "job-x", false, 10, { recovered: true })).toBe(started);
+  });
+
+  it("compareLabel recovered：主字顯示本次耗時，快取與否照當次結果", () => {
+    const uncached = settleTiming(startTiming(history, "j", 0), "j", false, 12_340, { recovered: true });
+    expect(compareLabel(uncached)).toEqual({ primary: "12.3 s", cached: false });
+    const cached = settleTiming(startTiming(history, "j", 0), "j", true, 14, { recovered: true });
+    expect(compareLabel(cached)).toEqual({ primary: "快取 · 14 ms", cached: true });
+  });
+
+  it("compareBars recovered → null；之後的快取診斷仍以原本的非快取耗時為「上一次」", () => {
+    const recovered = settleTiming(startTiming(history, "j", 0), "j", true, 30_000, { recovered: true });
+    expect(compareBars(recovered)).toBeNull();
+    const next = settleTiming(startTiming(recovered, "j2", 0), "j2", true, 20);
+    expect(compareBars(next)?.[1]).toMatchObject({ kind: "previous", value: "8.2 s" });
+  });
+});
+
 describe("compareBars", () => {
   it("非快取、無紀錄、只有 pending → null", () => {
     expect(compareBars(undefined)).toBeNull();

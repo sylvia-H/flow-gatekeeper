@@ -5,6 +5,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
+    "test": "vitest run",
     "test:e2e": "vitest run --mode e2e"
   },
   "dependencies": {

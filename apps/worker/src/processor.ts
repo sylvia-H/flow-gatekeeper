@@ -1,15 +1,32 @@
 import { randomUUID } from "node:crypto";
 import { DelayedError, UnrecoverableError } from "bullmq";
+import { z } from "zod";
 import { DiagnosisResultSchema } from "@flow-gatekeeper/contracts";
-import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisResult } from "@flow-gatekeeper/contracts";
+import type {
+  AiStreamEvent,
+  DiagnosisJobPayload,
+  DiagnosisJobProgress,
+  DiagnosisJobReturnValue,
+  DiagnosisResult,
+} from "@flow-gatekeeper/contracts";
 import { AiProviderError } from "./ai/provider.js";
 import type { AiProvider, AiStreamResult } from "./ai/provider.js";
 import { buildPrompt, PROMPT_VERSION } from "./ai/prompt.js";
+import {
+  AI_FAIL_TTL_SECONDS,
+  AI_METRIC_TTL_SECONDS,
+  AI_RESULT_TTL_SECONDS,
+  aiFailKey,
+  aiMetricKey,
+  aiResultKey,
+} from "./cache/job-keys.js";
 import { buildDiagnosisSignature } from "./cache/signature.js";
 import type { ProcessorStore } from "./cache/redis-store.js";
 import { isEmptyContext } from "./context/context-builder.js";
 import type { DiagnosisContext } from "./context/context-builder.js";
 import type { DiagnosisRepository } from "./diagnosis-repository.js";
+import { KEEPALIVE_INTERVAL_MS } from "./lib/bullmq-options.js";
+import { createKeepalive } from "./lib/keepalive.js";
 import type { LivenessTracker } from "./lib/liveness.js";
 import type { MetricsCollector } from "./lib/metrics-collector.js";
 import { parseResult } from "./lib/parse-result.js";
@@ -18,10 +35,16 @@ import { DIAGNOSIS_RESULT_JSON_SCHEMA } from "./lib/zod-json-schema.js";
 /**
  * 診斷 job processor（自 main.ts 抽出，以依賴注入讓並發／重試語意可單元測試）。
  *
- * 流程：context → signature → cache 命中寫 trigger 後回 ai/done(cached:true)；未命中取 `ai-lock` 去重
+ * 流程：冪等短路（`ai-result:<jobId>` → `diagnoses`，命中即補寫並回 ai/done(cached:false)）
+ *   → context → signature → cache 命中寫 trigger 後回 ai/done(cached:true)；未命中取 `ai-lock` 去重
  *   → 取鎖後**再查一次 cache**（等待者搶到鎖時，前一個持鎖者多半已寫好結果）→ LLM 限流窗
  *   → AiProvider 串流（token → Pub/Sub `ai-stream:<jobId>`，逾時以 AbortSignal 真正中止）
- *   → parseResult → 寫 diagnoses → 寫 cache → 寫 trigger → ai/done(cached:false)。
+ *   → parseResult → 暫存 ai-result → 寫 diagnoses → DEL 暫存 → 寫 cache → 寫 trigger → ai/done(cached:false)。
+ * 取鎖迴圈每輪開頭與取鎖後（限流前）查 `ai-fail:<sig>`：同簽章剛在 LLM 階段失敗就以同 code 失敗、不再打 LLM（D5）。
+ * 每次執行以 keepalive 保證閒置 10 s 至少補送一則 progress（D2）。
+ * 同 jobId 的任何再執行對外結果一致：同一個 result、同一筆 trigger（upsert）、hit／miss 只計一次（ADR-003 D6）。
+ * 成功時兩條路徑都在 ai/done 之後回傳 `DiagnosisJobReturnValue { result, cached }`（BullMQ `returnvalue`，
+ * 經 QueueEvents `completed` 成為權威完成訊號；ai/done 降為 best-effort，ADR-003 D1）。
  *
  * 重試語意：非最終嘗試的失敗只記 log 後 throw（交給 BullMQ 退避重試），**不** publish
  * `ai/error`——否則前端收到錯誤即轉 failed，之後重試即使成功畫面也停在錯誤。最終嘗試（或
@@ -35,8 +58,17 @@ import { DIAGNOSIS_RESULT_JSON_SCHEMA } from "./lib/zod-json-schema.js";
 export interface ProcessorJob {
   readonly data: DiagnosisJobPayload;
   readonly attemptsMade: number;
+  /**
+   * BullMQ 於每次 `moveToActive` 遞增（含 stalled 重派與 `moveToDelayed` 後再執行），處理中的值 ≥ 1；
+   * 012 用作 `DiagnosisJobProgress.execution`（讀到 0 時以 1 代入，research R8）。
+   */
+  readonly attemptsStarted: number;
   readonly opts: { attempts?: number };
-  updateProgress(progress: number): Promise<void>;
+  /**
+   * 只接受 `DiagnosisJobProgress` 物件（012 FR-020）：型別擋下退回純數字的寫法——api relay 與 GET 雖仍相容舊 worker 的數字，
+   * 但數字不帶 attempt／execution，web 就無法判斷換輪。BullMQ 的 `Job.updateProgress(JobProgress)` 結構上相容。
+   */
+  updateProgress(progress: DiagnosisJobProgress): Promise<void>;
   moveToDelayed(timestamp: number, token?: string): Promise<void>;
 }
 
@@ -83,6 +115,32 @@ const RATE_WINDOW_MS = 60_000;
 const RATE_JITTER_MS = 2000;
 /** 關閉中交回佇列時的延遲：給其他副本（或重啟後的本副本）接手的緩衝。 */
 const CLOSING_REQUEUE_DELAY_MS = 1000;
+
+/**
+ * `diagnoses` 寫入失敗（012 FR-027；代理裁決第 18 條）：訊息為固定英文句，Mongo 原始錯誤只進日誌的 `err` 欄位——
+ * 這句會成為 BullMQ `failedReason` 與 `ai/error.message`，web 以 `persist_failed` 字樣對應文案。
+ */
+export const PERSIST_FAILED_CODE = "persist_failed";
+export const PERSIST_FAILED_MESSAGE = "persist_failed: diagnosis record could not be written";
+
+/**
+ * `ai-fail:<sig>` 負向標記（012 FR-028；ADR-003 D5；research R7）。寫讀都在 worker 同一份程式碼，不是 api↔worker 傳輸，
+ * 故不進 contracts（P9）。讀回不合法 → DEL 並視為無標記。
+ */
+export const AiFailMarkerSchema = z.object({
+  code: z.string().min(1),
+  message: z.string(),
+  jobId: z.string().min(1),
+  /** 寫入者的 attempt：同 jobId 只有「較晚的 attempt」（自己的重試）才忽略，兄弟執行（stalled 重派的同一 attempt）照標記失敗。 */
+  attempt: z.number().int().positive(),
+  /** 原失敗是否可重試：等待者以同一語意失敗（不可重試者第一次 attempt 就轉 UnrecoverableError）。 */
+  retryable: z.boolean(),
+  at: z.string(),
+});
+export type AiFailMarker = z.infer<typeof AiFailMarkerSchema>;
+
+/** 冪等短路命中的來源（info `idempotent short-circuit` 的 `source` 欄位；e2e 場景 7 印出）。 */
+export type IdempotentSource = "ai-result" | "diagnoses";
 
 /** 空脈絡短路的錯誤碼與訊息（前端 humanizeError 對短訊息原文照顯）。 */
 export const NO_CONTEXT_CODE = "no_context";
@@ -162,14 +220,11 @@ export function createProcessor(deps: ProcessorDeps) {
   const isClosing = deps.isClosing ?? (() => false);
   const pollIntervalMs = config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
-  return async (job: ProcessorJob, token?: string): Promise<void> => {
+  return async (job: ProcessorJob, token?: string): Promise<DiagnosisJobReturnValue> => {
     const { jobId, machineId, requestedBy, windowMinutes } = job.data;
     // `attemptsMade` 於一次嘗試結束（完成／失敗）時才遞增，故處理第 N 次嘗試時其值為 N-1。
     const attempt = job.attemptsMade + 1;
     const isFinalAttempt = attempt >= (job.opts.attempts ?? 1);
-    // 快取命中／未命中**只在第一次嘗試計**：hitRate 的語意是「每個診斷請求恰好一筆」。否則一次 LLM 逾時的診斷會記多筆
-    // 未命中，在 LLM 不穩期間系統性壓低回報的 hitRate，也破壞「每個 job 恰好一筆」的不變量。
-    const isFirstAttempt = job.attemptsMade === 0;
     // 長流程以 child logger 綁定一次（contracts/log-fields.md §2 規則 3）。
     const jl = logger.child({ jobId, machineId, attempt });
     const emit = (event: AiStreamEvent): void => publishEvent(publisher, event, jl);
@@ -180,6 +235,9 @@ export function createProcessor(deps: ProcessorDeps) {
 
     /** 把 job 交回佇列（不消耗 attempts）；沒有 token 時（非 BullMQ 呼叫）退回一般 throw。 */
     const requeueAt = async (timestamp: number, reason: string): Promise<never> => {
+      // 交回佇列前先停 keepalive（冪等，finally 會再停一次）：moveToDelayed 之後若還補送 progress，api 會把已延後的 job
+      // 轉成 `active` 送到前端，蓋掉 relay 的 waiting 語意。
+      keepalive.stop();
       if (token === undefined) throw new Error(reason);
       await job.moveToDelayed(timestamp, token);
       throw new DelayedError(reason);
@@ -201,15 +259,120 @@ export function createProcessor(deps: ProcessorDeps) {
       throw retryable ? new Error(message, { cause }) : new UnrecoverableError(message);
     };
 
+    /**
+     * 快取命中／未命中**每個 jobId 只計一次**（012 FR-026）：hitRate 的語意是「每個診斷請求恰好一筆」。以
+     * `SET ai-metric:<jobId> NX` 取代原本的「只在第一次嘗試計」——stalled 重派與 moveToDelayed 不遞增 attemptsMade，
+     * 只看嘗試次數會讓同一個 job 記兩筆。Redis 錯誤照常拋出走重試（與其他 cache 指令一致）。
+     */
+    const claimMetric = (): Promise<boolean> => store.setIfAbsent(aiMetricKey(jobId), "1", AI_METRIC_TTL_SECONDS);
+
+    /** 讀回 JSON 並過 `DiagnosisResultSchema`；不合法回 null（呼叫端決定是否 DEL）。 */
+    const parseStoredResult = (raw: string): DiagnosisResult | null => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = undefined;
+      }
+      const checked = DiagnosisResultSchema.safeParse(parsed);
+      return checked.success ? checked.data : null;
+    };
+
+    /** `insertDiagnosis` 失敗一律轉 `persist_failed`（可重試；Mongo 原始錯誤只進 `err`）。 */
+    const persistDiagnosis = async (result: DiagnosisResult): Promise<void> => {
+      try {
+        await repo.insertDiagnosis({ machineId, jobId, result });
+      } catch (err) {
+        await fail(PERSIST_FAILED_CODE, PERSIST_FAILED_MESSAGE, true, err);
+      }
+    };
+
+    /**
+     * 冪等短路（012 FR-024；ADR-003 D6；data-model §5 步驟 2～4）：同 jobId 的再執行（重試、stalled 重派、延後後再跑）
+     * 若前一次已拿到 LLM 結果，就只補做未完成的寫入，不建 context、不查快取、不取鎖、不打 LLM。
+     * (i) `ai-result:<jobId>`：前一次 LLM 成功但 `diagnoses` 未確認落地 → 補寫 diagnoses 後 DEL 暫存；
+     * (ii) `diagnoses` 已有該 jobId → 直接沿用。
+     * 不回填 `ai-cache:<sig>`、不動 `ai-fail:<sig>`（短路不建 context，沒有簽章；P11）。
+     */
+    const replayCompleted = async (): Promise<{ result: DiagnosisResult; source: IdempotentSource } | null> => {
+      const resultKey = aiResultKey(jobId);
+      const raw = await store.get(resultKey);
+      if (raw !== null) {
+        const staged = parseStoredResult(raw);
+        if (staged) {
+          await persistDiagnosis(staged);
+          // 暫存刪不掉只 warn：diagnoses 已落地，下次會由 (i) 再補寫一次（jobId unique，視為成功），TTL 兜底。
+          await store.del(resultKey).catch((err: unknown) => {
+            jl.warn({ err }, "ai-result 暫存刪除失敗（將由 TTL 過期回收）");
+          });
+          return { result: staged, source: "ai-result" };
+        }
+        jl.warn({ source: "ai-result" }, "ai-result 暫存內容不符 schema，已刪除並視為無");
+        await store.del(resultKey);
+      }
+      const persisted = await repo.findDiagnosisResult(jobId, () => {
+        jl.warn({ source: "diagnoses" }, "diagnoses 既有紀錄的 result 不符 schema，視為查無");
+      });
+      return persisted ? { result: persisted, source: "diagnoses" } : null;
+    };
+
+    /** 短路命中後的收尾：與 LLM 路徑同一順序（trigger → 100 → ai/done → return），一律 cached:false。 */
+    const finishReplay = async ({
+      result,
+      source,
+    }: {
+      result: DiagnosisResult;
+      source: IdempotentSource;
+    }): Promise<DiagnosisJobReturnValue> => {
+      await repo.upsertTrigger({ machineId, jobId, requestedBy, cached: false });
+      await report(100);
+      await emitTerminal({ type: "ai/done", jobId, attempt, cached: false, result });
+      jl.info({ source }, "idempotent short-circuit");
+      return { result, cached: false };
+    };
+
+    /**
+     * 同 jobId 的再執行（重試、stalled 重派、延後後再跑）。開頭短路沒命中、但之後在快取命中時，前一次執行可能剛好
+     * 在這段期間寫完 diagnoses（例如等鎖期間舊執行完成）——回 cached:true 會與舊執行的 cached:false 不一致（ADR-003 D3）。
+     */
+    const isReExecution = job.attemptsStarted > 1 || job.attemptsMade > 0;
+
+    /**
+     * 進度回報（012 FR-020；data-model §5）：一律送 `DiagnosisJobProgress` 物件，帶本次的 attempt 與 execution，
+     * 並記下目前里程碑、重設 keepalive。`execution`＝`attemptsStarted`（BullMQ 於 moveToActive 遞增）；讀到 0
+     * （非 BullMQ 呼叫）以 1 代入。
+     */
+    const execution = Math.max(1, job.attemptsStarted);
+    let milestone = 0;
+    /**
+     * keepalive（012 FR-019；ADR-003 D2）：任何對外事件（report、ai/token）重設；閒置 `KEEPALIVE_INTERVAL_MS` 就以目前
+     * 里程碑補送一次 progress——涵蓋等待去重鎖、首 token 前、寫庫期間。補送失敗吞掉、本次執行至多 warn 一則（P12）；
+     * 成功的補送不記日誌（FR-047）。
+     */
+    const keepalive = createKeepalive({
+      intervalMs: KEEPALIVE_INTERVAL_MS,
+      onIdle: () => job.updateProgress({ value: milestone, attempt, execution }),
+      onError: (err) => jl.warn({ err, milestone }, "keepalive 進度補送失敗（本次執行不再重複記錄）"),
+    });
+    const report = (value: number): Promise<void> => {
+      milestone = value;
+      keepalive.touch();
+      return job.updateProgress({ value, attempt, execution });
+    };
+
     try {
       // 進度里程碑綁真實階段（而非計時估算），前端進度條才反映實際卡在哪一步：0=job active、20=context 返回、40=取鎖將呼叫 LLM、
       // 60=首個 token、80=parseResult 成功、100=寫庫/快取（cached 直接 100）。
       jl.info("job active");
-      await job.updateProgress(0);
+      await report(0);
+
+      // 冪等短路必須在 buildContext／readCache 之前：重派那次若先查到快取，會記一筆 hit、標成 cached:true（SC-004）。
+      const replayed = await replayCompleted();
+      if (replayed) return await finishReplay(replayed);
 
       const context = await buildContext({ machineId, windowMinutes });
       touch();
-      await job.updateProgress(20);
+      await report(20);
 
       // 空脈絡短路：不查 cache、不取鎖、不吃 AI_RPM 額度、不打 LLM。重試結果也不會變 → 不可重試，
       // 第一次嘗試就通知前端；UnrecoverableError 讓 BullMQ 不退避重試，main.ts 的 failed handler
@@ -230,6 +393,49 @@ export function createProcessor(deps: ProcessorDeps) {
       });
       const cacheKey = `ai-cache:${sig}`;
       const lockKey = `ai-lock:${sig}`;
+      const failKey = aiFailKey(sig);
+
+      /**
+       * LLM 階段失敗（ai_timeout、provider 錯誤、schema_invalid 含 safety／max_tokens）：先寫 `ai-fail:<sig>`（EX 10）再
+       * `fail()`，讓同簽章的等待者與新 job 不再各自打 LLM（ADR-003 D5）。不可重試者也寫：同簽章＝同一份 prompt。
+       * 寫入失敗只 warn——標記只是減少重複呼叫，不該蓋掉原本的失敗。no_context、persist_failed、限流延後不走這裡。
+       */
+      const failLlm = async (code: string, message: string, retryable: boolean, cause: unknown): Promise<never> => {
+        const marker: AiFailMarker = { code, message, jobId, attempt, retryable, at: new Date(now()).toISOString() };
+        try {
+          await store.setWithTtl(failKey, JSON.stringify(marker), AI_FAIL_TTL_SECONDS);
+          jl.info({ sig, code }, "ai-fail written");
+        } catch (err) {
+          jl.warn({ err, sig, code }, "ai-fail 標記寫入失敗");
+        }
+        return await fail(code, message, retryable, cause);
+      };
+
+      /**
+       * 讀 `ai-fail:<sig>`（P13）：取鎖迴圈每輪開頭，與取得鎖、double-check 之後、限流 INCR 之前兩處。標記是自己寫的
+       * （`jobId` 相同）→ 忽略：持鎖者自己的重試要能真的再試一次。看到別人的標記 → 以同 code 失敗：非最終 attempt
+       * 只拋可重試錯誤（消耗一次 attempt），最終 attempt 送同 code 的 ai/error。
+       */
+      const checkFailMarker = async (): Promise<void> => {
+        const raw = await store.get(failKey);
+        if (raw === null) return;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          parsed = undefined;
+        }
+        const marker = AiFailMarkerSchema.safeParse(parsed);
+        if (!marker.success) {
+          jl.warn({ sig }, "ai-fail 標記內容不符 schema，已刪除並視為無");
+          await store.del(failKey);
+          return;
+        }
+        // 自己前一次 attempt 留下的標記 → 忽略（重試要能真的再試一次）；同 attempt 的兄弟執行不忽略。
+        if (marker.data.jobId === jobId && marker.data.attempt < attempt) return;
+        jl.warn({ sig, code: marker.data.code }, "ai-fail hit");
+        await fail(marker.data.code, marker.data.message, marker.data.retryable, null);
+      };
 
       /**
        * cache 讀回也要過 schema：任何能寫 Redis 的一方都能塞進畸形或惡意內容，不驗證就等於
@@ -238,14 +444,8 @@ export function createProcessor(deps: ProcessorDeps) {
       const readCache = async (): Promise<DiagnosisResult | null> => {
         const raw = await store.get(cacheKey);
         if (raw === null) return null;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(raw);
-        } catch {
-          parsed = undefined;
-        }
-        const checked = DiagnosisResultSchema.safeParse(parsed);
-        if (checked.success) return checked.data;
+        const cached = parseStoredResult(raw);
+        if (cached) return cached;
         jl.warn({ sig }, "cache 內容不符 schema，已刪除並視為未命中");
         await store.del(cacheKey);
         return null;
@@ -256,22 +456,32 @@ export function createProcessor(deps: ProcessorDeps) {
        * 真正由 LLM 產生的結果（避免同一份結果被複製成多筆），但每次觸發仍要留稽核紀錄。
        * 順序與 LLM 路徑一致：先寫 trigger、進度 100，最後才 await ai/done——寫入失敗時照常 throw
        * 走重試，前端不會先收到 ai/done、之後又看到同一個 job 失敗。
+       * 命中時回傳 BullMQ `returnvalue`（ADR-003 D1），未命中回 null。
+       * 再執行時先重跑一次冪等短路：前一次執行若已落地（diagnoses 或 ai-result），照短路語意回 cached:false。
        */
-      const replyCached = async (): Promise<boolean> => {
+      const replyCached = async (): Promise<DiagnosisJobReturnValue | null> => {
         const result = await readCache();
-        if (!result) return false;
+        if (!result) return null;
         // 命中在此計、未命中在真正呼叫 LLM 前計：等待迴圈每輪都會查 cache，於此計未命中會失真。
-        if (isFirstAttempt) metrics.recordCacheHit();
-        await repo.insertTrigger({ machineId, jobId, requestedBy, cached: true });
-        await job.updateProgress(100);
+        // claim 失敗（`!first`）＝同 jobId 已有別的執行計過——包括「舊執行落後於重派執行」：舊執行的 attemptsStarted
+        // 仍是 1、看起來像第一次執行，卻可能在重派執行寫完 diagnoses 之後才走到這裡。兩種情況都先重查冪等短路。
+        const first = await claimMetric();
+        if (isReExecution || !first) {
+          const late = await replayCompleted();
+          if (late) return await finishReplay(late);
+        }
+        if (first) metrics.recordCacheHit();
+        await repo.upsertTrigger({ machineId, jobId, requestedBy, cached: true });
+        await report(100);
         await emitTerminal({ type: "ai/done", jobId, attempt, cached: true, result });
         jl.info({ sig }, "cache hit");
-        return true;
+        return { result, cached: true };
       };
 
-      const callLlmAndReply = async (): Promise<void> => {
-        await job.updateProgress(40);
-        if (isFirstAttempt) metrics.recordCacheMiss();
+      /** LLM 路徑；成功時回傳 BullMQ `returnvalue`（ADR-003 D1），失敗一律經 `fail()` 拋出。 */
+      const callLlmAndReply = async (): Promise<DiagnosisJobReturnValue> => {
+        await report(40);
+        if (await claimMetric()) metrics.recordCacheMiss();
         jl.info({ sig, provider: ai.id, model: ai.model }, "LLM call");
 
         // 逾時在核心統一處理：signal 交給 adapter 中止底層串流，逾時後不再有任何 token 外送。
@@ -279,7 +489,7 @@ export function createProcessor(deps: ProcessorDeps) {
         let seq = 0;
         // 首個 token 的 60 里程碑非致命：吞掉更新失敗、保留 promise 供後續 await，確保 60 先於 80。
         let firstTokenProgress: Promise<void> = Promise.resolve();
-        // 延遲以呼叫外圍計時（含首 token 前等待），只記成功樣本；不設 isFirstAttempt 閘門——
+        // 延遲以呼叫外圍計時（含首 token 前等待），只記成功樣本；不設 ai-metric 閘門——
         // 樣本單位是「一次成功的 LLM 呼叫」而非「一個 job」。
         const startedAt = now();
         let out: AiStreamResult;
@@ -292,20 +502,21 @@ export function createProcessor(deps: ProcessorDeps) {
               onToken: (text) => {
                 if (signal.aborted) return;
                 touch();
+                keepalive.touch();
                 const s = seq++;
                 emit({ type: "ai/token", jobId, attempt, seq: s, text });
-                if (s === 0) firstTokenProgress = job.updateProgress(60).catch(() => {});
+                if (s === 0) firstTokenProgress = report(60).catch(() => {});
               },
             }),
             signal,
           );
         } catch (err) {
           if (signal.aborted) {
-            return await fail("ai_timeout", `AI streaming timeout after ${config.aiTimeoutMs}ms`, true, err);
+            return await failLlm("ai_timeout", `AI streaming timeout after ${config.aiTimeoutMs}ms`, true, err);
           }
           const pe = err instanceof AiProviderError ? err : null;
           const message = err instanceof Error ? err.message : String(err);
-          return await fail(pe?.code ?? "provider_error", message, pe?.retryable ?? true, err);
+          return await failLlm(pe?.code ?? "provider_error", message, pe?.retryable ?? true, err);
         }
         const latencyMs = now() - startedAt;
         jl.info({ finishReason: out.finishReason, usage: out.usage }, "LLM stream finished");
@@ -315,10 +526,10 @@ export function createProcessor(deps: ProcessorDeps) {
         // 截斷代表同一輸入在同一 AI_MAX_OUTPUT_TOKENS 下多半陷入重複輸出，退避重試只會再燒兩次
         // 上限額度的 token、延後使用者看到失敗。
         if (out.finishReason === "safety") {
-          return await fail("schema_invalid", "AI 回應遭供應商安全機制攔截（finishReason=safety）", false, null);
+          return await failLlm("schema_invalid", "AI 回應遭供應商安全機制攔截（finishReason=safety）", false, null);
         }
         if (out.finishReason === "max_tokens") {
-          return await fail("schema_invalid", "AI 回應達輸出上限被截斷（finishReason=max_tokens）", false, null);
+          return await failLlm("schema_invalid", "AI 回應達輸出上限被截斷（finishReason=max_tokens）", false, null);
         }
         // 延遲只記完整回應的樣本：截斷／安全攔截的時間長短取決於在哪裡被切，混進來會扭曲 avg／p95。
         metrics.recordLatency(latencyMs);
@@ -327,51 +538,84 @@ export function createProcessor(deps: ProcessorDeps) {
         try {
           result = parseResult(out.text);
         } catch (err) {
-          return await fail("schema_invalid", err instanceof Error ? err.message : String(err), true, err);
+          return await failLlm("schema_invalid", err instanceof Error ? err.message : String(err), true, err);
         }
         await firstTokenProgress;
-        await job.updateProgress(80);
+        await report(80);
 
-        // 先落地 diagnoses 再寫 cache：若中途失敗而重試，cache 仍是空的 → 重算並再 insert
-        // （jobId unique，重複 insert 視為成功）。反過來的順序會讓重試命中 cache、診斷永不落地。
-        await repo.insertDiagnosis({ machineId, jobId, result });
-        await store.setWithTtl(cacheKey, JSON.stringify(result), config.cacheTtlSeconds);
-        await repo.insertTrigger({ machineId, jobId, requestedBy, cached: false });
-        await job.updateProgress(100);
+        // 寫庫順序（012 FR-027；data-model §5 步驟 10）：
+        // 1. 先把結果暫存到 `ai-result:<jobId>`：之後任何一步失敗而重試（或被 stalled 重派），開頭的冪等短路 (i)
+        //    會命中暫存、只補做寫庫，不再打 LLM。
+        // 2. 再落地 diagnoses：失敗轉 persist_failed（可重試，重試時由短路 (i) 只重做這一步）。
+        // 3. 落地後 DEL 暫存（失敗只 warn，TTL 兜底）。
+        // 4. 最後才寫 cache——不變量「快取有值就代表已落庫」：反過來的順序會讓重試命中 cache、診斷永不落地。寫 cache 為 best-effort。
+        // 暫存是 best-effort：寫不進去只 warn、照常寫 diagnoses——diagnoses 一旦落地，之後任何一步失敗都能由短路 (ii) 回收；
+        // 讓暫存失敗中斷流程反而會讓已拿到的 LLM 結果作廢、重試再打一次 LLM。
+        await store.setWithTtl(aiResultKey(jobId), JSON.stringify(result), AI_RESULT_TTL_SECONDS).catch((err: unknown) => {
+          jl.warn({ err }, "ai-result 暫存寫入失敗（照常寫 diagnoses）");
+        });
+        await persistDiagnosis(result);
+        await store.del(aiResultKey(jobId)).catch((err: unknown) => {
+          jl.warn({ err }, "ai-result 暫存刪除失敗（將由 TTL 過期回收）");
+        });
+        // 快取是 best-effort：diagnoses 已落地，這裡失敗只 warn——拋出會讓已完成的診斷走重試（最後一次 attempt 甚至轉失敗），
+        // 而重試也只會由短路 (ii) 回收同一份結果、同樣不回填快取（P11）。
+        await store.setWithTtl(cacheKey, JSON.stringify(result), config.cacheTtlSeconds).catch((err: unknown) => {
+          jl.warn({ err, sig }, "ai-cache 寫入失敗（diagnoses 已落地，照常完成）");
+        });
+        // 成功即清除負向標記（含自己前一次嘗試留下的）；刪不掉只 warn，TTL 10 s 兜底。
+        await store.del(failKey).catch((err: unknown) => {
+          jl.warn({ err, sig }, "ai-fail 標記刪除失敗（將由 TTL 過期回收）");
+        });
+        await repo.upsertTrigger({ machineId, jobId, requestedBy, cached: false });
+        await report(100);
         await emitTerminal({ type: "ai/done", jobId, attempt, cached: false, result });
         jl.info("job completed");
+        return { result, cached: false };
       };
 
-      if (await replyCached()) return;
+      // returnvalue 由 QueueEvents `completed` 帶給 api relay，作為權威完成訊號（ADR-003 D1）；ai/done 仍照送（best-effort）。
+      // 五個 return 點（冪等短路、首查命中、取鎖後 double-check 命中、LLM 成功、等待者輪詢命中）都回同一形狀。
+      const firstHit = await replyCached();
+      if (firstHit) return firstHit;
 
       // 「取鎖或等待」迴圈：lock TTL（≥ AI_TIMEOUT_MS + LOCK_TTL_MARGIN_MS，啟動時驗證）保證進度——持鎖者崩潰時
       // 最遲於 TTL 後鎖過期，某個等待者搶到鎖改走計算路徑。
       const deadline = now() + config.aiTimeoutMs + config.lockTtlSeconds * 1000 + 5000;
       for (;;) {
         touch();
+        // (a) 每輪開頭（新 job 第一輪與等待者每次輪詢）：同簽章剛失敗就不再取鎖、不打 LLM。
+        await checkFailMarker();
         const lockToken = randomUUID();
         if (await store.tryAcquireLock(lockKey, lockToken, config.lockTtlSeconds)) {
-          let rateLimitedUntil: number | null = null;
+          let rateLimitedUntil: number;
           try {
             // double-check：等待者搶到鎖時，前一個持鎖者多半剛寫好 cache 並放鎖——不回頭查就會
             // 對同一 signature 再打一次 LLM，去重形同虛設。
-            if (await replyCached()) return;
+            const lockedHit = await replyCached();
+            if (lockedHit) return lockedHit;
+            // 再執行（或同 jobId 已有別的執行計過 hit／miss）且快取未命中：那次執行可能已落地 diagnoses 卻在之後失敗並放鎖
+            // ——不再查一次冪等短路就會吃 AI_RPM、重打 LLM（ADR-003 D3／D6；裁決 49 延伸到未命中路徑）。
+            // 這裡只「看」ai-metric 標記、不 claim：claim 留到真正打 LLM 時（callLlmAndReply）；若在此 claim，限流延後的
+            // 那次就會吃掉標記，延後後真的打 LLM 的那次反而記不到 miss。
+            const countedElsewhere = (await store.get(aiMetricKey(jobId))) !== null;
+            if (isReExecution || countedElsewhere) {
+              const late = await replayCompleted();
+              if (late) return await finishReplay(late);
+            }
+            // (b) 取鎖後、限流 INCR 前：擋「持鎖者寫標記放鎖、等待者恰好在 (a) 與取鎖之間」的窗口，被擋下的 job 不吃 AI_RPM。
+            await checkFailMarker();
 
             // LLM 限流放在取鎖且確認未命中之後：只有「真的要打 LLM」才計數，cache 命中與
             // 等待者不吃額度（BullMQ 的 limiter 只能計 job 啟動數，做不到這點）。
             const windowIndex = Math.floor(now() / RATE_WINDOW_MS);
             // key 帶窗序號，TTL 取兩個窗長：首次 INCR 可能發生在窗中段，TTL 只設一窗會提早歸零。
             const used = await store.incrementWindow(`ai-rpm:${windowIndex}`, (RATE_WINDOW_MS / 1000) * 2);
-            if (used > config.aiRpm) {
-              // 加 0–2 秒隨機抖動：同一窗被擋下的 job 若全部在窗起點同時醒來，會一起搶鎖、一起打滿新窗。
-              rateLimitedUntil = (windowIndex + 1) * RATE_WINDOW_MS + Math.floor(Math.random() * RATE_JITTER_MS);
-              jl.warn(
-                { used, limit: config.aiRpm, until: rateLimitedUntil },
-                "超過每分鐘 LLM 呼叫上限，延後到下一個窗",
-              );
-            } else {
-              await callLlmAndReply();
-            }
+            // `return await`：finally 的放鎖必須等 LLM 路徑整個結束（含寫庫、ai/done）才執行。
+            if (used <= config.aiRpm) return await callLlmAndReply();
+            // 加 0–2 秒隨機抖動：同一窗被擋下的 job 若全部在窗起點同時醒來，會一起搶鎖、一起打滿新窗。
+            rateLimitedUntil = (windowIndex + 1) * RATE_WINDOW_MS + Math.floor(Math.random() * RATE_JITTER_MS);
+            jl.warn({ used, limit: config.aiRpm, until: rateLimitedUntil }, "超過每分鐘 LLM 呼叫上限，延後到下一個窗");
           } finally {
             // compare-and-del：只刪自己的鎖。釋放失敗（Redis 斷線）不可蓋掉原本的錯誤——鎖會靠 TTL 自然過期。
             await store.releaseLock(lockKey, lockToken).catch((err: unknown) => {
@@ -379,17 +623,17 @@ export function createProcessor(deps: ProcessorDeps) {
             });
           }
           // 延後而非失敗：不消耗 attempts、不打擾前端；放鎖後才延後，其他 job 仍可取鎖或命中 cache。
-          if (rateLimitedUntil !== null) await requeueAt(rateLimitedUntil, "LLM rate limited");
-          return;
+          return await requeueAt(rateLimitedUntil, "LLM rate limited");
         }
 
         // 取不到鎖：他人正在算 → 輪詢共用其結果。
-        if (await replyCached()) return;
+        const waitHit = await replyCached();
+        if (waitHit) return waitHit;
         if (isClosing()) {
           // 關閉中不再空等：等待上限遠長於 compose 的 stop_grace_period，空等只會被 SIGKILL，
           // 再靠 stalled 重派（還吃掉一次 maxStalledCount）。直接交回佇列，由重啟後的行程接手。
           jl.info("worker 關閉中，放棄等待並把 job 交回佇列");
-          await requeueAt(now() + CLOSING_REQUEUE_DELAY_MS, "worker closing");
+          return await requeueAt(now() + CLOSING_REQUEUE_DELAY_MS, "worker closing");
         }
         if (now() > deadline) {
           throw new Error(`dedupe wait exceeded for ${jobId}`); // 最終保護：交還 attempts 重試
@@ -397,6 +641,7 @@ export function createProcessor(deps: ProcessorDeps) {
         await sleep(pollIntervalMs);
       }
     } finally {
+      keepalive.stop();
       liveness?.end(slot);
     }
   };

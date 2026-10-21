@@ -6,7 +6,9 @@ import type { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisResult } from "@flow-gatekeeper/contracts";
 import { PROMPT_VERSION } from "../ai/prompt.js";
+import { AiProviderError } from "../ai/provider.js";
 import type { AiProvider, AiStreamRequest, AiStreamResult } from "../ai/provider.js";
+import { AI_FAIL_TTL_SECONDS, aiFailKey } from "../cache/job-keys.js";
 import { createRedisStore } from "../cache/redis-store.js";
 import type { ProcessorStore } from "../cache/redis-store.js";
 import { buildDiagnosisSignature } from "../cache/signature.js";
@@ -91,11 +93,18 @@ class CollectingPublisher {
 class MemoryRepo implements DiagnosisRepository {
   readonly diagnoses: string[] = [];
   readonly triggers: { jobId: string; cached: boolean }[] = [];
-  async insertDiagnosis(doc: { jobId: string }) {
+  private readonly results = new Map<string, DiagnosisResult>();
+  async insertDiagnosis(doc: { jobId: string; result: DiagnosisResult }) {
+    if (this.results.has(doc.jobId)) return; // 與 Mongo jobId unique 同語意：重複視為成功
+    this.results.set(doc.jobId, doc.result);
     this.diagnoses.push(doc.jobId);
   }
-  async insertTrigger(doc: { jobId: string; cached: boolean }) {
+  async upsertTrigger(doc: { jobId: string; cached: boolean }) {
+    if (this.triggers.some((t) => t.jobId === doc.jobId)) return; // $setOnInsert：先寫者勝
     this.triggers.push({ jobId: doc.jobId, cached: doc.cached });
+  }
+  async findDiagnosisResult(jobId: string) {
+    return this.results.get(jobId) ?? null;
   }
 }
 
@@ -148,6 +157,7 @@ function makeJob(jobId: string, machineId: string): ProcessorJob {
   return {
     data,
     attemptsMade: 0,
+    attemptsStarted: 1,
     opts: { attempts: 3 },
     async updateProgress() {},
     async moveToDelayed() {},
@@ -420,6 +430,88 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("RedisStore × 真 Redis（�
       const stored = await raw.get(cacheKeyRaw);
       expect(stored === null ? null : (JSON.parse(stored) as unknown)).toEqual(VALID_RESULT);
       expect(publisher.events.at(-1)).toMatchObject({ type: "ai/done", cached: false });
+    });
+  });
+
+  describe("(g) setIfAbsent：SET NX EX 一次性標記（012 FR-026、P9）", () => {
+    it("第一次回 true 並帶 TTL；第二次（另一副本）回 false、值與 TTL 不被覆寫", async () => {
+      const key = `ai-metric:g-${randomUUID()}`;
+      expect(await storeA.setIfAbsent(key, "1", 86_400)).toBe(true);
+      const ttl = await raw.pttl(`${PREFIX}${key}`);
+      expect(ttl).toBeGreaterThan(86_395_000);
+      expect(ttl).toBeLessThanOrEqual(86_400_000);
+
+      // 另一副本以不同值、較短 TTL 再寫：NX 擋下，原值與原 TTL 不變。
+      expect(await storeB.setIfAbsent(key, "2", 5)).toBe(false);
+      expect(await raw.get(`${PREFIX}${key}`)).toBe("1");
+      expect(await raw.pttl(`${PREFIX}${key}`)).toBeGreaterThan(86_390_000);
+    });
+
+    it("兩個副本並發 20 次，恰好只有一次回 true", async () => {
+      const key = `ai-metric:g2-${randomUUID()}`;
+      const results = await Promise.all(
+        Array.from({ length: 20 }, (_, i) => (i % 2 === 0 ? storeA : storeB).setIfAbsent(key, String(i), 60)),
+      );
+      expect(results.filter(Boolean)).toHaveLength(1);
+    });
+
+    it("TTL 到期後可再次寫入", async () => {
+      const key = `ai-metric:g3-${randomUUID()}`;
+      expect(await storeA.setIfAbsent(key, "1", 1)).toBe(true);
+      await waitUntilExpired(raw, `${PREFIX}${key}`, 3000);
+      expect(await storeB.setIfAbsent(key, "1", 1)).toBe(true);
+    });
+  });
+
+  describe("(h) ai-fail:<sig> 負向標記（012 T064；SC-007、ADR-003 D5）", () => {
+    const marker = () =>
+      JSON.stringify({ code: "provider_error", message: "503 overloaded", jobId: "job-a", at: new Date().toISOString() });
+
+    it("setWithTtl(…, AI_FAIL_TTL_SECONDS)：另一副本 10 s 內可讀、PTTL ≤ 10 s，逾時後消失", async () => {
+      const key = aiFailKey(`h-${randomUUID()}`);
+      const value = marker();
+      await storeA.setWithTtl(key, value, AI_FAIL_TTL_SECONDS);
+      expect(await storeB.get(key)).toBe(value);
+      const ttl = await raw.pttl(`${PREFIX}${key}`);
+      expect(ttl).toBeGreaterThan(9_000);
+      expect(ttl).toBeLessThanOrEqual(10_000);
+
+      await waitUntilExpired(raw, `${PREFIX}${key}`, 12_000);
+      expect(await storeB.get(key)).toBeNull();
+    });
+
+    it("del 生效：持鎖者成功後清除，其他副本立即讀不到", async () => {
+      const key = aiFailKey(`h2-${randomUUID()}`);
+      await storeA.setWithTtl(key, marker(), AI_FAIL_TTL_SECONDS);
+      await storeB.del(key);
+      expect(await storeA.get(key)).toBeNull();
+      expect(await raw.exists(`${PREFIX}${key}`)).toBe(0);
+    });
+
+    it("processor 層：持鎖者 LLM 失敗寫標記後，另一副本同簽章的新 job 不打 LLM、以同 code 失敗", async () => {
+      const machineId = `int-m-${randomUUID()}`;
+      let calls = 0;
+      const failingAi: AiProvider = {
+        id: "int-fake",
+        model: "int-fake-model",
+        streamDiagnosis: async () => {
+          calls += 1;
+          throw new AiProviderError("503 overloaded", { retryable: true, code: "provider_error" });
+        },
+      };
+      const p1 = buildProcessor(storeA, failingAi, { cacheTtlSeconds: 600, lockTtlSeconds: 45 });
+      const p2 = buildProcessor(storeB, failingAi, { cacheTtlSeconds: 600, lockTtlSeconds: 45 });
+
+      await expect(p1.processor(makeJob(`job-${randomUUID()}`, machineId))).rejects.toThrow("503 overloaded");
+      const sig = signatureFor(machineId, failingAi);
+      expect(await raw.pttl(`${PREFIX}${aiFailKey(sig)}`)).toBeGreaterThan(0);
+
+      const last = { ...makeJob(`job-${randomUUID()}`, machineId), attemptsMade: 2 };
+      await expect(p2.processor(last)).rejects.toThrow("503 overloaded");
+      expect(calls).toBe(1);
+      expect(p2.publisher.events).toEqual([
+        expect.objectContaining({ type: "ai/error", code: "provider_error", attempt: 3 }),
+      ]);
     });
   });
 });

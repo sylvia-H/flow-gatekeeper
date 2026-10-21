@@ -14,11 +14,13 @@ import type {
   CreateDiagnosisResponse,
   DiagnosisJobPayload,
 } from "@flow-gatekeeper/contracts";
-import { AiStreamRelayService } from "../websocket/ai-stream-relay.service.js";
+import { JobRoutingRegistry } from "../websocket/job-routing-registry.js";
+import type { JobBinding } from "../websocket/job-routing-registry.js";
 import { MonitoringGateway } from "../websocket/monitoring.gateway.js";
 import { ERROR_LOG_THROTTLE_MS, LogThrottle } from "@flow-gatekeeper/shared/logging";
 import { throttledFields } from "../../lib/throttled-log.js";
 import { getAppLogger } from "../../logging/app-logger.js";
+import { withTimeout } from "./with-timeout.js";
 
 /**
  * 入列（含重複檢查）的逾時上限。producer 連線雖已設為斷線即 reject，但 BullMQ Queue 在首次
@@ -26,8 +28,8 @@ import { getAppLogger } from "../../logging/app-logger.js";
  */
 export const ENQUEUE_TIMEOUT_MS = 5_000;
 
-/** 綁定查詢／建立／清理——JobsService 只需要 relay 的這三個能力（測試可注入 fake）。 */
-export type JobBindingStore = Pick<AiStreamRelayService, "bindJobToClient" | "getBinding" | "deleteBinding">;
+/** 綁定查詢／建立／清理——JobsService 只需要 registry 的這三個能力（測試可注入 fake）。 */
+export type JobBindingStore = Pick<JobRoutingRegistry, "bind" | "get" | "deleteIfCurrent">;
 
 /** 發起連線的在線／授權查詢——JobsService 只需要 Gateway 的這個能力（測試可注入 fake）。 */
 export type ClientPresence = Pick<MonitoringGateway, "isAuthorized">;
@@ -39,14 +41,14 @@ export type ClientPresence = Pick<MonitoringGateway, "isAuthorized">;
  */
 const KNOWN_MACHINE_IDS: ReadonlySet<string> = new Set(MACHINE_IDS);
 
-/** 同 jobId 的 job 已結束（佇列查得到，或綁定已標 completed）時的 409 訊息。 */
+/** 同 jobId 的 job 已結束（佇列查得到，或綁定已標終態）時的 409 訊息。 */
 const JOB_ID_USED_MESSAGE = "jobId 已使用過，請以新的 jobId 重新發起診斷";
 
-class EnqueueTimeoutError extends Error {
-  constructor() {
-    super(`enqueue timed out after ${ENQUEUE_TIMEOUT_MS}ms`);
-  }
-}
+/**
+ * socketId 不是「在線且已授權」的 WS 連線時的 409 訊息（API-4）。POST 與 GET `/diagnoses/:jobId` 共用同一句，
+ * GET 由此 import、不複製字串。
+ */
+export const SOCKET_UNAVAILABLE_MESSAGE = "WebSocket 連線不存在或未授權，請重新連線後再發起診斷";
 
 /**
  * 建立診斷 job（API 只入列與綁定，不跑 long-running，憲章 IV）。
@@ -83,7 +85,7 @@ export class JobsService {
 
   constructor(
     @InjectQueue(DIAGNOSIS_QUEUE) private readonly queue: Queue<DiagnosisJobPayload>,
-    @Inject(AiStreamRelayService) private readonly relay: JobBindingStore,
+    @Inject(JobRoutingRegistry) private readonly bindings: JobBindingStore,
     @Inject(MonitoringGateway) private readonly presence: ClientPresence,
   ) {}
 
@@ -109,18 +111,20 @@ export class JobsService {
       throw new ConflictException({
         statusCode: 409,
         error: "Conflict",
-        message: "WebSocket 連線不存在或未授權，請重新連線後再發起診斷",
+        message: SOCKET_UNAVAILABLE_MESSAGE,
       });
     }
 
-    const existing = this.relay.getBinding(jobId);
+    const existing = this.bindings.get(jobId);
     if (existing) {
-      // 已 completed、綁定只是寬限保留（AR-5，見 `JobBinding.completedAt`）：job 已結束、不會再有
+      // 已 completed／failed、綁定只是寬限保留（AR-5、D12，見 `JobBinding.terminal`）：job 已結束、不會再有
       // job/status，不能當冪等重送回 200 waiting。回應與綁定已刪時 `enqueueOnce` 查到既有 job 的 409 相同，
-      // 且不碰綁定——寬限內晚到的 ai/done 仍要送給原連線。
-      if (existing.completedAt !== undefined) {
+      // 且不碰綁定——寬限內晚到的 ai/* 仍要送給原連線。
+      if (existing.terminal !== undefined) {
         throw new ConflictException(JOB_ID_USED_MESSAGE);
       }
+      // GET 暫定綁定（machineId null，api 重啟後、resolveClaim 之前）期間同 jobId 的 POST 也會走到這裡、得到「另一台機台」
+      // 訊息；web 每次 POST 都用新 jobId，實務上不可達。
       if (existing.machineId !== machineId) {
         throw new ConflictException("jobId 已用於另一台機台的診斷");
       }
@@ -132,7 +136,7 @@ export class JobsService {
 
     // 綁定必須在任何 await 之前建立：早到的 job/status／ai/* 要能找到對象，同一 jobId 的
     // 併發重送也會在上面的檢查命中，而不是各自入列。
-    this.relay.bindJobToClient(jobId, body.socketId, machineId);
+    const binding = this.bindings.bind(jobId, body.socketId, machineId);
 
     const payload: DiagnosisJobPayload = {
       jobId,
@@ -142,7 +146,7 @@ export class JobsService {
       windowMinutes: 5,
     };
 
-    const work = this.enqueueOrUnbind(payload);
+    const work = this.enqueueOrUnbind(payload, binding);
     this.enqueuing.set(jobId, work);
     try {
       await work;
@@ -154,13 +158,16 @@ export class JobsService {
     return { jobId, machineId, status: "waiting" };
   }
 
-  /** 有時限地入列；失敗時解除綁定並轉成對外的 409／503。 */
-  private async enqueueOrUnbind(payload: DiagnosisJobPayload): Promise<void> {
+  /**
+   * 有時限地入列；失敗時解除綁定並轉成對外的 409／503。只刪自己建立的那份（`deleteIfCurrent`）：等待入列期間
+   * 綁定可能已被 GET `/diagnoses/:jobId` 改綁到別的連線，那份不屬於這次失敗的請求。
+   */
+  private async enqueueOrUnbind(payload: DiagnosisJobPayload, binding: Readonly<JobBinding>): Promise<void> {
     const { jobId, machineId } = payload;
     try {
-      await withTimeout(this.enqueueOnce(payload), ENQUEUE_TIMEOUT_MS);
+      await withTimeout(this.enqueueOnce(payload), ENQUEUE_TIMEOUT_MS, "enqueue");
     } catch (err) {
-      this.relay.deleteBinding(jobId);
+      this.bindings.deleteIfCurrent(jobId, binding);
       if (err instanceof ConflictException) throw err;
       this.plog.warn({ jobId, machineId, err }, "diagnosis enqueue failed, redis unavailable");
       // 逾時後底層的 add 仍可能在 Redis 恢復時完成（無法撤回），此時 job 會在無綁定下跑完；
@@ -198,19 +205,5 @@ export class JobsService {
       active: counts.active ?? 0,
       failed: counts.failed ?? 0,
     };
-  }
-}
-
-async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new EnqueueTimeoutError()), ms);
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
   }
 }

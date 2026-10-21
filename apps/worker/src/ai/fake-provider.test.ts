@@ -66,6 +66,26 @@ describe("FakeAiProvider", () => {
     expect(tokens).toHaveLength(4);
   });
 
+  it("firstTokenDelayMs 只延遲第一段，之後各段照 tokenDelayMs", async () => {
+    vi.useFakeTimers();
+    const tokens: string[] = [];
+    const p = new FakeAiProvider({ tokenDelayMs: 500, tokenCount: 3, firstTokenDelayMs: 2000 });
+    const done = p.streamDiagnosis({
+      prompt: "",
+      signal: new AbortController().signal,
+      onToken: (t) => tokens.push(t),
+    });
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(tokens).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(tokens).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(tokens).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(500);
+    await done;
+    expect(tokens).toHaveLength(3);
+  });
+
   it("abort 後立即以可重試的 AiProviderError 結束，且不再送 token", async () => {
     vi.useFakeTimers();
     const tokens: string[] = [];

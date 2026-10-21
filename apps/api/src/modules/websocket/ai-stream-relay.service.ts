@@ -5,29 +5,23 @@ import type { Redis } from "ioredis";
 import { AiStreamEventSchema } from "@flow-gatekeeper/contracts";
 import { AppConfigService } from "../config/config.service.js";
 import { MonitoringGateway } from "./monitoring.gateway.js";
+import { JobRoutingRegistry } from "./job-routing-registry.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 import { attachThrottledErrorLog } from "../../lib/connection-error-throttle.js";
 import { closeWithDeadline } from "./relay-close.js";
-
-/**
- * jobId → 發起連線綁定（記憶體，重連失效——已知限制，spec Assumptions）。
- *
- * `completedAt`：job 已 `completed`、綁定只是在寬限期內保留給晚到的 `ai/done`（AR-5）時才有值。
- * `JobsService` 據此把同 jobId 的重送判為「已使用過」回 409，而不是當成進行中的冪等重送回 200 waiting——
- * 那個 job 已結束，之後不會再有任何 `job/status`。
- */
-export type JobBinding = { clientId: string; machineId: string; boundAt: number; completedAt?: number };
+import { summarizeIssues } from "./job-status-payload.js";
 
 /**
  * AI 串流轉發（通道 A，憲章 IV）：專用 subscriber `psubscribe('ai-stream:*')`，把 worker
- * publish 的 `ai/token`／`ai/done`／`ai/error` 依 `jobId` 綁定查 `clientId` → `gateway.send`。
+ * publish 的 `ai/token`／`ai/done`／`ai/error` 依 `jobId` 向 `JobRoutingRegistry` 查目前接收連線 → `gateway.send`。
  *
  * **只轉發、不刪綁定**：worker 先 publish `ai/done`、才由 BullMQ 標 `completed`；若此處在
  * `ai/done` 就刪綁定，通道 B（T020）的終態 `job/status:completed` 會查不到對象（F1）。綁定的
- * 建立由 `JobsService` 呼叫 `bindJobToClient`，清理由 job-status relay 單一負責。反過來也不成立：
+ * 建立由 `JobsService`（與 GET 的 claim）經 registry 進行，終態標記由 job-status relay 負責。反過來也不成立：
  * 兩個訊號分走不同 Redis 連線（本服務的 subscriber 與 QueueEvents 的 XREAD），api 端收到的先後沒有
- * 保證，`ai/done` 可能晚於 `completed` 才到——故 job-status relay 在 `completed` 後把綁定保留
- * `COMPLETED_BINDING_GRACE_MS` 才刪（AR-5），本服務查的就是同一份綁定，寬限內遲到的 `ai/done` 照常轉發。
+ * 保證，`ai/done`／`ai/error` 可能晚於 `completed`／`failed` 才到——故 job-status relay 在終態後以
+ * `registry.markTerminal` 把綁定保留 `TERMINAL_BINDING_GRACE_MS` 才刪（AR-5、D12），本服務查的就是同一份綁定，
+ * 寬限內遲到的 `ai/*` 照常轉發。
  * subscriber 連線 MUST NOT 跑一般 command（憲章 IV）。
  *
  * **轉發前必驗**：channel 上的字串來自任何能對 Redis `PUBLISH` 的一方，不只是 worker；未經
@@ -41,11 +35,11 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
   private subscriber?: Redis;
   /** 已進入關閉流程：之後 subscriber 的 close／reconnecting 屬預期，不記成斷線。 */
   private closing = false;
-  private readonly jobRooms = new Map<string, JobBinding>();
 
   constructor(
     private readonly config: AppConfigService,
     private readonly gateway: MonitoringGateway,
+    private readonly registry: JobRoutingRegistry,
   ) {}
 
   onModuleInit(): void {
@@ -108,42 +102,10 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  /** 建 job 時綁定發起連線（`socketId` 即 WS `clientId`，data-model §4）。 */
-  bindJobToClient(jobId: string, clientId: string, machineId: string): void {
-    this.jobRooms.set(jobId, { clientId, machineId, boundAt: Date.now() });
-  }
-
-  getBinding(jobId: string): JobBinding | undefined {
-    return this.jobRooms.get(jobId);
-  }
-
-  /**
-   * 標記綁定所屬的 job 已 completed（由 job-status relay 在送出 completed 時呼叫，AR-5）：綁定仍保留、
-   * 照常轉發寬限內晚到的 `ai/*`，只是不再接受同 jobId 的冪等重送。以新物件取代舊綁定並回傳它，
-   * 供呼叫端在寬限期滿時比對「刪的仍是這一份」；無綁定時回 undefined。
-   */
-  markCompleted(jobId: string, now: number = Date.now()): JobBinding | undefined {
-    const binding = this.jobRooms.get(jobId);
-    if (!binding) return undefined;
-    const completed: JobBinding = { ...binding, completedAt: now };
-    this.jobRooms.set(jobId, completed);
-    return completed;
-  }
-
-  /** 綁定清理——僅由 job-status relay 於終態呼叫（單一 owner，F1）。 */
-  deleteBinding(jobId: string): void {
-    this.jobRooms.delete(jobId);
-  }
-
-  /** 供 job-status relay 掃描孤兒綁定（唯讀）。 */
-  get bindings(): ReadonlyMap<string, JobBinding> {
-    return this.jobRooms;
-  }
-
   private handleMessage(channel: string, message: string): void {
     const jobId = channel.slice("ai-stream:".length);
-    const binding = this.jobRooms.get(jobId);
-    if (!binding) return; // 純後端 smoke 或已重連：略過推送，job 仍完成
+    const clientId = this.registry.owner(jobId);
+    if (clientId === undefined) return; // 純後端 smoke 或已重連：略過推送，job 仍完成
     let raw: unknown;
     try {
       raw = JSON.parse(message);
@@ -154,10 +116,7 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
     const parsed = AiStreamEventSchema.safeParse(raw);
     if (!parsed.success) {
       // 只記 issue 路徑與代碼，不記原始內容：畸形訊息可能夾帶任意大小或敏感的 payload。
-      const issues = parsed.error.issues
-        .slice(0, 5)
-        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.code}`);
-      this.plog.warn({ jobId, channel, issues }, "invalid ai-stream message dropped");
+      this.plog.warn({ jobId, channel, issues: summarizeIssues(parsed.error) }, "invalid ai-stream message dropped");
       return;
     }
     // channel 尾綴才是綁定依據；payload 內的 jobId 與之不符代表來源可疑，不轉發給這個 client。
@@ -165,6 +124,6 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
       this.plog.warn({ jobId, channel, payloadJobId: parsed.data.jobId }, "ai-stream jobId mismatch dropped");
       return;
     }
-    this.gateway.send(binding.clientId, parsed.data); // 只轉發、不刪綁定（F1）
+    this.gateway.send(clientId, parsed.data); // 只轉發、不刪綁定（F1）
   }
 }
