@@ -838,7 +838,7 @@ describe("humanizeError（FR-007 可讀訊息，非原始堆疊）", () => {
     expect(humanizeError("Worker crashed unexpectedly")).toBe(GENERIC_DIAGNOSIS_ERROR);
     expect(GENERIC_DIAGNOSIS_ERROR).toBe("診斷失敗，請重試。");
   });
-  it("未知中文短句 → 照顯原文（如 api 回的中文 message）", () => {
+  it("未知中文短句 → 照顯原文", () => {
     expect(humanizeError("  機台名冊載入失敗  ")).toBe("機台名冊載入失敗");
     expect(humanizeError("Mongo 寫入被拒")).toBe("Mongo 寫入被拒");
   });
@@ -861,6 +861,11 @@ describe("humanizeFailure（失敗態 error＋技術細節；fix/20261022-ui-hum
     expect(humanizeFailure("request timed out")).toEqual({ error: "AI 診斷逾時，請重試。" });
     expect(humanizeFailure("x", "persist_failed")).toEqual({ error: PERSIST_FAILED_ERROR });
     expect(humanizeFailure("job stalled more than allowable limit")).toEqual({ error: STALLED_LIMIT_ERROR });
+  });
+  it("worker 空脈絡短路（no_context）的中文訊息 → 照顯、不帶 errorDetail", () => {
+    // 照抄 apps/worker/src/processor.ts 的 NO_CONTEXT_MESSAGE（web 不能 import worker）；含漢字照顯的實際正式訊息。
+    const NO_CONTEXT_MESSAGE = "此機台近期沒有遙測、異常事件或維修紀錄，無資料可供診斷（未呼叫 AI）";
+    expect(humanizeFailure(NO_CONTEXT_MESSAGE, "no_context")).toEqual({ error: NO_CONTEXT_MESSAGE });
   });
   it("中文短句 → 照顯、不重複放 errorDetail（原文剛好是通用句也一樣）", () => {
     expect(humanizeFailure("機台名冊載入失敗")).toEqual({ error: "機台名冊載入失敗" });

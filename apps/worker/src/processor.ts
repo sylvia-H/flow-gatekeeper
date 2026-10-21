@@ -142,7 +142,7 @@ export type AiFailMarker = z.infer<typeof AiFailMarkerSchema>;
 /** 冪等短路命中的來源（info `idempotent short-circuit` 的 `source` 欄位；e2e 場景 7 印出）。 */
 export type IdempotentSource = "ai-result" | "diagnoses";
 
-/** 空脈絡短路的錯誤碼與訊息（前端 humanizeError 對短訊息原文照顯）。 */
+/** 空脈絡短路的錯誤碼與訊息（前端 humanizeError 對含漢字的短訊息照顯）。 */
 export const NO_CONTEXT_CODE = "no_context";
 export const NO_CONTEXT_MESSAGE = "此機台近期沒有遙測、異常事件或維修紀錄，無資料可供診斷（未呼叫 AI）";
 

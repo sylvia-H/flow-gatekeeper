@@ -165,7 +165,10 @@ export function STALLED_NOTICE(n: number): string {
 /** 未能分類的錯誤一律顯示的通用句（FR-007）。 */
 export const GENERIC_DIAGNOSIS_ERROR = "診斷失敗，請重試。";
 
-/** 原文含漢字即視為已是中文訊息（如 api 回的中文 message），可直接給使用者看。 */
+/**
+ * 原文含漢字即視為已是中文訊息，可直接給使用者看——目前實際走這條的是 worker 空脈絡短路的
+ * `no_context` 訊息（`apps/worker/src/processor.ts` `NO_CONTEXT_MESSAGE`）。
+ */
 const HAN_RE = /\p{Script=Han}/u;
 
 /** 短（< 120 字）且單行的原文：不是長堆疊或多行 JSON，才有給人看的價值。 */
