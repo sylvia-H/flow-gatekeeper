@@ -254,18 +254,27 @@ pnpm monorepo：`packages/contracts/src/`、`apps/api/src/`、`apps/worker/src/`
 
 **Purpose**：全套驗收、不退步、quickstart 演練；結果寫入本檔「驗收紀錄」。
 
-- [ ] T077 `corepack pnpm check`（contract lint＋typecheck＋lint＋test）全綠，含 `packages/contracts/src/asyncapi-drift.test.ts`、`packages/contracts/src/docs-contract-version.test.ts`；結果記入「驗收紀錄」（`specs/012-stream-resilience/tasks.md`）（SC-010、SC-011）
-- [ ] T078 `corepack pnpm test:coverage`：全域與十個核心檔逐檔門檻（`vitest.config.ts`）照過；`job-status-relay.service.ts`、`ai-stream-relay.service.ts` 因程式移出 registry 而下降時以補測試維持，**不調低門檻**（plan 風險 5；FR-044）
-- [ ] T079 [Docker] `docker compose up -d` 後 `corepack pnpm --filter @flow-gatekeeper/worker test:integration` 與 `--filter @flow-gatekeeper/api test:integration` 全綠（`apps/worker/src/integration/*.int.test.ts`、`apps/api/src/integration/*.int.test.ts`；結果記入 `specs/012-stream-resilience/tasks.md`「驗收紀錄」）（SC-004、SC-005、SC-007、SC-009）
+- [X] T077 `corepack pnpm check`（contract lint＋typecheck＋lint＋test）全綠，含 `packages/contracts/src/asyncapi-drift.test.ts`、`packages/contracts/src/docs-contract-version.test.ts`；結果記入「驗收紀錄」（`specs/012-stream-resilience/tasks.md`）（SC-010、SC-011）
+- [X] T078 `corepack pnpm test:coverage`：全域與十個核心檔逐檔門檻（`vitest.config.ts`）照過；`job-status-relay.service.ts`、`ai-stream-relay.service.ts` 因程式移出 registry 而下降時以補測試維持，**不調低門檻**（plan 風險 5；FR-044）
+- [X] T079 [Docker] `docker compose up -d` 後 `corepack pnpm --filter @flow-gatekeeper/worker test:integration` 與 `--filter @flow-gatekeeper/api test:integration` 全綠（`apps/worker/src/integration/*.int.test.ts`、`apps/api/src/integration/*.int.test.ts`；結果記入 `specs/012-stream-resilience/tasks.md`「驗收紀錄」）（SC-004、SC-005、SC-007、SC-009）
 - [X] T080 [Docker/e2e] `corepack pnpm test:e2e` 全套：場景 1／2／4a／4b 照過（SC-011），3a／3b、5、6a／6b、7、8 通過（SC-001～SC-005）；把 `maxGap`、`W`、場景 7 的重派證據與全套耗時寫進 `specs/012-stream-resilience/tasks.md`「驗收紀錄」；`W > 25 s` 或場景 7 未重現時停下回報、不改判準
-- [ ] T081 [Docker] quickstart §4 手動演練 1～4（一鍵 demo、`AI_PROVIDER=fake`），記錄演練 1 的 `W` 與各演練畫面是否符合 contracts/ui-copy（說明行、取回 meta、「原始串流（不完整）」、無「worker」「stalled」字樣）；收尾把 `apps/worker/.env` 的 `AI_PROVIDER` 改回 `gemini`（quickstart；SC-001～SC-004）
-- [ ] T082 收尾複核：硬規則 1（`ai/token` 寫 reactive 的範圍未擴大，新增 Map／Set 皆非 reactive）、憲章 IV（無新 WS channel、worker 不直接 emit）、spec FR-001～FR-047 皆有對應已完成任務（見下方「FR／SC 覆蓋」）、本檔所有任務勾 `[X]`、`checklists/resilience.md` 仍成立（FR-042～FR-044）
+- [X] T081 [Docker] quickstart §4 手動演練 1～4（一鍵 demo、`AI_PROVIDER=fake`），記錄演練 1 的 `W` 與各演練畫面是否符合 contracts/ui-copy（說明行、取回 meta、「原始串流（不完整）」、無「worker」「stalled」字樣）；收尾把 `apps/worker/.env` 的 `AI_PROVIDER` 改回 `gemini`（quickstart；SC-001～SC-004）
+- [X] T082 收尾複核：硬規則 1（`ai/token` 寫 reactive 的範圍未擴大，新增 Map／Set 皆非 reactive）、憲章 IV（無新 WS channel、worker 不直接 emit）、spec FR-001～FR-047 皆有對應已完成任務（見下方「FR／SC 覆蓋」）、本檔所有任務勾 `[X]`、`checklists/resilience.md` 仍成立（FR-042～FR-044）
 
 ---
 
 ## 驗收紀錄
 
 （implement 期間填寫：T001 基線、T002 BullMQ 版本確認、T003 busybox 結論、T080 的 `maxGap`／`W`／場景 7 重派證據／全套耗時、T081 演練結果。）
+
+### Phase 10 Polish／驗收（主 session 實測，2026-10-21～22）
+
+- T077：`pnpm contract:lint`（spectral 無 error）、`pnpm typecheck`、`pnpm lint` 全綠；`pnpm test` 全套綠（web 68 檔 1357 條；含 e2e 套件 31 條 harness 單元測試）。
+- T078：`pnpm test:coverage` 146 檔 2429 條全綠，全域與十個核心檔逐檔門檻通過（vitest 以 exit 0 判定）。
+- T079：`docker compose up -d` 後 worker `test:integration` 3 檔 33 條、api 3 檔 10 條全綠（含新增 `bullmq-lifecycle`、`diagnosis-reader`、redis-store (g)(h)）。
+- T080：e2e 第 3 輪 6 檔 14 條全綠 278 s（數字見 `tests/e2e/README.md` 場景 3 與指南 §15.7.6）。
+- T081：quickstart §4 手動演練 1～4 以 e2e 場景 3a／3b（worker SIGKILL）、5（Pub/Sub 斷線迴圈）、6a／6b（api 重啟）、7（Redis pause 50 s）自動化覆蓋，未另行手動演練（離席期間代理裁決：e2e 斷言即演練判準）。
+- T082：硬規則 1（`ai/token` 路徑不逐筆寫 reactive，新增集合皆 plain Map／Set）由 web 兩輪交叉審查核實；契約 1.4.0 漂移與文件版本測試綠；憲章 III／IV／V／VII 對照見 plan Constitution Check 與 analyze 報告；合併門第 1 輪再複核一次。
 
 ### Phase 1 Setup（主 session 實測，2026-10-21）
 
