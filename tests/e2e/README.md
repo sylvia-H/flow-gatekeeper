@@ -15,7 +15,7 @@ corepack pnpm test:e2e        # 等同 corepack pnpm --filter @flow-gatekeeper/e
 
 流程（`src/harness/global-setup.ts`）：
 
-1. 若專案 `flow-gatekeeper-e2e` 有殘留容器 → `down -v`（避免上一輪的 cache／job 污染本輪）。
+1. 無條件 `down -v` 專案 `flow-gatekeeper-e2e`（不先查殘留容器：容器已移除、volume 仍在時，上一輪的 cache／job 一樣會污染本輪）。
 2. `docker compose -p flow-gatekeeper-e2e -f docker-compose.yml -f docker-compose.e2e.yml --profile demo build`。
 3. `up -d --wait`（等所有 healthcheck 轉 healthy）。
 4. 循序跑 `src/*.e2e.test.ts`。
@@ -24,8 +24,14 @@ corepack pnpm test:e2e        # 等同 corepack pnpm --filter @flow-gatekeeper/e
 `E2E_KEEP=1 corepack pnpm test:e2e` 會保留容器，事後用
 `docker compose -p flow-gatekeeper-e2e logs worker api` 排查，清理：`docker compose -p flow-gatekeeper-e2e --profile demo down -v`。
 
-gating：只有 `vitest run --mode e2e`（即 `test:e2e`）才會設 `E2E=1`；`pnpm test`／`test:coverage` 不涵蓋本套件，
-在本目錄直接 `vitest run` 時測試全部 skip、也不起容器。
+gating：只有 `vitest run --mode e2e`（即 `test:e2e`）才會設 `E2E=1`、收 `src/*.e2e.test.ts` 並起容器；`test:coverage` 不涵蓋本套件。
+其他方式（本目錄 `vitest run`、`pnpm test` 經 `pnpm -r` 帶到本套件）只收 `src/harness/**/*.test.ts`、不掛 globalSetup，不起容器（shell 殘留 `E2E=1` 也一樣）。
+
+harness 單元測試：`pnpm --filter @flow-gatekeeper/e2e test`（日誌解析、窗界加總、`maxGap` 等純函式，不需 Docker）。
+
+harness 讀後端證據的兩處做法（`src/harness/infra.ts`，與 012 tasks T022 原文不同、已採納）：
+- worker 日誌時間取 pino 每行自帶的 `time`（epoch ms），不加 `compose logs --timestamps`：兩者同為容器側時鐘，`time` 免解析奈秒前綴。
+- Pub/Sub 斷線迴圈的 Redis 密碼以 `REDISCLI_AUTH` 傳給 `redis-cli`，不用 `-a`：`-a` 會讓密碼出現在容器行程參數，與 compose healthcheck 同法。
 
 ## 隔離（為什麼可以和 demo／dev infra 同時存在）
 

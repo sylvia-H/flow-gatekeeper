@@ -39,6 +39,9 @@ services:
       AI_TIMEOUT_MS: "15000"
       AI_DEDUPE_LOCK_SECONDS: "20"
       REDIS_PASSWORD: ""
+      # 指標結算間隔縮到下限 5s（MIN_METRICS_INTERVAL_MS；低於下限會回退 60s 預設而非 clamp）：場景 7 以 worker 日誌
+      # 的 `worker metrics summary` 當窗界加總 cache hit／miss（012 FR-046），等一個窗界最多 5s。api 須同值。
+      METRICS_INTERVAL_MS: "5000"
     healthcheck:
       start_interval: 2s
 
@@ -49,6 +52,8 @@ services:
     environment:
       REDIS_PASSWORD: ""
       WS_AUTH_SECRET: ""
+      # 與 worker 同值（見上）：api 的 system/metrics 合併快照也跟著 5s 一窗，兩端窗長一致。
+      METRICS_INTERVAL_MS: "5000"
 
   seed:
     image: flow-gatekeeper-api:e2e
