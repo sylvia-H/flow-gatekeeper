@@ -243,7 +243,11 @@ onMounted(() => {
   tickTimer = setInterval(() => {
     store.tickNow();
     // 斷線期間不跑兩種退路（代理裁決第 63 條）：GET 只會以舊連線 409，把仍在跑的任務誤轉失敗。
-    copilot.checkStalls(Date.now(), STALL_TIMEOUT_MS, performance.now(), store.connectionStatus === "connected");
+    // 「連上」以收到本次連線的 clientId 為準，不只看 socket open：open 到 `system/connected` 之間 copilot 手上仍是舊 clientId，
+    // 這時發的 GET 一樣會 409（合併門第 3 輪 L1）。monitoring store 離開 connected 即清 clientId、收到 `system/connected` 才設回，
+    // 已連線但未授權時 clientId 已在，退路照常觸發（代理裁決第 47 條）。
+    const live = store.connectionStatus === "connected" && store.clientId !== null;
+    copilot.checkStalls(Date.now(), STALL_TIMEOUT_MS, performance.now(), live);
   }, 1000);
 });
 onUnmounted(() => {

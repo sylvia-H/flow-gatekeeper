@@ -67,6 +67,31 @@ describe("App 即時通道接線（012 T043）", () => {
     expect(useMonitoringStore().clientId).toBe(CLIENT);
   });
 
+  it("socket open 後、system/connected 前，每秒 tick 不跑退路；收到 clientId 後（含未授權）才照常（合併門第 3 輪 L1）", () => {
+    vi.useFakeTimers();
+    try {
+      const copilot = useCopilotStore();
+      const checkStalls = vi.spyOn(copilot, "checkStalls");
+      const { options } = mountApp();
+      const monitoring = useMonitoringStore();
+
+      options.onStatus?.("connected"); // socket open：clientId 尚未到
+      expect(monitoring.clientId).toBeNull();
+      vi.advanceTimersByTime(1_000);
+      expect(checkStalls).toHaveBeenLastCalledWith(expect.any(Number), 45_000, expect.any(Number), false);
+
+      options.onConnected?.(CLIENT); // system/connected：拿到本次 clientId（尚未授權）
+      vi.advanceTimersByTime(1_000);
+      expect(checkStalls).toHaveBeenLastCalledWith(expect.any(Number), 45_000, expect.any(Number), true);
+
+      options.onStatus?.("reconnecting"); // 斷線：clientId 清空
+      vi.advanceTimersByTime(1_000);
+      expect(checkStalls).toHaveBeenLastCalledWith(expect.any(Number), 45_000, expect.any(Number), false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("onAuthResult(false) 不續接（交給 45 s watchdog，代理裁決第 47 條）", () => {
     const { options, onAuthorized } = mountApp();
     options.onConnected?.(CLIENT);
