@@ -8,8 +8,10 @@ import { createDiagnosis, E2eClient, getDiagnosisUntilSettled, reconnectClient, 
 /**
  * 場景 6（012 US2、SC-003；research P18）：api 重啟後，新連線以 GET 續接重啟前發起的任務。
  *
- * - 6a 串流中重啟 api：fake 串流約 10 s，短於 api 冷啟動，job 必在 api 停機期間完成（WS 推不到）；重連後以新 socketId
- *   GET → 200 completed＋result。
+ * - 6a 串流中重啟 api：收到第 10 個 token 後重啟（剩約 5 s 串流），P18 預期 job 在 api 停機期間完成（WS 推不到）；重連後以
+ *   新 socketId GET → 200 completed＋result。第 3 輪實測 api 重啟到 healthy 僅約 8 s，若 GET 時 job 仍在跑（200 active／waiting
+ *   `rebound: true`，這是正確的改綁回應），就等新連線收到改綁後的 completed，再 GET 一次取 200 completed——兩條路徑都要在
+ *   api healthy 後 60 s 內拿到結果（2026-10-21 第 3 輪後的時序調整）。
  * - 6b job 仍在佇列時重啟 api：先停 worker → POST → 重啟 api → 重連 GET → 200 waiting `rebound: true`（api 新行程的
  *   registry 是空的，GET 暫定建立綁定）→ 啟動 worker → 新連線收到帶 result 的 completed。
  * - 判準：兩者都在 api healthy 後 60 s 內完成（SC-003）。active 狀態的改綁由 api 單元測試與場景 8 的 previousSocketId 覆蓋。
@@ -22,6 +24,8 @@ const MACHINE = "press-02";
 const TELEMETRY_FLUSH_WAIT_MS = 3_000;
 /** SC-003：api healthy 後 60 s 內續接完成。 */
 const RESUME_DEADLINE_MS = 60_000;
+/** 6a：收到第幾個 token 後重啟 api（首 token 前 2 s＋每段 500 ms；第 10 個之後約剩 5 s 串流）。 */
+const RESTART_AFTER_TOKENS = 10;
 /** api 重啟：SIGTERM 收尾（stop_grace_period 15 s）＋冷啟動＋healthcheck，留寬。 */
 const API_HEALTHY_TIMEOUT_MS = 120_000;
 
@@ -61,7 +65,11 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：api 重啟後以 GET 續接
     const jobId = randomUUID();
     const oldSocketId = client.clientId;
     await createDiagnosis({ jobId, machineId: MACHINE, socketId: oldSocketId });
-    await client.waitFor(() => client.tokens(jobId).length > 0, 30_000, "第一個 ai/token（串流已開始）");
+    await client.waitFor(
+      () => client.tokens(jobId).length >= RESTART_AFTER_TOKENS,
+      30_000,
+      `第 ${RESTART_AFTER_TOKENS} 個 ai/token（串流進行中）`,
+    );
     const tokensBeforeRestart = client.tokens(jobId).length;
 
     const t0 = Date.now();
@@ -72,7 +80,20 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：api 重啟後以 GET 續接
     const re = await reconnectWithRetry(client);
     client = re.client;
     expect(re.clientId).not.toBe(oldSocketId);
-    const res = await getDiagnosisUntilSettled(jobId, re.clientId, oldSocketId, RESUME_DEADLINE_MS);
+    const first = await getDiagnosisUntilSettled(jobId, re.clientId, oldSocketId, RESUME_DEADLINE_MS);
+    const firstStatus = (first.body as { status?: unknown }).status;
+    let res = first;
+    if (first.status === 200 && (firstStatus === "active" || firstStatus === "waiting")) {
+      // job 仍在跑：GET 已把綁定改到新連線，等改綁後的 completed 送到新連線，再 GET 取權威結果
+      expect(first.body).toMatchObject({ jobId, rebound: true });
+      await client.waitFor(
+        () => client.statuses(jobId).some((s) => s.status === "completed" || s.status === "failed"),
+        Math.max(1_000, RESUME_DEADLINE_MS - (Date.now() - healthyAt)),
+        "改綁後新連線收到 completed",
+      );
+      expect(client.statuses(jobId).find((s) => s.status === "completed")?.result).toBeDefined();
+      res = await getDiagnosisUntilSettled(jobId, re.clientId, undefined, RESUME_DEADLINE_MS);
+    }
     const resumedMs = Date.now() - healthyAt;
 
     expect(res.status, `GET 應回 200：${JSON.stringify(res.body)}`).toBe(200);
@@ -84,7 +105,7 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：api 重啟後以 GET 續接
 
     console.log(
       `[e2e] 場景 6a：重啟前收到 ${tokensBeforeRestart} 個 token；restart＋healthy ${healthyAt - t0}ms` +
-        `（waitHealthy ${waitedMs}ms）；healthy → GET 200 ${resumedMs}ms`,
+        `（waitHealthy ${waitedMs}ms）；首次 GET ${String(firstStatus)}；healthy → 取得 completed ${resumedMs}ms`,
     );
   });
 

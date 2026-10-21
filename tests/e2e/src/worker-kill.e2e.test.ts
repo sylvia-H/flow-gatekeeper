@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DiagnosisResultSchema } from "@flow-gatekeeper/contracts";
 import type { AiToken } from "@flow-gatekeeper/contracts";
-import { compose } from "./harness/compose.js";
+import { compose, docker } from "./harness/compose.js";
 import { clearDiagnosisCache, workerExitedAt, workerReadyAt, workerReadyBaseline } from "./harness/infra.js";
 import { createDiagnosis, E2eClient, sleep } from "./harness/ws-client.js";
 
@@ -61,14 +61,20 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：worker 崩潰後 stalled �
     killWhat: string,
   ): Promise<{ jobId: string; statusesBeforeKill: number; tokensBeforeKill: number }> {
     const cleared = await clearDiagnosisCache();
+    // 觸發點到 kill 之間不放任何 compose 呼叫（Windows 上每次 compose CLI 約 1～2 s，第 3 輪實測讓 3b 的 kill 晚到首 token 之後）：
+    // worker ready 基線與容器 id 都在 POST 前先取（POST → kill 之間不會有新的 worker ready），kill 直接 docker kill 容器 id。
+    const base = await workerReadyBaseline();
+    const { stdout: ids } = await compose(["ps", "-q", "worker"]);
+    const workerId = ids.split(/\r?\n/).find((l) => l.trim() !== "")?.trim();
+    if (workerId === undefined) throw new Error("找不到執行中的 worker 容器");
     const jobId = randomUUID();
     await createDiagnosis({ jobId, machineId: MACHINE, socketId: client.clientId });
     const postedAt = performance.now();
 
     await client.waitFor(() => killWhen(jobId), 30_000, killWhat);
-    const base = await workerReadyBaseline();
     const killAt = performance.now();
-    await compose(["kill", "-s", "SIGKILL", "worker"]);
+    await docker(["kill", "--signal", "KILL", workerId]);
+    const killCmdMs = performance.now() - killAt;
     workerKilled = true;
     // 標記 kill 之前已收到的事件數：之後的 job/status 才算「重派後」。
     const statusesBeforeKill = client.statuses(jobId).length;
@@ -92,7 +98,7 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：worker 崩潰後 stalled �
     const stalled = after.some((s) => s.status === "waiting" && s.reason === "stalled");
     const maxExecution = Math.max(0, ...after.map((s) => s.execution ?? 0));
     console.log(
-      `[e2e] 場景 ${label}：清 ai-cache ${cleared} 鍵；kill 時已收 ${tokensBeforeKill} 個 token（POST 後 ${Math.round(killAt - postedAt)}ms）；` +
+      `[e2e] 場景 ${label}：清 ai-cache ${cleared} 鍵；kill 時已收 ${tokensBeforeKill} 個 token（POST 後 ${Math.round(killAt - postedAt)}ms 觸發、docker kill 指令 ${Math.round(killCmdMs)}ms）；` +
         `kill → completed ${Math.round(completedAt - killAt)}ms；W ${w}ms；maxGap ${Math.round(gap)}ms；stalled=${String(stalled)}、最大 execution ${maxExecution}`,
     );
 

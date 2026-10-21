@@ -77,11 +77,11 @@ P24「首 token 約在 progress 40 後 500ms」的前提與實作不符，2026-1
 | 同上 | 4a 不在線 socketId | 隨機 uuid → 409，body `statusCode: 409`、`error: "Conflict"` |
 | 同上 | 4b 名冊外機台 | `ghost-99` → 404，body `statusCode: 404`、`error: "Not Found"` |
 | `pubsub-loss.e2e.test.ts` | 5 Pub/Sub 每 50 ms 斷線 20 s（`pack-03`，SC-002） | POST 後 redis 容器內迴圈 `CLIENT KILL TYPE pubsub`；以帶 `result` 的 `job/status: completed` 收尾、`result` 通過 `DiagnosisResultSchema`、`cached:false`、無 `ai/error`、迴圈 `killed > 0`；`ai/token`／`ai/done` 可有可無（只印出收到幾個） |
-| `api-restart.e2e.test.ts` | 6a 串流中重啟 api（`press-02`，SC-003） | 第一個 token 後 `restart api`＋等 healthy → 重連 → 新 socketId（帶 `previousSocketId`）GET → 200 `completed`＋`result`（通過 schema、`cached:false`），api healthy 後 60 s 內 |
+| `api-restart.e2e.test.ts` | 6a 串流中重啟 api（`press-02`，SC-003） | 第 10 個 token 後 `restart api`＋等 healthy → 重連 → 新 socketId（帶 `previousSocketId`）GET → 200 `completed`＋`result`（通過 schema、`cached:false`）；若 GET 時 job 仍在跑（200 `active`／`waiting` `rebound:true`），等新連線收到 `completed` 後再 GET；都在 api healthy 後 60 s 內 |
 | 同上 | 6b job 仍在佇列時重啟 api（P18） | 停 worker → POST → `restart api` → 重連 GET → 200 `waiting`、`rebound:true` → 啟動 worker → 新連線收到帶 `result` 的 `completed`，api healthy 後 60 s 內 |
 | `redis-pause.e2e.test.ts` | 7 Redis 停頓 50 s（`oven-04`，SC-004；執行點在 US3 checkpoint） | 第 3 個 token 後 `pause redis` 50 s → `unpause`；`diagnosisTriggers` 該 jobId 1 筆、worker 日誌 `LLM call` 1 則、POST 前與完成後兩個 `worker metrics summary` 窗界之間 `cache.hits + cache.misses` 合計 1、`completed.cached === false`；收到 `reason:"stalled"` 或 `execution ≥ 2`（否則印「未重現 AR-4」並失敗）；印出重派那次 `idempotent short-circuit` 的 `source` |
 | `diagnosis-lookup.e2e.test.ts` | 8 GET 回應形狀（`press-02`，SC-005） | 隨機 jobId → 404；`socketId=abc` → 400（帶 `issues`、不回顯）；不在線 socketId → 409 `socket_unauthorized`；停 worker 製造進行中 job（綁 A）：B 查 → 409 `job_bound_elsewhere`、B 帶 `previousSocketId`＝A → 200 `waiting` `rebound:true`、之後 `completed` 只送 B；完成後 A 查 → 200 `completed`＋`result` |
-| `worker-kill.e2e.test.ts` | 3a 串流中 SIGKILL（第 3 個 token 後）、3b 首 token 前 SIGKILL（收到 progress 20 即 kill，P24；靠 e2e 的 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 留出窗口）（`sorter-05`，SC-001） | 每題 POST 前清 `ai-cache:*`；`docker compose kill -s SIGKILL worker` → `start worker` → 收到 `completed`（帶通過 schema 的 `result`、`cached:false`）、無 `failed`／`ai/error`；`waiting`＋`reason:"stalled"` 或 `execution ≥ 2`；整個 job 的 `maxGap < 45 s`；印出 `W`（kill 後第一則 `worker ready` − 容器 `State.FinishedAt`），W > 25 s 印「上界失效」並失敗。3a 另斷言第二輪 `seq` 0–19 重播、`attempt` 皆 1、串接全文＝`completed.result`；3b 斷言 kill 前零 token、只有重派那一輪 |
+| `worker-kill.e2e.test.ts` | 3a 串流中 SIGKILL（第 3 個 token 後）、3b 首 token 前 SIGKILL（收到 progress 20 即 kill，P24；靠 e2e 的 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 留出窗口）（`sorter-05`，SC-001） | 每題 POST 前清 `ai-cache:*`、先取 `worker ready` 基線與 worker 容器 id；`docker kill --signal KILL <id>`（觸發點到 kill 之間不跑 compose CLI，Windows 上每次約 1～2 s）→ `compose start worker` → 收到 `completed`（帶通過 schema 的 `result`、`cached:false`）、無 `failed`／`ai/error`；`waiting`＋`reason:"stalled"` 或 `execution ≥ 2`；整個 job 的 `maxGap < 45 s`；印出 `W`（kill 後第一則 `worker ready` − 容器 `State.FinishedAt`），W > 25 s 印「上界失效」並失敗。3a 另斷言第二輪 `seq` 0–19 重播、`attempt` 皆 1、串接全文＝`completed.result`；3b 斷言 kill 前零 token、只有重派那一輪 |
 
 每則 WS 訊息都以契約 schema `safeParse`（遙測批次以 `isTelemetryBatch`），不符者記入 `violations`，各場景結尾斷言為空。
 
@@ -103,8 +103,10 @@ P24「首 token 約在 progress 40 後 500ms」的前提與實作不符，2026-1
   `W`＝kill 後第一則 `worker ready` − 容器 `State.FinishedAt`，`W > 25 s` 時場景印「上界失效」並失敗（不放寬判準）。
 - **重播**：3a 的第二輪 `ai/token` 仍帶 `attempt: 1`、`seq` 從 0 重播（同一 attempt 內 `seq <= 上一個 seq` 即新一次執行，契約 1.3.0 起；
   `execution` 遞增同樣會清空串流）；3b 在首 token 前 kill，kill 前零 token，只有重派那一輪。
-- **實測（012-lite）**：3a `maxGap` **（第 3 輪實測後填）**、3b `maxGap` **（第 3 輪實測後填）**、`W` **（第 3 輪實測後填）**、
-  kill → `reason: "stalled"` **（第 3 輪實測後填）**、kill → `completed` **（第 3 輪實測後填）**、本檔耗時 **（第 3 輪實測後填）**。
+- **實測（012-lite，2026-10-21 第 3 輪；修正 kill 時序後重跑的那一次全綠）**：3a `maxGap` **14.0 s**、3b `maxGap` **18.8 s**、
+  `W` **3.8 s／3.7 s**（3a／3b；時序修正前那次為 7.4 s／12.9 s）、kill → `reason: "stalled"` 未分段計時（兩題都收到 `stalled`、
+  `execution` 2）、kill → `completed` **28.7 s／31.8 s**、本檔耗時約 **69 s**（3a 34.6 s＋3b 34.2 s）。3b kill 前 0 個 token
+  （progress 20 後 19 ms 觸發，`docker kill` 指令 431 ms，落在 2 s 首 token 延遲內）。
 
 以下為 012-lite 之前（2.1.0）的語意與實測，保留作對照：
 
