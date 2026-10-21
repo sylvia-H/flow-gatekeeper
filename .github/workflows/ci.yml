@@ -1,17 +1,38 @@
 name: ci
 
-# CI 暫停自動觸發（私有 repo 期間節省 Actions 分鐘數）。
-# 開發完畢、clone 到正式私有庫後，解開下面 push / pull_request 兩行即可恢復自動 CI。
+# 觸發：所有分支的 push 自動跑，另保留手動觸發（2026-10-21 恢復，第三輪審查 DOC-18，使用者裁決）。
+# - 為何是 push：本 repo 不開 PR，合併一律本機 `git merge --no-ff` 後 push develop；只開 pull_request 等於 CI 永不自動跑。
+#   2026-06-30 起曾只留 workflow_dispatch（`6417069`），理由「私有 repo 期間節省 Actions 分鐘」在 repo 公開後已不成立：
+#   公開 repo 的標準 runner 不計分鐘，一次約 2 分鐘（2026-10-18 實測），連續 push 由下方 concurrency 取消舊 run。
+# - 為何不加 pull_request：同 repo 分支開 PR 時 push 與 pull_request 會讓同一個 commit 跑兩次。
+#   代價：外部 fork 的 PR 不會自動跑；需要時由維護者把 fork 分支拉進本 repo 後手動觸發（workflow_dispatch 只能跑本 repo 的 ref），或改用 pull_request。
+# - 為何只限 branches：tag 不觸發。release 時 `git push origin main --follow-tags` 的 main 已經會跑，tag 再跑一次是重複。
 on:
-  workflow_dispatch: # 僅保留手動觸發（Actions 頁可手動 Run workflow）
-  # push:
-  # pull_request:
+  push:
+    branches: ["**"]
+    # 只改文件的 push 不跑；但測試會讀的 Markdown 不能略過，否則改壞了也不會紅燈。
+    # GitHub 的 paths-ignore 不支援 `!` 例外，所以改用 paths：先全收、再排除文件、最後加回測試讀取的檔（後面的規則優先）。
+    # 加回的三個檔與讀取它們的測試：
+    #   README.md                              ← apps/{api,worker}/src/lib/readme-env-table.test.ts、packages/contracts/src/docs-contract-version.test.ts
+    #   CHANGELOG.md                           ← packages/contracts/src/docs-contract-version.test.ts
+    #   docs/Flow-Gatekeeper-SDD-完整實作指南.md ← packages/contracts/src/docs-contract-version.test.ts
+    # 新增讀取 Markdown 或 docs/ 檔案的測試時 MUST 把該檔加回這份清單。
+    # GitHub 的 paths 過濾只看一次 push diff 的前 300 個變更檔：超大 merge 若沒自動跑，用 workflow_dispatch 補跑。
+    paths:
+      - "**"
+      - "!docs/**"
+      - "!**/*.md"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/Flow-Gatekeeper-SDD-*.md"
+  workflow_dispatch: # Actions 頁可手動 Run workflow（例如只改文件、想補跑一次時）
 
 # 最小權限：本流程只需讀取原始碼（上傳 artifact 走 Actions 內建 token，不需 contents: write）。
 permissions:
   contents: read
 
-# 同一分支重複觸發時取消舊 run，只保留最新一次。
+# 同一分支重複觸發時取消舊 run，只保留最新一次：同分支連續 push 時以最新一次為準；
+# 主支的合併節點若被後續 push 取消，用 workflow_dispatch 補跑。
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -22,7 +43,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # 目前全流程約數分鐘；設上限避免卡死的 run 空耗分鐘數。
+    # 目前全流程約 2 分鐘（2026-10-18 實測）；設上限避免卡死的 run 空耗分鐘數。
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5

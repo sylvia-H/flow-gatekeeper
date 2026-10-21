@@ -605,21 +605,34 @@ describe("工具列三段收合（T060、FR-032、research R10）", () => {
 });
 
 describe("compact 覆蓋式搜尋（T060、FR-032、FR-034a）", () => {
+  /*
+   * 時鐘固定（只假 `Date`，計時器與 microtask 照常）：Vue runtime-dom 的事件 invoker 會略過
+   * 「事件時間戳 ≤ 該監聽器掛上時間」的事件（防止事件傳遞途中才掛上的 handler 處理同一事件，vuejs/vue#6566）。
+   * 時間戳由路徑上第一個 Vue invoker 以 `Date.now()` 記下，精度只到毫秒——覆蓋外框（`@keydown.esc`）與
+   * 輸入框（`@keydown.enter`）在展開時才掛載，若 keydown 在掛載的同一毫秒內從輸入框送出，冒泡到外框時
+   * 會被當成「掛上前的事件」而略過（2026-10-19 nightly mutation 的 `defaultPrevented` 不穩定即此）。
+   * 真實按鍵不可能與掛載同一毫秒；這裡把時鐘固定，讓「同一毫秒」成為必然，再由 `openByClick` 明確推進 1ms
+   * 表達「掛載之後才按鍵」——結果不再取決於機器快慢，漏推進時也會穩定失敗而不是偶發。
+   */
   beforeEach(() => {
     narrow = true;
     stubLayout();
+    vi.useFakeTimers({ toFake: ["Date"] });
   });
   afterEach(() => {
     resize = null;
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   const toggleOf = (w: VueWrapper) => w.get('[data-fg="search-toggle"]');
   const overlayOf = (w: VueWrapper) => w.find('[data-fg="search-overlay"]');
 
+  /** 點圖示鈕展開覆蓋；回傳前把時鐘推進 1ms，之後送出的事件晚於覆蓋內監聽器的掛載時間（見 describe 註解）。 */
   async function openByClick(w: VueWrapper): Promise<HTMLInputElement> {
     await toggleOf(w).trigger("click");
     await flushPromises();
+    vi.advanceTimersByTime(1);
     return w.get('input[type="search"]').element as HTMLInputElement;
   }
 

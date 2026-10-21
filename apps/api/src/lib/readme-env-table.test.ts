@@ -1,3 +1,4 @@
+// 本檔讀取的 md 已列在 `.github/workflows/ci.yml` 的 `on.push.paths`，改讀其他檔時同步。
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

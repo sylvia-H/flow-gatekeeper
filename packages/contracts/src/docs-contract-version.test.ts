@@ -1,3 +1,4 @@
+// 本檔讀取的 md 已列在 `.github/workflows/ci.yml` 的 `on.push.paths`，改讀其他檔時同步。
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import asyncapiRaw from "../../../asyncapi.yaml?raw";
