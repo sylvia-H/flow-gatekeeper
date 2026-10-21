@@ -102,14 +102,33 @@ describe("App 即時通道接線（012 T043）", () => {
 });
 
 describe("App 分頁標題與 favicon 接線（013 critique 周邊注意力訊號）", () => {
-  const iconHref = (): string | null | undefined =>
-    document.querySelector('link[rel~="icon"]')?.getAttribute("href");
+  /** favicon 的 SVG 原文（data URL 解碼）。 */
+  const iconSvg = (): string =>
+    decodeURIComponent(
+      (document.querySelector('link[rel~="icon"]')?.getAttribute("href") ?? "").replace(/^data:image\/svg\+xml;utf8,/, ""),
+    );
+  // happy-dom 不載入 theme.css：以 inline 自訂屬性提供 favicon 讀的 token（值同淺色主題）。
+  const TOKENS: Record<string, string> = {
+    surface: "255 255 255",
+    ink: "31 42 51",
+    "ink-3": "74 87 99",
+    accent: "15 110 140",
+    crit: "198 40 40",
+    stale: "122 135 146",
+  };
+  beforeEach(() => {
+    for (const [name, value] of Object.entries(TOKENS)) document.documentElement.style.setProperty(`--c-${name}`, value);
+  });
+  afterEach(() => {
+    for (const name of Object.keys(TOKENS)) document.documentElement.style.removeProperty(`--c-${name}`);
+  });
 
   it("嚴重台數來自 fleetHealth、離線來自連線狀態；unmount 還原標題", async () => {
     document.title = "flow-gatekeeper";
     const { options } = mountApp();
     expect(document.title).toBe("flow-gatekeeper");
-    expect(iconHref()).toBe("/favicon.svg");
+    expect(iconSvg()).toContain("<svg");
+    expect(iconSvg()).not.toContain("<circle");
 
     options.onStatus?.("connected");
     options.onConnected?.(CLIENT);
@@ -124,15 +143,16 @@ describe("App 分頁標題與 favicon 接線（013 critique 周邊注意力訊�
     ]);
     await nextTick();
     expect(document.title).toBe("● 嚴重 1 · flow-gatekeeper");
-    expect(iconHref()).toBe("/favicon-critical.svg");
+    expect(iconSvg()).toContain('fill="rgb(198,40,40)"'); // crit 點
 
     options.onStatus?.("reconnecting");
     await nextTick();
     expect(document.title).toBe("○ 重新連線中 · flow-gatekeeper");
-    expect(iconHref()).toBe("/favicon-offline.svg");
+    expect(iconSvg()).toContain('stroke="rgb(122,135,146)"'); // stale 空心圈
 
     wrapper?.unmount();
     wrapper = null;
     expect(document.title).toBe("flow-gatekeeper");
+    expect(document.querySelector('link[rel~="icon"]')).toBeNull(); // 自建的 link 隨 unmount 移除
   });
 });

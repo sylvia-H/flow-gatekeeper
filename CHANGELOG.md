@@ -56,6 +56,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 - **同簽章失敗標記**：LLM 供應商失敗後 10 秒內，同機台同狀態的其他請求不打 LLM、直接以同一個錯誤失敗（`ai-fail:<sig>`）；供應商只短暫抖動時，這些請求不會自己再試一次。
 - **api 需要讀 `diagnoses` 的權限**：`GET /diagnoses/:jobId` 的第二來源由 api 直接讀 MongoDB `diagnoses`；MongoDB 若按角色分權限，api 使用的帳號需有該 collection 的讀權限（api 不寫、不建索引）。
 - **e2e 的 fake provider 首 token 延遲**：`FAKE_AI_FIRST_TOKEN_DELAY_MS`（預設 0）只影響 `AI_PROVIDER=fake`；e2e compose 設 2000，全套 e2e 實測約 4.6 分鐘（278 s，第 3 輪；012 之前的場景組合約 6 分鐘）。
+- **分頁標題不再固定為「flow-gatekeeper」**（`fix/20261022-ui-tab-title-alert`）：有嚴重機台或即時通道重新連線中時，分頁標題會帶「● 嚴重 N · 」或「○ 重新連線中 · 」前綴。依分頁標題固定為「flow-gatekeeper」做比對的劇本需放寬。favicon 以 `data:` URL 提供，部署端 CSP 的 `img-src` 需允許 `data:`（本專案 `apps/web/nginx.conf` 三處 CSP 本來就是 `img-src 'self' data:`，不需改）。
 
 ### Added
 
@@ -67,7 +68,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 - **UI 新狀態與文案**（PRODUCT.md 新術語「重新排入佇列（內部稱重新派送）」「取回」「結果未知」）：說明行「後端處理程序中斷，任務已重新排入佇列（第 N 次執行）」「已重新連線，正在取回診斷狀態…」；完成 meta「重新連線後取回」（耗時不作快取對比基準）；串流標題「原始串流（不完整）」（以 `job/status`／GET 收尾，或執行期間經歷過重連）；失敗文案「連線中斷期間的診斷結果已無法取回，請重試」「這個診斷正由另一個視窗接收，請在該視窗查看或重試」「超過 45 秒沒有收到進度，結果未知，請重試」「診斷結果無法寫入資料庫，請稍後重試」「後端處理程序多次中斷，診斷已停止，請重試」。卡片診斷 chip 不新增種類。
 - **結構化日誌**：冪等短路命中（info，帶來源）、`ai-fail` 寫入（info）與命中（warn）、relay 轉發 `stalled`（warn）、GET 的 rebind 與衝突 409（info）；`system/metrics`／`WorkerMetrics` 不新增欄位。
 - **e2e 場景**：3a／3b（串流中、首 token 前 SIGKILL，斷言最長無事件 < 45 秒）、5（Pub/Sub 每 50 ms 斷線）、6a／6b（api 重啟後續接）、7（Redis 停頓 50 秒，斷言重派確實發生且 trigger／LLM 各一次）、8（GET 回應形狀）；fake provider 新增 `FAKE_AI_FIRST_TOKEN_DELAY_MS`。
-- **分頁標題與 favicon 告警**（013 critique 2026-10-17 P2「沒有周邊注意力訊號」）：web 新增 SVG favicon（`apps/web/public/favicon.svg`，之前沒有 favicon）。機群健康的嚴重台數 > 0 時分頁標題改為「● 嚴重 N · flow-gatekeeper」、favicon 換成帶紅色狀態點的 `favicon-critical.svg`；曾連上後重新連線中／已斷線時標題為「○ 重新連線中 · flow-gatekeeper」／「○ 已斷線 · flow-gatekeeper」、favicon 換成空心灰圈的 `favicon-offline.svg`，並蓋過嚴重；其餘為「flow-gatekeeper」。警告不上分頁、首次連線中不標、不閃爍；只在標題或圖示真的要變時才寫 DOM。依分頁標題固定為「flow-gatekeeper」做比對的劇本需放寬。
+- **分頁標題與 favicon 告警**（013 critique 2026-10-17 P2「沒有周邊注意力訊號」）：web 新增 favicon（之前沒有），在執行期讀目前主題的色彩 token 組成 SVG data URL、隨淺色／深色主題切換（不新增靜態圖檔，`index.html` 也不放 favicon link）。機群健康的嚴重台數 > 0 時分頁標題改為「● 嚴重 N · flow-gatekeeper」、favicon 帶紅色狀態點；即時通道重新連線中時標題為「○ 重新連線中 · flow-gatekeeper」（判定與主區橫幅相同；「○ 已斷線 · flow-gatekeeper」只在即時通道被卸載時出現）、favicon 換成空心灰圈，並蓋過嚴重；其餘為「flow-gatekeeper」。警告不上分頁、第一次連線嘗試結果出來前不標、不閃爍；只在標題或圖示真的要變時才寫 DOM。
 
 ### Changed
 
