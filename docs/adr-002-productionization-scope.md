@@ -137,7 +137,7 @@ dev 期間 worker 保留 `tsx watch`（熱重載價值 > 監督價值，且人�
 - **為何可接受**：最終診斷結果會落 MongoDB `diagnoses` 並進 Redis cache，丟失的只是「打字機動畫的過場」，不是資料；重連後可拿完整結果（此句已更正，見下一條）。
 - **更正（2026-09 審查）**：上一條「重連後可拿完整結果」撰寫時即無程式支撐——HTTP 只有 `POST /diagnoses` 與 `GET /healthz`，**目前沒有任何結果讀取端點**；重連後拿到新 `clientId`、綁定失效，前端只能顯示「中斷 + Retry」（Retry 若簽章相同且快取未過期會秒回 Cached，這是目前唯一的取回路徑）。資料確實落庫，但使用者取不回。補上 `GET /diagnoses/:jobId` 與重連 rebind 列為 roadmap 012（串流韌性）。**roadmap 已修訂（2026-09 第二輪審查）**：順序改為 010-lite → 012-lite → 011（見 `docs/20260927-research-review02.md` §5.4）；012-lite 範圍為 processor 回傳結果存 BullMQ `returnvalue`→`job/status.result`、`GET /diagnoses/:jobId`（第一來源 `returnvalue`、其次 Mongo；cache 命中的 job 不寫 `diagnoses`）、重連以 jobId rebind、relay 監聽 `stalled`、等待者 keepalive（見 §6.5）。
 - **生產路徑**：改用 Redis Streams（`XADD`/`XREAD` + consumer group），client 帶 last-id 續傳即可回放斷線期間的 token；或 token 落地 + offset 續傳。
-  > **已變更（2026-09 第二輪審查）**：優先路徑改為先用完 BullMQ 既有能力——結果存 `returnvalue`（已保存 1 小時）＋`GET /diagnoses/:jobId`＋`stalled` 監聽（roadmap 012-lite），可同時涵蓋 api 重啟、前端重連、`ai/done` 遺失與 watchdog 誤判；Redis Streams 降為**備選**（只補得到重連期間的 token 缺口，卻要處理 `XADD`／`MAXLEN`／`XREAD`／last-id）。上一段保留為原決策敘述。
+  > **已變更（2026-09 第二輪審查）**：優先路徑改為先用完 BullMQ 既有能力——結果存 `returnvalue`（已保存 1 小時）＋`GET /diagnoses/:jobId`＋`stalled` 監聽（roadmap 012-lite），可同時涵蓋 api 重啟、前端重連、`ai/done` 遺失與 watchdog 誤判；Redis Streams 降為**備選**（只補得到重連期間的 token 缺口，卻要處理 `XADD`／`MAXLEN`／`XREAD`／last-id）。上一段保留為原決策敘述。→ 另見 [ADR-003](adr-003-completion-semantics.md)（2026-10-21，012-lite 立案）：Redis Streams 定案拒絕、完成語意改以 BullMQ `returnvalue` 為權威；落地狀態於 012-lite merge 時回補。
 
 ### 6.3 認證：`WS_AUTH_SECRET` 是佔位符
 
