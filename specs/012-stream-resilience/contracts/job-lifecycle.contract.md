@@ -107,6 +107,5 @@ export type DiagnosisJobProgress = z.infer<typeof DiagnosisJobProgressSchema>;
 - `asyncapi-drift.test.ts`：`JobStatus` 已在 `MESSAGE_SCHEMAS`，YAML 與 Zod 任一邊沒改就紅；新增一支斷言「`JobStatus.reason`
   不是 enum」，防止日後被收成封閉列舉。
 - `docs-contract-version.test.ts`：README、指南、CHANGELOG 的 `info.version` 現況宣稱同步到 1.4.0。
-- `CHANGELOG.md` 契約小節記 1.4.0（見 [diagnosis-lookup.contract.md](./diagnosis-lookup.contract.md) §7 的 HTTP 部分）；
-  相容性注意記「`ai/done` 可重複、可遺失，自寫 client 須以 jobId 去重」「BullMQ job 的 `progress` 改為物件」「BullMQ lock
-  參數 15／5／2」「升級順序先 api 後 worker」（research R12）。
+- `CHANGELOG.md` 契約小節記 1.4.0（見 [diagnosis-lookup.contract.md](./diagnosis-lookup.contract.md) §9 的 HTTP 部分）；
+  相容性注意見 spec FR-034（7 條，含升級順序先 api 後 worker，research R12）。

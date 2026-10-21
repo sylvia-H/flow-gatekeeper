@@ -58,7 +58,7 @@ $env:E2E_KEEP = "1"; corepack pnpm test:e2e   # 保留容器排查；事後 dock
 | 5 Pub/Sub 每 50 ms 斷線 | SC-002 | 以帶 `result` 的 `job/status: completed` 收尾，`result` 通過 schema；`ai/done` 可有可無 |
 | 6a api 重啟（job 期間完成） | SC-003 | 新連線 GET → 200 completed＋result；api healthy 後 60 s 內 |
 | 6b api 重啟（job 仍在佇列） | SC-003 | 停 worker → POST → restart api → GET 200 waiting `rebound:true` → 啟動 worker → 新連線收到 `completed` |
-| 7 Redis 停頓 50 s | SC-004 | `diagnosisTriggers` 該 jobId 恰 1 筆、worker 日誌 `LLM call` 恰 1 則、hit／miss 合計 1、`completed.cached === false` |
+| 7 Redis 停頓 50 s（第 3 個 token 後開始，research P25） | SC-004 | `diagnosisTriggers` 該 jobId 恰 1 筆、worker 日誌 `LLM call` 恰 1 則、`cacheCounters`（場景前後兩個窗界之間 `worker metrics summary` 的 `cache.hits + cache.misses` 加總，見 spec FR-046；全套 e2e 循序執行）合計 1、`completed.cached === false`；收到 `reason:"stalled"` 或 `execution ≥ 2`；場景輸出印重派那次 `idempotent short-circuit` 的 `source` |
 | 8 GET 回應形狀 | SC-005 | 隨機 jobId → 404；他人 socketId 查進行中 → 409 `job_bound_elsewhere`；同情境帶 `previousSocketId`＝原 socketId → 200 `rebound:true`；不在線 socketId → 409 `socket_unauthorized`；非 UUID socketId → 400；已完成任務以他人 socketId 查 → 200 completed |
 
 ## 4. 手動演練（一鍵 demo）
@@ -99,7 +99,7 @@ Redis 有設密碼時，下方 `redis-cli` 加 `--no-auth-warning -a <REDIS_PASS
 
 ### 演練 4：Redis 停頓（US4、SC-004）
 
-1. 按診斷，串流開始後 `docker compose pause redis`；等 50 秒；`docker compose unpause redis`。
+1. 按診斷，看到串流出現幾個字（首 token 之後，research P25）再 `docker compose pause redis`；等 50 秒；`docker compose unpause redis`。
 2. 預期畫面：凍結期間沒有任何事件，約 45 秒時面板可能顯示「超過 45 秒沒有收到進度，結果未知，請重試」——這是 D11「結果未知」的語意
    （research R13）；恢復後按重試應秒回（命中快取）。
 3. 預期後端（取步驟 1 的 jobId）：

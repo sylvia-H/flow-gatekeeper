@@ -35,8 +35,8 @@ jobId（UUID v4）即 bearer capability：持有一條在線、已授權的 WS �
 2. `socketId` 非在線且已授權 → 409（`code: "socket_unauthorized"`）。
 3. **在任何 await 之前** `registry.claimForLookup(...)`（data-model §2.3）。
 4. `Job.fromId(queue, jobId)` 與 `getState()`（producer command 連線；上限 5 s）。
-5. 依 state 回應並處置 claim（data-model §2.4）；BullMQ 查無 job，或 `returnvalue` 不合法 → Mongo `diagnoses.findOne({ jobId })`
-   → 合法結果 200 completed（`cached:false`），否則 404。
+5. 依 state 回應並處置 claim（data-model §2.4）；BullMQ 查無 job、state 不在 §4 列舉內（例如 `unknown`，視同查無 job），或
+   `returnvalue` 不合法 → Mongo `diagnoses.findOne({ jobId })`（`maxTimeMS` 3 s）→ 合法結果 200 completed（`cached:false`），否則 404。
 6. 任何回應前，非保留的 claim 一律 `revertClaim`（只撤回本次請求自己的動作）。
 
 ## 4. 成功回應（200，`DiagnosisLookupResponseSchema`）
@@ -66,7 +66,7 @@ jobId（UUID v4）即 bearer capability：持有一條在線、已授權的 WS �
 | 409 | `socketId` 不在線或未授權 | `{ statusCode: 409, error: "Conflict", code: "socket_unauthorized", message: "WebSocket 連線不存在或未授權，請重新連線後再發起診斷" }`（message 與 POST 相同） |
 | 409 | 進行中且原綁定在線、不是本連線、不等於 `previousSocketId` | `{ statusCode: 409, error: "Conflict", code: "job_bound_elsewhere", message: "此診斷仍綁定在另一條連線" }` |
 | 429 | nginx `diag_read` 超限 | nginx 錯誤頁（非 JSON） |
-| 503 | Redis／Mongo 不可用或 5 s 逾時 | `{ statusCode: 503, error: "Service Unavailable", message: "診斷狀態暫時無法查詢，請稍後再試" }` |
+| 503 | Redis／Mongo 不可用，或 BullMQ 查詢超過 5 s、Mongo 查詢超過 3 s（合計上限 8 s；spec FR-010） | `{ statusCode: 503, error: "Service Unavailable", message: "診斷狀態暫時無法查詢，請稍後再試" }` |
 
 `code` 欄位只出現在 GET 的 409（research P2）；POST 的 409 body 不變。
 

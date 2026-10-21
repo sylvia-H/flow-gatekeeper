@@ -78,7 +78,7 @@
 | --- | --- | --- | --- | --- | --- |
 | completed（`returnvalue` 合法） | 撤回（刪）→ 200 | 撤回（還原原綁定）→ 200 | 200 | 200 | 200 |
 | failed | 撤回 → 200 | 撤回 → 200 | 200 | 200 | 200 |
-| 進行中 | 保留＋補 machineId → 200 `rebound:true` | 保留 → 200 `rebound:true` | 200 `rebound:true` | 200 `rebound:true`（罕見：寬限中又查到進行中） | **409** `job_bound_elsewhere` |
+| 進行中 | 保留＋補 machineId → 200 `rebound:true` | 保留 → 200 `rebound:true` | 200 `rebound:true` | registry 清除 terminal 後依 §2.3 第 3～6 列重判（實務上不可達） | **409** `job_bound_elsewhere` |
 | 無 job → Mongo 有 | 撤回 → 200 completed | 撤回 → 200 | 200 | 200 | 200 |
 | 無 job、Mongo 無（或兩來源皆不合法） | 撤回 → 404 | 撤回 → 404 | 404 | 404 | 404 |
 | Redis／Mongo 錯誤或逾時 | 撤回 → 503 | 撤回 → 503 | 503 | 503 | 503 |

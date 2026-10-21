@@ -4,7 +4,7 @@
 
 設計決策的理由與替代方案以 [ADR-003](../../docs/adr-003-completion-semantics.md) D1～D13 與 §7 代理裁決第 1～21 條為準，
 本檔**不重述**，只記「落地方式」：放在哪個檔、介面長什麼樣、與現有程式怎麼接。另有 plan 階段才浮現、spec／ADR 未定的
-設計點，統一列在文末「plan 階段自行決定的設計點」（P1～P24），採「對使用者可見行為最保守、實作代價最小」的做法，
+設計點，統一列在文末「plan 階段自行決定的設計點」（P1～P24；P25 為 analyze 階段補），採「對使用者可見行為最保守、實作代價最小」的做法，
 待使用者覆核後記入 ADR-003 §7（第 22 條起）。
 
 **行號基準**：本檔引用的行號皆於 `012-stream-resilience` HEAD `bc969dc` 核對；程式檔自 2.1.0（`27bc587`）以來未變，
@@ -40,7 +40,8 @@ Technical Context 沒有 NEEDS CLARIFICATION：技術棧不換（BullMQ 5.79.2�
   補一段 `GET /diagnoses/:jobId` 的 HTTP 語意摘要（400／404／409 兩種 code／429／503），明細記 `CHANGELOG.md` 契約小節
   （憲章 III 例外 (b)）。
 - 新增測試：`http.test.ts`（GET query／params／response 的合法與非法樣本、discriminated union 各分支）、`jobs.test.ts`（新檔：
-  兩個傳輸型別）、`asyncapi-drift.test.ts` 不需改程式（JobStatus 已在 `MESSAGE_SCHEMAS`），只會在 YAML 未同步時轉紅；
+  兩個傳輸型別）、`asyncapi-drift.test.ts` 新增一支「`JobStatus.reason` 不是 enum」斷言（其餘比對因 JobStatus 已在 `MESSAGE_SCHEMAS` 自動涵蓋，
+  YAML 未同步時轉紅；analyze 階段更正 2026-10-21）；
   `docs-contract-version.test.ts` 會逼 README／指南／CHANGELOG 的版本字串同步到 1.4.0。
 
 **Rationale**：契約先行（憲章 III）；傳輸型別放 `jobs.ts` 讓 api（relay `safeParse`、GET 驗證 `returnvalue`）與 worker
@@ -346,7 +347,7 @@ CSP `connect-src 'self'` 已涵蓋同源 GET，註解補一句。Vite dev proxy 
 
 ---
 
-## plan 階段自行決定的設計點（spec／ADR 未定，待覆核）
+## plan 階段自行決定的設計點（spec／ADR 未定，待覆核；P25 為 analyze 階段補）
 
 依「對使用者可見行為最保守、實作代價最小」採下列做法；使用者覆核後記入 ADR-003 §7（第 22 條起），推翻則照 FR-040 以 fix 分支修正。
 
@@ -376,3 +377,4 @@ CSP `connect-src 'self'` 已涵蓋同源 GET，註解補一句。Vite dev proxy 
 | P22 | GET 回 `rebound` 的語意 | 綁定原本就是本 socket（`unchanged`）時也回 `rebound: true`，意思是「之後的事件送到這條連線」 | 讓 web 只有一條規則（收到 `rebound:true` 就把 `previousSocketId` 改成本次 socketId） | 新增 `rebound:false` 分支（契約多一種值） |
 | P23 | rebind 後孤兒回收的起算點 | rebind 時更新 `boundAt` | 改綁後還要再跑的 job 不該因原始建立時間被提早回收 | 沿用原 `boundAt` |
 | P24 | e2e「首 token 前」kill 的時點 | 收到 `job/status` progress 20（context 已返回、尚未呼叫 LLM）即 kill | fake 第一個 token 約在 progress 40 後 500 ms，以 20 為觸發點確定落在首 token 前 | 收到 progress 40 才 kill（與首 token 只差 500 ms，容易落到之後） |
+| P25 | 場景 7 停頓觸發點與時序論證（analyze 階段補 2026-10-21） | 收到該 jobId 第 3 個 `ai/token` 後才 `pauseRedis()`（停頓在 exec1 首 token 之後開始）；場景從 worker 日誌印出重派那次 `idempotent short-circuit` 的 `source` 作為「冪等短路吸收重派」的證據 | e2e 的 `AI_DEDUPE_LOCK_SECONDS` 為 20 s，停頓 50 s 一定超過它，表面上落在 spec Edge Cases 的殘餘風險（第二次執行搶到 `ai-lock` 再打一次 LLM），會讓 SC-004 的「LLM 恰 1 次」偶發失敗。停頓排在首 token 之後時：token 發布不等 Redis 回應，exec1 在停頓期間跑完 LLM 串流、停在 `report(80)`；恢復後 exec1 排在前面的 SET `ai-result` 先於 exec2 的冪等短路查詢送進 Redis，exec2 一定在短路 (i) 命中，殘餘風險不適用；觸發點若落在首 token 前，exec1 卡在 LLM 呼叫前、恢復後與 exec2 競爭，場景會不穩。印 `source` 讓失敗時看得出是走 `ai-result` 還是 `diagnoses`，不必重跑才能判讀 | e2e 把 `AI_DEDUPE_LOCK_SECONDS` 拉到 60 s，讓停頓不超過去重鎖（代價：kill 場景 3a／3b 中死掉的持鎖者留下的 `ai-lock` 要等 60 s 才過期，重派的 job 才能取鎖，每個 kill 場景多等約 40 s，全套 e2e 再拉長，既有場景的等待上限也要跟著調） |

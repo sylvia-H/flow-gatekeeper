@@ -5,7 +5,7 @@
 **Input**: Feature specification from `/specs/012-stream-resilience/spec.md`（FR-001～FR-047、SC-001～SC-011、Clarifications 兩輪共 19 題）；
 設計依據 [ADR-003](../../docs/adr-003-completion-semantics.md)（D1～D13、§6 回補清單、§7 代理裁決第 1～21 條，皆待使用者覆核）。
 
-> **使用者離席期間產出**：技術決策沿用 ADR-003 代理裁決；plan 階段才浮現、spec／ADR 未定的設計點（P1～P24）一律採
+> **使用者離席期間產出**：技術決策沿用 ADR-003 代理裁決；plan 階段才浮現、spec／ADR 未定的設計點（P1～P24；analyze 階段補 P25）一律採
 > 「對使用者可見行為最保守、實作代價最小」的做法，列於 [research.md](./research.md) 文末，待覆核後記入 ADR-003 §7（第 22 條起）。
 
 ---
@@ -69,7 +69,7 @@ compose 全棧＋fake provider）；`pnpm check`、`pnpm test:coverage`（全域
 | **I. 規格驅動開發** | ✅ PASS | `012-stream-resilience` 自 `develop` 開出，已走 specify → clarify → plan；merge 以 `--no-ff`；implement 以 phase 為遞交單位。 |
 | **II. 單一真實來源** | ✅ PASS | 新文案依 `apps/web/PRODUCT.md`／`DESIGN.md`，不新增色值與 chip 種類；架構取捨已在 ADR-003；跨 feature 決策的回補清單見下方「文件回補」（ADR-003 §6），merge 前 MUST 完成。 |
 | **III. 契約優先與型別安全** | ⚠️ PASS（需記錄） | 先改 `packages/contracts`（`job-status.ts`、`http.ts`、`jobs.ts`）與 `asyncapi.yaml` 1.4.0，再改三端；`JobStatus` 以 Zod 定義並納入漂移比對；api↔worker 的 `returnvalue`／progress 依例外 (c) 以 Zod 定義、消費端 `safeParse`；不另寫平行型別。**需記錄**：Principle III 的列舉只寫 `POST /diagnoses`，`GET /diagnoses/:jobId` 不在列舉內——本 feature 仍以 Zod 定義其 query 與成功回應（spec FR-032），憲章補列為建議修訂（PATCH 1.6.0 → 1.6.1），待使用者決定（FR-041，見 Complexity Tracking）。GET 錯誤 body 依例外 (b) 不另定 schema，語意記於 asyncapi `info.description` 與 CHANGELOG。`ai-fail` 標記為 worker 自寫自讀的內部值，以 worker 內部 Zod 驗證、不進 contracts（research P9）。 |
-| **IV. 即時通道架構紀律** | ✅ PASS | 原生 `ws` 不變、不新增 channel；結果經 BullMQ QueueEvents（lifecycle 通道）送出，keepalive 也是 `updateProgress`（同一通道），token 仍走 Pub/Sub，不混流（FR-042）；worker 不直接 emit ws；api 不跑 long-running——GET 只做有 5 s 上限的 Redis 讀與一次 Mongo `findOne`；Redis 連線分離：GET 的 `Job.fromId` 用 producer 的 command 連線，不借 subscriber 或 QueueEvents 的 blocking 連線；`ai/token` 仍逐筆進 store 的既有範圍不擴大（硬規則 1）。 |
+| **IV. 即時通道架構紀律** | ✅ PASS | 原生 `ws` 不變、不新增 channel；結果經 BullMQ QueueEvents（lifecycle 通道）送出，keepalive 也是 `updateProgress`（同一通道），token 仍走 Pub/Sub，不混流（FR-042）；worker 不直接 emit ws；api 不跑 long-running——GET 只做有 5 s 上限的 Redis 讀與一次 Mongo `findOne`；Redis 連線分離：GET 的 `Job.fromId` 用 producer 的 command 連線，不借 subscriber 或 QueueEvents 的 blocking 連線；worker 新增的三種鍵（`ai-result`／`ai-metric`／`ai-fail`）走既有 cache 連線（`ProcessorStore`），不借 BullMQ Worker 或 Pub/Sub 的連線；`ai/token` 仍逐筆進 store 的既有範圍不擴大（硬規則 1）。 |
 | **V. AI 診斷紀律** | ✅ PASS | `AiProvider` interface 不動；cache before API 與簽章去重不變，另加負向標記 `ai-fail:<sig>`（同一簽章的成本控制，與原則同向）；所有結果在每個邊界都經 `DiagnosisResultSchema` 驗證：`returnvalue`（relay、GET）、`ai-result` 暫存、Mongo 讀回；不合法者不轉發、改走退路。 |
 | **VI. 祕密與設定衛生** | ✅ PASS | 無新環境變數與祕密（BullMQ 參數是具名常數，FR-018）；日誌不記 MongoDB 原始錯誤以外的敏感值，`persist_failed` 訊息為固定句（代理裁決第 18 條）。 |
 | **VII. 資料可追溯性** | ⚠️ PASS（需記錄） | 診斷結果仍持久化於 Mongo `diagnoses`、觸發紀錄每 jobId 一筆（FR-043）。**需記錄**：`ai-result:<jobId>` 是結果在 Redis 的暫時副本（≤ 1 h），只用來讓寫庫失敗的重試不重打 LLM；寫庫終究失敗時 job 以 `persist_failed` 收尾、使用者看到失敗，該副本隨 TTL 消失，不被當作歷史資料（見 Complexity Tracking）。 |
@@ -90,14 +90,16 @@ compose 全棧＋fake provider）；`pnpm check`、`pnpm test:coverage`（全域
 specs/012-stream-resilience/
 ├── plan.md                              # 本檔
 ├── spec.md                              # 含 Clarifications 兩輪
-├── research.md                          # Phase 0：R1–R13 落地方式＋ P1–P24 plan 階段自行決定的設計點
+├── research.md                          # Phase 0：R1–R13 落地方式＋ P1–P25 plan／analyze 階段自行決定的設計點
 ├── data-model.md                        # Phase 1：契約型別、綁定與 claim 判斷表、Redis 鍵、Mongo、worker 步驟表、web 狀態
 ├── quickstart.md                        # Phase 1：單元／整合／e2e 指令與四個故障演練
 ├── contracts/
 │   ├── job-lifecycle.contract.md        # job/status 1.4.0、relay 對映、ai/done 描述、ai/error code、傳輸型別
 │   ├── diagnosis-lookup.contract.md     # GET /diagnoses/:jobId、錯誤碼、nginx、日誌
 │   └── ui-copy.contract.md              # 面板文案、串流標題、GET 三種用途的對映（非通訊契約）
-├── checklists/requirements.md           # 既有
+├── checklists/
+│   ├── requirements.md                  # 既有（spec 品質檢查）
+│   └── resilience.md                    # checklist 階段：韌性需求檢查表 52 項
 └── tasks.md                             # Phase 2（/speckit-tasks 產出，非本指令）
 ```
 
@@ -232,7 +234,7 @@ docs/Flow-Gatekeeper-SDD-完整實作指南.md
 | SC-001 SIGKILL 最長無事件 < 45 s | `bullmq-options.test.ts`（`K + L + 2S` 不變量）、`keepalive.test.ts`、processor（等待鎖與首 token 前的補送）、relay `stalled` 轉發 | `bullmq-lifecycle.int.test.ts`（options 生效、progress 物件讀回） | 場景 3a（串流中 kill）、3b（progress 20 時 kill，P24）：`maxGap < 45 s`、印 `W` |
 | SC-002 Pub/Sub 斷線仍以 result 完成 | processor 回傳值形狀；`job-status-payload.test.ts`（合法／不合法／null）；relay `completed` 三分支；reducer `completed+result` | `bullmq-lifecycle.int.test.ts`（returnvalue 經 QueueEvents 讀回） | 場景 5：容器內 50 ms 迴圈 `CLIENT KILL TYPE pubsub` |
 | SC-003 api 重啟續接 | registry claim（無綁定 → created）、lookup service（進行中 → 200 rebound、completed → 撤回）、store `onReconnect`／`onAuthorized` | — | 場景 6a（期間完成 → 200 completed）、6b（停 worker → 200 waiting → 收到 completed，P18） |
-| SC-004 Redis 停頓 50 s：trigger 1、LLM 1、hit／miss 1、cached false | processor：stalled 重派情境的短路、metric once、trigger upsert | `diagnosis-repository.int.test.ts`（unique＋upsert、併發 upsert）、`redis-store.int.test.ts`（`setIfAbsent`） | 場景 7：`compose pause redis` 50 s、`countTriggers`、`countLlmCalls`（`LLM call` 日誌，FR-047） |
+| SC-004 Redis 停頓 50 s：trigger 1、LLM 1、hit／miss 1、cached false | processor：stalled 重派情境的短路、metric once、trigger upsert | `diagnosis-repository.int.test.ts`（unique＋upsert、併發 upsert）、`redis-store.int.test.ts`（`setIfAbsent`） | 場景 7：第 3 個 token 後 `compose pause redis` 50 s（research P25）、`countTriggers`、`countLlmCalls`（`LLM call` 日誌，FR-047）、`cacheCounters`（窗內 hit／miss 加總，FR-046） |
 | SC-005 GET 七種回應 | `job-routing-registry.test.ts`（判斷表 6 列、撤回只撤自己）、`diagnosis-lookup.service.test.ts`（200×3、400、404、409×2、503、`returnvalue` 不合法退 Mongo、`previousSocketId` 改綁、先綁定後查詢：查詢期間到的 `completed` 送得到新連線）、`jobs.controller.test.ts`（400 形狀）、contracts `http.test.ts` | `diagnosis-reader.int.test.ts`（`removeOnComplete` 後由 Mongo 取回的讀取端） | 場景 8：404、409 `job_bound_elsewhere`、`previousSocketId` → 200、409 `socket_unauthorized`、400（非 UUID socketId）、他人查已完成 → 200 |
 | SC-006 四種完成順序收斂 | reducer 四順序 × `result`／`cached`／`jobId` 相同、store 耗時只結算一次、`CopilotDrawer` 公告只一次；AR-6 救回擴充到三來源 | — | — |
 | SC-007 同簽章失敗 ≤ 4 次 LLM | processor（fake store／timer／provider）：兩 job 持續錯誤、錯誤碼相同、`ai-rpm` 不因第二個 job 增加、自己的標記忽略、成功時 DEL | `redis-store.int.test.ts`（`ai-fail` TTL 10 s） | — |
@@ -256,6 +258,7 @@ docs/Flow-Gatekeeper-SDD-完整實作指南.md
 | `countTriggers(jobId)` | `infra.ts` | `compose exec -T mongo mongosh --quiet <MONGO_DB> --eval …countDocuments({jobId})` | 7 |
 | `countLlmCalls(jobId)` | `infra.ts` | `compose logs --no-color worker` 逐行 JSON parse，數 `msg === "LLM call"` 且 `jobId` 相符 | 7 |
 | `workerReadyAt(after)` | `infra.ts` | `compose logs --timestamps worker` 找 `after` 之後第一則 `worker ready` | 3a／3b（記錄 W） |
+| `cacheCounters(from, to)` | `infra.ts` | `compose logs --timestamps --no-color worker` 逐行 JSON parse，加總時間落在 `(from, to]` 的 `worker metrics summary` 之 `cache.hits + cache.misses`（窗內值、結算後歸零，不能取 `system/metrics` 前後相減）；`from` 取 POST 前等到的一則 summary（窗界，避免前一場景的計數混進同一窗）、`to` 取完成後第一則 summary；e2e override 把 api 與 worker 的 `METRICS_INTERVAL_MS` 設 5000（下限，兩端須相同），等窗界最多 5 s（FR-046） | 7 |
 
 場景各自一個檔（全套循序）。nginx POST 桶（10 r/m、burst 5）：全套 POST 由 5 次增為約 11 次，但新場景每檔耗時 ≥ 30 s，期間回補 ≥ 5 次，
 不加自動重試；GET 走獨立 60 r/m 桶。
@@ -266,16 +269,18 @@ docs/Flow-Gatekeeper-SDD-完整實作指南.md
 
 | Phase | 內容 | 對應 |
 | --- | --- | --- |
-| 1. Setup | 無新相依；確認 `docker compose up -d` 可跑整合測試 | — |
-| 2. Foundational | 契約 1.4.0（三個 contracts 檔、asyncapi、漂移與版本測試）；`JobRoutingRegistry` 抽出（行為不變的重構＋`failed` 寬限）；`bullmq-options.ts`／`keepalive.ts`／`job-keys.ts` 純函式與單測（尚未接線） | FR-014、030～033 |
-| 3. US1 | worker 回傳值；relay `completed` 讀 `returnvalue`；web reducer 三來源收斂（GET 退路留到 US2） | FR-001～005 |
-| 4. US2 | GET（lookup service、controller、Mongo 唯讀）、nginx `diag_read`；web `getDiagnosis`、`onReconnect`／`onAuthorized`、2 s 與 watchdog 退路、文案 | FR-005、007～017、022、035～038 |
-| 5. US4 | 冪等短路、trigger unique＋upsert、metric once、`ai-result`／`persist_failed` | FR-024～027 |
-| 6. US3 | 鎖參數接線、keepalive 接線、progress 物件、relay `stalled`、web 說明行與 stalled 上限文案（**MUST 在 US4 之後**） | FR-018～023 |
+| 1. Setup | 無新相依；確認基線、BullMQ 5.79.2 能力與 busybox 小數秒 | — |
+| 2. Foundational | 契約 1.4.0（三個 contracts 檔、asyncapi、漂移與版本測試）；`JobRoutingRegistry` 抽出（行為不變的重構＋`failed` 寬限）；`bullmq-options.ts`／`keepalive.ts`／`job-keys.ts` 純函式與單測（尚未接線）；e2e harness helper | FR-014、030～033、046 |
+| 3. US1 | worker 回傳值；relay `completed` 讀 `returnvalue`；web reducer 三來源收斂（GET 退路留到 US2）；e2e 場景 1／2 斷言、場景 5 | FR-001～005；SC-002 |
+| 4. US2 | GET（lookup service、controller、Mongo 唯讀）、nginx `diag_read`；web `getDiagnosis`、`onReconnect`／`onAuthorized`、2 s 與 watchdog 退路、文案；e2e 場景 6a／6b、8 | FR-005、007～017、022、035～038；SC-003、SC-005 |
+| 5. US4 | 冪等短路、trigger unique＋upsert、metric once、`ai-result`／`persist_failed`；e2e 場景 7 撰寫（執行點在 US3 checkpoint） | FR-024～027；SC-004 |
+| 6. US3 | 鎖參數接線、keepalive 接線、progress 物件、relay `stalled`、web 說明行與 stalled 上限文案（**MUST 在 US4 之後**）；e2e 場景 3a／3b、執行場景 7 | FR-018～023；SC-001 |
 | 7. US5 | `ai-fail` | FR-028、029 |
 | 8. US6 | `attempt`／`execution` 的 web 消費與「嘗試 N / 3」 | FR-006 |
-| 9. e2e | harness helper、場景 3 改寫、場景 5～8 | FR-046、SC-001～005 |
-| 10. Polish | 文件回補（下節）、`pnpm check`／`test:coverage`／`test:e2e`、quickstart 演練 | FR-039～041、044 |
+| 9. 文件回補 | 下節「文件回補」與 ADR-003 本文同步 | FR-039～041 |
+| 10. Polish | `pnpm check`／`test:coverage`／整合測試／`test:e2e` 全套、quickstart 演練 | FR-044；SC-010、SC-011 |
+
+e2e 場景隨各 story 交付（不另立 e2e phase）；與 tasks.md 的 phase 切分一致（analyze 階段修正 2026-10-21）。
 
 ---
 
@@ -314,11 +319,11 @@ docs/Flow-Gatekeeper-SDD-完整實作指南.md
 - [ ] 指南 §15.7 狀態改「已落地」；§15.6「e2e 實測發現（留給 012-lite）」條加已落地註記；§15.6 現況摘要補 012-lite；§16.3 第 6 列「目前無結果讀取端點」改寫；§17「streaming 推不到前端」列的「重連後舊 jobId 不會改綁」改寫。
 - [ ] README「已知限制」四條改寫（重連以 jobId 續接、快取命中 1 h 後 GET 404、上界約 35 s／45 s 才標結果未知、at-most-once 重連後直接顯示結果）＋補「重新整理頁面後不續接」；「第三輪審查的現況」把 012-lite 各項移到已修。
 - [ ] README 資料表：`diagnoses`「目前只寫不讀」改寫、`diagnosisTriggers` 補 jobId unique、Redis 職責補 `ai-fail:*`／`ai-result:*`／`ai-metric:*`；契約版本字串 1.3.0 → 1.4.0；nginx GET 60 r/m 獨立桶；BullMQ 參數具名常數說明；`previousSocketId` 與 jobId 進 access log 的曝險（風險 3）。
-- [ ] `apps/web/PRODUCT.md`：已知產品限制改寫（含「重新整理頁面後不續接」）、失敗段改為 2 s 退路先 GET、新術語（重新派送、取回、結果未知）。
+- [ ] `apps/web/PRODUCT.md`：已知產品限制改寫（含「重新整理頁面後不續接」）、失敗段改為 2 s 退路先 GET、新術語（重新排入佇列（內部稱重新派送）、取回、結果未知）。
 - [ ] `tests/e2e/README.md`：場景表（3a／3b、5～8）、場景 3 的現況語意、「注意」段（GET 獨立桶、新場景與耗時 10～15 分鐘）。
 - [ ] `asyncapi.yaml`（FR-033）與 `CHANGELOG.md`（FR-034：契約 1.4.0、相容性注意四條＋升級順序、`[2.1.0]` 帶著發布的 012-lite 項標已修）。
 - [ ] 憲章 Principle III 補列 GET：**建議**、待使用者；merge 前仍未確認則 spec 與 ADR-003 保留「建議修訂、待使用者」註記（FR-041）。
-- [ ] ADR-003：§6 勾選；§7 補記 plan 階段的 P1～P24（第 22 條起，待覆核）；檔頭「待覆核」註保留到使用者覆核（FR-040）。
+- [ ] ADR-003：§6 勾選；§7 補記 plan／analyze 階段的 P1～P25（第 22 條起，待覆核）；檔頭「待覆核」註保留到使用者覆核（FR-040）。
 - [ ] repo `CLAUDE.md` 開頭現況段：落地後改為最近一次完成的 feature。
 
 ---
