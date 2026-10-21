@@ -95,6 +95,8 @@ const progressText = computed(() =>
 const steps = computed(() =>
   props.state.status === "active" ? jobSteps(props.state.progress) : [],
 );
+/** 步驟清單小標「處理步驟」的 id：清單以 `aria-labelledby` 指向它（fix/20261022-ui-steps-heading）。 */
+const stepsHeadingId = useId();
 /**
  * 目前步驟（進度列下方的一行 `text-xs`）：骨架填滿後完整步驟清單會被擠到捲動區下方，
  * 「取得去重鎖」這類進度與佇列／嘗試一起放在進度列下，不必捲動也看得到（critique 第二輪 Minor；完整清單仍保留在下方）。
@@ -481,7 +483,7 @@ watch(
           </p>
         </div>
 
-        <!-- 進行中：進度（含中止）＋目前步驟與 job meta 一行 → 逐格填入的結果骨架 → 原始串流（收合）→ 完整處理步驟 -->
+        <!-- 進行中：進度（含中止）＋目前步驟與 job meta 一行 → 逐格填入的結果骨架 → 原始串流（收合）→ 「處理步驟」小標＋完整步驟清單 -->
         <div v-else-if="state.status === 'active'" class="space-y-4">
           <div class="space-y-2">
             <div class="flex items-center gap-2">
@@ -521,26 +523,33 @@ watch(
           <!-- 原始串流：逐字文字仍可展開查看（FR-019），預設收合 -->
           <StreamDisclosure v-model:expanded="showStream" label="原始串流" :text="state.streamText" :streaming="true" />
 
-          <!-- US7 處理步驟清單（衍生自進度里程碑 0/20/40/60/80/100）；目前步驟另摘要在進度列下 -->
-          <ol class="space-y-1.5" aria-label="診斷處理步驟">
-            <li
-              v-for="step in steps"
-              :key="step.milestone"
-              class="flex items-center gap-2.5 text-sm"
-              :class="STEP_STYLE[step.status].text"
-              :aria-current="step.status === 'active' ? 'step' : undefined"
-            >
-              <span
-                class="h-0.5 w-3 shrink-0"
-                :class="STEP_STYLE[step.status].tick"
-                aria-hidden="true"
-              />
-              <span class="flex-1">
-                {{ step.label }}<span class="sr-only">（{{ STEP_STYLE[step.status].sr }}）</span>
-              </span>
-              <span class="font-mono text-xs tabular-nums text-ink-3">{{ step.milestone }}%</span>
-            </li>
-          </ol>
+          <!-- US7 處理步驟清單（衍生自進度里程碑 0/20/40/60/80/100）；目前步驟另摘要在進度列下。
+             小標「處理步驟」＋上方 edge 分隔線（與原始串流展開區同一條分區規則，fix/20261022-ui-steps-heading）：
+             原本清單緊接在「原始串流」鈕下方，看起來像它的展開內容（critique 2026-10-17）。小標同結果區段標頭
+             （14px/600 ink-2）；清單以 aria-labelledby 指向小標，讀屏念「處理步驟 清單 N 項」。用 div 不用 section，
+             不多一個 region 地標。 -->
+          <div class="border-t border-edge pt-3" data-testid="copilot-steps">
+            <h3 :id="stepsHeadingId" class="mb-2 text-sm font-semibold text-ink-2">處理步驟</h3>
+            <ol class="space-y-1.5" :aria-labelledby="stepsHeadingId">
+              <li
+                v-for="step in steps"
+                :key="step.milestone"
+                class="flex items-center gap-2.5 text-sm"
+                :class="STEP_STYLE[step.status].text"
+                :aria-current="step.status === 'active' ? 'step' : undefined"
+              >
+                <span
+                  class="h-0.5 w-3 shrink-0"
+                  :class="STEP_STYLE[step.status].tick"
+                  aria-hidden="true"
+                />
+                <span class="flex-1">
+                  {{ step.label }}<span class="sr-only">（{{ STEP_STYLE[step.status].sr }}）</span>
+                </span>
+                <span class="font-mono text-xs tabular-nums text-ink-3">{{ step.milestone }}%</span>
+              </li>
+            </ol>
+          </div>
         </div>
 
         <!-- 已完成：嚴重度色條 + 完成 meta（快取時大字耗時對比）+ 結構化結果 + 收合的原始串流。

@@ -164,6 +164,14 @@ function stubDesktop(): void {
   );
 }
 
+/** bottom sheet（< 1366px）：matchMedia 明確命中 sheet 斷點，不依賴 happy-dom 的預設視窗寬度。 */
+function stubSheet(): void {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({ matches: true, media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+  );
+}
+
 describe("CopilotDrawer 空狀態與 idle", () => {
   beforeEach(stubDesktop);
 
@@ -247,7 +255,7 @@ describe("CopilotDrawer active：進度、Attempt、串流", () => {
     expect(metaValue(w, "佇列")).toBe("diagnosis"); // 技術識別碼維持原文
     expect(w.text()).not.toMatch(LEGACY_EN_LABEL);
     // 步驟標籤全中文（標籤來自 job-steps.ts，元件層不再另放對照表）
-    const steps = w.get('[aria-label="診斷處理步驟"]').text();
+    const steps = w.get('[data-testid="copilot-steps"] ol').text();
     expect(steps).toContain("彙整診斷資料");
     expect(steps).toContain("收到首段串流");
     expect(steps).not.toMatch(/context|token/);
@@ -722,6 +730,65 @@ describe("CopilotDrawer 原始串流標題（012 FR-038、contracts/ui-copy §2�
     expect(headerText(w)).toContain("已完成");
     expect(streamToggleLabel(w)).toBe("原始串流（不完整）");
     expect(w.get('[data-testid="copilot-announcement"]').text()).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
+  });
+});
+
+describe("CopilotDrawer 處理步驟小標（fix/20261022-ui-steps-heading）", () => {
+  const JOB = "55555555-5555-4555-8555-555555555555";
+  const ACTIVE: CopilotJobState = {
+    status: "active",
+    machineId: MACHINE,
+    jobId: JOB,
+    attempt: 1,
+    lastSeq: 0,
+    execution: 1,
+    progress: 40,
+    streamText: "推理",
+  };
+
+  /** 文字為「處理步驟」的小標（結果區段標頭同為 h3，以文字辨識）。 */
+  function stepsHeading(w: VueWrapper) {
+    return w.findAll("h3").find((h) => h.text() === "處理步驟");
+  }
+
+  it.each<[string, () => void, boolean]>([
+    ["推擠式側欄（≥ 1366px）", stubDesktop, false],
+    ["bottom sheet（< 1366px）", stubSheet, true],
+  ])("%s：進行中有「處理步驟」小標，清單以 aria-labelledby 指向它，且以分隔線與原始串流區塊分開", async (_name, layout, isSheet) => {
+    layout();
+    const w = mountDrawer({ state: ACTIVE });
+    // isSheet 在 onMounted 讀 matchMedia 後才更新，等重繪
+    await flushPromises();
+    // 確認真的落在該版面：sheet 根節點帶 role=dialog，推擠式側欄不帶
+    expect(w.find('[role="dialog"]').exists()).toBe(isSheet);
+    const heading = stepsHeading(w);
+    expect(heading).toBeDefined();
+    const id = heading!.attributes("id");
+    expect(id).toBeTruthy();
+    const list = w.get(`ol[aria-labelledby="${id}"]`);
+    expect(list.findAll("li").length).toBeGreaterThan(0);
+    // 小標與清單同在一個帶上方 edge 分隔線的區塊，位在原始串流展開區之後、不在其內
+    const block = w.get('[data-testid="copilot-steps"]');
+    expect(block.classes()).toEqual(expect.arrayContaining(["border-t", "border-edge"]));
+    expect(block.element.contains(heading!.element)).toBe(true);
+    expect(block.element.contains(list.element)).toBe(true);
+    const streamBtn = w.findAll("button").find((b) => b.text().startsWith("原始串流"))!;
+    expect(streamBtn.element.parentElement!.contains(block.element)).toBe(false);
+    expect(streamBtn.element.compareDocumentPosition(heading!.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // 小標只有一個；進度列下的「目前步驟」摘要不重複成第二個小標
+    expect(w.findAll("h3").filter((h) => h.text() === "處理步驟")).toHaveLength(1);
+  });
+
+  it.each<[string, CopilotJobState]>([
+    ["閒置", { status: "idle", machineId: MACHINE }],
+    ["已完成", { status: "completed", machineId: MACHINE, jobId: JOB, cached: false, streamText: "推理", result: RESULT, source: "ai/done", streamIncomplete: false }],
+    ["失敗", { status: "failed", machineId: MACHINE, jobId: JOB, streamText: "推理", error: "AI 診斷逾時，請重試。" }],
+  ])("%s：不渲染「處理步驟」小標與步驟清單", (_name, state) => {
+    stubDesktop();
+    const w = mountDrawer({ state });
+    expect(stepsHeading(w)).toBeUndefined();
+    expect(w.find('[data-testid="copilot-steps"]').exists()).toBe(false);
+    expect(w.text()).not.toContain("處理步驟");
   });
 });
 
