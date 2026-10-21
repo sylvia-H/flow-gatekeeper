@@ -31,7 +31,8 @@ info:
     429 when the nginx diag_read limit (60 requests per minute, burst 10, separate from POST) is exceeded (nginx error
     page, not JSON);
     503 when Redis or MongoDB is unavailable, or the BullMQ lookup exceeds 5 seconds or the MongoDB query exceeds
-    3 seconds (8 seconds in total at most).
+    3 seconds (8 seconds in total at most); also returned for rare inconsistent states (terminal binding while the
+    queue still reports the job in progress; job data without machineId); retry later.
   contact:
     name: flow-gatekeeper
     url: https://github.com/flow-gatekeeper
