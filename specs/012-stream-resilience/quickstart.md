@@ -44,7 +44,7 @@ corepack pnpm --filter @flow-gatekeeper/api test:integration      # HistoryServi
 
 預期：全綠；`bullmq-lifecycle.int.test.ts` 的 QueueEvents `completed` 讀回 `{ result, cached }`、`progress` 讀回 `{ value, attempt, execution }`。
 
-## 3. e2e（需 Docker；約 10～15 分鐘）
+## 3. e2e（需 Docker；實測約 4.6 分鐘（278 s，第 3 輪），規劃時估 10～15 分鐘）
 
 ```powershell
 corepack pnpm test:e2e                 # build → up --wait → 循序跑全部場景 → down -v

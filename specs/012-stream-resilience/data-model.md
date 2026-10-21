@@ -163,7 +163,8 @@ MUST 再核對一次 owner（實作交叉審查補，2026-10-21）。
 | `active` | `resume?: "pending"` | 重連後、續接 GET 回應前；面板顯示「已重新連線，正在取回診斷狀態…」 |
 | `active` | `reconnected?: true` | 執行期間經歷過 WS 重連（FR-016）；收尾時轉成 `streamIncomplete` |
 | `active` | `stalledNotice?: { execution: number; confirmed?: true }` | 收到 `reason:"stalled"`；面板顯示「…（第 N 次執行）」（P15） |
-| `completed` | `source: "ai/done" \| "status" \| "lookup"` | 收尾來源；`lookup` 時完成 meta 加「重新連線後取回」 |
+| `completed` | `source: "ai/done" \| "status" \| "lookup"` | 收尾來源；`lookup` 時完成 meta 加「重新連線後取回」（實作更新 2026-10-21，ADR-003 代理裁決第 53 條：改為 `source === "lookup"` **且** `reconnected` 才顯示，2 s／watchdog 退路沒有重連時不顯示） |
+| `completed` | `reconnected?: true` | 自 active 帶入（執行期間經歷過重連）；供「重新連線後取回」小字（第 53 條）與耗時 recovered 判定 `source === "lookup" \|\| reconnected`（第 52 條，§6.4）使用 |
 | `completed` | `streamIncomplete: boolean` | `source !== "ai/done"` 或 `reconnected` 時為 true → 標題「原始串流（不完整）」（FR-038） |
 | `failed` | `reason?: "undelivered"`（不變） | 只有它可被三種結果來源救回 |
 

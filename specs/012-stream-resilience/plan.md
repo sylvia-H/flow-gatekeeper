@@ -309,22 +309,22 @@ e2e 場景隨各 story 交付（不另立 e2e phase）；與 tasks.md 的 phase 
 
 ## 文件回補（merge 回 `develop` 前 MUST；取自 ADR-003 §6）
 
-- [ ] ADR-002 §6.2「生產路徑：改用 Redis Streams」改寫為「已拒絕（2026-10-21，ADR-003）」；「已變更」註記收斂；「更正」段的「沒有讀取端點」標已落地。
-- [ ] ADR-002 §3 第 5 列加「已變更（012-lite）」。
-- [ ] ADR-002 §6.5「結果讀取與完成語意」列改「已落地（012-lite，ADR-003）」＋一句摘要；92 秒實測改過去式；升級路徑指 ADR-003 §5。
-- [ ] ADR-002 §6.5「api 行程內單實例狀態」列：`JobRoutingRegistry` 已移（012-lite），外置見 ADR-003 §5。
-- [ ] ADR-002 §6.5.1 WK-4／AR-F4 列標已落地；「review03 新增：失敗終態沒有 relay 寬限」列標已落地（D12）。
-- [ ] ADR-002 §6.5.1 末尾補「review03 roadmap 012-lite：已落地」列（AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治含失敗終態寬限、WK-20、WEB-20 attempt 部分、DOC-29）。
-- [ ] ADR-002 §6.1 單實例狀態第 4 項改指 `JobRoutingRegistry`。
-- [ ] 指南 §15.7 狀態改「已落地」；§15.6「e2e 實測發現（留給 012-lite）」條加已落地註記；§15.6 現況摘要補 012-lite；§16.3 第 6 列「目前無結果讀取端點」改寫；§17「streaming 推不到前端」列的「重連後舊 jobId 不會改綁」改寫。
-- [ ] README「已知限制」四條改寫（重連以 jobId 續接、快取命中 1 h 後 GET 404、上界約 35 s／45 s 才標結果未知、at-most-once 重連後直接顯示結果）＋補「重新整理頁面後不續接」；「第三輪審查的現況」把 012-lite 各項移到已修。
-- [ ] README 資料表：`diagnoses`「目前只寫不讀」改寫、`diagnosisTriggers` 補 jobId unique、Redis 職責補 `ai-fail:*`／`ai-result:*`／`ai-metric:*`；契約版本字串 1.3.0 → 1.4.0；nginx GET 60 r/m 獨立桶；BullMQ 參數具名常數說明；`previousSocketId` 與 jobId 進 access log 的曝險（風險 3）。
-- [ ] `apps/web/PRODUCT.md`：已知產品限制改寫（含「重新整理頁面後不續接」）、失敗段改為 2 s 退路先 GET、新術語（重新排入佇列（內部稱重新派送）、取回、結果未知）。
-- [ ] `tests/e2e/README.md`：場景表（3a／3b、5～8）、場景 3 的現況語意、「注意」段（GET 獨立桶、新場景與耗時 10～15 分鐘）。
-- [ ] `asyncapi.yaml`（FR-033）與 `CHANGELOG.md`（FR-034：契約 1.4.0、相容性注意四條＋升級順序、`[2.1.0]` 帶著發布的 012-lite 項標已修）。
-- [ ] 憲章 Principle III 補列 GET：**建議**、待使用者；merge 前仍未確認則 spec 與 ADR-003 保留「建議修訂、待使用者」註記（FR-041）。
-- [ ] ADR-003：§6 勾選；§7 補記 plan／analyze 階段的 P1～P25（第 22 條起，待覆核）；檔頭「待覆核」註保留到使用者覆核（FR-040）。
-- [ ] repo `CLAUDE.md` 開頭現況段：落地後改為最近一次完成的 feature。
+- [x] ADR-002 §6.2「生產路徑：改用 Redis Streams」改寫為「已拒絕（2026-10-21，ADR-003）」；「已變更」註記收斂；「更正」段的「沒有讀取端點」標已落地。
+- [x] ADR-002 §3 第 5 列加「已變更（012-lite）」。
+- [x] ADR-002 §6.5「結果讀取與完成語意」列改「已落地（012-lite，ADR-003）」＋一句摘要；92 秒實測改過去式；升級路徑指 ADR-003 §5。
+- [x] ADR-002 §6.5「api 行程內單實例狀態」列：`JobRoutingRegistry` 已移（012-lite），外置見 ADR-003 §5。
+- [x] ADR-002 §6.5.1 WK-4／AR-F4 列標已落地；「review03 新增：失敗終態沒有 relay 寬限」列標已落地（D12）。
+- [x] ADR-002 §6.5.1 末尾補「review03 roadmap 012-lite：已落地」列（AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治含失敗終態寬限、WK-20、WEB-20 attempt 部分、DOC-29）。
+- [x] ADR-002 §6.1 單實例狀態第 4 項改指 `JobRoutingRegistry`。
+- [x] 指南 §15.7 狀態改「已落地」；§15.6「e2e 實測發現（留給 012-lite）」條加已落地註記；§15.6 現況摘要補 012-lite；§16.3 第 6 列「目前無結果讀取端點」改寫；§17「streaming 推不到前端」列的「重連後舊 jobId 不會改綁」改寫。
+- [x] README「已知限制」四條改寫（重連以 jobId 續接、快取命中 1 h 後 GET 404、上界約 35 s／45 s 才標結果未知、at-most-once 重連後直接顯示結果）＋補「重新整理頁面後不續接」；「第三輪審查的現況」把 012-lite 各項移到已修。
+- [x] README 資料表：`diagnoses`「目前只寫不讀」改寫、`diagnosisTriggers` 補 jobId unique、Redis 職責補 `ai-fail:*`／`ai-result:*`／`ai-metric:*`；契約版本字串 1.3.0 → 1.4.0；nginx GET 60 r/m 獨立桶；BullMQ 參數具名常數說明；`previousSocketId` 與 jobId 進 access log 的曝險（風險 3）。
+- [x] `apps/web/PRODUCT.md`：已知產品限制改寫（含「重新整理頁面後不續接」）、失敗段改為 2 s 退路先 GET、新術語（重新排入佇列（內部稱重新派送）、取回、結果未知）。
+- [x] `tests/e2e/README.md`：場景表（3a／3b、5～8）、場景 3 的現況語意、「注意」段（GET 獨立桶、新場景與耗時；實測約 4.6 分鐘（278 s，第 3 輪），規劃時估 10～15 分鐘）。
+- [x] `asyncapi.yaml`（FR-033）與 `CHANGELOG.md`（FR-034：契約 1.4.0、相容性注意四條＋升級順序、`[2.1.0]` 帶著發布的 012-lite 項標已修）。
+- [ ] 憲章 Principle III 補列 GET：**建議**、待使用者；merge 前仍未確認則 spec 與 ADR-003 保留「建議修訂、待使用者」註記（FR-041）。（2026-10-22 合併門第 1 輪：保留未勾——憲章待使用者確認；CLAUDE.md 現況段於 merge 時改（T076））
+- [x] ADR-003：§6 勾選；§7 補記 plan／analyze 階段的 P1～P25（第 22 條起，待覆核）；檔頭「待覆核」註保留到使用者覆核（FR-040）。
+- [ ] repo `CLAUDE.md` 開頭現況段：落地後改為最近一次完成的 feature。（2026-10-22 合併門第 1 輪：保留未勾——憲章待使用者確認；CLAUDE.md 現況段於 merge 時改（T076））
 
 ---
 

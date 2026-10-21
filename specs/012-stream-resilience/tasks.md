@@ -258,7 +258,7 @@ pnpm monorepo：`packages/contracts/src/`、`apps/api/src/`、`apps/worker/src/`
 - [X] T078 `corepack pnpm test:coverage`：全域與十個核心檔逐檔門檻（`vitest.config.ts`）照過；`job-status-relay.service.ts`、`ai-stream-relay.service.ts` 因程式移出 registry 而下降時以補測試維持，**不調低門檻**（plan 風險 5；FR-044）
 - [X] T079 [Docker] `docker compose up -d` 後 `corepack pnpm --filter @flow-gatekeeper/worker test:integration` 與 `--filter @flow-gatekeeper/api test:integration` 全綠（`apps/worker/src/integration/*.int.test.ts`、`apps/api/src/integration/*.int.test.ts`；結果記入 `specs/012-stream-resilience/tasks.md`「驗收紀錄」）（SC-004、SC-005、SC-007、SC-009）
 - [X] T080 [Docker/e2e] `corepack pnpm test:e2e` 全套：場景 1／2／4a／4b 照過（SC-011），3a／3b、5、6a／6b、7、8 通過（SC-001～SC-005）；把 `maxGap`、`W`、場景 7 的重派證據與全套耗時寫進 `specs/012-stream-resilience/tasks.md`「驗收紀錄」；`W > 25 s` 或場景 7 未重現時停下回報、不改判準
-- [X] T081 [Docker] quickstart §4 手動演練 1～4（一鍵 demo、`AI_PROVIDER=fake`），記錄演練 1 的 `W` 與各演練畫面是否符合 contracts/ui-copy（說明行、取回 meta、「原始串流（不完整）」、無「worker」「stalled」字樣）；收尾把 `apps/worker/.env` 的 `AI_PROVIDER` 改回 `gemini`（quickstart；SC-001～SC-004）
+- [ ] T081 [Docker] quickstart §4 手動演練 1～4（一鍵 demo、`AI_PROVIDER=fake`），記錄演練 1 的 `W` 與各演練畫面是否符合 contracts/ui-copy（說明行、取回 meta、「原始串流（不完整）」、無「worker」「stalled」字樣）；收尾把 `apps/worker/.env` 的 `AI_PROVIDER` 改回 `gemini`（quickstart；SC-001～SC-004）
 - [X] T082 收尾複核：硬規則 1（`ai/token` 寫 reactive 的範圍未擴大，新增 Map／Set 皆非 reactive）、憲章 IV（無新 WS channel、worker 不直接 emit）、spec FR-001～FR-047 皆有對應已完成任務（見下方「FR／SC 覆蓋」）、本檔所有任務勾 `[X]`、`checklists/resilience.md` 仍成立（FR-042～FR-044）
 
 ---
@@ -273,7 +273,8 @@ pnpm monorepo：`packages/contracts/src/`、`apps/api/src/`、`apps/worker/src/`
 - T078：`pnpm test:coverage` 146 檔 2429 條全綠，全域與十個核心檔逐檔門檻通過（vitest 以 exit 0 判定）。
 - T079：`docker compose up -d` 後 worker `test:integration` 3 檔 33 條、api 3 檔 10 條全綠（含新增 `bullmq-lifecycle`、`diagnosis-reader`、redis-store (g)(h)）。
 - T080：e2e 第 3 輪 6 檔 14 條全綠 278 s（數字見 `tests/e2e/README.md` 場景 3 與指南 §15.7.6）。
-- T081：quickstart §4 手動演練 1～4 以 e2e 場景 3a／3b（worker SIGKILL）、5（Pub/Sub 斷線迴圈）、6a／6b（api 重啟）、7（Redis pause 50 s）自動化覆蓋，未另行手動演練（離席期間代理裁決：e2e 斷言即演練判準）。
+- T081：**未完成、待使用者驗收**（合併門第 1 輪改回 `[ ]`，2026-10-22，ADR-003 代理裁決第 57 條）。e2e 自動化覆蓋後端與 WS client 行為（場景 3a／3b worker SIGKILL、5 Pub/Sub 斷線迴圈、6a／6b api 重啟、7 Redis pause 50 s）；瀏覽器端 UI（說明行、「重新連線後取回」、「原始串流（不完整）」、文案無「worker」「stalled」字樣）未手動演練，待使用者驗收。（原記錄：以上述 e2e 場景自動化覆蓋、未另行手動演練，離席期間代理裁決 e2e 斷言即演練判準。）
+- 提交顆粒度註記（合併門第 1 輪，2026-10-22；不改寫歷史）：Phase 4–8 的 web 部分與 Phase 6–7 的後端部分因同檔重疊，各合為一個 commit（`fca108a`、`ca6d86f`），未逐 phase 拆分。
 - T082：硬規則 1（`ai/token` 路徑不逐筆寫 reactive，新增集合皆 plain Map／Set）由 web 兩輪交叉審查核實；契約 1.4.0 漂移與文件版本測試綠；憲章 III／IV／V／VII 對照見 plan Constitution Check 與 analyze 報告；合併門第 1 輪再複核一次。
 
 ### Phase 1 Setup（主 session 實測，2026-10-21）
