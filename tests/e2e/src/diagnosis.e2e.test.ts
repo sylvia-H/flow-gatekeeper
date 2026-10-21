@@ -35,7 +35,7 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：診斷全鏈路", () => {
     client?.close();
   });
 
-  it("場景 1 happy path：job/status waiting→active→進度遞增→completed，ai/token seq 0 起連號、attempt 1，ai/done 通過契約", async () => {
+  it("場景 1 happy path：job/status waiting→active→進度遞增→completed（帶 result、cached:false），ai/token seq 0 起連號、attempt 1，ai/done 通過契約", async () => {
     const t0 = Date.now();
     const jobId = randomUUID();
     const res = await createDiagnosis({ jobId, machineId: MACHINE, socketId: client.clientId });
@@ -68,6 +68,11 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：診斷全鏈路", () => {
     expect(order.at(-1)).toBe("completed");
     expect(order.filter((s) => s === "completed")).toHaveLength(1);
     expect(order).not.toContain("failed");
+    // 012 US1：completed 自帶權威結果（BullMQ returnvalue，與 ai/done 同一份）與 cached:false
+    const completed = statuses.at(-1);
+    expect(DiagnosisResultSchema.safeParse(completed?.result).success).toBe(true);
+    expect(completed?.result).toEqual(done?.result);
+    expect(completed?.cached).toBe(false);
     const progress = statuses.flatMap((s) => (s.progress === undefined ? [] : [s.progress]));
     expect(progress).toEqual([0, 20, 40, 60, 80, 100]);
     expect(statuses.every((s) => s.machineId === MACHINE)).toBe(true);
@@ -81,7 +86,7 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：診斷全鏈路", () => {
     console.log(`[e2e] 場景 1 耗時 ${Date.now() - t0}ms（POST → completed）`);
   });
 
-  it("場景 2 cache 命中：同機台同簽章再 POST → ai/done cached:true、無 ai/token、進度 0/20/100", async () => {
+  it("場景 2 cache 命中：同機台同簽章再 POST → ai/done 與 completed 皆 cached:true、completed 帶同一份 result、無 ai/token、進度 0/20/100", async () => {
     expect(firstResult, "需先跑過場景 1").toBeDefined();
     const t0 = Date.now();
     const jobId = randomUUID();
@@ -100,7 +105,11 @@ describe.skipIf(!process.env.E2E)("跨 process e2e：診斷全鏈路", () => {
     expect(client.errors(jobId)).toEqual([]);
 
     const statuses = client.statuses(jobId);
-    expect(statuses.at(-1)?.status).toBe("completed");
+    const completed = statuses.at(-1);
+    expect(completed?.status).toBe("completed");
+    // 012 US1：cache 命中的 completed 同樣帶 result，且 cached:true
+    expect(completed?.cached).toBe(true);
+    expect(completed?.result).toEqual(firstResult);
     const progress = statuses.flatMap((s) => (s.progress === undefined ? [] : [s.progress]));
     expect(progress).toEqual([0, 20, 100]);
     expect(client.violations).toEqual([]);

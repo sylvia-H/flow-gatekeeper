@@ -90,8 +90,8 @@ pnpm monorepo：`packages/contracts/src/`、`apps/api/src/`、`apps/worker/src/`
 - [ ] T026 [P] [US1] `apps/web/src/domains/ai-copilot/lib/copilot-reducer.ts`：completed 狀態加 `source: "ai/done" | "status" | "lookup"` 與 `streamIncomplete: boolean`；`job/status` completed 且帶 `result` → completed（`cached ?? false`、`source: "status"`、`streamIncomplete: true`），不帶 `result` 維持 active；`ai/done` → completed（`source: "ai/done"`、`streamIncomplete: state.reconnected === true`，`reconnected` 欄位於 T039 加入前視為 false）；「結果未送達」救回擴充到帶 `result` 的 `completed`；文案常數 `STREAM_LABEL_INCOMPLETE`；`apps/web/src/domains/ai-copilot/lib/copilot-reducer.test.ts` 補 `ai/done`→`completed+result`、`completed+result`→`ai/done`、`ai/done` 重複兩次三種順序收斂（`result`／`cached`／`jobId` 相同）與 `cached` 缺值當 false（FR-004、FR-005、FR-038、SC-006；data-model §6.2；代理裁決第 11、15 條）
 - [ ] T027 [US1] `apps/web/src/domains/ai-copilot/stores/copilot.store.ts`：`applyEvent` 對帶 `result` 的 `completed` 照 `ai/done` 路徑收尾（清 2 s 未送達計時起點 `backendCompletedAt`、`settleTiming` 只呼叫一次）；之後同 jobId 的 `ai/done` 不再結算；`apps/web/src/domains/ai-copilot/stores/copilot.store.test.ts` 補「兩來源都到、耗時只結算一次」「帶 result 的 completed 不觸發 2 s 未送達」。相依 T026（FR-004、SC-006）
 - [ ] T028 [US1] `apps/web/src/domains/ai-copilot/components/CopilotDrawer.vue`：completed 且 `streamIncomplete` 時串流標題用 `STREAM_LABEL_INCOMPLETE`（`StreamDisclosure.vue` 只吃 `label`，不改）；`apps/web/src/domains/ai-copilot/components/CopilotDrawer.test.ts` 補標題四態，`apps/web/src/domains/ai-copilot/components/CopilotDrawer.watch.test.ts` 補「`completed+result` 後再到 `ai/done`，螢幕閱讀器公告只一次」。相依 T026（FR-035、FR-038、SC-006；contracts/ui-copy §2）
-- [ ] T029 [US1] [Docker/e2e] `tests/e2e/src/diagnosis.e2e.test.ts`：場景 1 斷言 `completed` 帶通過 `DiagnosisResultSchema` 的 `result` 與 `cached: false`；場景 2 斷言 `completed` 帶 `cached: true`；場景 4a／4b 不變。相依 T023、T025（SC-002、SC-011）
-- [ ] T030 [US1] [Docker/e2e] 新檔 `tests/e2e/src/pubsub-loss.e2e.test.ts`（場景 5）：POST 後立即 `pubsubKillLoop(20)`，斷言以帶 `result` 的 `job/status: completed` 收尾、`result` 通過 schema、無 `ai/error`；`ai/done` 可有可無。相依 T022、T029（SC-002；quickstart 演練 2）
+- [X] T029 [US1] [Docker/e2e] `tests/e2e/src/diagnosis.e2e.test.ts`：場景 1 斷言 `completed` 帶通過 `DiagnosisResultSchema` 的 `result` 與 `cached: false`；場景 2 斷言 `completed` 帶 `cached: true`；場景 4a／4b 不變。相依 T023、T025（SC-002、SC-011）
+- [X] T030 [US1] [Docker/e2e] 新檔 `tests/e2e/src/pubsub-loss.e2e.test.ts`（場景 5）：POST 後立即 `pubsubKillLoop(20)`，斷言以帶 `result` 的 `job/status: completed` 收尾、`result` 通過 schema、無 `ai/error`；`ai/done` 可有可無。相依 T022、T029（SC-002；quickstart 演練 2）
 
 **Checkpoint**：US1 可獨立驗收——Pub/Sub 故障不再造成假失敗；2 s「結果未送達」路徑行為暫同 2.1.0（GET 退路於 US2）。建議 commit：`feat(012): [Phase 3: US1] worker 回傳值與 relay 以 returnvalue 完成`、`feat(012): [Phase 3: US1] web 三來源先到者收尾`、`test(012): [Phase 3: US1] e2e 場景 5 Pub/Sub 斷線`。
 
@@ -114,7 +114,7 @@ pnpm monorepo：`packages/contracts/src/`、`apps/api/src/`、`apps/worker/src/`
 
 ### nginx（U-nginx-e2e）
 
-- [ ] T037 [P] [US2] `apps/web/nginx.conf`：檔頭新增 `limit_req_zone $binary_remote_addr zone=diag_read:1m rate=60r/m;`（附 Docker Desktop 共用一桶註解）；在 `location /diagnoses` **之前**新增 `location ~ ^/diagnoses/[0-9a-fA-F-]{36}$`（`limit_req zone=diag_read burst=10 nodelay`、`limit_req_status 429`、沿用 `proxy_pass http://$api_upstream;` 等三行、**不寫** `add_header`）；CSP 註解補一句同源 GET 已涵蓋；**[Docker]** `docker compose --profile demo up -d --build web` 後 `curl.exe -i` 驗 GET 走新桶且回應帶 server 層安全 header（FR-015；R5；代理裁決第 8 條）
+- [X] T037 [P] [US2] `apps/web/nginx.conf`：檔頭新增 `limit_req_zone $binary_remote_addr zone=diag_read:1m rate=60r/m;`（附 Docker Desktop 共用一桶註解）；在 `location /diagnoses` **之前**新增 `location ~ ^/diagnoses/[0-9a-fA-F-]{36}$`（`limit_req zone=diag_read burst=10 nodelay`、`limit_req_status 429`、沿用 `proxy_pass http://$api_upstream;` 等三行、**不寫** `add_header`）；CSP 註解補一句同源 GET 已涵蓋；**[Docker]** `docker compose --profile demo up -d --build web` 後 `curl.exe -i` 驗 GET 走新桶且回應帶 server 層安全 header（FR-015；R5；代理裁決第 8 條）
 
 ### web（U-web）
 
