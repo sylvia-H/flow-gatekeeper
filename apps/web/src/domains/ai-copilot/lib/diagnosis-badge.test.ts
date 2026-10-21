@@ -24,7 +24,7 @@ describe("diagnosisBadgeOf（data-model §7）", () => {
   });
 
   it("active → 帶進度（null 保留為 null）", () => {
-    const base = { status: "active", machineId: "m", jobId: "j", attempt: 1, lastSeq: -1, streamText: "" } as const;
+    const base = { status: "active", machineId: "m", jobId: "j", attempt: 1, lastSeq: -1, execution: 1, streamText: "" } as const;
     expect(diagnosisBadgeOf({ ...base, progress: 60 })).toEqual({ kind: "active", progress: 60 });
     expect(diagnosisBadgeOf({ ...base, progress: null })).toEqual({ kind: "active", progress: null });
   });

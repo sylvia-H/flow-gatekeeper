@@ -1,9 +1,18 @@
 import { defineStore } from "pinia";
 import { computed, reactive, ref, shallowRef, triggerRef } from "vue";
 import { readPreference, writePreference } from "../../../shared/composables/useLocalPreference.js";
-import { AiDoneSchema, DiagnosisResultSchema, type JobStatus } from "@flow-gatekeeper/contracts";
 import {
+  AiDoneSchema,
+  DiagnosisResultSchema,
+  type DiagnosisLookupResponse,
+  type JobStatus,
+} from "@flow-gatekeeper/contracts";
+import {
+  LOOKUP_DISCONNECTED_ERROR,
+  LOOKUP_ELSEWHERE_ERROR,
+  LOOKUP_EXPIRED_ERROR,
   UNDELIVERED_ERROR,
+  WATCHDOG_UNKNOWN_ERROR,
   copilotReducer,
   isUndeliveredFailure,
   startActiveState,
@@ -11,9 +20,11 @@ import {
   type CopilotJobState,
 } from "../lib/copilot-reducer.js";
 import {
+  DiagnoseLookupError,
   DiagnoseRequestError,
   NETWORK_ERROR_MESSAGE,
   UNAUTHORIZED_DIAGNOSE_MESSAGE,
+  getDiagnosis,
   postDiagnose,
 } from "../lib/diagnose-api.js";
 import {
@@ -44,12 +55,34 @@ export interface DiagnoseOptions {
 export const PANEL_PREFERENCE_KEY = "fg.copilot-panel";
 
 /**
- * 收到 `job/status: completed` 後等 `ai/done` 的寬限期（AR-6，2026-10-18 使用者裁決 2 s）。
+ * 收到不帶 `result` 的 `job/status: completed` 後等結果的寬限期（AR-6，2026-10-18 使用者裁決 2 s）。
  * worker 先送出 ai/done 才讓 BullMQ 回報完成，兩者走不同通道、抵達順序不保證，但正常情況相差
- * 毫秒級；超過寬限仍沒到，就由 `checkStalls` 轉成「結果未送達」失敗。App 每秒 tick 呼叫一次
- * `checkStalls`，所以實際在完成後 2–3 s 之間轉失敗。
+ * 毫秒級；超過寬限仍沒到，`checkStalls` 先 GET 一次（012 FR-005），取不到結果才轉「結果未送達」失敗。
+ * App 每秒 tick 呼叫一次 `checkStalls`，所以實際在完成後 2–3 s 之間發出 GET。
  */
 export const UNDELIVERED_GRACE_MS = 2_000;
+
+/**
+ * `GET /diagnoses/:jobId` 的三種用途（contracts/ui-copy §3）：`resume` 重連授權後續接、`undelivered` 2 s 未送達退路、
+ * `watchdog` 45 s 無進展退路。同一個失敗在三種用途下的文案不同。
+ */
+export type LookupPurpose = "resume" | "undelivered" | "watchdog";
+
+/**
+ * GET 取不到結果時（非 2xx、網路錯誤、逾時、格式不符，或手上沒有 socketId）依用途對映的使用者文案（ui-copy §3）。
+ * 回 failed 時不走這裡（一律 `humanizeError(error)`）；`undelivered` 的 waiting／active 也對映成 `UNDELIVERED_ERROR`（P21），
+ * 由呼叫端處理。純函式，便於單元測試。
+ */
+export function lookupFailureMessage(purpose: LookupPurpose, err: unknown): string {
+  if (purpose === "undelivered") return UNDELIVERED_ERROR;
+  if (purpose === "watchdog") return WATCHDOG_UNKNOWN_ERROR;
+  if (err instanceof DiagnoseLookupError && err.kind === "http") {
+    if (err.status === 404) return LOOKUP_EXPIRED_ERROR;
+    if (err.status === 409 && err.code === "job_bound_elsewhere") return LOOKUP_ELSEWHERE_ERROR;
+  }
+  // 409 socket_unauthorized、429、503、其他狀態碼、網路錯誤、逾時、格式不符、沒有 socketId
+  return LOOKUP_DISCONNECTED_ERROR;
+}
 
 /** 解析面板偏好；格式不符就拋錯，讓 `readPreference` 退回預設。 */
 function parsePanelPreference(raw: string): boolean {
@@ -117,10 +150,29 @@ export const useCopilotStore = defineStore("copilot", () => {
   function touch(machineId: string): void {
     lastActivityAt.set(machineId, Date.now());
   }
-  /** 某台離開 active（完成／失敗／中止）：清掉兩個 watchdog 計時。 */
+  /**
+   * 每個任務最後一次成功綁定的 socketId（jobId → socketId；FR-016、代理裁決第 17 條）：POST 送出前記 POST 的 socketId，
+   * GET 回 `rebound: true` 時改記該次 GET 的 socketId。每次 GET 以 `previousSocketId` 帶上，讓 api 在原綁定是本分頁的
+   * 半開舊連線時也能改綁。只有副作用路徑讀寫，plain Map（data-model §6.3）。
+   */
+  const boundSocketIds = new Map<string, string>();
+  /**
+   * 重連後待續接的任務（machineId → 標記當下的 jobId）：`onReconnect` 寫入，`onAuthorized` 消化後清空——同一條連線
+   * 多次授權（`machine/subscribed`）只續接一次（P20）。記 jobId 是為了消化時確認任務沒被換掉。
+   */
+  const pendingResume = new Map<string, string>();
+  /** GET 往返中的 jobId：同一 jobId 同時只有一個 GET，`checkStalls` 每秒 tick 也不重複觸發（ui-copy §3）。 */
+  const lookupInFlight = new Set<string>();
+  /** 某台離開 active（完成／失敗／中止）：清掉兩個 watchdog 計時與待續接標記。 */
   function clearWatch(machineId: string): void {
     lastActivityAt.delete(machineId);
     backendCompletedAt.delete(machineId);
+    pendingResume.delete(machineId);
+  }
+  /** 該台換新任務或中止：舊任務的綁定紀錄不再需要（data-model §6.3「清除」欄）。 */
+  function forgetBinding(machineId: string): void {
+    const prev = jobs.value.get(machineId);
+    if (prev !== undefined && "jobId" in prev && prev.jobId !== undefined) boundSocketIds.delete(prev.jobId);
   }
   /**
    * POST /diagnoses 往返中的機台。TopBar、卡片 icon、drawer 三個入口共用 `canDiagnose`，
@@ -310,6 +362,9 @@ export const useCopilotStore = defineStore("copilot", () => {
     openPanel();
     if (!canDiagnose(machineId, socketId !== null && socketId !== "")) return;
     const jobId = newJobId();
+    forgetBinding(machineId);
+    // POST 送出前就記下綁定：重連若發生在 HTTP 回應之前，續接 GET 仍帶得上 previousSocketId。
+    boundSocketIds.set(jobId, socketId as string);
     jobs.value.set(machineId, startActiveState(machineId, jobId));
     touch(machineId);
     inFlight.value.add(machineId);
@@ -383,7 +438,10 @@ export const useCopilotStore = defineStore("copilot", () => {
     if (prev.status !== "active" && !(isUndeliveredFailure(prev) && next.status === "completed")) return;
     if (next.status === "completed") {
       const timing = timings.value.get(machineId);
-      if (timing) putTiming(machineId, settleTiming(timing, next.jobId, next.cached, performance.now()));
+      // 以 GET 取回、或執行期間重連過的收尾，耗時含斷線時間：只記 `lastRecoveredMs`，不當快取對比的基準
+      // （P16、代理裁決第 52 條）。
+      const recovered = next.source === "lookup" || next.reconnected === true;
+      if (timing) putTiming(machineId, settleTiming(timing, next.jobId, next.cached, performance.now(), { recovered }));
       completedAt.value.set(machineId, Date.now());
       triggerRef(completedAt);
     } else if (next.status === "failed") {
@@ -396,76 +454,173 @@ export const useCopilotStore = defineStore("copilot", () => {
    * 被放棄任務的遲到事件由 reducer 以 `isStaleJobEvent`／非 active 保護忽略，不會復活畫面。
    */
   function cancel(machineId: string): void {
+    forgetBinding(machineId);
     jobs.value.set(machineId, { status: "idle", machineId });
     clearWatch(machineId);
     dropPendingTiming(machineId);
   }
 
   /**
-   * 前端逾時 watchdog（問題修正）：掃描仍 active 的台，若距最後一次進展超過 `thresholdMs`
-   * 未有任何進度/串流更新，判定卡住並收尾為 failed（可讀訊息 + 沿用現成 Retry）。
-   * 由 App 每隔數秒帶當前時間呼叫；純呈現層自癒，不依賴後端補送事件。
+   * active 任務轉失敗（GET 退路取不到結果、或沒有 socketId 可查）。`undelivered` 為「結果未送達」：帶 `reason`／`attempt`
+   * 與重連旗標，並**保留**耗時量測的 pending——同 jobId 的結果若只是晚到，reducer 會改回 completed，store 照常結算
+   * （FR-005）；其他失敗清掉 pending。
+   */
+  function failActive(
+    machineId: string,
+    state: Extract<CopilotJobState, { status: "active" }>,
+    error: string,
+    undelivered: boolean,
+  ): void {
+    jobs.value.set(machineId, {
+      status: "failed",
+      machineId,
+      jobId: state.jobId,
+      streamText: state.streamText,
+      error,
+      ...(undelivered ? { reason: "undelivered" as const, attempt: state.attempt } : {}),
+      ...(undelivered && state.reconnected ? { reconnected: true as const } : {}),
+    });
+    clearWatch(machineId);
+    if (!undelivered) dropPendingTiming(machineId);
+  }
+
+  /**
+   * GET 回應或失敗抵達時，該台是否仍在等這個回應：同一 jobId 的 active（`undelivered` 另允許可救回的未送達失敗）。
+   * 期間已完成、失敗、中止或換了新任務 → 丟棄（ui-copy §3）。
+   */
+  function stillAwaiting(machineId: string, jobId: string, purpose: LookupPurpose): CopilotJobState | null {
+    const state = stateFor(machineId);
+    if (!("jobId" in state) || state.jobId !== jobId) return null;
+    if (state.status === "active") return state;
+    if (purpose === "undelivered" && isUndeliveredFailure(state)) return state;
+    return null;
+  }
+
+  /** GET 取不到結果：依用途轉失敗（任務仍在等時）。 */
+  function onLookupFailure(machineId: string, jobId: string, purpose: LookupPurpose, err: unknown): void {
+    const state = stillAwaiting(machineId, jobId, purpose);
+    if (state?.status !== "active") return; // 已是可救回的未送達失敗：維持原樣，等遲到的結果
+    failActive(machineId, state, lookupFailureMessage(purpose, err), purpose === "undelivered");
+  }
+
+  /**
+   * GET 往返期間發生重連（發出時用的 socket 已不是目前的 `lastClientId`）時，舊 socket 的結果不可信：失敗多半是舊連線已離線
+   * 造成的 409，進行中的回應則把任務改綁到了舊 socket。任務仍是同一 jobId 的 active 時作廢並處理新連線：
+   * - 新連線尚未授權（仍在待續接清單）→ 只作廢，交給 `onAuthorized` 續接（授權前 GET 會被 409）；
+   * - 已授權（`onAuthorized` 因這個 GET 往返中而略過了它）→ 立刻以新 socket 發一次 `resume`。
+   * 回傳 true 表示已作廢（呼叫端不再處理該結果）。
+   */
+  function retryOnNewSocket(machineId: string, jobId: string, usedSocketId: string): boolean {
+    const current = lastClientId.value;
+    if (current === null || current === usedSocketId) return false;
+    const state = stateFor(machineId);
+    if (state.status !== "active" || state.jobId !== jobId) return false;
+    if (pendingResume.get(machineId) !== jobId) void lookup(machineId, jobId, current, "resume");
+    return true;
+  }
+
+  /**
+   * 讀回某台任務的狀態（GET /diagnoses/:jobId；contracts/ui-copy §3、research R9）。同一 jobId 同時只有一個 GET；
+   * 帶 `previousSocketId = boundSocketIds.get(jobId)`，回 `rebound: true` 時改記本次 socketId。
    *
-   * 另一種卡住（AR-6）：後端已回報 `job/status: completed`，但超過 `UNDELIVERED_GRACE_MS` 仍沒收到
-   * `ai/done`（例如 Pub/Sub 訂閱斷線期間 ai/done 遺失）。不必等滿 `thresholdMs`——後端不會再有任何進展——
-   * 直接轉成「結果未送達」失敗。這種失敗**保留**耗時量測的 pending：同 jobId 的 `ai/done` 若只是晚到，
-   * reducer 會改回 completed，store 照常結算耗時與完成時刻，與準時抵達的路徑一致。
+   * - completed／failed：包成 `lookup/result` 經 `applyEvent` 交給 reducer（三來源先到者為準的規則只在 reducer 一處）；
+   *   completed 以 `recovered` 結算耗時。
+   * - waiting／active：`resume`／`watchdog` 同樣經 reducer 留在 active（清 `resume`、更新進度、重設 watchdog），
+   *   `watchdog` 另記一則 console 警告（後端還在跑卻 45 s 沒送事件，代表 keepalive 失效，FR-022）；
+   *   `undelivered` 視同取不到結果、轉可救回的「結果未送達」（P21）。
+   * - 失敗或沒有 socketId：依用途的文案轉失敗（`lookupFailureMessage`）。
    *
+   * 沒有 socketId 時同步轉失敗（不發 GET），其餘在 GET 回應後才改狀態。
+   */
+  async function lookup(machineId: string, jobId: string, socketId: string | null, purpose: LookupPurpose): Promise<void> {
+    if (lookupInFlight.has(jobId)) return;
+    if (!socketId) {
+      onLookupFailure(machineId, jobId, purpose, null);
+      return;
+    }
+    lookupInFlight.add(jobId);
+    let response: DiagnosisLookupResponse;
+    try {
+      response = await getDiagnosis(jobId, socketId, boundSocketIds.get(jobId));
+    } catch (err) {
+      lookupInFlight.delete(jobId);
+      if (retryOnNewSocket(machineId, jobId, socketId)) return;
+      onLookupFailure(machineId, jobId, purpose, err);
+      return;
+    }
+    lookupInFlight.delete(jobId);
+    const stillRunning = response.status === "waiting" || response.status === "active";
+    // 後端已改綁到本次 socket：之後的 GET 以它當 previousSocketId（P22）。任務已被換掉或中止時不記（綁定紀錄跟著任務走）。
+    // 必須在下面的重查之前記：往返期間重連過時，補發的 GET 要帶「剛被改綁到」的這個 socket，api 才認得出是同一分頁。
+    if (stillRunning && boundSocketIds.has(jobId)) boundSocketIds.set(jobId, socketId);
+    // 往返期間重連過：進行中的回應（改綁到舊 socket）作廢、以新 socket 重查；completed／failed 與 socket 無關，照常採用。
+    if (stillRunning && retryOnNewSocket(machineId, jobId, socketId)) return;
+    const state = stillAwaiting(machineId, jobId, purpose);
+    if (state === null) return;
+    if (stillRunning && purpose === "undelivered") {
+      if (state.status === "active") failActive(machineId, state, UNDELIVERED_ERROR, true);
+      return;
+    }
+    if (stillRunning && purpose === "watchdog") {
+      console.warn(`[copilot] 診斷 ${jobId} 超過 45 秒沒有進度事件，但後端仍在進行（${response.status}）；繼續等待`);
+    }
+    applyEvent({ type: "lookup/result", jobId, response });
+  }
+
+  /**
+   * 前端逾時 watchdog 與「結果未送達」退路（每秒由 App 帶當前時間呼叫）。兩種退路都**先 GET 一次**再決定（FR-005、FR-022、D10／D11）：
+   *
+   * - 2 s 未送達：後端已回報不帶 `result` 的 `job/status: completed`，超過 `UNDELIVERED_GRACE_MS` 仍沒有任何來源的結果
+   *   （例如 Pub/Sub 斷線期間 ai/done 遺失、relay 驗證 returnvalue 失敗）→ `lookup(…, "undelivered")`。
+   * - 45 s 無進展：距最後一次進展超過 `thresholdMs` → `lookup(…, "watchdog")`。觸發只代表畫面這麼久沒收到進展，
+   *   後端可能其實已完成，因此先查；仍在進行就重設計時、維持 active。
+   *
+   * GET 往返期間（`lookupInFlight`）不重複觸發任一種退路。沒有 `lastClientId` 時直接走該用途的失敗文案。
    * 兩種判定用不同時鐘：2 s 寬限比 `monoNowMs`（單調時鐘，預設當下 `performance.now()`，測試可傳入）；
-   * 45 s watchdog 維持既有的牆上時鐘 `nowMs`（門檻寬、語意不變，本次不改）。
+   * 45 s watchdog 維持牆上時鐘 `nowMs`（觸發後先 GET，時鐘跳動的誤觸只會得到「仍在進行」，D11）。
    */
   function checkStalls(nowMs: number, thresholdMs: number, monoNowMs: number = performance.now()): void {
     for (const [machineId, state] of jobs.value) {
-      if (state.status !== "active") continue;
+      if (state.status !== "active" || lookupInFlight.has(state.jobId)) continue;
       const done = backendCompletedAt.get(machineId);
       if (done !== undefined && done.jobId === state.jobId && monoNowMs - done.at > UNDELIVERED_GRACE_MS) {
-        jobs.value.set(machineId, {
-          status: "failed",
-          machineId,
-          jobId: state.jobId,
-          streamText: state.streamText,
-          error: UNDELIVERED_ERROR,
-          reason: "undelivered",
-          attempt: state.attempt,
-        });
-        clearWatch(machineId);
+        void lookup(machineId, state.jobId, lastClientId.value, "undelivered");
         continue;
       }
       const last = lastActivityAt.get(machineId) ?? nowMs;
-      if (nowMs - last > thresholdMs) {
-        jobs.value.set(machineId, {
-          status: "failed",
-          machineId,
-          jobId: state.jobId,
-          streamText: state.streamText,
-          error: "診斷逾時或無回應，請重試",
-        });
-        clearWatch(machineId);
-        dropPendingTiming(machineId);
-      }
+      if (nowMs - last > thresholdMs) void lookup(machineId, state.jobId, lastClientId.value, "watchdog");
     }
   }
 
   /**
-   * 重連收尾（FR-012／R7）：由 004 `onConnected` 呼叫。首次連線僅記 clientId；
-   * 之後若 clientId 變更（重連派新連線），把所有仍 active 的台標 failed（中斷）＋可 Retry。
+   * 連線（重連）通知（FR-016、D10）：由 App `onConnected` 呼叫。首次連線僅記 clientId；之後 clientId 變更（重連派新連線）時，
+   * 仍 active 的任務**不轉失敗**：標 `resume: "pending"`（面板顯示「已重新連線，正在取回診斷狀態…」）與 `reconnected`
+   * （收尾時標「原始串流（不完整）」）、重設 watchdog，並記入待續接清單；等 `onAuthorized` 才 GET——新連線在授權成功前
+   * GET 會被 409。重連後授權失敗則不會 GET，由 45 s watchdog 承接（代理裁決第 47 條）。
    */
   function onReconnect(newClientId: string): void {
     const prev = lastClientId.value;
     lastClientId.value = newClientId;
     if (prev === null || prev === newClientId) return;
     for (const [machineId, state] of jobs.value) {
-      if (state.status === "active") {
-        jobs.value.set(machineId, {
-          status: "failed",
-          machineId,
-          jobId: state.jobId,
-          streamText: state.streamText,
-          error: "連線中斷，請重試",
-        });
-        clearWatch(machineId);
-        dropPendingTiming(machineId);
-      }
+      if (state.status !== "active") continue;
+      jobs.value.set(machineId, { ...state, resume: "pending", reconnected: true });
+      touch(machineId);
+      pendingResume.set(machineId, state.jobId);
+    }
+  }
+
+  /**
+   * 連線授權成功（App 在 `onAuthResult(true)` 呼叫，P20）：逐台對待續接清單中仍 active、jobId 未變的任務發續接 GET，
+   * 並清空清單——同一連線多次授權只消化一次。`socketId` 為已授權的這條連線。
+   */
+  function onAuthorized(socketId: string): void {
+    if (pendingResume.size === 0) return;
+    const entries = [...pendingResume];
+    pendingResume.clear();
+    for (const [machineId, jobId] of entries) {
+      const state = stateFor(machineId);
+      if (state.status === "active" && state.jobId === jobId) void lookup(machineId, jobId, socketId, "resume");
     }
   }
 
@@ -492,5 +647,6 @@ export const useCopilotStore = defineStore("copilot", () => {
     applyEvent,
     inFlight,
     onReconnect,
+    onAuthorized,
   };
 });

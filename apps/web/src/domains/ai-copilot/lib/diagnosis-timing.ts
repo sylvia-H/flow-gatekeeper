@@ -13,8 +13,22 @@ export interface DiagnosisTiming {
   lastUncachedMs: number | null;
   /** 最近一次 `cached:true` 的耗時（ms）。 */
   lastCachedMs: number | null;
+  /**
+   * 最近一次以 GET 取回（重連續接或 2 s／45 s 退路）的耗時（ms；012 data-model §6.4、research P16）。耗時含斷線時間，
+   * 只用來顯示本次，不寫進 `lastUncachedMs`／`lastCachedMs`，免得成為下一次快取對比的「上一次」基準。
+   * 從未有過取回紀錄時不存在（optional，避免每份既有量測都得補欄位）。
+   */
+  lastRecoveredMs?: number;
+  /** `lastRecoveredMs` 那次結果是否來自快取（`compareLabel` 決定主字寫「快取 · N ms」或「N.N s」）。 */
+  lastRecoveredCached?: boolean;
   /** 最近一次完成的是哪一種（data-model 未列；`compareLabel` 需要知道主字顯示哪一筆）。 */
-  lastKind: "cached" | "uncached" | null;
+  lastKind: "cached" | "uncached" | "recovered" | null;
+}
+
+/** `settleTiming` 的選用參數。 */
+export interface SettleOptions {
+  /** 以 GET 取回的完成（P16）：只寫 `lastRecoveredMs`／`lastKind: "recovered"`，不動非快取／快取兩欄。 */
+  recovered?: boolean;
 }
 
 /** 完成態 meta 的耗時呈現；排版由元件決定。 */
@@ -40,16 +54,21 @@ export function startTiming(
 /**
  * `ai/done` 到達：`pending` 存在且 `jobId` 相符時計算 `elapsed = now - startedAt`（負值夾為 0），
  * 依 `cached` 寫入對應欄位並清 `pending`；無 pending 或 jobId 不符（過期事件）則原樣回傳。
+ * `opts.recovered` 時改寫 `lastRecoveredMs`（P16），非快取／快取兩欄不動。
  */
 export function settleTiming(
   timing: DiagnosisTiming,
   jobId: string,
   cached: boolean,
   now: number,
+  opts?: SettleOptions,
 ): DiagnosisTiming {
   const { pending } = timing;
   if (!pending || pending.jobId !== jobId) return timing;
   const elapsed = Math.max(0, now - pending.startedAt);
+  if (opts?.recovered) {
+    return { ...timing, pending: null, lastRecoveredMs: elapsed, lastRecoveredCached: cached, lastKind: "recovered" };
+  }
   return cached
     ? { ...timing, pending: null, lastCachedMs: elapsed, lastKind: "cached" }
     : { ...timing, pending: null, lastUncachedMs: elapsed, lastKind: "uncached" };
@@ -71,6 +90,12 @@ export function compareLabel(timing: DiagnosisTiming | undefined): TimingLabel |
   }
   if (timing.lastKind === "uncached" && timing.lastUncachedMs !== null) {
     return { primary: formatDuration(timing.lastUncachedMs), cached: false };
+  }
+  // 以 GET 取回：照常顯示本次耗時（快取與否照當次結果），但不畫對比橫條（`compareBars` 回 null）。
+  if (timing.lastKind === "recovered" && timing.lastRecoveredMs !== undefined) {
+    const cached = timing.lastRecoveredCached === true;
+    const value = formatDuration(timing.lastRecoveredMs);
+    return { primary: cached ? `快取 · ${value}` : value, cached };
   }
   return null;
 }

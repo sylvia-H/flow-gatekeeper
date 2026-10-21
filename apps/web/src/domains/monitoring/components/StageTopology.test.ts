@@ -315,6 +315,7 @@ describe("StageTopology 卡片底列接線：異常標記與診斷 chip（T051�
       jobId: "j1",
       attempt: 1,
       lastSeq: -1,
+      execution: 1,
       progress: 60,
       streamText: "",
     });
@@ -322,5 +323,29 @@ describe("StageTopology 卡片底列接線：異常標記與診斷 chip（T051�
     expect(w.get('.machine-card[data-machine="press-02"]').attributes("data-diagnosis")).toBe("active");
     expect(w.text()).toContain("診斷中 60%");
     expect(w.get('.machine-card[data-machine="mixer-01"]').attributes("data-diagnosis")).toBe("none");
+  });
+
+  it("重新排入佇列、重連後正在取回期間卡片 chip 仍只是「診斷中 N%」，不出現 worker／stalled／停滯（012 FR-036、FR-037）", async () => {
+    const copilot = useCopilotStore();
+    const w = mountTopology();
+    copilot.jobs.set("press-02", {
+      status: "active",
+      machineId: "press-02",
+      jobId: "j1",
+      attempt: 1,
+      lastSeq: -1,
+      execution: 2,
+      stalledNotice: { execution: 2, confirmed: true },
+      resume: "pending",
+      reconnected: true,
+      progress: 60,
+      streamText: "",
+    });
+    await w.vm.$nextTick();
+    const card = w.get('.machine-card[data-machine="press-02"]');
+    expect(card.attributes("data-diagnosis")).toBe("active");
+    expect(card.text()).toContain("診斷中 60%");
+    expect(card.text()).not.toMatch(/worker|stalled|重新排入|取回/i);
+    expect(card.text()).not.toContain("停滯");
   });
 });

@@ -261,7 +261,11 @@ const handle = useHighFrequencyWs({
   isPaused: () => store.paused,
   onLatency: store.setLatency,
   // 訂閱授權結果（system/unauthorized 不再靜默忽略，TopBar 顯示未授權 chip）。
-  onAuthResult: store.setAuthorized,
+  // 012：授權成功後才續接重連前進行中的診斷（新連線授權前 GET 會被 409；同一連線多次授權只續接一次，P20）。
+  onAuthResult: (ok: boolean) => {
+    store.setAuthorized(ok);
+    if (ok && store.clientId) copilot.onAuthorized(store.clientId);
+  },
   // 溢位合併與入口剔除的筆數計入背壓計量（背壓 strip 另列近 60 秒的丟棄數）。
   onDrop: store.recordDropped,
   // 診斷事件分流交 copilot.store（憲章 IV／FR-017：不進遙測 buffer）。
@@ -272,7 +276,7 @@ const handle = useHighFrequencyWs({
   // （dev 送空 token）。
   onConnected: (clientId: string) => {
     store.setClientId(clientId);
-    // 005：重連（新 clientId）使舊綁定失效——把仍 active 的台標中斷＋可重試（FR-012／R7）。
+    // 012：重連（新 clientId）時仍 active 的台不轉失敗，標「正在取回」並等授權成功後續接（FR-016）。
     copilot.onReconnect(clientId);
     handle.send({
       type: "machine/subscribe",

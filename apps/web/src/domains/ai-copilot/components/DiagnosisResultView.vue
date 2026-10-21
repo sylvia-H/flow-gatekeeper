@@ -31,7 +31,14 @@ const props = defineProps<{
    * - `elapsed`：`compareLabel()` 的耗時標籤；尚無量測紀錄時為 null。
    * - `bars`：`compareBars()` 的快取對比橫條（僅快取態有值）；省略或 null 則不畫橫條。
    */
-  meta?: { cached: boolean; completedAt: number | null; elapsed: TimingLabel | null; bars?: CompareBar[] | null };
+  meta?: {
+    cached: boolean;
+    completedAt: number | null;
+    elapsed: TimingLabel | null;
+    bars?: CompareBar[] | null;
+    /** meta 列末的中性小字（012：重連後以 GET 取回時為「重新連線後取回」，代理裁決第 53 條）；null／未提供則不畫。 */
+    note?: string | null;
+  };
 }>();
 
 defineSlots<{
@@ -81,7 +88,9 @@ const uncachedElapsed = computed(() =>
 
 /** 非快取且既無完成時刻也無耗時（量測缺漏）時不畫空的 meta 列；快取一律畫出，快取標記必須可見。 */
 const showMeta = computed(
-  () => props.meta !== undefined && (props.meta.cached || clock.value !== null || uncachedElapsed.value !== null),
+  () =>
+    props.meta !== undefined &&
+    (props.meta.cached || clock.value !== null || uncachedElapsed.value !== null || Boolean(props.meta.note)),
 );
 
 /** 證據：合併後預設列前 2 筆，其餘收在「還有 N 筆」之後。 */
@@ -148,9 +157,10 @@ const MORE_BTN =
         <p v-if="clock" class="mt-1 text-xs text-ink-3">
           完成 <span class="font-mono tabular-nums">{{ clock }}</span>
         </p>
+        <p v-if="meta.note" class="mt-1 text-xs text-ink-3" data-testid="copilot-recovered-meta">{{ meta.note }}</p>
       </template>
       <p v-else class="text-sm text-ink-2">
-        <template v-if="clock">完成 <span class="font-mono tabular-nums">{{ clock }}</span></template><span v-if="clock && uncachedElapsed"> · </span><span v-if="uncachedElapsed" class="font-mono tabular-nums">{{ uncachedElapsed }}</span>
+        <template v-if="clock">完成 <span class="font-mono tabular-nums">{{ clock }}</span></template><span v-if="clock && uncachedElapsed"> · </span><span v-if="uncachedElapsed" class="font-mono tabular-nums">{{ uncachedElapsed }}</span><template v-if="meta.note"><span v-if="clock || uncachedElapsed"> · </span><span class="text-xs text-ink-3" data-testid="copilot-recovered-meta">{{ meta.note }}</span></template>
       </p>
     </div>
 

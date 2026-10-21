@@ -9,6 +9,7 @@ import { useCopilotStore } from "../stores/copilot.store.js";
 import type { CopilotJobState } from "../lib/copilot-reducer.js";
 import type { MachineLive } from "../../monitoring/stores/monitoring.store.js";
 import { machineLabel } from "../../monitoring/lib/machine-labels.js";
+import { diagnosisBadgeText } from "../lib/diagnosis-badge.js";
 
 /**
  * CopilotDrawer 元件行為與可及性（review02 Batch D）。
@@ -650,7 +651,7 @@ describe("CopilotDrawer 原始串流標題（012 FR-038、contracts/ui-copy §2�
   }
 
   it.each<[string, CopilotJobState, string]>([
-    ["進行中", { status: "active", machineId: MACHINE, jobId: JOB, attempt: 1, lastSeq: 0, progress: 60, streamText: "推理" }, "原始串流"],
+    ["進行中", { status: "active", machineId: MACHINE, jobId: JOB, attempt: 1, lastSeq: 0, execution: 1, progress: 60, streamText: "推理" }, "原始串流"],
     ["完成（ai/done 收尾）", completed(false, "ai/done"), "原始串流"],
     ["完成（job/status 收尾，不完整）", completed(true, "status"), "原始串流（不完整）"],
     [
@@ -675,6 +676,227 @@ describe("CopilotDrawer 原始串流標題（012 FR-038、contracts/ui-copy §2�
     expect(headerText(w)).toContain("已完成");
     expect(streamToggleLabel(w)).toBe("原始串流（不完整）");
     expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
+  });
+});
+
+describe("CopilotDrawer 重連續接說明行與取回 meta（012 T044、FR-035、FR-037、contracts/ui-copy §1、§4、§5）", () => {
+  const SOCKET_2 = "22222222-2222-4222-8222-222222222222";
+  /** GET /diagnoses/:jobId 的回應；POST 照常成功。 */
+  let lookupReply: (jobId: string) => Response;
+
+  beforeEach(() => {
+    stubDesktop();
+    lookupReply = (jobId) => Response.json({ status: "active", jobId, progress: 60, rebound: true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          const body = JSON.parse(init.body as string) as { jobId: string; machineId: string };
+          return Response.json({ ...body, status: "waiting" });
+        }
+        const jobId = new URL(url, "http://localhost").pathname.split("/").at(-1) ?? "";
+        return lookupReply(jobId);
+      }),
+    );
+  });
+
+  /** 首次連線 → 診斷 → 進度 40 → 重連到新 socket；回傳 jobId。 */
+  async function startThenReconnect(): Promise<string> {
+    const copilot = useCopilotStore();
+    copilot.onReconnect(SOCKET);
+    const jobId = await startJob();
+    copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "active", progress: 40 });
+    copilot.onReconnect(SOCKET_2);
+    await flushPromises();
+    return jobId;
+  }
+
+  it("重連後、續接 GET 回應前：步驟列下顯示說明行並經 polite 公告區朗讀一次；面板 chip 仍「進行中」、卡片 chip 仍「診斷中 N%」", async () => {
+    const w = mountWithStore();
+    await startThenReconnect();
+    const note = w.get('[data-testid="copilot-progress-note"]');
+    expect(note.text()).toBe("已重新連線，正在取回診斷狀態…");
+    expect(note.classes()).toEqual(expect.arrayContaining(["text-xs", "text-ink-3"]));
+    expect(w.get('[aria-live="polite"]').text()).toBe("已重新連線，正在取回診斷狀態…");
+    expect(headerText(w)).toContain("進行中");
+    expect(diagnosisBadgeText(useCopilotStore().badgeFor(MACHINE))).toBe("診斷中 40%");
+  });
+
+  it("授權後 GET 回 active → 說明行消失、維持進行中與新進度", async () => {
+    const w = mountWithStore();
+    await startThenReconnect();
+    useCopilotStore().onAuthorized(SOCKET_2);
+    await flushPromises();
+    await flushPromises();
+    expect(w.find('[data-testid="copilot-progress-note"]').exists()).toBe(false);
+    expect(headerText(w)).toContain("進行中");
+    expect(w.text()).toContain("60%");
+  });
+
+  it("沒有重連的進行中任務不顯示說明行", async () => {
+    const w = mountWithStore();
+    await startJob();
+    await flushPromises();
+    expect(w.find('[data-testid="copilot-progress-note"]').exists()).toBe(false);
+  });
+
+  it("GET 回 completed → 已完成、完成 meta 加「重新連線後取回」、串流標題「原始串流（不完整）」、公告完成", async () => {
+    const w = mountWithStore();
+    const jobId = await startThenReconnect();
+    useCopilotStore().applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 0, text: "推理" });
+    lookupReply = (id) => Response.json({ status: "completed", jobId: id, result: RESULT, cached: false });
+    useCopilotStore().onAuthorized(SOCKET_2);
+    await flushPromises();
+    await flushPromises();
+    expect(headerText(w)).toContain("已完成");
+    const meta = w.get('[data-testid="copilot-recovered-meta"]');
+    expect(meta.text()).toBe("重新連線後取回");
+    expect(meta.classes()).toEqual(expect.arrayContaining(["text-xs", "text-ink-3"]));
+    expect(w.get('[data-fg="timing"]').text()).toContain("重新連線後取回");
+    expect(w.find('[data-fg="timing-bars"]').exists()).toBe(false); // 取回的耗時不畫對比橫條（P16）
+    expect(w.findAll("button").some((b) => b.text() === "原始串流（不完整）")).toBe(true);
+    expect(w.get('[aria-live="polite"]').text()).toBe(`${LABEL} 診斷完成：${RESULT.summary}`);
+  });
+
+  it("以 ai/done 收尾的完成態不顯示「重新連線後取回」", async () => {
+    const w = mountWithStore();
+    const jobId = await startJob();
+    useCopilotStore().applyEvent({ type: "ai/done", jobId, attempt: 1, cached: false, result: RESULT });
+    await flushPromises();
+    expect(headerText(w)).toContain("已完成");
+    expect(w.find('[data-testid="copilot-recovered-meta"]').exists()).toBe(false);
+  });
+
+  it("續接 GET 回 409 job_bound_elsewhere → 失敗文案指向另一個視窗", async () => {
+    const w = mountWithStore();
+    await startThenReconnect();
+    lookupReply = () => Response.json({ code: "job_bound_elsewhere" }, { status: 409 });
+    useCopilotStore().onAuthorized(SOCKET_2);
+    await flushPromises();
+    await flushPromises();
+    expect(headerText(w)).toContain("失敗");
+    expect(w.text()).toContain("這個診斷正由另一個視窗接收，請在該視窗查看或重試");
+  });
+});
+
+describe("CopilotDrawer 重新排入佇列說明行與嘗試次數（012 T059、T066、FR-006、FR-035～FR-037）", () => {
+  beforeEach(stubDesktop);
+
+  /** 進行中區塊的說明行文字（不存在為 null）。 */
+  function noteText(w: VueWrapper): string | null {
+    const note = w.find('[data-testid="copilot-progress-note"]');
+    return note.exists() ? note.text() : null;
+  }
+
+  it("reason stalled → 說明行「…（第 N 次執行）」並朗讀；N 由下一則帶 execution 的事件校正；面板 chip 仍「進行中」", async () => {
+    const w = mountWithStore();
+    const jobId = await startJob();
+    const copilot = useCopilotStore();
+    copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "active", progress: 40, execution: 1 });
+    copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "waiting", reason: "stalled" });
+    await flushPromises();
+    expect(noteText(w)).toBe("後端處理程序中斷，任務已重新排入佇列（第 2 次執行）");
+    expect(w.get('[aria-live="polite"]').text()).toBe("後端處理程序中斷，任務已重新排入佇列（第 2 次執行）");
+    expect(headerText(w)).toContain("進行中");
+    expect(diagnosisBadgeText(copilot.badgeFor(MACHINE))).toBe("診斷中 40%");
+
+    copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "active", progress: 20, execution: 3 });
+    await flushPromises();
+    expect(noteText(w)).toBe("後端處理程序中斷，任務已重新排入佇列（第 3 次執行）");
+    expect(w.get('[aria-live="polite"]').text()).toBe("後端處理程序中斷，任務已重新排入佇列（第 3 次執行）");
+
+    // execution 再遞增而沒有新的 stalled → 說明消失
+    copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "active", progress: 20, execution: 4 });
+    await flushPromises();
+    expect(noteText(w)).toBeNull();
+  });
+
+  it("重新排入佇列與重連後正在取回同時成立 → 只顯示後者", async () => {
+    const w = mountWithStore();
+    const copilot = useCopilotStore();
+    copilot.onReconnect(SOCKET);
+    const jobId = await startJob();
+    copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "waiting", reason: "stalled" });
+    copilot.onReconnect("33333333-3333-4333-8333-333333333333");
+    await flushPromises();
+    expect(noteText(w)).toBe("已重新連線，正在取回診斷狀態…");
+  });
+
+  it("execution 遞增但沒有 reason（重試、限流延後）→ 不出現說明行", async () => {
+    const w = mountWithStore();
+    const jobId = await startJob();
+    useCopilotStore().applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "waiting", execution: 2 });
+    await flushPromises();
+    expect(noteText(w)).toBeNull();
+  });
+
+  it("面板與卡片渲染文字不含「worker」「stalled」，診斷任務不用「停滯」（FR-036）", async () => {
+    const w = mountWithStore();
+    const jobId = await startJob();
+    const copilot = useCopilotStore();
+    copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "waiting", reason: "stalled" });
+    await flushPromises();
+    const panel = w.text();
+    expect(panel).toContain("重新排入佇列");
+    expect(panel).not.toMatch(/worker|stalled/i);
+    expect(panel).not.toContain("停滯");
+    const card = diagnosisBadgeText(copilot.badgeFor(MACHINE)) ?? "";
+    expect(card).not.toMatch(/worker|stalled|停滯/i);
+
+    copilot.applyEvent({
+      type: "job/status",
+      jobId,
+      machineId: MACHINE,
+      status: "failed",
+      error: "job stalled more than allowable limit",
+    });
+    await flushPromises();
+    expect(w.text()).toContain("後端處理程序多次中斷，診斷已停止，請重試");
+    expect(w.text()).not.toMatch(/worker|stalled/i);
+  });
+
+  it("等待中收到 attempt 2（尚無 token）即顯示「嘗試 2 / 3」，並清掉上一輪的串流文字", async () => {
+    const w = mountWithStore();
+    const jobId = await startJob();
+    const copilot = useCopilotStore();
+    copilot.applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 0, text: "第一輪" });
+    await flushPromises();
+    expect(metaValue(w, "嘗試")).toBe("1 / 3");
+    copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "waiting", attempt: 2 });
+    await flushPromises();
+    expect(metaValue(w, "嘗試")).toBe("2 / 3");
+    const s = copilot.stateFor(MACHINE);
+    expect(s.status === "active" ? s.streamText : null).toBe("");
+  });
+
+  it("快取命中的那一輪：嘗試次數照 job/status 推進，完成後不保留上一輪文字", async () => {
+    const w = mountWithStore();
+    const jobId = await startJob();
+    const copilot = useCopilotStore();
+    copilot.applyEvent({ type: "ai/token", jobId, attempt: 1, seq: 0, text: "第一輪半截" });
+    copilot.applyEvent({ type: "job/status", jobId, machineId: MACHINE, status: "active", progress: 20, attempt: 2, execution: 2 });
+    await flushPromises();
+    expect(metaValue(w, "嘗試")).toBe("2 / 3");
+    copilot.applyEvent({ type: "ai/done", jobId, attempt: 2, cached: true, result: RESULT });
+    await flushPromises();
+    expect(headerText(w)).toContain("已完成");
+    expect(w.findAll("button").some((b) => b.text().startsWith("原始串流"))).toBe(false); // 沒有文字就不畫串流區
+  });
+
+  it("沒有重連的 45 s watchdog 以 GET 收尾 → 不顯示「重新連線後取回」（裁決 53）", async () => {
+    const w = mountWithStore();
+    const copilot = useCopilotStore();
+    copilot.onReconnect(SOCKET);
+    const jobId = await startJob();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ status: "completed", jobId, result: RESULT, cached: false })),
+    );
+    copilot.checkStalls(Date.now() + 46_000, 45_000);
+    await flushPromises();
+    await flushPromises();
+    expect(headerText(w)).toContain("已完成");
+    expect(w.find('[data-testid="copilot-recovered-meta"]').exists()).toBe(false);
   });
 });
 
