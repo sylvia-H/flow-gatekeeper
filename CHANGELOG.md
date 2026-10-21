@@ -35,6 +35,8 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 
 維護分支 `fix/20261022-ui-humanize-error-zh`（自 `fix/20261022-ui-zero-count-neutral` 尖端開出、併回 develop 時以 develop 為準）：013 UI 待辦「`humanizeError` 的英文原文後援改繁中」；現況摘要見指南 §15.6「失敗訊息英文後援改繁中」。
 
+維護分支 `fix/20261022-ui-tab-title-alert`（自 `fix/20261022-ui-humanize-error-zh` 尖端開出、併回 develop 時以 develop 為準）：013 UI 待辦「分頁 title／favicon 嚴重告警」；現況摘要見指南 §15.6「分頁標題與 favicon 告警」。
+
 ### 相容性注意（升級前必讀）
 
 - **`ai/done` 可重複、可遺失**（契約 1.4.0，ADR-003 D3）：同一 jobId 再執行（stalled 重派、重試）時會再送一則 `ai/done`，通常帶相同結果；罕見的殘餘情況（ADR-003 §4：停頓剛好落在取鎖之後、送出 LLM 請求之前）下再執行可能帶不同結果，client 以先收到者為準，Pub/Sub 斷線時也可能收不到。權威完成是帶 `result` 的 `job/status: completed`。**自寫 WS client MUST 以 jobId 去重**、以收到的第一個完成為準；只認 `ai/done` 的 client 會把同一結果顯示兩次，或在 Pub/Sub 斷線時永遠等不到結果。
@@ -65,6 +67,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 - **UI 新狀態與文案**（PRODUCT.md 新術語「重新排入佇列（內部稱重新派送）」「取回」「結果未知」）：說明行「後端處理程序中斷，任務已重新排入佇列（第 N 次執行）」「已重新連線，正在取回診斷狀態…」；完成 meta「重新連線後取回」（耗時不作快取對比基準）；串流標題「原始串流（不完整）」（以 `job/status`／GET 收尾，或執行期間經歷過重連）；失敗文案「連線中斷期間的診斷結果已無法取回，請重試」「這個診斷正由另一個視窗接收，請在該視窗查看或重試」「超過 45 秒沒有收到進度，結果未知，請重試」「診斷結果無法寫入資料庫，請稍後重試」「後端處理程序多次中斷，診斷已停止，請重試」。卡片診斷 chip 不新增種類。
 - **結構化日誌**：冪等短路命中（info，帶來源）、`ai-fail` 寫入（info）與命中（warn）、relay 轉發 `stalled`（warn）、GET 的 rebind 與衝突 409（info）；`system/metrics`／`WorkerMetrics` 不新增欄位。
 - **e2e 場景**：3a／3b（串流中、首 token 前 SIGKILL，斷言最長無事件 < 45 秒）、5（Pub/Sub 每 50 ms 斷線）、6a／6b（api 重啟後續接）、7（Redis 停頓 50 秒，斷言重派確實發生且 trigger／LLM 各一次）、8（GET 回應形狀）；fake provider 新增 `FAKE_AI_FIRST_TOKEN_DELAY_MS`。
+- **分頁標題與 favicon 告警**（013 critique 2026-10-17 P2「沒有周邊注意力訊號」）：web 新增 SVG favicon（`apps/web/public/favicon.svg`，之前沒有 favicon）。機群健康的嚴重台數 > 0 時分頁標題改為「● 嚴重 N · flow-gatekeeper」、favicon 換成帶紅色狀態點的 `favicon-critical.svg`；曾連上後重新連線中／已斷線時標題為「○ 重新連線中 · flow-gatekeeper」／「○ 已斷線 · flow-gatekeeper」、favicon 換成空心灰圈的 `favicon-offline.svg`，並蓋過嚴重；其餘為「flow-gatekeeper」。警告不上分頁、首次連線中不標、不閃爍；只在標題或圖示真的要變時才寫 DOM。依分頁標題固定為「flow-gatekeeper」做比對的劇本需放寬。
 
 ### Changed
 

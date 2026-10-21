@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- flow-gatekeeper 分頁圖示（嚴重版）：基礎版右上加實心 crit 狀態點，白圈與刻度分開。
+       色值取自 src/styles/theme.css 淺色主題：surface #FFFFFF、ink #1F2A33、ink-3 #4A5763、accent #0F6E8C、crit #C62828（src/styles/favicon.test.ts 核對）。 -->
+  <rect x="2" y="2" width="28" height="28" rx="5" fill="#FFFFFF" stroke="#1F2A33" stroke-width="2"/>
+  <path d="M7 8h6M7 13h4M7 18h6" fill="none" stroke="#4A5763" stroke-width="2"/>
+  <rect x="7" y="21" width="18" height="5" fill="#0F6E8C"/>
+  <circle cx="23" cy="10" r="6.5" fill="#C62828" stroke="#FFFFFF" stroke-width="2"/>
+</svg>

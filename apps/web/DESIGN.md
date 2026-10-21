@@ -269,7 +269,7 @@ components:
 **The One Teal Rule.** 深青只出現在主要動作、選取、液位線、串流游標與「進行中」；任何裝飾性的青都是錯的。桌面與桌邊上的深青文字一律用 accent-strong。
 **The Etch-Is-Not-Text Rule.** `etch` 與狀態實心色只畫刻度、短線、點、邊框與色條；文字一律用 ink 階或 `*-fg`。刻度旁的數字是文字，用 ink-3。
 **The Three-Piece Rule.** 每個狀態都是「實心／fg／bg」三件套：徽章永遠 `bg-*-bg + text-*-fg`，實心只給刻度、燈、框與色條；嚴重卡片是唯一拿 `*-bg` 當大面積底的地方，而且是 80%。
-**The One Source Rule.** 色值只存在 `theme.css`，兩套主題同名換值；元件與 `tailwind.config.ts` 只寫語意 class（`bg-bench`、`text-ink-2`…），半透明一律由 class 的 alpha 修飾（`bg-surface/72`、`bg-crit-bg/80`、`bg-scrim/50`、`bg-ink/20`）決定。
+**The One Source Rule.** 色值只存在 `theme.css`，兩套主題同名換值；元件與 `tailwind.config.ts` 只寫語意 class（`bg-bench`、`text-ink-2`…），半透明一律由 class 的 alpha 修飾（`bg-surface/72`、`bg-crit-bg/80`、`bg-scrim/50`、`bg-ink/20`）決定。唯一例外是 `public/favicon*.svg`：靜態資產讀不到 CSS 變數，只能寫死 hex，而且只准用 theme.css **淺色**主題既有 token 的值（`src/styles/favicon.test.ts` 逐一核對，改 token 值時會提醒同步；見 Components「分頁標題與 favicon」）。
 
 ## Typography
 
@@ -377,6 +377,14 @@ rail 版：玻璃片，標頭「機群健康」+ 「共 N 台」，2×2 計數�
 
 ### StatusLight
 12px 方框內置中 10px `rounded-pill` 圓點，`bg-ok／warn／crit`；燈本身不脈動（嚴重卡片的脈動在底色，燈再閃會在半週期與底同色而消失）；`role="img"` + `aria-label="狀態：…"`。狀態 → 色 token 與中文標籤的單一對照在 `shared/lib/state-style.ts`，卡片徽章、機群健康、事件流、Copilot 摘要共用。
+
+### 分頁標題與 favicon（周邊注意力訊號）
+分頁不在前景時的唯一訊號（`shared/composables/useDocumentAlert.ts`，App 接線；`fix/20261022-ui-tab-title-alert`）。三態，優先序與主區橫幅同向：
+- **離線**（曾連上後重新連線中／已斷線）：標題「○ 重新連線中 · flow-gatekeeper」／「○ 已斷線 · flow-gatekeeper」（字與連線 chip 相同），favicon `favicon-offline.svg`。首次連線中不標，與橫幅的中性「連線中…」一致。
+- **嚴重**（`fleetHealth.critical` > 0，停滯的機台不算）：標題「● 嚴重 N · flow-gatekeeper」，favicon `favicon-critical.svg`。
+- **其餘**：標題「flow-gatekeeper」、基礎 `favicon.svg`。**警告不上分頁**——mock 會週期性出警告尖峰，分頁跟著跳只會讓人麻痺；分頁訊號留給「需要現在回來看」的狀況。
+
+favicon 是 32×32 viewBox 的極簡玻璃量具：`surface` 白底玻璃片（rx 5、2px `ink` 框，深淺色瀏覽器分頁列上都分得出輪廓）、左上三道 2px `ink-3` 蝕刻刻度、下方 `accent` 實心液柱；嚴重版右上加 r 6.5 的實心 `crit` 狀態點（2px `surface` 白圈與框線分開），離線版同位置改 3px `stale` 空心圈（資料已停，對應標題的「○」）。三個檔都只用 theme.css 淺色主題的 token 色值（surface #FFFFFF、ink #1F2A33、ink-3 #4A5763、accent #0F6E8C、crit #C62828、stale #7A8792），不隨 app 主題切換（分頁列屬瀏覽器、不屬畫面）。只在衍生出的標題／favicon 字串變化時寫入 DOM；不閃爍、不輪播（與 `prefers-reduced-motion` 無關），標題變化不設 live region。暫停時沿用暫停那一刻的計數（與機群健康同一個凍結快照）。
 
 ## Do's and Don'ts
 

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { shallowMount, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
+import { nextTick } from "vue";
 import type { UseHighFrequencyWsOptions } from "./domains/monitoring/composables/useHighFrequencyWs.js";
 
 /**
@@ -97,5 +98,41 @@ describe("App 即時通道接線（012 T043）", () => {
     options.onConnected?.(CLIENT);
     options.onAuthResult?.(false);
     expect(onAuthorized).not.toHaveBeenCalled();
+  });
+});
+
+describe("App 分頁標題與 favicon 接線（013 critique 周邊注意力訊號）", () => {
+  const iconHref = (): string | null | undefined =>
+    document.querySelector('link[rel~="icon"]')?.getAttribute("href");
+
+  it("嚴重台數來自 fleetHealth、離線來自連線狀態；unmount 還原標題", async () => {
+    document.title = "flow-gatekeeper";
+    const { options } = mountApp();
+    expect(document.title).toBe("flow-gatekeeper");
+    expect(iconHref()).toBe("/favicon.svg");
+
+    options.onStatus?.("connected");
+    options.onConnected?.(CLIENT);
+    options.onBatch([
+      {
+        type: "machine/data",
+        machineId: "press-02",
+        timestamp: new Date().toISOString(),
+        telemetry: { temperature: 90, vibration: 3, throughput: 10, errorRate: 0.5 },
+        state: "critical",
+      },
+    ]);
+    await nextTick();
+    expect(document.title).toBe("● 嚴重 1 · flow-gatekeeper");
+    expect(iconHref()).toBe("/favicon-critical.svg");
+
+    options.onStatus?.("reconnecting");
+    await nextTick();
+    expect(document.title).toBe("○ 重新連線中 · flow-gatekeeper");
+    expect(iconHref()).toBe("/favicon-offline.svg");
+
+    wrapper?.unmount();
+    wrapper = null;
+    expect(document.title).toBe("flow-gatekeeper");
   });
 });

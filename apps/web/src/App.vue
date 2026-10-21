@@ -19,6 +19,7 @@ import { useResizeDrag } from "./shared/composables/useResizeDrag.js";
 import { useKeyboardShortcuts } from "./shared/composables/useKeyboardShortcuts.js";
 import { BELOW_MD_QUERY, useMediaQuery } from "./shared/composables/useMediaQuery.js";
 import { useDiagnoseTrigger } from "./domains/ai-copilot/composables/useDiagnoseTrigger.js";
+import { useDocumentAlert } from "./shared/composables/useDocumentAlert.js";
 import {
   EVENT_STRIP_MAX,
   EVENT_STRIP_MIN,
@@ -221,6 +222,16 @@ const machineCount = computed(() => MACHINE_IDS.length);
 const banner = computed(() =>
   bannerOf(store.connectionStatus, store.everConnected, store.authError, store.paused, store.pausedAt),
 );
+
+/**
+ * 分頁標題與 favicon 的周邊注意力訊號（013 critique 2026-10-17 P2）：嚴重台數取 `fleetHealth`、離線判斷與橫幅同一組值；
+ * 只在衍生字串變化時寫 DOM（見 `useDocumentAlert`）。
+ */
+useDocumentAlert(() => ({
+  critical: store.fleetHealth.critical,
+  connection: store.connectionStatus,
+  everConnected: store.everConnected,
+}));
 
 /** 暫停橫幅的「恢復」：走工具列同一個 `togglePause`；橫幅隨即消失，焦點交回工具列暫停鈕。 */
 function onBannerResume(): void {

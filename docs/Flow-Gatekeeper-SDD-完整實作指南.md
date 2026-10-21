@@ -3221,6 +3221,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 11 | `fix/20261021-ci-and-flaky` | （以 `git log --first-parent --merges` 為準） | `ci.yml` 恢復所有分支 push 自動觸發（DOC-18）、修正 nightly mutation 抓到的 `TopBar.test.ts` 不穩定測試、§15.5 roadmap 註記更新 | CI 恢復自動觸發與 flaky 測試 |
 | 12 | `fix/20261022-ui-zero-count-neutral` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：機群健康四類計數為 0 時數字改中性 `ink-3` | 零值計數中性色 |
 | 13 | `fix/20261022-ui-humanize-error-zh` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：AI 診斷失敗時未能分類的英文原文不再當主訊息，改顯通用繁中句、原文收進預設收合的「技術細節」 | 失敗訊息英文後援改繁中 |
+| 14 | `fix/20261022-ui-tab-title-alert` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：分頁標題與 favicon 隨嚴重台數與離線狀態變化（新增 SVG favicon 三版） | 分頁標題與 favicon 告警 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」與「012-lite 串流韌性」；後者的完整藍圖與落地摘要在 §15.7），但不列入本表。
 
@@ -3483,6 +3484,19 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **store 自己組的 POST 失敗句不動**：`failureMessage` 回的都是 web／api 端的中文固定句，不經 `humanizeError`。
 - **驗證**：`copilot-reducer.test.ts` 改寫「未知短訊息」案例（英文短句 → 通用句），新增中文短句照顯、含中文的長句／多行 → 通用句，以及 `humanizeFailure` 的英文短句帶 `errorDetail`、已知分類（含 012 兩條）不帶、中文與恰為通用句的原文不重複帶（含 worker `no_context` 的實際訊息）、長／多行／空不帶、reducer 三條失敗路徑都帶；`CopilotDrawer.test.ts` 新增「技術細節」預設收合、展開後顯示原文（mono、內凹）、公告只念通用句、重試後消失、再失敗回到收合，以及經 store／reducer 實跑的已分類錯誤與中文短句都不顯示；web 全套 vitest（69 檔、1388 測試）、`typecheck`、`lint` 通過。
 
+**分頁標題與 favicon 告警**（`fix/20261022-ui-tab-title-alert`，merge 以 `git log --first-parent --merges` 為準，2026-10-22；自 `fix/20261022-ui-humanize-error-zh` 尖端開出、併回 develop 時以 develop 為準；變更明細見 `CHANGELOG.md` `[Unreleased]`）：
+
+- **做了什麼**：新增 `apps/web/src/shared/composables/useDocumentAlert.ts`——純函式 `documentAlertOf({ critical, connection, everConnected })` 決定分頁標題與 favicon 版本，`useDocumentAlert(getter)` 只 watch 衍生出的兩個字串、值變了才寫 `document.title` 與 `<link rel="icon">` 的 `href`，scope 結束時還原（自建的 link 移除）。`App.vue` 以 `store.fleetHealth.critical`、`store.connectionStatus`、`store.everConnected` 接線。三態：曾連上後重新連線中／已斷線 →「○ 重新連線中 · flow-gatekeeper」／「○ 已斷線 · flow-gatekeeper」＋`favicon-offline.svg`；嚴重台數 > 0 →「● 嚴重 N · flow-gatekeeper」＋`favicon-critical.svg`；其餘 →「flow-gatekeeper」＋`favicon.svg`。新增 `apps/web/public/`（三個 SVG favicon；之前 repo 沒有 favicon，瀏覽器自行去要的 `/favicon.ico` 只拿到 SPA fallback 的 `index.html`，分頁只有預設圖示），`index.html` 加 `<link rel="icon">`。`apps/web/DESIGN.md`（Components「分頁標題與 favicon」、One Source Rule 的 favicon 例外）與 `apps/web/PRODUCT.md`（Operating Context「周邊注意力訊號」）同步；README §4 加一句。
+- **依據**：013 critique 快照 `apps/web/.impeccable/critique/2026-10-17T05-27-46Z__src-app-vue.md` 第 66 行（[P2] 沒有周邊注意力訊號：「`document.title`／favicon 不隨嚴重台數變」，Fix「title 前綴『● 嚴重 1 · flow-gatekeeper』、favicon 狀態色點」）與值夜班操作員 persona（「無分頁告警」）；即下方「013 UI 全面改版」T073 待辦清單的同名項。PRODUCT.md 原則 2「狀態永遠誠實」。
+- **取捨**：
+  - **警告不上分頁**：critique 只點名嚴重；mock 會週期性出警告尖峰，分頁標題跟著跳會讓人對分頁訊號麻痺，等到真的嚴重時反而不看。分頁訊號留給「需要現在回來看」的狀況。
+  - **離線要標、而且蓋過嚴重**：斷線時時鐘照走（`staleClock` 斷線不凍結），10 秒後機台全數轉停滯、嚴重數歸 0，只看嚴重的話分頁會退回「flow-gatekeeper」、讀成一切正常，違反「狀態永遠誠實」。優先序與主區橫幅同向（斷線 ＞ 其他）；字沿用連線 chip 的「重新連線中」「已斷線」。首次連線中（從未連上）不標，與橫幅的中性「連線中…」一致，免得每次開頁先閃一個離線標題。未授權不另標（設了 `WS_AUTH_SECRET` 時的部署設定問題，連線本身仍在、不算離線，主區橫幅與未授權 chip 已標示）。
+  - **「●」「○」用 Unicode 幾何字元、不用 emoji**：「⚠」等字元在部分平台會被畫成彩色 emoji、寬度不一；實心／空心圓與 favicon 的實心紅點／空心灰圈對應。
+  - **favicon 用三個靜態 SVG 檔、不用 data URL**：data URL 得把 hex 寫進 TS 程式碼，違反「色值只在 theme.css」；靜態檔的 hex 由 `src/styles/favicon.test.ts` 逐一核對必須是 theme.css 淺色主題的 token 值。favicon 不隨 app 主題切換——分頁列屬瀏覽器，白底玻璃片加 2px 墨色框在深淺色分頁列上都分得出輪廓。
+  - **不另起 1 Hz 計時器**：critique 的 Fix 寫「1 Hz tick 更新」，實作改為 watch 衍生值——`fleetHealth` 本來就隨批次與 1 Hz `staleNow` 重算，字串沒變不寫 DOM，比固定每秒寫一次少寫，也不碰硬規則 1（不新增逐筆寫入的 reactive state）。暫停時沿用暫停那一刻的計數，與機群健康同一個凍結快照。
+  - **不閃爍、不設 live region**：標題只在狀態變化時換一次，沒有輪播或閃動，與 `prefers-reduced-motion` 無關；畫面上的機群健康與連線 chip 已有可讀名稱，分頁標題不再額外朗讀。
+- **驗證**：`useDocumentAlert.test.ts` 新增 `documentAlertOf` 四態（正常、嚴重 N、重新連線中／已斷線蓋過嚴重、首次連線中不標）、`faviconHref` 依 `BASE_URL` 組檔名、嚴重數變化 → 標題與 href 跟著換、回 0 還原、斷線與重連、衍生值不變時不重寫 DOM、沒有 link 時自建並在 scope 結束時移除、既有 link 還原原 href；`favicon.test.ts` 核對三個 SVG 的 fill／stroke 皆為 theme.css 淺色 token；`App.test.ts` 新增接線測試（批次帶入嚴重機台 → 嚴重標題與嚴重 favicon、`reconnecting` → 離線標題、unmount 還原）；web 全套 vitest（71 檔、1402 測試）、`typecheck`、`lint` 通過，`vite build` 產物含三個 favicon 與 `<link rel="icon">`。
+
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 
 前端整套視覺改為「實驗室玻璃與蝕刻刻度」，視覺真實來源由 design-spec＋refs 切換為 impeccable 工件 `apps/web/PRODUCT.md`＋`apps/web/DESIGN.md`。全部是前端改動：`packages/contracts`、`asyncapi.yaml` 與後端行為不變（FR-039），只消費既有 12 則 WS 訊息與 `POST /diagnoses`；高頻遙測仍是「先進 buffer、每幀至多一次批次提交」（硬規則 1）。
@@ -3558,7 +3572,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - 這**推翻**了 `MachineNodeCard.css.test.ts` 註解記載的「以 CSS cascade 測試取代 Playwright 截圖、不新增瀏覽器相依」取捨。
     cascade 測試仍保留為單元層回歸（跑在 `pnpm test`、不需瀏覽器）；截圖劇本需先起 api 與 web dev server，手動執行，不進 CI。
 
-- **T073 critique 結果與後續待辦（2026-10-17）**：改版前基準 20/40，四輪修正後最後一次評分 29/40（趨勢 20→28→29→29→29，快照在 `apps/web/.impeccable/critique/`）。門檻 30 未達，使用者裁決結案不再追分：四位獨立審查者的 P1 互不重疊且各輪都已修掉，分數停滯的結構性原因是「說明與文件」四輪皆 2 分（概念說明只靠 tooltip）。留給後續 feature 的待辦：768 高視窗的卡片密度（第二排卡片與異常標記被裁切）、AI 結果與機台現況脫鉤的交代（依據時刻、之後已回復）、側欄確認鈕改文字鈕並在確認後顯示「已確認」tag、桌機面板展開時工具列「診斷」主鈕降級、分頁 title／favicon 嚴重告警、卡片三線刻度改迷你量筒（閾值分段＋液位）、768 堆疊改 2 欄、進行中步驟清單加小標、零值計數改中性色（已做，`fix/20261022-ui-zero-count-neutral`）、`humanizeError` 的英文原文後援改繁中（已做，`fix/20261022-ui-humanize-error-zh`）。
+- **T073 critique 結果與後續待辦（2026-10-17）**：改版前基準 20/40，四輪修正後最後一次評分 29/40（趨勢 20→28→29→29→29，快照在 `apps/web/.impeccable/critique/`）。門檻 30 未達，使用者裁決結案不再追分：四位獨立審查者的 P1 互不重疊且各輪都已修掉，分數停滯的結構性原因是「說明與文件」四輪皆 2 分（概念說明只靠 tooltip）。留給後續 feature 的待辦：768 高視窗的卡片密度（第二排卡片與異常標記被裁切）、AI 結果與機台現況脫鉤的交代（依據時刻、之後已回復）、側欄確認鈕改文字鈕並在確認後顯示「已確認」tag、桌機面板展開時工具列「診斷」主鈕降級、分頁 title／favicon 嚴重告警（已做，`fix/20261022-ui-tab-title-alert`）、卡片三線刻度改迷你量筒（閾值分段＋液位）、768 堆疊改 2 欄、進行中步驟清單加小標、零值計數改中性色（已做，`fix/20261022-ui-zero-count-neutral`）、`humanizeError` 的英文原文後援改繁中（已做，`fix/20261022-ui-humanize-error-zh`）。
 
 **012-lite 串流韌性**（SDD feature `012-stream-resilience`，spec／plan／tasks 見 `specs/012-stream-resilience/`；屬 SDD feature 而非維護分支，不列入上表；2026-10-21 implement 完成）：完成語意改以 BullMQ `returnvalue` 為權威（`job/status: completed` 帶 `result`、`ai/done` 降為 best-effort）、新增 `GET /diagnoses/:jobId` 與重連 rebind（`JobRoutingRegistry`）、BullMQ lock 15／5／2＋keepalive 10 s（SIGKILL 後設計上界 35 s）、jobId 冪等與 `ai-fail` 負向標記；契約 asyncapi **1.4.0**。帶著 2.1.0 發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治由此修掉。設計決策見 ADR-003，藍圖與落地摘要見 §15.7（§15.7.6）。
 
