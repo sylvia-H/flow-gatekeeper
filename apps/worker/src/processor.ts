@@ -131,6 +131,10 @@ export const AiFailMarkerSchema = z.object({
   code: z.string().min(1),
   message: z.string(),
   jobId: z.string().min(1),
+  /** 寫入者的 attempt：同 jobId 只有「較晚的 attempt」（自己的重試）才忽略，兄弟執行（stalled 重派的同一 attempt）照標記失敗。 */
+  attempt: z.number().int().positive(),
+  /** 原失敗是否可重試：等待者以同一語意失敗（不可重試者第一次 attempt 就轉 UnrecoverableError）。 */
+  retryable: z.boolean(),
   at: z.string(),
 });
 export type AiFailMarker = z.infer<typeof AiFailMarkerSchema>;
@@ -397,7 +401,7 @@ export function createProcessor(deps: ProcessorDeps) {
        * 寫入失敗只 warn——標記只是減少重複呼叫，不該蓋掉原本的失敗。no_context、persist_failed、限流延後不走這裡。
        */
       const failLlm = async (code: string, message: string, retryable: boolean, cause: unknown): Promise<never> => {
-        const marker: AiFailMarker = { code, message, jobId, at: new Date(now()).toISOString() };
+        const marker: AiFailMarker = { code, message, jobId, attempt, retryable, at: new Date(now()).toISOString() };
         try {
           await store.setWithTtl(failKey, JSON.stringify(marker), AI_FAIL_TTL_SECONDS);
           jl.info({ sig, code }, "ai-fail written");
@@ -427,9 +431,10 @@ export function createProcessor(deps: ProcessorDeps) {
           await store.del(failKey);
           return;
         }
-        if (marker.data.jobId === jobId) return;
+        // 自己前一次 attempt 留下的標記 → 忽略（重試要能真的再試一次）；同 attempt 的兄弟執行不忽略。
+        if (marker.data.jobId === jobId && marker.data.attempt < attempt) return;
         jl.warn({ sig, code: marker.data.code }, "ai-fail hit");
-        await fail(marker.data.code, marker.data.message, true, null);
+        await fail(marker.data.code, marker.data.message, marker.data.retryable, null);
       };
 
       /**
@@ -457,12 +462,15 @@ export function createProcessor(deps: ProcessorDeps) {
       const replyCached = async (): Promise<DiagnosisJobReturnValue | null> => {
         const result = await readCache();
         if (!result) return null;
-        if (isReExecution) {
+        // 命中在此計、未命中在真正呼叫 LLM 前計：等待迴圈每輪都會查 cache，於此計未命中會失真。
+        // claim 失敗（`!first`）＝同 jobId 已有別的執行計過——包括「舊執行落後於重派執行」：舊執行的 attemptsStarted
+        // 仍是 1、看起來像第一次執行，卻可能在重派執行寫完 diagnoses 之後才走到這裡。兩種情況都先重查冪等短路。
+        const first = await claimMetric();
+        if (isReExecution || !first) {
           const late = await replayCompleted();
           if (late) return await finishReplay(late);
         }
-        // 命中在此計、未命中在真正呼叫 LLM 前計：等待迴圈每輪都會查 cache，於此計未命中會失真。
-        if (await claimMetric()) metrics.recordCacheHit();
+        if (first) metrics.recordCacheHit();
         await repo.upsertTrigger({ machineId, jobId, requestedBy, cached: true });
         await report(100);
         await emitTerminal({ type: "ai/done", jobId, attempt, cached: true, result });
@@ -540,7 +548,7 @@ export function createProcessor(deps: ProcessorDeps) {
         //    會命中暫存、只補做寫庫，不再打 LLM。
         // 2. 再落地 diagnoses：失敗轉 persist_failed（可重試，重試時由短路 (i) 只重做這一步）。
         // 3. 落地後 DEL 暫存（失敗只 warn，TTL 兜底）。
-        // 4. 最後才寫 cache——不變量「快取有值就代表已落庫」：反過來的順序會讓重試命中 cache、診斷永不落地。
+        // 4. 最後才寫 cache——不變量「快取有值就代表已落庫」：反過來的順序會讓重試命中 cache、診斷永不落地。寫 cache 為 best-effort。
         // 暫存是 best-effort：寫不進去只 warn、照常寫 diagnoses——diagnoses 一旦落地，之後任何一步失敗都能由短路 (ii) 回收；
         // 讓暫存失敗中斷流程反而會讓已拿到的 LLM 結果作廢、重試再打一次 LLM。
         await store.setWithTtl(aiResultKey(jobId), JSON.stringify(result), AI_RESULT_TTL_SECONDS).catch((err: unknown) => {
@@ -550,7 +558,11 @@ export function createProcessor(deps: ProcessorDeps) {
         await store.del(aiResultKey(jobId)).catch((err: unknown) => {
           jl.warn({ err }, "ai-result 暫存刪除失敗（將由 TTL 過期回收）");
         });
-        await store.setWithTtl(cacheKey, JSON.stringify(result), config.cacheTtlSeconds);
+        // 快取是 best-effort：diagnoses 已落地，這裡失敗只 warn——拋出會讓已完成的診斷走重試（最後一次 attempt 甚至轉失敗），
+        // 而重試也只會由短路 (ii) 回收同一份結果、同樣不回填快取（P11）。
+        await store.setWithTtl(cacheKey, JSON.stringify(result), config.cacheTtlSeconds).catch((err: unknown) => {
+          jl.warn({ err, sig }, "ai-cache 寫入失敗（diagnoses 已落地，照常完成）");
+        });
         // 成功即清除負向標記（含自己前一次嘗試留下的）；刪不掉只 warn，TTL 10 s 兜底。
         await store.del(failKey).catch((err: unknown) => {
           jl.warn({ err, sig }, "ai-fail 標記刪除失敗（將由 TTL 過期回收）");
@@ -582,9 +594,12 @@ export function createProcessor(deps: ProcessorDeps) {
             // 對同一 signature 再打一次 LLM，去重形同虛設。
             const lockedHit = await replyCached();
             if (lockedHit) return lockedHit;
-            // 再執行且快取未命中：前一次執行可能已落地 diagnoses 卻在之後失敗（例如 SET ai-cache 失敗）並放鎖——不再查一次
-            // 冪等短路就會吃 AI_RPM、重打 LLM（ADR-003 D3／D6；裁決 49 延伸到未命中路徑）。
-            if (isReExecution) {
+            // 再執行（或同 jobId 已有別的執行計過 hit／miss）且快取未命中：那次執行可能已落地 diagnoses 卻在之後失敗並放鎖
+            // ——不再查一次冪等短路就會吃 AI_RPM、重打 LLM（ADR-003 D3／D6；裁決 49 延伸到未命中路徑）。
+            // 這裡只「看」ai-metric 標記、不 claim：claim 留到真正打 LLM 時（callLlmAndReply）；若在此 claim，限流延後的
+            // 那次就會吃掉標記，延後後真的打 LLM 的那次反而記不到 miss。
+            const countedElsewhere = (await store.get(aiMetricKey(jobId))) !== null;
+            if (isReExecution || countedElsewhere) {
               const late = await replayCompleted();
               if (late) return await finishReplay(late);
             }

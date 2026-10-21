@@ -177,7 +177,7 @@ importers:
         specifier: ^2.24.0
         version: 2.24.0
       bullmq:
-        specifier: ^5.21.0
+        specifier: ^5.79.2
         version: 5.79.2
       dotenv:
         specifier: ^16.4.5

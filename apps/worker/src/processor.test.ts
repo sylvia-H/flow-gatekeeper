@@ -981,13 +981,33 @@ describe("createProcessor：cache", () => {
     expect(JSON.parse(store.data.get(key) ?? "null")).toEqual(VALID_RESULT);
   });
 
-  it("先寫 diagnoses 再寫 cache：寫 cache 失敗時 diagnoses 已落地、cache 仍空；重試由冪等短路沿用，不重打 LLM", async () => {
-    const { ai, store, repo, processor } = setup([okScript()]);
+  it("SET ai-cache 失敗（best-effort）：只 warn、diagnoses 已落地，job 照常完成 cached:false——attempts 1 也成功", async () => {
+    const { logger, warns } = recordingLogger();
+    const { ai, store, repo, processor } = setup([okScript()], { logger });
     store.failSetWithTtl = (key) => key.startsWith("ai-cache:");
-    await expect(processor(makeJob("a"))).rejects.toThrow("redis down");
+    await expect(processor(makeJob("a", { attempts: 1 }))).resolves.toEqual({ result: VALID_RESULT, cached: false });
+    expect(warns.map((w) => w.msg)).toContain("ai-cache 寫入失敗（diagnoses 已落地，照常完成）");
     expect(repo.diagnoses).toHaveLength(1);
+    expect(repo.triggers.map((t) => t.cached)).toEqual([false]);
     expect(store.cacheKeys()).toHaveLength(0);
     expect(store.data.has("ai-result:a")).toBe(false); // 寫庫成功後暫存已刪
+    expect(ai.calls).toHaveLength(1);
+  });
+
+  it("diagnoses 落地後 trigger 寫入失敗：拋出走重試，重試由冪等短路沿用、不重打 LLM、不回填 ai-cache", async () => {
+    const { ai, store, repo, processor } = setup([okScript()]);
+    store.failSetWithTtl = (key) => key.startsWith("ai-cache:");
+    const upsert = repo.upsertTrigger.bind(repo);
+    let failTriggerOnce = true;
+    vi.spyOn(repo, "upsertTrigger").mockImplementation(async (doc) => {
+      if (failTriggerOnce) {
+        failTriggerOnce = false;
+        throw new Error("mongo down");
+      }
+      await upsert(doc);
+    });
+    await expect(processor(makeJob("a"))).rejects.toThrow("mongo down");
+    expect(repo.diagnoses).toHaveLength(1);
 
     await expect(processor(makeJob("a", { attemptsMade: 1, attempts: 3 }))).resolves.toEqual({
       result: VALID_RESULT,
@@ -1009,9 +1029,18 @@ describe("createProcessor：cache", () => {
   });
 
   it("暫存寫入失敗且之後的步驟也失敗：diagnoses 已落地者由短路 (ii) 回收，不重打 LLM", async () => {
-    const { ai, store, processor } = setup([okScript()]);
-    store.failSetWithTtl = () => true; // ai-result 與 ai-cache 都寫不進去
-    await expect(processor(makeJob("a"))).rejects.toThrow("redis down"); // 卡在 SET ai-cache
+    const { ai, store, repo, processor } = setup([okScript()]);
+    store.failSetWithTtl = () => true; // ai-result 與 ai-cache 都寫不進去（皆 best-effort）
+    const upsert = repo.upsertTrigger.bind(repo);
+    let failTriggerOnce = true;
+    vi.spyOn(repo, "upsertTrigger").mockImplementation(async (doc) => {
+      if (failTriggerOnce) {
+        failTriggerOnce = false;
+        throw new Error("mongo down");
+      }
+      await upsert(doc);
+    });
+    await expect(processor(makeJob("a"))).rejects.toThrow("mongo down"); // 卡在 trigger
 
     store.failSetWithTtl = false;
     await expect(processor(makeJob("a", { attemptsMade: 1, attempts: 3 }))).resolves.toEqual({
@@ -1330,11 +1359,20 @@ describe("createProcessor：再執行在快取命中時先重查短路（M1；AD
     expect(metrics.recordCacheMiss).toHaveBeenCalledTimes(1);
   });
 
-  it("取鎖後快取未命中的再執行：exec1 寫完 diagnoses 後 SET ai-cache 失敗放鎖 → exec2 取鎖後由短路沿用，不重打 LLM、不吃 AI_RPM", async () => {
+  it("取鎖後快取未命中的再執行：exec1 寫完 diagnoses 後（ai-cache 未寫成）trigger 失敗放鎖 → exec2 取鎖後由短路沿用，不重打 LLM、不吃 AI_RPM", async () => {
     const holder = gatedScript();
     const { logger, shortCircuits } = infoLogger();
     const { ai, store, repo, clock, processor } = setup([holder.script], { logger });
     store.failSetWithTtl = (key) => key.startsWith("ai-cache:");
+    const upsert = repo.upsertTrigger.bind(repo);
+    let failTriggerOnce = true;
+    vi.spyOn(repo, "upsertTrigger").mockImplementation(async (doc) => {
+      if (failTriggerOnce) {
+        failTriggerOnce = false;
+        throw new Error("mongo down");
+      }
+      await upsert(doc);
+    });
     const exec1 = processor(makeJob("miss")).catch((e: unknown) => e);
     await flush();
     const exec2 = processor(makeJob("miss", { attemptsStarted: 2 }));
@@ -1342,7 +1380,7 @@ describe("createProcessor：再執行在快取命中時先重查短路（M1；AD
     expect(clock.pending).toBe(1); // exec2 等鎖
 
     holder.release();
-    expect(await exec1).toBeInstanceOf(Error); // 卡在 SET ai-cache
+    expect(await exec1).toBeInstanceOf(Error); // 卡在 trigger
     expect(repo.diagnoses).toHaveLength(1);
     const windowKey = `ai-rpm:${Math.floor(CLOCK_START / 60_000)}`;
     const usedBefore = store.counters.get(windowKey);
@@ -1370,6 +1408,75 @@ describe("createProcessor：再執行在快取命中時先重查短路（M1；AD
       cached: true,
     });
     expect(repo.findCalls).toBe(2); // 開頭一次＋命中快取前重查一次
+  });
+});
+
+describe("createProcessor：舊執行落後於重派執行（合併門第 2 輪 M1；ADR-003 D3）", () => {
+  it("exec1（attemptsStarted 1）卡在 buildContext、exec2 跑完全程後放行 exec1：exec1 命中快取時 claim 失敗→重查短路→cached:false", async () => {
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((r) => {
+      releaseFirst = r;
+    });
+    let calls = 0;
+    const buildContext = async () => {
+      calls += 1;
+      if (calls === 1) await firstGate; // 只有 exec1 被擋
+      return CONTEXT;
+    };
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, repo, publisher, metrics, processor } = setup([okScript()], { buildContext, logger });
+    const exec1 = processor(makeJob("lag"));
+    await flush();
+    // 舊執行仍卡著時 lock 過期、重派：exec2 從頭跑完（打 LLM、寫 diagnoses／ai-cache／trigger）。
+    expect(await processor(makeJob("lag", { attemptsStarted: 2 }))).toEqual({ result: VALID_RESULT, cached: false });
+
+    releaseFirst();
+    expect(await exec1).toEqual({ result: VALID_RESULT, cached: false });
+    expect(shortCircuits()).toEqual(["diagnoses"]);
+    expect(ai.calls).toHaveLength(1);
+    expect(repo.triggers).toEqual([{ machineId: "press-02", jobId: "lag", requestedBy: "tester", cached: false }]);
+    expect(publisher.ofType("ai/done").every((e) => !e.cached)).toBe(true);
+    expect(metrics.recordCacheHit).not.toHaveBeenCalled();
+    expect(metrics.recordCacheMiss).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("createProcessor：舊執行落後於重派執行——取鎖後未命中路徑（M1）", () => {
+  it("exec2 落地 diagnoses 後 trigger 失敗（ai-cache 未寫成）：放行的 exec1 取鎖後看到 ai-metric 已被計過→重查短路，不打 LLM、不吃 AI_RPM", async () => {
+    let releaseFirst: () => void = () => {};
+    const firstGate = new Promise<void>((r) => {
+      releaseFirst = r;
+    });
+    let calls = 0;
+    const buildContext = async () => {
+      calls += 1;
+      if (calls === 1) await firstGate;
+      return CONTEXT;
+    };
+    const { logger, shortCircuits } = infoLogger();
+    const { ai, store, repo, processor } = setup([okScript()], { buildContext, logger });
+    store.failSetWithTtl = (key) => key.startsWith("ai-cache:");
+    const upsert = repo.upsertTrigger.bind(repo);
+    let failTriggerOnce = true;
+    vi.spyOn(repo, "upsertTrigger").mockImplementation(async (doc) => {
+      if (failTriggerOnce) {
+        failTriggerOnce = false;
+        throw new Error("mongo down");
+      }
+      await upsert(doc);
+    });
+    const exec1 = processor(makeJob("lag2"));
+    await flush();
+    await expect(processor(makeJob("lag2", { attemptsStarted: 2 }))).rejects.toThrow("mongo down");
+    const windowKey = `ai-rpm:${Math.floor(CLOCK_START / 60_000)}`;
+    const usedBefore = store.counters.get(windowKey);
+
+    releaseFirst();
+    expect(await exec1).toEqual({ result: VALID_RESULT, cached: false });
+    expect(shortCircuits()).toEqual(["diagnoses"]);
+    expect(ai.calls).toHaveLength(1);
+    expect(store.counters.get(windowKey)).toBe(usedBefore);
+    expect(repo.triggers.map((t) => t.cached)).toEqual([false]);
   });
 });
 
@@ -1766,6 +1873,8 @@ describe("createProcessor：ai-fail 負向標記（012 T062／T063；FR-028、SC
       code: "provider_error",
       message: "503 overloaded",
       jobId: "a",
+      attempt: 1,
+      retryable: true,
       at: new Date(CLOCK_START).toISOString(),
     });
     expect(store.ttls.filter((t) => t.key === failKey)).toEqual([{ op: "cache", key: failKey, ttlSeconds: 10 }]);
@@ -1866,10 +1975,51 @@ describe("createProcessor：ai-fail 負向標記（012 T062／T063；FR-028、SC
     expect(store.cacheKeys()).toHaveLength(1);
   });
 
+  it("同 jobId 同 attempt 的兄弟執行（stalled 重派）不忽略標記：照標記失敗、不打 LLM", async () => {
+    const { ai, store, processor } = setup([okScript()]);
+    const { failKey } = keysFor(CONTEXT);
+    store.data.set(
+      failKey,
+      JSON.stringify({ code: "provider_error", message: "503", jobId: "sib", attempt: 1, retryable: true, at: "t" }),
+    );
+    const err = await processor(makeJob("sib", { attemptsStarted: 2 })).catch((e: unknown) => e);
+    expect((err as Error).message).toBe("503");
+    expect(err).not.toBeInstanceOf(UnrecoverableError);
+    expect(ai.calls).toHaveLength(0);
+  });
+
+  it("標記帶 retryable:false（持鎖者 safety）：等待者 B 第一次 attempt 即 UnrecoverableError、送 ai/error，LLM 只 1 次", async () => {
+    let open: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      open = r;
+    });
+    const safety: Script = async () => {
+      await gate;
+      return { text: "", finishReason: "safety" };
+    };
+    const { ai, store, publisher, clock, processor } = setup([safety]);
+    const a = processor(makeJob("A")).catch((e: unknown) => e);
+    const b = processor(makeJob("B")).catch((e: unknown) => e);
+    await flush();
+    open();
+    expect(await a).toBeInstanceOf(UnrecoverableError);
+    expect(AiFailMarkerSchema.parse(JSON.parse(store.data.get(keysFor(CONTEXT).failKey) ?? "null")).retryable).toBe(false);
+    clock.advance(CONFIG.pollIntervalMs);
+    expect(await b).toBeInstanceOf(UnrecoverableError);
+    expect(ai.calls).toHaveLength(1);
+    expect(publisher.ofType("ai/error").map((e) => [e.jobId, e.code, e.attempt])).toEqual([
+      ["A", "schema_invalid", 1],
+      ["B", "schema_invalid", 1],
+    ]);
+  });
+
   it("持鎖者自己的重試忽略自己的標記；成功時 DEL 標記", async () => {
     const { ai, store, processor } = setup([okScript()]);
     const { failKey } = keysFor(CONTEXT);
-    store.data.set(failKey, JSON.stringify({ code: "provider_error", message: "x", jobId: "self", at: "t" }));
+    store.data.set(
+      failKey,
+      JSON.stringify({ code: "provider_error", message: "x", jobId: "self", attempt: 1, retryable: true, at: "t" }),
+    );
     await expect(processor(makeJob("self", { attemptsMade: 1 }))).resolves.toEqual({ result: VALID_RESULT, cached: false });
     expect(ai.calls).toHaveLength(1);
     expect(store.data.has(failKey)).toBe(false);
@@ -1879,7 +2029,10 @@ describe("createProcessor：ai-fail 負向標記（012 T062／T063；FR-028、SC
     const { logger, warns } = recordingLogger();
     const { ai, store, publisher, processor } = setup([okScript()], { logger });
     const { failKey } = keysFor(CONTEXT);
-    store.data.set(failKey, JSON.stringify({ code: "ai_timeout", message: "AI streaming timeout", jobId: "other", at: "t" }));
+    store.data.set(
+      failKey,
+      JSON.stringify({ code: "ai_timeout", message: "AI streaming timeout", jobId: "other", attempt: 1, retryable: true, at: "t" }),
+    );
     const acquire = vi.spyOn(store, "tryAcquireLock");
 
     const err = await processor(makeJob("n", { attemptsMade: 2, attempts: 3 })).catch((e: unknown) => e);
@@ -1897,7 +2050,10 @@ describe("createProcessor：ai-fail 負向標記（012 T062／T063；FR-028、SC
   it("標記過期（不存在）後新 job 照常呼叫 LLM", async () => {
     const { ai, store, processor } = setup([okScript()]);
     const { failKey } = keysFor(CONTEXT);
-    store.data.set(failKey, JSON.stringify({ code: "provider_error", message: "x", jobId: "other", at: "t" }));
+    store.data.set(
+      failKey,
+      JSON.stringify({ code: "provider_error", message: "x", jobId: "other", attempt: 1, retryable: true, at: "t" }),
+    );
     store.data.delete(failKey); // TTL 到期
     await expect(processor(makeJob("n"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
     expect(ai.calls).toHaveLength(1);
@@ -1918,7 +2074,10 @@ describe("createProcessor：ai-fail 負向標記（012 T062／T063；FR-028、SC
     const acquire = store.tryAcquireLock.bind(store);
     vi.spyOn(store, "tryAcquireLock").mockImplementation(async (key, token, ttl) => {
       // 等待者剛通過 (a)：此刻持鎖者寫好標記並放鎖。
-      store.data.set(failKey, JSON.stringify({ code: "provider_error", message: "503", jobId: "holder", at: "t" }));
+      store.data.set(
+        failKey,
+        JSON.stringify({ code: "provider_error", message: "503", jobId: "holder", attempt: 1, retryable: true, at: "t" }),
+      );
       return acquire(key, token, ttl);
     });
     const err = await processor(makeJob("w")).catch((e: unknown) => e);

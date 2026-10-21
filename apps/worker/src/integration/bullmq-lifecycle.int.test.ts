@@ -49,6 +49,9 @@ const UNREACHABLE_HINT =
   `無法連線 Redis（${env.REDIS_HOST}:${env.REDIS_PORT}，db ${INTEGRATION_DB}）。請先在 repo 根目錄執行 ` +
   "`docker compose up -d`，並以 `docker compose ps` 確認 redis 為 healthy。";
 
+/** processor 的 LLM 每分鐘上限（限流案例把窗計數預先填到這個值）。 */
+const AI_RPM = 1000;
+
 const VALID_RESULT: DiagnosisResult = {
   summary: "主軸振動偏高",
   severity: "warning",
@@ -144,7 +147,7 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("BullMQ lifecycle × 真 Redi
         buildContext: async () => CONTEXT,
         logger: silentLogger,
         metrics: { recordCacheHit: () => {}, recordCacheMiss: () => {}, recordLatency: () => {} },
-        config: { aiTimeoutMs: 5000, lockTtlSeconds: 30, cacheTtlSeconds: 60, aiRpm: 1000, pollIntervalMs: 50 },
+        config: { aiTimeoutMs: 5000, lockTtlSeconds: 30, cacheTtlSeconds: 60, aiRpm: AI_RPM, pollIntervalMs: 50 },
       }),
       { connection, prefix: BULL_PREFIX, concurrency: 1, ...WORKER_LOCK_OPTIONS },
     );
@@ -260,5 +263,60 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("BullMQ lifecycle × 真 Redi
     expect(first.every((p) => p.execution === 1)).toBe(true);
     expect(second.map((p) => p.value)).toEqual([0, 20, 40, 60, 80, 100]);
     expect(second.every((p) => p.execution === 2)).toBe(true);
+  });
+
+  it("限流延後（moveToDelayed，不消耗 attempt）後再執行：progress 為 { attempt: 1, execution: 2 }", async () => {
+    const jobId = randomUUID();
+    const progress: unknown[] = [];
+    const onProgress = ({ jobId: id, data }: { jobId: string; data: unknown }) => {
+      if (id === jobId) progress.push(data);
+    };
+    events.on("progress", onProgress);
+    let onCompleted: ((args: { jobId: string; returnvalue: unknown }) => void) | undefined;
+    const completed = new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("等待 completed 逾時")), 30_000);
+      onCompleted = ({ jobId: id, returnvalue }) => {
+        if (id !== jobId) return;
+        clearTimeout(timer);
+        resolve(returnvalue);
+      };
+      events.on("completed", onCompleted);
+    });
+    let onDelayed: ((args: { jobId: string }) => void) | undefined;
+    const delayed = new Promise<void>((resolve) => {
+      onDelayed = ({ jobId: id }) => {
+        if (id === jobId) resolve();
+      };
+      events.on("delayed", onDelayed);
+    });
+
+    // 本窗（與下一窗，防跨窗）的 LLM 計數先打滿：processor 取鎖後 INCR 超過 aiRpm → moveToDelayed 到下一窗。
+    const windowIndex = Math.floor(Date.now() / 60_000);
+    const windowKeys = [`ai-rpm:${windowIndex}`, `ai-rpm:${windowIndex + 1}`];
+    for (const k of windowKeys) await storeRedis.set(k, String(AI_RPM), "EX", 120);
+
+    await queue.add(
+      "diagnose",
+      { jobId, machineId: `int-delay-${RUN_ID}`, requestedBy: "integration", requestedAt: new Date().toISOString(), windowMinutes: 5 },
+      { jobId, attempts: 2 },
+    );
+    await delayed;
+    // 解除限流並立即提前執行（不必等到下一窗）。
+    await storeRedis.del(...windowKeys);
+    await (await queue.getJob(jobId))?.promote();
+
+    const returnvalue = await completed.finally(() => {
+      if (onCompleted) events.off("completed", onCompleted);
+      if (onDelayed) events.off("delayed", onDelayed);
+    });
+    events.off("progress", onProgress);
+
+    expect(DiagnosisJobReturnValueSchema.parse(returnvalue)).toEqual({ result: VALID_RESULT, cached: false });
+    const parsed = progress.map((p) => DiagnosisJobProgressSchema.parse(p));
+    expect(parsed.every((p) => p.attempt === 1)).toBe(true); // 延後不消耗 attempt
+    const firstRun = parsed.filter((p) => p.execution === 1);
+    const secondRun = parsed.filter((p) => p.execution === 2);
+    expect(firstRun.length).toBeGreaterThan(0);
+    expect(secondRun.map((p) => p.value)).toEqual([0, 20, 40, 60, 80, 100]);
   });
 });

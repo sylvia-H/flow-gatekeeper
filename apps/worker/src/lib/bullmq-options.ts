@@ -13,8 +13,9 @@ import type { WorkerOptions } from "bullmq";
  * **任一值調整（含 `AI_TIMEOUT_MS`）都 MUST 重算此上界**，並同步 ADR-003 D4 與本檔單測的不變量；`W > L` 時公式改為
  * `K + W + 2S`（仍 < 45 s 需 `W < 25 s`）。
  *
- * `lockRenewTime` 刻意不設：維持 BullMQ 預設 `L/2`（7.5 s）續租。`maxStalledCount` 2：`L` 縮短後 Redis 卡頓超過 15 s
- * 就會觸發一次 stalled，留一次額度給真正的 worker 崩潰。
+ * `lockRenewTime` 刻意不設：維持 BullMQ 預設 `L/2`（7.5 s）；BullMQ 以 `lockRenewTime/2` 的計時器檢查續租，實際節拍約
+ * 3.75 s（最慢 7.5 s）續一次，所以 Redis 卡頓約 11.25～15 s 就可能讓 lock 過期、觸發 stalled。`maxStalledCount` 2：
+ * 留一次額度給這種卡頓、一次給真正的 worker 崩潰。
  */
 
 /** `L`：BullMQ job lock 的有效期（BullMQ 預設 30000）。 */
