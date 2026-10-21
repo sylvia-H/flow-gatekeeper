@@ -286,7 +286,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 
 ### 📐 7. 契約優先的全棧型別安全
 
-- `packages/contracts` 定義即時通道的訊息契約——`asyncapi.yaml`（`info.version` 1.3.0）共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`）——以及 `DiagnosisResultSchema`、`CreateDiagnosisBodySchema`（`POST /diagnoses`）、佇列常數與 `DiagnosisJobPayload`（不含 prompt 版本，改由 worker 自行管理）。
+- `packages/contracts` 定義即時通道的訊息契約——`asyncapi.yaml`（`info.version` 1.4.0）共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`）——以及 `DiagnosisResultSchema`、`CreateDiagnosisBodySchema`（`POST /diagnoses`）、佇列常數與 `DiagnosisJobPayload`（不含 prompt 版本，改由 worker 自行管理）。
 - 需要 runtime 驗證的方向一律 Zod：客戶端控制訊息 `ClientControlMessageSchema`、`AiStreamEventSchema`（含 `attempt`）、`JobStatusSchema`、`WorkerMetricsSchema`；`machine/data` payload 為裸陣列、由 `isTelemetryPoint` 守衛逐點驗證（高頻路徑不逐筆 `safeParse`）。伺服器→客戶端的控制訊息（`SystemConnectedSchema`、`MachineSubscribedSchema`、`PongSchema`、`SystemUnauthorizedSchema`、`SystemMetricsSchema`）與 `TelemetryPointSchema` 也以 Zod 定義、型別由 `z.infer` 推導，供漂移測試做結構比對。
 - web／api／worker 三端**共用同一份**契約，新增 event/payload 一律**先改契約再改各端**；`asyncapi.yaml` 以 Spectral 做契約 lint，另有 asyncapi↔Zod **漂移測試**（`packages/contracts/src/asyncapi-drift.test.ts`，以 Zod 4 內建 `z.toJSONSchema()` 轉出後逐一比對全部 12 則 message 的結構，含 `format`）防止兩份來源分岔。
 - 全棧 strict TypeScript（`noUncheckedIndexedAccess`），避免 `any` 擴散。
@@ -397,7 +397,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 | `system/unauthorized` | api → web | 訂閱授權失敗（`WS_AUTH_SECRET` 不符）；前端 TopBar 顯示「未授權」chip，下次訂閱成功（`machine/subscribed`）自動消失。錯誤 token 計入違規（無法解析、schema 不符、超過入站速率同樣計入），累計 10 次以 `1008` 關閉 |
 | `system/metrics` | api → web | **009**：週期廣播的營運指標摘要（queue 深度、WS 連線數、worker 端 LLM latency／cache 命中率），廣播給所有**已授權**連線（未設 `WS_AUTH_SECRET` 時即所有連線）、與訂閱的機台無關；供 dev-only Metrics Panel 消費。另有 optional `persist: { dropped, failed }`——api 啟動以來累計的歷史寫入遺失紀錄數與 `insertMany` 失敗批數（舊版 api 不帶，讀者須容忍缺席） |
 
-> 所有 WS 訊息都以 `packages/contracts` 的 Zod schema 定義、型別由 `z.infer` 推導（憲章 Principle III）。需 runtime 驗證的 payload 在入口 `safeParse`——來自任意連線者的客戶端控制訊息（`ClientControlMessageSchema`：`ping`、`machine/subscribe`）、`DiagnosisResult`、`AiStreamEvent`、`JobStatus`、`WorkerMetrics`；伺服器→客戶端的純分派控制訊息（`pong`／`system/*`）與高頻的 `machine/data` 則只用 schema 做漂移比對，runtime 走手寫守衛或 `switch(type)` 分派。契約全貌另見 [`asyncapi.yaml`](asyncapi.yaml)（`info.version` 1.3.0，共 12 個 channel），並由 `asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
+> 所有 WS 訊息都以 `packages/contracts` 的 Zod schema 定義、型別由 `z.infer` 推導（憲章 Principle III）。需 runtime 驗證的 payload 在入口 `safeParse`——來自任意連線者的客戶端控制訊息（`ClientControlMessageSchema`：`ping`、`machine/subscribe`）、`DiagnosisResult`、`AiStreamEvent`、`JobStatus`、`WorkerMetrics`；伺服器→客戶端的純分派控制訊息（`pong`／`system/*`）與高頻的 `machine/data` 則只用 schema 做漂移比對，runtime 走手寫守衛或 `switch(type)` 分派。契約全貌另見 [`asyncapi.yaml`](asyncapi.yaml)（`info.version` 1.4.0，共 12 個 channel），並由 `asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
 
 ### 部署與監督拓撲（demo 容器模式，007–009）
 
@@ -541,7 +541,7 @@ flow-gatekeeper/
 ├── specs/             # 001–009 每條 feature 的 spec / plan / tasks / checklist
 ├── docs/              # ADR、SDD 完整實作指南、design-spec（v0.3 歷史起點，已退役）、demo 影片與截圖
 ├── scripts/           # dev-up.ps1（一鍵起全棧）、demo-reset.ps1（清 AI 快取）
-├── asyncapi.yaml      # 即時通道契約（Spectral lint；info.version 1.3.0）
+├── asyncapi.yaml      # 即時通道契約（Spectral lint；info.version 1.4.0）
 ├── CHANGELOG.md       # 產品版本（2.1.0）與 asyncapi 契約版本的變更紀錄與版本策略
 ├── docker-compose.yml # Redis 7 + MongoDB 7（不帶分組）＋ demo profile：api/worker/web/seed 全棧受監督容器
 ├── docker-compose.e2e.yml # 只給 tests/e2e 用的 override（獨立專案名、18080、AI_PROVIDER=fake）
@@ -839,7 +839,7 @@ env **分散在各 app**（app 行程執行期不讀根目錄 `.env`；**例外*
 | 項目 | 現況 |
 | --- | --- |
 | **產品版本** | **2.1.0**（2026-10-18；git tag `2.1.0`，指向 `develop` 併入 `main` 的 merge commit；前一版 2.0.0 為 2026-10-17）。六份 `package.json` 的 `version` 與 tag 一致。產品 tag **不帶 `v` 前綴**——第一版 tag 原名 `v1.0.0`，已於 2026-09-28 更名為 `1.0.0`（同一 commit `3e94ac2`），GitHub Release 與 demo 影片連結當時一併改指 `1.0.0`（2.0.0 起影片重錄、連結改指 `2.0.0`，見「端到端操作 Demo」版本註記） |
-| **契約版本** | `asyncapi.yaml` `info.version` **1.3.0**，獨立於產品版本演進；每版加嚴／新增欄位／新增消費端義務都記在 `CHANGELOG.md`「asyncapi 契約版本」小節 |
+| **契約版本** | `asyncapi.yaml` `info.version` **1.4.0**，獨立於產品版本演進；每版加嚴／新增欄位／新增消費端義務都記在 `CHANGELOG.md`「asyncapi 契約版本」小節 |
 | **變更紀錄** | [`CHANGELOG.md`](CHANGELOG.md)（Keep a Changelog 格式；升級前先讀「不相容變更」與「相容性注意」）；維護分支的現況摘要見指南 §15.6 |
 | **Release** | `main` 只接收發布：`develop` 以 `--no-ff` 併入 `main` → annotated tag → GitHub Release（流程見 `CLAUDE.md`「`main` 的 release 流程」）；日常開發與 feature merge 一律在 `develop` |
 

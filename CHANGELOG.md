@@ -37,6 +37,10 @@
 
 - **修正 `TopBar.test.ts`「Escape 收回」的不穩定**（2026-10-19 nightly mutation 的 dry run 失敗，`expected false to be true`；同一 commit 前後兩天都通過）：Vue 的事件 invoker 會略過時間戳 ≤ 監聽器掛上時間的事件，時間戳精度只到毫秒；覆蓋式搜尋剛展開、同一毫秒內從輸入框送出的 Escape，冒泡到覆蓋外框時被當成「掛上前的事件」略過，沒有 `preventDefault`。真實按鍵不會在掛載的同一毫秒內發生，元件不改；該 describe 改以假時鐘固定 `Date`，展開後明確推進 1 ms，結果不再取決於機器快慢。同組的「輸入法組字中的 Escape」原本也可能因同一原因空過，現在確實走到元件的組字判斷。
 
+### 契約
+
+- **契約 1.4.0**（向後相容的 minor，Feature `012-stream-resilience`）：`asyncapi.yaml` `info.version` 1.3.0 → **1.4.0**。明細見下方「asyncapi 契約版本」1.4.0；完整內容與相容性注意於 T074 補齊。
+
 ## [2.1.0] - 2026-10-18
 
 次版號升級：修掉 2.0.0 已公開的 P1（設了 `REDIS_PASSWORD` 而 Redis 認證失敗時，密碼經 BullMQ `console.error` 明文進 api stderr）與第三輪審查 Batch E；因下方「相容性注意」有對外可見的行為變更、契約升 asyncapi **1.3.0**，依 1.1.0 前例升 minor（使用者 2026-10-18 裁決 2.1.0，原規劃為 2.0.1）。demo 影片未重錄，README 下載連結仍指向 2.0.0 release 的資產。
@@ -321,6 +325,10 @@ worker 預設模型與輸出上限的變更見下方不相容變更。demo 影�
 
 `asyncapi.yaml` 的 `info.version` 獨立於產品版本（見「版本策略」）。本節同時記錄 HTTP（`POST /diagnoses`）的契約變化，
 核對來源為 `git log -p -- asyncapi.yaml` 與 `packages/contracts/src/`。
+
+### 1.4.0（Feature 012-stream-resilience，未發布）
+
+asyncapi `info.version` 1.4.0，向後相容的 minor：`job/status` 新增 optional `attempt`／`execution`／`reason`／`cached`，`completed`＋`result` 為權威完成、`ai/done` 改為盡力送達（可重複、可遺失），`ai/error.code` 新增已知值 `persist_failed`，新增 `GET /diagnoses/:jobId`。逐項明細見本版相容性注意與 T074。
 
 ### 1.3.0（產品 2.1.0 起）
 

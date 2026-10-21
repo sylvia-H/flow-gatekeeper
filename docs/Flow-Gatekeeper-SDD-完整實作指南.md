@@ -661,7 +661,7 @@ packages:
 
 ### 6.8 `asyncapi.yaml`
 
-> **現況註記**：下面是 001 起草時的 reference。現行 `asyncapi.yaml` 為 `info.version: 1.3.0`（各版變更見 repo 根 `CHANGELOG.md`）、共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`），`ai/*` 帶 `attempt`、`machine/subscribe` 帶長度上限；並由 `packages/contracts/src/asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
+> **現況註記**：下面是 001 起草時的 reference。現行 `asyncapi.yaml` 為 `info.version: 1.4.0`（各版變更見 repo 根 `CHANGELOG.md`）、共 **12 個 channel**（`machine/subscribe`、`machine/subscribed`、`machine/data`、`job/status`、`ai/token`、`ai/done`、`ai/error`、`ping`、`pong`、`system/connected`、`system/unauthorized`、`system/metrics`），`ai/*` 帶 `attempt`、`machine/subscribe` 帶長度上限；並由 `packages/contracts/src/asyncapi-drift.test.ts` 自動比對與 Zod 是否漂移。
 
 ```yaml
 asyncapi: 2.6.0
@@ -3438,7 +3438,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - WS：入站每連線 20 則／秒（容量 40），超速每則計一次違規，累計 10 次以 `1008` 關閉——web 前端穩態遠低於 1 則／秒，只影響自寫腳本；client 送的協定層 ping frame 不回應（`autoPong: false`），應用層 pong 在送出緩衝超過 `WS_SEND_HIGH_WATER_BYTES` 時照回。Zod schema 與訊息結構不變，契約版本因 wire 行為改變升 1.3.0（見下方「契約 1.3.0」）。
   - 時序：`ai/done`／`ai/error` 從 worker 送出一定早於 BullMQ 的 `completed`／`failed`；`completed` 後綁定保留 10 s，寬限內同 jobId 重送仍回 409。
   - 關閉：api 12 s、worker `AI_TIMEOUT_MS`＋10 s 內必定自行 `exit(0)`；compose `stop_grace_period`（api 15s、worker 45s）不變，調高 `AI_TIMEOUT_MS` 時 worker 的 grace MUST 同步調為 `AI_TIMEOUT_MS`＋15 s。
-- **契約 1.3.0**（使用者 2026-10-18 裁決，向後相容的 minor）：`asyncapi.yaml` 的 `info.version` 已升 **1.3.0**。schema 沒有改動，變的是 wire 行為與描述——
+- **契約 1.3.0**（使用者 2026-10-18 裁決，向後相容的 minor）：`asyncapi.yaml` 的 `info.version` 當時升為 **1.3.0**（**已變更**：現行 `info.version` 為 **1.4.0**，見 §15.7 012-lite 與 `CHANGELOG.md`「asyncapi 契約版本」）。schema 沒有改動，變的是 wire 行為與描述——
   `machine/subscribe`／`ping` 描述每連線入站限速（20 則／秒、容量 40，超速計違規，達 `WS_MAX_VIOLATIONS` 以 1008 關閉）；`ping`／`pong` 描述 client 送的協定層 ping frame 不回應、應用層 pong 不受背壓影響（裁決 13 併入 1.3.0）；
   `ai/*` 的 `attempt` 描述改為同一 attempt 內 `seq` 未遞增（`seq <= 上一個 seq`）即視為新一次執行；`POST /diagnoses` 新增 413、壞 JSON 400 的 body 改為固定形狀、body 上限 16 kb。明細見 `CHANGELOG.md`「asyncapi 契約版本」1.3.0。
 - **roadmap 版號順延**：第三輪審查 roadmap（報告 §5.4：quick-fix → 012-lite → 010-lite → 011）原定 012-lite＝契約 1.3.0、010-lite＝1.4.0、011＝1.5.0；1.3.0 已由本 quick-fix 使用，三者各順延一號為 **012-lite＝1.4.0、010-lite＝1.5.0、011＝1.6.0**（報告本身凍結不改）。
