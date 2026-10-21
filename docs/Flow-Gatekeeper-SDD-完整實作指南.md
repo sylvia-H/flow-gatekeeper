@@ -3219,6 +3219,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 10 | `fix/20261018-review03-quickfix` | `09d5a7e` | 第三輪審查報告 §6 Batch E（quick-fix）：P1 與日誌遮蔽、HTTP 錯誤回應、relay 與 Gateway 入站限速、worker 終態事件順序、關閉總時限、web 結果未送達收尾、測試門檻 ratchet；契約升 1.3.0 | 第三輪審查 quick-fix |
 | — | `docs/20261018-release-2.1.0` | （以 `git log --first-parent --merges` 為準） | 2.1.0 release 準備（版號、CHANGELOG、文件版本註記，以及首次 Linux CI 抓到的 `ThemeToggle.test.ts` localStorage 洩漏修正；版號由原規劃的 2.0.1 改為 2.1.0，見下方「第三輪審查 quick-fix」裁決 14） | — |
 | 11 | `fix/20261021-ci-and-flaky` | （以 `git log --first-parent --merges` 為準） | `ci.yml` 恢復所有分支 push 自動觸發（DOC-18）、修正 nightly mutation 抓到的 `TopBar.test.ts` 不穩定測試、§15.5 roadmap 註記更新 | CI 恢復自動觸發與 flaky 測試 |
+| 12 | `fix/20261022-ui-zero-count-neutral` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：機群健康四類計數為 0 時數字改中性 `ink-3` | 零值計數中性色 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」與「012-lite 串流韌性」；後者的完整藍圖與落地摘要在 §15.7），但不列入本表。
 
@@ -3461,6 +3462,14 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
      理由（Claude 回答使用者提問「為何不建議恢復 push」時提出，使用者採納）：本 repo 從未開過 PR，合併一律本機 `--no-ff` 後 push `develop`，只恢復 `pull_request` 等於 CI 永不自動跑；當初關閉的理由「私有 repo 期間節省 Actions 分鐘」（`6417069`）在 repo 公開後已不成立；push 自動跑一次約 2 分鐘（2026-10-18 實測），公開 repo 不計費，連續 push 由 concurrency 取消舊 run。不加 `pull_request` 是因為同 repo 分支的 PR 會讓同一個 commit 跑兩次。
 - **仍未處理**（不在本分支範圍）：第三輪報告 Batch F 第 6 點其餘的 INF-14（nightly 不論 `develop` 有無變更每日照跑；180 分 timeout 為私有 repo 2 vCPU 時的推估值，公開 repo 4 vCPU 下 2026-10-15～20 成功的 run 實測 7 分 08 秒～10 分 22 秒）、INF-15（重跑 mutation、更新基準），以及 §3.8 DOC-18 條目的 `compose config -q`、e2e 進 CI 的方式；ADR-002 §6.5.1 infra Low 列的 INF-8 餘項同樣未處理。
 
+**零值計數中性色**（`fix/20261022-ui-zero-count-neutral`，merge 以 `git log --first-parent --merges` 為準，2026-10-22；自 `develop` `eb60786`；變更明細見 `CHANGELOG.md` `[Unreleased]`）：
+
+- **做了什麼**：`FleetHealth.vue` 的四類計數（rail 面板與手機 `compact` 摘要條共用同一組 segment）在計數為 0 時，數字由狀態色（`text-ok-fg`／`text-warn-fg`／`text-crit-fg`，停滯 `text-ink`）改為中性 `text-ink-3`，非 0 維持原色；比例條與摘要條的可讀名稱（`barLabel`／`toggleLabel`）不變。`apps/web/DESIGN.md` FleetHealth 段補上零值規則。
+- **依據**：013 critique 快照 `apps/web/.impeccable/critique/2026-10-17T05-27-46Z__src-app-vue.md` 第 29 行（Aesthetic and Minimalist Design：「零值計數仍染狀態色」）、第 77 行（Minor Observations：「零值計數用 ink-3」）與色弱者 persona（「『嚴重 0』染紅無意義」）；即下方「013 UI 全面改版」T073 待辦清單的「零值計數改中性色」。
+- **取捨**：狀態圓點**保留**狀態色——它是圖例鍵，對應卡片狀態色與比例條各段，一起中性化會讓四類只剩文字標籤可辨，而 critique 只點名計數文字。比例條**不動**——0 佔比的段寬度本來就是 0、不會出現。ink-3 對玻璃的對比為淺色 6.61（rail，玻璃疊 rim）～6.90（摘要條，玻璃疊 bench）、深色 5.77（摘要條落在桌面格線上的像素為 5.55），皆依 `theme.css` 檔頭量測表，仍 ≥ 4.5:1。
+- **驗證**：`FleetHealth.test.ts` 新增 rail 與 compact 的零值／非零值 class 斷言、計數由 0 變非 0 恢復狀態色、圓點仍為 `bg-ok/warn/crit/stale`；web 全套 vitest（69 檔、1378 測試）、`typecheck`、`lint` 通過。
+- **README 截圖**：`docs/screenshots/fleet-health.png` 等含機群健康面板的 README 截圖拍於本分支之前，畫面中的零值計數仍是狀態色；依「二進位資產只留最終版」本分支不重拍，於下次 release 重拍截圖時更新（`apps/web/scripts/screenshots.cjs --readme`）。
+
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 
 前端整套視覺改為「實驗室玻璃與蝕刻刻度」，視覺真實來源由 design-spec＋refs 切換為 impeccable 工件 `apps/web/PRODUCT.md`＋`apps/web/DESIGN.md`。全部是前端改動：`packages/contracts`、`asyncapi.yaml` 與後端行為不變（FR-039），只消費既有 12 則 WS 訊息與 `POST /diagnoses`；高頻遙測仍是「先進 buffer、每幀至多一次批次提交」（硬規則 1）。
@@ -3536,7 +3545,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - 這**推翻**了 `MachineNodeCard.css.test.ts` 註解記載的「以 CSS cascade 測試取代 Playwright 截圖、不新增瀏覽器相依」取捨。
     cascade 測試仍保留為單元層回歸（跑在 `pnpm test`、不需瀏覽器）；截圖劇本需先起 api 與 web dev server，手動執行，不進 CI。
 
-- **T073 critique 結果與後續待辦（2026-10-17）**：改版前基準 20/40，四輪修正後最後一次評分 29/40（趨勢 20→28→29→29→29，快照在 `apps/web/.impeccable/critique/`）。門檻 30 未達，使用者裁決結案不再追分：四位獨立審查者的 P1 互不重疊且各輪都已修掉，分數停滯的結構性原因是「說明與文件」四輪皆 2 分（概念說明只靠 tooltip）。留給後續 feature 的待辦：768 高視窗的卡片密度（第二排卡片與異常標記被裁切）、AI 結果與機台現況脫鉤的交代（依據時刻、之後已回復）、側欄確認鈕改文字鈕並在確認後顯示「已確認」tag、桌機面板展開時工具列「診斷」主鈕降級、分頁 title／favicon 嚴重告警、卡片三線刻度改迷你量筒（閾值分段＋液位）、768 堆疊改 2 欄、進行中步驟清單加小標、零值計數改中性色、`humanizeError` 的英文原文後援改繁中。
+- **T073 critique 結果與後續待辦（2026-10-17）**：改版前基準 20/40，四輪修正後最後一次評分 29/40（趨勢 20→28→29→29→29，快照在 `apps/web/.impeccable/critique/`）。門檻 30 未達，使用者裁決結案不再追分：四位獨立審查者的 P1 互不重疊且各輪都已修掉，分數停滯的結構性原因是「說明與文件」四輪皆 2 分（概念說明只靠 tooltip）。留給後續 feature 的待辦：768 高視窗的卡片密度（第二排卡片與異常標記被裁切）、AI 結果與機台現況脫鉤的交代（依據時刻、之後已回復）、側欄確認鈕改文字鈕並在確認後顯示「已確認」tag、桌機面板展開時工具列「診斷」主鈕降級、分頁 title／favicon 嚴重告警、卡片三線刻度改迷你量筒（閾值分段＋液位）、768 堆疊改 2 欄、進行中步驟清單加小標、零值計數改中性色（已做，`fix/20261022-ui-zero-count-neutral`）、`humanizeError` 的英文原文後援改繁中。
 
 **012-lite 串流韌性**（SDD feature `012-stream-resilience`，spec／plan／tasks 見 `specs/012-stream-resilience/`；屬 SDD feature 而非維護分支，不列入上表；2026-10-21 implement 完成）：完成語意改以 BullMQ `returnvalue` 為權威（`job/status: completed` 帶 `result`、`ai/done` 降為 best-effort）、新增 `GET /diagnoses/:jobId` 與重連 rebind（`JobRoutingRegistry`）、BullMQ lock 15／5／2＋keepalive 10 s（SIGKILL 後設計上界 35 s）、jobId 冪等與 `ai-fail` 負向標記；契約 asyncapi **1.4.0**。帶著 2.1.0 發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治由此修掉。設計決策見 ADR-003，藍圖與落地摘要見 §15.7（§15.7.6）。
 

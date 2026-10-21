@@ -47,6 +47,57 @@ describe("FleetHealth 預設版面（rail 面板）", () => {
   });
 });
 
+// 零值計數改中性色（critique 2026-10-17「零值計數仍染狀態色」）：0 → ink-3，非 0 → 原狀態色。
+const ZERO_MIX: FleetHealthSummary = { healthy: 3, warning: 0, critical: 0, stale: 1, total: 4 };
+const ALL_ZERO_BUT_OK: FleetHealthSummary = { healthy: 4, warning: 0, critical: 0, stale: 0, total: 4 };
+const STATE_TEXT = ["text-ok-fg", "text-warn-fg", "text-crit-fg", "text-ink"];
+
+/** 計數元素上的文字色 class（`text-ok-fg`／`text-ink-3`…；排除字級 `text-xs`／`text-md`）。 */
+const toneOf = (el: { classes(): string[] }): string[] =>
+  el.classes().filter((c) => c.startsWith("text-") && !["text-xs", "text-sm", "text-md"].includes(c));
+
+describe("FleetHealth 零值計數中性色", () => {
+  it("rail 面板：計數為 0 的 dd 用 text-ink-3，非 0 維持狀態色", () => {
+    wrapper = mount(FleetHealth, { props: { summary: ZERO_MIX } });
+    const dds = wrapper.get("section").findAll("dd");
+    expect(dds.map(toneOf)).toEqual([["text-ok-fg"], ["text-ink-3"], ["text-ink-3"], ["text-ink"]]);
+  });
+
+  it("rail 面板：非 0 時四類皆為各自狀態色（停滯用 ink），沒有 ink-3", () => {
+    wrapper = mount(FleetHealth, { props: { summary: SUMMARY } });
+    const dds = wrapper.get("section").findAll("dd");
+    expect(dds.map(toneOf)).toEqual(STATE_TEXT.map((c) => [c]));
+  });
+
+  it("compact 摘要條：計數為 0 的數字用 text-ink-3，非 0 維持狀態色；圓點保留狀態色", () => {
+    wrapper = mount(FleetHealth, { props: { summary: ALL_ZERO_BUT_OK, compact: true } });
+    const counts = wrapper.findAll("[data-count]");
+    expect(counts.map((c) => toneOf(c.get(".font-mono")))).toEqual([
+      ["text-ok-fg"],
+      ["text-ink-3"],
+      ["text-ink-3"],
+      ["text-ink-3"],
+    ]);
+    expect(counts.map((c) => c.get(".rounded-pill").classes().find((k) => k.startsWith("bg-")))).toEqual([
+      "bg-ok",
+      "bg-warn",
+      "bg-crit",
+      "bg-stale",
+    ]);
+  });
+
+  it("計數由 0 變非 0 時恢復狀態色；可讀名稱不受影響", async () => {
+    wrapper = mount(FleetHealth, { props: { summary: ALL_ZERO_BUT_OK, compact: true } });
+    const critical = () => wrapper!.get('[data-count="critical"] .font-mono');
+    expect(toneOf(critical())).toEqual(["text-ink-3"]);
+    await wrapper.setProps({ summary: { healthy: 3, warning: 0, critical: 1, stale: 0, total: 4 } });
+    expect(toneOf(critical())).toEqual(["text-crit-fg"]);
+    expect(wrapper.get('[data-fg="fleet-summary-bar"]').attributes("aria-label")).toBe(
+      "機群健康：正常 3、警告 0、嚴重 1、停滯 0，展開異常清單",
+    );
+  });
+});
+
 describe("FleetHealth compact 摘要條", () => {
   function mountBar(props: Partial<{ expanded: boolean; controls: string; summary: FleetHealthSummary }> = {}) {
     wrapper = mount(FleetHealth, { props: { summary: SUMMARY, compact: true, ...props } });
