@@ -229,7 +229,7 @@ dev 期間 worker 保留 `tsx watch`（熱重載價值 > 監督價值，且人�
 
 另外：**CI/CD 發布管線（image registry、自動部署）不綁進 007–009**。撰寫時 CI 因私有 repo 節省 Actions 分鐘數而刻意暫停，恢復時機是獨立決策；007/008 的 Dockerfile 寫好後，接上 CI 產 image 是機械工作，不需要現在做。
 
-> **已變更（2026-10-21，第三輪審查 DOC-18，使用者裁決）**：`ci.yml` 恢復**所有分支的 push** 自動觸發，保留 `workflow_dispatch`、**不加** `pull_request`；只改文件的 push 不跑（`docs/**`、`**/*.md`），但測試會讀的 `README.md`、`CHANGELOG.md`、指南仍會觸發。理由：本 repo 從未開過 PR，合併一律本機 `--no-ff` 後 push `develop`，只恢復 `pull_request` 等於 CI 永不自動跑；當初暫停的理由「私有 repo 期間節省 Actions 分鐘」（`6417069`）在 repo 公開後已不成立——公開 repo 的標準 runner 不計分鐘，一次約 10 分鐘，連續 push 由 `concurrency` 取消舊 run；不加 `pull_request` 是因為同 repo 分支的 PR 會讓同一個 commit 跑兩次。第三輪報告附錄 C 原建議 (a)「恢復 `pull_request`、不恢復 push」，使用者改為 push（推翻紀錄見指南 §15.6「CI 恢復自動觸發與 flaky 測試」）。nightly mutation 的排程不變（INF-14 仍未處理）；image 發布管線仍另議。
+> **已變更（2026-10-21，第三輪審查 DOC-18，使用者裁決）**：`ci.yml` 恢復**所有分支的 push** 自動觸發，保留 `workflow_dispatch`、**不加** `pull_request`；只改文件的 push 不跑（`docs/**`、`**/*.md`），但測試會讀的 `README.md`、`CHANGELOG.md`、指南仍會觸發。理由：本 repo 從未開過 PR，合併一律本機 `--no-ff` 後 push `develop`，只恢復 `pull_request` 等於 CI 永不自動跑；當初暫停的理由「私有 repo 期間節省 Actions 分鐘」（`6417069`）在 repo 公開後已不成立——公開 repo 的標準 runner 不計分鐘，一次約 2 分鐘（2026-10-18 實測），連續 push 由 `concurrency` 取消舊 run；不加 `pull_request` 是因為同 repo 分支的 PR 會讓同一個 commit 跑兩次。第三輪報告附錄 C 原建議 (a)「恢復 `pull_request`、不恢復 push」，使用者改為 push（推翻紀錄見指南 §15.6「CI 恢復自動觸發與 flaky 測試」）。nightly mutation 的排程不變（INF-14 仍未處理）；image 發布管線仍另議。
 
 ---
 
