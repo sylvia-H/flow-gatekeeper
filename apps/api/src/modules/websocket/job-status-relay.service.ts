@@ -7,6 +7,9 @@ import type { AiError, DiagnosisJobPayload, JobStatus } from "@flow-gatekeeper/c
 import { AppConfigService } from "../config/config.service.js";
 import { MonitoringGateway } from "./monitoring.gateway.js";
 import { JobRoutingRegistry } from "./job-routing-registry.js";
+import type { JobBinding } from "./job-routing-registry.js";
+import { completedStatus, progressStatus } from "./job-status-payload.js";
+import type { ProgressFields } from "./job-status-payload.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 import { attachThrottledErrorLog, bullmqConnection } from "../../lib/connection-error-throttle.js";
 import { closeWithDeadline } from "./relay-close.js";
@@ -26,7 +29,8 @@ const DELAYED_GRACE_MS = 5_000;
 /**
  * Job 生命週期轉發（通道 B，憲章 IV）：以**獨立 blocking 連線**建 `QueueEvents`，把
  * waiting/active/completed/failed/progress 組成 `job/status` → `gateway.send`；`delayed` 以 `waiting`
- * 轉發，並在延後期間定期補送（見 `DELAYED_KEEPALIVE_MS`）。
+ * 轉發，並在延後期間定期補送（見 `DELAYED_KEEPALIVE_MS`）。`completed` 的 `returnvalue` 與 `progress` 的 `data`
+ * 來自 Redis、視為不受信任，經 `job-status-payload.ts` 的純函式驗證後才轉發（contracts/job-lifecycle §2）。
  *
  * **終態標記單一 owner**：僅在 `completed`/`failed`（最終終態）送出終態 `job/status` 之後才以
  * `registry.markTerminal` 標記綁定，確保終態 `job/status` 一定送得出去（F1）；兩種終態都保留
@@ -70,11 +74,10 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
         this.emit(jobId, "waiting");
       });
       this.queueEvents.on("active", ({ jobId }) => this.emit(jobId, "active"));
-      this.queueEvents.on("progress", ({ jobId, data }) =>
-        this.emit(jobId, "active", typeof data === "number" ? data : undefined),
-      );
+      this.queueEvents.on("progress", ({ jobId, data }) => this.handleProgress(jobId, data));
       this.queueEvents.on("delayed", ({ jobId, delay }) => this.handleDelayed(jobId, Number(delay)));
-      this.queueEvents.on("completed", ({ jobId }) => this.handleCompleted(jobId));
+      // bullmq 的 QueueEvents 已 JSON.parse 過 returnvalue（型別宣告寫 string，實際是解析後的值）。
+      this.queueEvents.on("completed", ({ jobId, returnvalue }) => this.handleCompleted(jobId, returnvalue as unknown));
       // `failed` 只在「不會再重試」時才發：依 bullmq 5.79 原始碼，`Job.moveToFailed` 先以
       // `shouldRetryJob` 判斷（`attemptsMade + 1 < attempts` 且非 `UnrecoverableError`），需重試者走
       // `moveToDelayed`／`retryJob`，事件流只寫 `delayed`／`waiting`；唯有最終失敗才走
@@ -118,12 +121,46 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * progress：`data` 經 `progressStatus` 拆解（D7）。012 worker 的物件形狀帶 `attempt`／`execution`，先記進綁定
+   * （`completed` 時沿用，P7）再送 `active`；舊 worker 的數字照舊只帶 `progress`；其他形狀送不帶 progress 的 `active`。
+   */
+  private handleProgress(jobId: string, data: unknown): void {
+    const fields = progressStatus(data);
+    if (fields.attempt !== undefined || fields.execution !== undefined) {
+      this.registry.noteProgress(jobId, fields.attempt, fields.execution);
+    }
+    this.emit(jobId, "active", fields);
+  }
+
+  /**
    * 完成：送 `job/status: completed`，再以 `markTerminal` 標記綁定（AR-5）：寬限
    * `TERMINAL_BINDING_GRACE_MS` 內 `ai/*` 照常轉發，`JobsService` 對同 jobId 的重送回 409「已使用過」
    * （與綁定立即刪除時的行為一致）；期滿由 registry 只刪標記當下那一份綁定。
+   *
+   * `returnvalue` 通過驗證才帶 `result`／`cached`（權威完成，D1）；不通過或缺值記 warn——只記 `jobId` 與 issue
+   * 路徑／代碼、不記原文——並照送不帶 `result` 的 `completed`，前端仍可收尾。`null`／`undefined` 多半是 012 之前的
+   * worker（processor 不回傳），訊息與「形狀不對」分開，方便從日誌區分升級落差與資料異常。
    */
-  private handleCompleted(jobId: string): void {
-    this.emit(jobId, "completed");
+  private handleCompleted(jobId: string, returnvalue: unknown): void {
+    this.delayedUntil.delete(jobId);
+    const target = this.routable(jobId);
+    if (target) {
+      const { status, issues } = completedStatus({
+        jobId,
+        machineId: target.machineId,
+        returnvalue,
+        binding: target.binding,
+      });
+      if (issues) {
+        this.plog.warn(
+          { jobId, issues },
+          returnvalue == null
+            ? "completed without returnvalue (legacy worker?)"
+            : "invalid completed returnvalue, forwarding completed without result",
+        );
+      }
+      this.gateway.send(target.binding.clientId, status);
+    }
     this.registry.markTerminal(jobId, "completed");
   }
 
@@ -149,7 +186,7 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
         this.gateway.send(clientId, aiError);
       }
     }
-    this.emit(jobId, "failed", undefined, failedReason);
+    this.emit(jobId, "failed", { error: failedReason });
     this.registry.markTerminal(jobId, "failed");
   }
 
@@ -190,16 +227,32 @@ export class JobStatusRelayService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private emit(jobId: string, status: JobStatus["status"], progress?: number, error?: string): void {
+  /**
+   * 送一則 `job/status`。`fields` 中值為 undefined 的欄位不放進訊息。
+   */
+  private emit(
+    jobId: string,
+    status: JobStatus["status"],
+    fields: ProgressFields & Pick<JobStatus, "error"> = {},
+  ): void {
     // active/completed/failed 都代表 job 已離開 delayed，停止補送（waiting 由呼叫端各自處理）。
     if (status !== "waiting") this.delayedUntil.delete(jobId);
+    const target = this.routable(jobId);
+    if (!target) return;
+    const jobStatus: JobStatus = { type: "job/status", jobId, machineId: target.machineId, status };
+    if (fields.progress !== undefined) jobStatus.progress = fields.progress;
+    if (fields.attempt !== undefined) jobStatus.attempt = fields.attempt;
+    if (fields.execution !== undefined) jobStatus.execution = fields.execution;
+    if (fields.error !== undefined) jobStatus.error = fields.error;
+    this.gateway.send(target.binding.clientId, jobStatus);
+  }
+
+  /** 可送 `job/status` 的綁定；無綁定或尚無 machineId 時回 undefined。 */
+  private routable(jobId: string): { binding: Readonly<JobBinding>; machineId: string } | undefined {
     const binding = this.registry.get(jobId);
-    if (!binding) return; // 純後端 smoke 或已終態清理：略過
+    if (!binding) return undefined; // 純後端 smoke 或已終態清理：略過
     // GET 在 api 重啟後暫定建立的綁定尚無 machineId（P1）：無法組出合法的 job/status，先不送（T032 補擱置記錄）。
-    if (binding.machineId === null) return;
-    const jobStatus: JobStatus = { type: "job/status", jobId, machineId: binding.machineId, status };
-    if (progress !== undefined) jobStatus.progress = progress;
-    if (error !== undefined) jobStatus.error = error;
-    this.gateway.send(binding.clientId, jobStatus);
+    if (binding.machineId === null) return undefined;
+    return { binding, machineId: binding.machineId };
   }
 }

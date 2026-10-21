@@ -1,6 +1,6 @@
 import { DelayedError, UnrecoverableError } from "bullmq";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AiStreamEventSchema } from "@flow-gatekeeper/contracts";
+import { AiStreamEventSchema, DiagnosisJobReturnValueSchema } from "@flow-gatekeeper/contracts";
 import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisResult } from "@flow-gatekeeper/contracts";
 import { GeminiProvider } from "./ai/gemini-provider.js";
 import { PROMPT_VERSION } from "./ai/prompt.js";
@@ -390,10 +390,13 @@ describe("createProcessor：去重", () => {
     expect(clock.pending).toBe(1); // b 取不到鎖，在等待迴圈裡 sleep
 
     holder.release();
-    await a;
+    const ra = await a;
     clock.advance(CONFIG.pollIntervalMs);
-    await b;
+    const rb = await b;
 
+    // returnvalue（ADR-003 D1）：持鎖者回 LLM 結果、等待者回共用的快取結果
+    expect(ra).toEqual({ result: VALID_RESULT, cached: false });
+    expect(rb).toEqual({ result: VALID_RESULT, cached: true });
     expect(ai.calls).toHaveLength(1);
     expect(publisher.ofType("ai/done").map((e) => [e.jobId, e.cached])).toEqual([
       ["a", false],
@@ -410,6 +413,31 @@ describe("createProcessor：去重", () => {
     expect(metrics.recordLatency).toHaveBeenCalledTimes(1);
   });
 
+  it("去重鎖撐完整條 LLM 路徑：串流中途鎖仍在，processor resolve 後才釋放", async () => {
+    let open: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      open = r;
+    });
+    const midStream: Script = async ({ onToken }) => {
+      onToken(RESULT_TEXT.slice(0, 10));
+      await gate; // 串流停在中途
+      onToken(RESULT_TEXT.slice(10));
+      return { text: RESULT_TEXT, finishReason: "stop" };
+    };
+    const { store, publisher, processor } = setup([midStream]);
+    const run = track(processor(makeJob("a")));
+    await flush();
+
+    // `return await callLlmAndReply()` 少了 await 時，finally 會在串流途中就放鎖——這裡會抓到。
+    expect(publisher.ofType("ai/token")).toHaveLength(1);
+    expect(run.state.settled).toBe(false);
+    expect(store.lockKeys()).toHaveLength(1);
+
+    open();
+    expect(await run.promise).toEqual({ result: VALID_RESULT, cached: false });
+    expect(store.lockKeys()).toEqual([]);
+  });
+
   it("等待者搶到鎖時先 double-check cache（持鎖者剛寫完並放鎖）", async () => {
     const holder = gatedScript();
     const { ai, store, publisher, clock, processor } = setup([holder.script]);
@@ -424,7 +452,7 @@ describe("createProcessor：去重", () => {
     await a;
     expect(store.lockKeys()).toEqual([]);
     clock.advance(CONFIG.pollIntervalMs);
-    await b;
+    expect(await b).toEqual({ result: VALID_RESULT, cached: true }); // 持鎖下 double-check 命中也回 returnvalue
 
     // a 取鎖成功、b 第一次失敗、b 醒來第二次成功——b 是在持鎖狀態下 double-check 命中的
     expect(await Promise.all(acquire.mock.results.map((r) => r.value))).toEqual([true, false, true]);
@@ -448,7 +476,7 @@ describe("createProcessor：去重", () => {
     clock.advance(CONFIG.pollIntervalMs);
     await flush();
     expect(run.state.settled).toBe(true);
-    await run.promise;
+    expect(await run.promise).toEqual({ result: VALID_RESULT, cached: true });
 
     expect(ai.calls).toHaveLength(0);
     expect(store.data.get(lockKey)).toBe("other-replica");
@@ -922,7 +950,7 @@ describe("createProcessor：LLM 限流與關閉", () => {
     expect(clock.sleeps).toEqual([]); // 沒有空等任何一輪
 
     holder.release();
-    await expect(holding).resolves.toBeUndefined();
+    await expect(holding).resolves.toEqual({ result: VALID_RESULT, cached: false });
   });
 });
 
@@ -949,7 +977,7 @@ describe("createProcessor：終態事件 await 送出（AR-5／WK-14）", () => 
     expect(run.state.settled).toBe(false);
 
     done.release();
-    await expect(run.promise).resolves.toBeUndefined();
+    await expect(run.promise).resolves.toEqual({ result: VALID_RESULT, cached: false });
   });
 
   it("cache 命中路徑：ai/done 的 PUBLISH 未完成前 processor 不 resolve", async () => {
@@ -963,7 +991,7 @@ describe("createProcessor：終態事件 await 送出（AR-5／WK-14）", () => 
     expect(run.state.settled).toBe(false);
 
     done.release();
-    await expect(run.promise).resolves.toBeUndefined();
+    await expect(run.promise).resolves.toEqual({ result: VALID_RESULT, cached: true });
   });
 
   it("終態 ai/error（最終嘗試）：PUBLISH 完成前不 throw——具體錯誤先於 BullMQ failed", async () => {
@@ -996,26 +1024,26 @@ describe("createProcessor：終態事件 await 送出（AR-5／WK-14）", () => 
     await expect(run.promise).rejects.toBeInstanceOf(UnrecoverableError);
   });
 
-  it("ai/done 的 PUBLISH 失敗：記 warn，job 仍成功（不轉失敗重試、不重複落地）", async () => {
+  it("ai/done 的 PUBLISH 失敗：記 warn，job 仍成功並照常回傳 returnvalue（不轉失敗重試、不重複落地）", async () => {
     const { logger, warns } = recordingLogger();
     const { publisher, repo, store, processor } = setup([okScript()], { logger });
     const boom = new Error("redis down");
     publisher.respond = (e) => (e.type === "ai/done" ? Promise.reject(boom) : Promise.resolve(1));
 
-    await expect(processor(makeJob("a"))).resolves.toBeUndefined();
+    await expect(processor(makeJob("a"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
     expect(repo.diagnoses).toHaveLength(1);
     expect(repo.triggers).toHaveLength(1);
     expect(store.cacheKeys()).toHaveLength(1);
     expect(warns).toEqual([{ obj: { eventType: "ai/done", err: boom }, msg: "終態事件 publish 失敗（job 結果不變）" }]);
   });
 
-  it("cache 命中時 ai/done 的 PUBLISH 失敗：記 warn，job 仍成功", async () => {
+  it("cache 命中時 ai/done 的 PUBLISH 失敗：記 warn，job 仍成功並照常回傳 returnvalue", async () => {
     const { logger, warns } = recordingLogger();
     const { store, publisher, repo, processor } = setup([okScript()], { logger });
     store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
     publisher.respond = () => Promise.reject(new Error("redis down"));
 
-    await expect(processor(makeJob("hit"))).resolves.toBeUndefined();
+    await expect(processor(makeJob("hit"))).resolves.toEqual({ result: VALID_RESULT, cached: true });
     expect(repo.triggers).toEqual([expect.objectContaining({ jobId: "hit", cached: true })]);
     expect(warns).toEqual([expect.objectContaining({ obj: expect.objectContaining({ eventType: "ai/done" }) })]);
   });
@@ -1046,14 +1074,59 @@ describe("createProcessor：終態事件 await 送出（AR-5／WK-14）", () => 
     const { publisher, processor } = setup([okScript()], { logger });
     publisher.respond = (e) => (e.type === "ai/token" ? Promise.reject(new Error("redis down")) : Promise.resolve(1));
 
-    await expect(processor(makeJob("a"))).resolves.toBeUndefined();
+    await expect(processor(makeJob("a"))).resolves.toEqual({ result: VALID_RESULT, cached: false });
     await flush(); // token 的 catch 是 fire-and-forget，等它落定
     expect(publisher.ofType("ai/done")).toHaveLength(1);
     expect(warns.filter((w) => w.msg === "publish 失敗")).toHaveLength(2);
   });
 });
 
+describe("createProcessor：回傳值 DiagnosisJobReturnValue（012 T023；ADR-003 D1）", () => {
+  it("LLM 路徑：回 { result, cached: false }，通過 DiagnosisJobReturnValueSchema，且與 ai/done 同一份結果", async () => {
+    const { publisher, processor } = setup([okScript()]);
+    const ret = await processor(makeJob("m"));
+
+    expect(ret).toEqual({ result: VALID_RESULT, cached: false });
+    expect(DiagnosisJobReturnValueSchema.safeParse(ret).success).toBe(true);
+    const done = publisher.ofType("ai/done");
+    expect(done).toHaveLength(1);
+    expect(done[0]?.result).toEqual(ret.result);
+  });
+
+  it("快取命中路徑：回 { result, cached: true }，通過 DiagnosisJobReturnValueSchema", async () => {
+    const { store, publisher, processor } = setup([okScript()]);
+    store.data.set(keysFor(CONTEXT).cacheKey, RESULT_TEXT);
+    const ret = await processor(makeJob("hit"));
+
+    expect(ret).toEqual({ result: VALID_RESULT, cached: true });
+    expect(DiagnosisJobReturnValueSchema.safeParse(ret).success).toBe(true);
+    expect(publisher.ofType("ai/done")[0]?.result).toEqual(ret.result);
+  });
+
+  it("回傳的 result 是通過 DiagnosisResultSchema 後的值：快取裡多出的欄位不會帶進 returnvalue", async () => {
+    const { store, processor } = setup([okScript()]);
+    store.data.set(keysFor(CONTEXT).cacheKey, JSON.stringify({ ...VALID_RESULT, injected: "<script>" }));
+    const ret = await processor(makeJob("hit"));
+
+    expect(ret.cached).toBe(true);
+    expect(ret.result).toEqual(VALID_RESULT);
+    expect(ret.result).not.toHaveProperty("injected");
+  });
+
+  it("LLM 輸出夾雜前後文字：returnvalue 只帶解析並驗證後的物件", async () => {
+    const text = `以下是診斷：\n${RESULT_TEXT}\n（完）`;
+    const wrapped: Script = async ({ onToken }) => {
+      onToken(text);
+      return { text, finishReason: "stop" };
+    };
+    const { processor } = setup([wrapped]);
+    const ret = await processor(makeJob("m"));
+    expect(ret).toEqual({ result: VALID_RESULT, cached: false });
+  });
+});
+
 describe("createProcessor：cache 命中路徑順序（AR-A12）", () => {
+  // 「ai/done 送出後才 return」由「終態事件 await 送出」組的兩支（PUBLISH 未完成前 processor 不 resolve）鎖住。
   it("先寫 trigger、再進度 100，最後才送 ai/done（與 LLM 路徑一致）", async () => {
     const order: string[] = [];
     const { store, publisher, repo, processor } = setup([okScript()]);

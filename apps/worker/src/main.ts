@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "bullmq";
 import { MongoClient } from "mongodb";
 import { DIAGNOSIS_QUEUE } from "@flow-gatekeeper/contracts";
-import type { DiagnosisJobPayload } from "@flow-gatekeeper/contracts";
+import type { DiagnosisJobPayload, DiagnosisJobReturnValue } from "@flow-gatekeeper/contracts";
 import { createLogger, ERROR_LOG_THROTTLE_MS } from "@flow-gatekeeper/shared/logging";
 import { bullmqConnectionOptions, createCommandConnection, waitForReady } from "./redis.js";
 import type { AiProvider } from "./ai/provider.js";
@@ -125,7 +125,7 @@ export async function bootstrap(): Promise<void> {
 
   // 關閉旗標：processor 的 dedupe 等待迴圈讀、buildShutdown 收到訊號時設（見 buildShutdown）。
   const closingState = createClosingState();
-  const worker = new Worker<DiagnosisJobPayload>(
+  const worker = new Worker<DiagnosisJobPayload, DiagnosisJobReturnValue>(
     DIAGNOSIS_QUEUE,
     createProcessor({
       store: createRedisStore(cache),

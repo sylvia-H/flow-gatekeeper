@@ -9,6 +9,7 @@ import { JobRoutingRegistry } from "./job-routing-registry.js";
 import { getAppLogger } from "../../logging/app-logger.js";
 import { attachThrottledErrorLog } from "../../lib/connection-error-throttle.js";
 import { closeWithDeadline } from "./relay-close.js";
+import { summarizeIssues } from "./job-status-payload.js";
 
 /**
  * AI 串流轉發（通道 A，憲章 IV）：專用 subscriber `psubscribe('ai-stream:*')`，把 worker
@@ -115,10 +116,7 @@ export class AiStreamRelayService implements OnModuleInit, OnModuleDestroy {
     const parsed = AiStreamEventSchema.safeParse(raw);
     if (!parsed.success) {
       // 只記 issue 路徑與代碼，不記原始內容：畸形訊息可能夾帶任意大小或敏感的 payload。
-      const issues = parsed.error.issues
-        .slice(0, 5)
-        .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.code}`);
-      this.plog.warn({ jobId, channel, issues }, "invalid ai-stream message dropped");
+      this.plog.warn({ jobId, channel, issues: summarizeIssues(parsed.error) }, "invalid ai-stream message dropped");
       return;
     }
     // channel 尾綴才是綁定依據；payload 內的 jobId 與之不符代表來源可疑，不轉發給這個 client。

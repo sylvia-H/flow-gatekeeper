@@ -51,6 +51,19 @@ describe("AiStreamRelayService.handleMessage", () => {
     expect(gateway.send).not.toHaveBeenCalled();
   });
 
+  it("驗證失敗的 warn：issues 與 job-status relay 同形狀（{ path, code } 物件陣列），不記原文", () => {
+    const { relay, handle } = makeAiRelay();
+    const warn = vi
+      .spyOn((relay as unknown as { plog: { warn: (...args: unknown[]) => void } }).plog, "warn")
+      .mockImplementation(() => undefined);
+    handle(`ai-stream:${JOB_ID}`, { type: "ai/token", jobId: JOB_ID, seq: 0, text: "SECRET-TEXT" });
+    expect(warn).toHaveBeenCalledWith(
+      { jobId: JOB_ID, channel: `ai-stream:${JOB_ID}`, issues: [{ path: "attempt", code: "invalid_type" }] },
+      "invalid ai-stream message dropped",
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("SECRET-TEXT");
+  });
+
   it("payload 的 jobId 與 channel 尾綴不符 → 丟棄", () => {
     const { gateway, handle } = makeAiRelay();
     handle(`ai-stream:${JOB_ID}`, { ...validToken, jobId: OTHER_JOB_ID });

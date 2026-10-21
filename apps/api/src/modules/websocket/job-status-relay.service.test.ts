@@ -411,3 +411,91 @@ describe("JobStatusRelayService：QueueEvents 事件驅動（TQ-6）", () => {
     expect(qe.disconnect).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("JobStatusRelayService：completed returnvalue 與 progress 物件（T025、D1、D7）", () => {
+  const RESULT = {
+    summary: "主軸溫度偏高",
+    severity: "warning",
+    likelyCauses: ["冷卻液不足"],
+    suggestedActions: [{ label: "補充冷卻液", priority: "high" }],
+    evidence: [{ source: "telemetry", excerpt: "temp=92" }],
+  };
+  const base = { type: "job/status", jobId: JOB_ID, machineId: "cnc-01" };
+
+  it("returnvalue 合法 → completed 帶 result 與 cached，不記 warn，之後標 terminal", async () => {
+    const { qe, registry, sent, relay } = setup();
+    qe.emit("completed", { jobId: JOB_ID, returnvalue: { result: RESULT, cached: true } });
+    expect(sent).toEqual([{ clientId: CLIENT_ID, payload: { ...base, status: "completed", result: RESULT, cached: true } }]);
+    expect(plog.warn).not.toHaveBeenCalled();
+    expect(registry.get(JOB_ID)?.terminal?.kind).toBe("completed");
+    await relay.onModuleDestroy();
+  });
+
+  it("returnvalue 不合法 → 照送不帶 result 的 completed，warn 只記 jobId 與 issue 路徑／代碼（不記原文），仍標 terminal", async () => {
+    const { qe, registry, sent, relay } = setup();
+    const secret = "SECRET-PAYLOAD-TEXT";
+    qe.emit("completed", { jobId: JOB_ID, returnvalue: { result: { summary: secret }, cached: false } });
+    expect(sent).toEqual([{ clientId: CLIENT_ID, payload: { ...base, status: "completed" } }]);
+    expect(plog.warn).toHaveBeenCalledTimes(1);
+    const [fields, msg] = plog.warn.mock.calls[0] as [Record<string, unknown>, string];
+    expect(msg).toBe("invalid completed returnvalue, forwarding completed without result");
+    expect(fields.jobId).toBe(JOB_ID);
+    expect(fields.issues).toEqual(expect.arrayContaining([{ path: "result.severity", code: "invalid_value" }]));
+    expect(JSON.stringify(plog.warn.mock.calls)).not.toContain(secret);
+    expect(registry.get(JOB_ID)?.terminal?.kind).toBe("completed");
+    await relay.onModuleDestroy();
+  });
+
+  it.each([
+    ["null（舊版 worker）", null],
+    ["缺值", undefined],
+  ])("returnvalue %s → 照送不帶 result 的 completed 並記 warn", async (_label, returnvalue) => {
+    const { qe, sent, relay } = setup();
+    qe.emit("completed", { jobId: JOB_ID, returnvalue });
+    expect(sent).toEqual([{ clientId: CLIENT_ID, payload: { ...base, status: "completed" } }]);
+    expect(plog.warn).toHaveBeenCalledWith(
+      { jobId: JOB_ID, issues: [{ path: "(root)", code: "invalid_type" }] },
+      "completed without returnvalue (legacy worker?)",
+    );
+    await relay.onModuleDestroy();
+  });
+
+  it("MUST NOT 轉發未驗證物件：result 夾帶的未知欄位與 returnvalue 的多餘欄位都不出現在送出的 job/status", async () => {
+    const { qe, sent, relay } = setup();
+    const returnvalue = { result: { ...RESULT, injected: "<img onerror>" }, cached: false, extra: { big: "x" } };
+    qe.emit("completed", { jobId: JOB_ID, returnvalue });
+    const payload = sent[0]?.payload;
+    expect(payload).toEqual({ ...base, status: "completed", result: RESULT, cached: false });
+    expect(payload?.result).not.toBe(returnvalue.result);
+    await relay.onModuleDestroy();
+  });
+
+  it("progress 物件 → active 帶 progress／attempt／execution 並記進綁定；completed 沿用最近一次的值（P7）", async () => {
+    const { qe, registry, sent, relay } = setup();
+    qe.emit("progress", { jobId: JOB_ID, data: { value: 20, attempt: 1, execution: 1 } });
+    qe.emit("progress", { jobId: JOB_ID, data: { value: 60, attempt: 2, execution: 3 } });
+    expect(registry.get(JOB_ID)).toMatchObject({ attempt: 2, execution: 3 });
+    qe.emit("completed", { jobId: JOB_ID, returnvalue: { result: RESULT, cached: false } });
+    expect(sent.map((s) => s.payload)).toEqual([
+      { ...base, status: "active", progress: 20, attempt: 1, execution: 1 },
+      { ...base, status: "active", progress: 60, attempt: 2, execution: 3 },
+      { ...base, status: "completed", result: RESULT, cached: false, attempt: 2, execution: 3 },
+    ]);
+    await relay.onModuleDestroy();
+  });
+
+  it("progress 數字照舊只帶 progress、不記綁定；超出 0～100 省略 progress；不合法物件送不帶 progress 的 active", async () => {
+    const { qe, registry, sent, relay } = setup();
+    qe.emit("progress", { jobId: JOB_ID, data: 42 });
+    qe.emit("progress", { jobId: JOB_ID, data: 150 });
+    qe.emit("progress", { jobId: JOB_ID, data: { value: 10, attempt: 0, execution: 1 } });
+    expect(sent.map((s) => s.payload)).toEqual([
+      { ...base, status: "active", progress: 42 },
+      { ...base, status: "active" },
+      { ...base, status: "active" },
+    ]);
+    expect(registry.get(JOB_ID)).not.toHaveProperty("attempt");
+    expect(registry.get(JOB_ID)).not.toHaveProperty("execution");
+    await relay.onModuleDestroy();
+  });
+});

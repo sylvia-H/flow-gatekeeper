@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { DelayedError, UnrecoverableError } from "bullmq";
 import { DiagnosisResultSchema } from "@flow-gatekeeper/contracts";
-import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisJobProgress, DiagnosisResult } from "@flow-gatekeeper/contracts";
+import type {
+  AiStreamEvent,
+  DiagnosisJobPayload,
+  DiagnosisJobProgress,
+  DiagnosisJobReturnValue,
+  DiagnosisResult,
+} from "@flow-gatekeeper/contracts";
 import { AiProviderError } from "./ai/provider.js";
 import type { AiProvider, AiStreamResult } from "./ai/provider.js";
 import { buildPrompt, PROMPT_VERSION } from "./ai/prompt.js";
@@ -22,6 +28,8 @@ import { DIAGNOSIS_RESULT_JSON_SCHEMA } from "./lib/zod-json-schema.js";
  *   → 取鎖後**再查一次 cache**（等待者搶到鎖時，前一個持鎖者多半已寫好結果）→ LLM 限流窗
  *   → AiProvider 串流（token → Pub/Sub `ai-stream:<jobId>`，逾時以 AbortSignal 真正中止）
  *   → parseResult → 寫 diagnoses → 寫 cache → 寫 trigger → ai/done(cached:false)。
+ * 成功時兩條路徑都在 ai/done 之後回傳 `DiagnosisJobReturnValue { result, cached }`（BullMQ `returnvalue`，
+ * 經 QueueEvents `completed` 成為權威完成訊號；ai/done 降為 best-effort，ADR-003 D1）。
  *
  * 重試語意：非最終嘗試的失敗只記 log 後 throw（交給 BullMQ 退避重試），**不** publish
  * `ai/error`——否則前端收到錯誤即轉 failed，之後重試即使成功畫面也停在錯誤。最終嘗試（或
@@ -168,7 +176,7 @@ export function createProcessor(deps: ProcessorDeps) {
   const isClosing = deps.isClosing ?? (() => false);
   const pollIntervalMs = config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
-  return async (job: ProcessorJob, token?: string): Promise<void> => {
+  return async (job: ProcessorJob, token?: string): Promise<DiagnosisJobReturnValue> => {
     const { jobId, machineId, requestedBy, windowMinutes } = job.data;
     // `attemptsMade` 於一次嘗試結束（完成／失敗）時才遞增，故處理第 N 次嘗試時其值為 N-1。
     const attempt = job.attemptsMade + 1;
@@ -262,20 +270,22 @@ export function createProcessor(deps: ProcessorDeps) {
        * 真正由 LLM 產生的結果（避免同一份結果被複製成多筆），但每次觸發仍要留稽核紀錄。
        * 順序與 LLM 路徑一致：先寫 trigger、進度 100，最後才 await ai/done——寫入失敗時照常 throw
        * 走重試，前端不會先收到 ai/done、之後又看到同一個 job 失敗。
+       * 命中時回傳 BullMQ `returnvalue`（ADR-003 D1），未命中回 null。
        */
-      const replyCached = async (): Promise<boolean> => {
+      const replyCached = async (): Promise<DiagnosisJobReturnValue | null> => {
         const result = await readCache();
-        if (!result) return false;
+        if (!result) return null;
         // 命中在此計、未命中在真正呼叫 LLM 前計：等待迴圈每輪都會查 cache，於此計未命中會失真。
         if (isFirstAttempt) metrics.recordCacheHit();
         await repo.insertTrigger({ machineId, jobId, requestedBy, cached: true });
         await job.updateProgress(100);
         await emitTerminal({ type: "ai/done", jobId, attempt, cached: true, result });
         jl.info({ sig }, "cache hit");
-        return true;
+        return { result, cached: true };
       };
 
-      const callLlmAndReply = async (): Promise<void> => {
+      /** LLM 路徑；成功時回傳 BullMQ `returnvalue`（ADR-003 D1），失敗一律經 `fail()` 拋出。 */
+      const callLlmAndReply = async (): Promise<DiagnosisJobReturnValue> => {
         await job.updateProgress(40);
         if (isFirstAttempt) metrics.recordCacheMiss();
         jl.info({ sig, provider: ai.id, model: ai.model }, "LLM call");
@@ -346,9 +356,13 @@ export function createProcessor(deps: ProcessorDeps) {
         await job.updateProgress(100);
         await emitTerminal({ type: "ai/done", jobId, attempt, cached: false, result });
         jl.info("job completed");
+        return { result, cached: false };
       };
 
-      if (await replyCached()) return;
+      // returnvalue 由 QueueEvents `completed` 帶給 api relay，作為權威完成訊號（ADR-003 D1）；ai/done 仍照送（best-effort）。
+      // 四個 return 點（首查命中、取鎖後 double-check 命中、LLM 成功、等待者輪詢命中）都回同一形狀。
+      const firstHit = await replyCached();
+      if (firstHit) return firstHit;
 
       // 「取鎖或等待」迴圈：lock TTL（≥ AI_TIMEOUT_MS + LOCK_TTL_MARGIN_MS，啟動時驗證）保證進度——持鎖者崩潰時
       // 最遲於 TTL 後鎖過期，某個等待者搶到鎖改走計算路徑。
@@ -357,27 +371,23 @@ export function createProcessor(deps: ProcessorDeps) {
         touch();
         const lockToken = randomUUID();
         if (await store.tryAcquireLock(lockKey, lockToken, config.lockTtlSeconds)) {
-          let rateLimitedUntil: number | null = null;
+          let rateLimitedUntil: number;
           try {
             // double-check：等待者搶到鎖時，前一個持鎖者多半剛寫好 cache 並放鎖——不回頭查就會
             // 對同一 signature 再打一次 LLM，去重形同虛設。
-            if (await replyCached()) return;
+            const lockedHit = await replyCached();
+            if (lockedHit) return lockedHit;
 
             // LLM 限流放在取鎖且確認未命中之後：只有「真的要打 LLM」才計數，cache 命中與
             // 等待者不吃額度（BullMQ 的 limiter 只能計 job 啟動數，做不到這點）。
             const windowIndex = Math.floor(now() / RATE_WINDOW_MS);
             // key 帶窗序號，TTL 取兩個窗長：首次 INCR 可能發生在窗中段，TTL 只設一窗會提早歸零。
             const used = await store.incrementWindow(`ai-rpm:${windowIndex}`, (RATE_WINDOW_MS / 1000) * 2);
-            if (used > config.aiRpm) {
-              // 加 0–2 秒隨機抖動：同一窗被擋下的 job 若全部在窗起點同時醒來，會一起搶鎖、一起打滿新窗。
-              rateLimitedUntil = (windowIndex + 1) * RATE_WINDOW_MS + Math.floor(Math.random() * RATE_JITTER_MS);
-              jl.warn(
-                { used, limit: config.aiRpm, until: rateLimitedUntil },
-                "超過每分鐘 LLM 呼叫上限，延後到下一個窗",
-              );
-            } else {
-              await callLlmAndReply();
-            }
+            // `return await`：finally 的放鎖必須等 LLM 路徑整個結束（含寫庫、ai/done）才執行。
+            if (used <= config.aiRpm) return await callLlmAndReply();
+            // 加 0–2 秒隨機抖動：同一窗被擋下的 job 若全部在窗起點同時醒來，會一起搶鎖、一起打滿新窗。
+            rateLimitedUntil = (windowIndex + 1) * RATE_WINDOW_MS + Math.floor(Math.random() * RATE_JITTER_MS);
+            jl.warn({ used, limit: config.aiRpm, until: rateLimitedUntil }, "超過每分鐘 LLM 呼叫上限，延後到下一個窗");
           } finally {
             // compare-and-del：只刪自己的鎖。釋放失敗（Redis 斷線）不可蓋掉原本的錯誤——鎖會靠 TTL 自然過期。
             await store.releaseLock(lockKey, lockToken).catch((err: unknown) => {
@@ -385,17 +395,17 @@ export function createProcessor(deps: ProcessorDeps) {
             });
           }
           // 延後而非失敗：不消耗 attempts、不打擾前端；放鎖後才延後，其他 job 仍可取鎖或命中 cache。
-          if (rateLimitedUntil !== null) await requeueAt(rateLimitedUntil, "LLM rate limited");
-          return;
+          return await requeueAt(rateLimitedUntil, "LLM rate limited");
         }
 
         // 取不到鎖：他人正在算 → 輪詢共用其結果。
-        if (await replyCached()) return;
+        const waitHit = await replyCached();
+        if (waitHit) return waitHit;
         if (isClosing()) {
           // 關閉中不再空等：等待上限遠長於 compose 的 stop_grace_period，空等只會被 SIGKILL，
           // 再靠 stalled 重派（還吃掉一次 maxStalledCount）。直接交回佇列，由重啟後的行程接手。
           jl.info("worker 關閉中，放棄等待並把 job 交回佇列");
-          await requeueAt(now() + CLOSING_REQUEUE_DELAY_MS, "worker closing");
+          return await requeueAt(now() + CLOSING_REQUEUE_DELAY_MS, "worker closing");
         }
         if (now() > deadline) {
           throw new Error(`dedupe wait exceeded for ${jobId}`); // 最終保護：交還 attempts 重試
