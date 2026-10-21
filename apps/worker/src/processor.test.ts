@@ -29,7 +29,7 @@ const RESULT_TEXT = JSON.stringify(VALID_RESULT);
 
 /** 每次帶 TTL 的寫入（cache SET EX／鎖 SET NX EX／限流窗首次 EXPIRE）都記下來，TTL 參數接錯才測得出。 */
 interface TtlRecord {
-  op: "cache" | "lock" | "window";
+  op: "cache" | "lock" | "window" | "marker";
   key: string;
   ttlSeconds: number;
 }
@@ -69,6 +69,12 @@ class FakeStore implements ProcessorStore {
     if (n === 1) this.ttls.push({ op: "window", key, ttlSeconds: windowSeconds });
     this.counters.set(key, n);
     return n;
+  }
+  async setIfAbsent(key: string, value: string, ttlSeconds: number) {
+    if (this.data.has(key)) return false;
+    this.ttls.push({ op: "marker", key, ttlSeconds });
+    this.data.set(key, value);
+    return true;
   }
   cacheKeys() {
     return [...this.data.keys()].filter((k) => k.startsWith("ai-cache:"));
@@ -269,6 +275,8 @@ function makeJob(jobId: string, opts: { attemptsMade?: number; attempts?: number
   const job: ProcessorJob & { progress: number[]; moveToDelayed: ReturnType<typeof vi.fn> } = {
     data,
     attemptsMade: opts.attemptsMade ?? 0,
+    // BullMQ 於 moveToActive 遞增：處理中至少為 attemptsMade + 1。
+    attemptsStarted: (opts.attemptsMade ?? 0) + 1,
     opts: { attempts: opts.attempts ?? 3 },
     progress: [],
     async updateProgress(p: number) {

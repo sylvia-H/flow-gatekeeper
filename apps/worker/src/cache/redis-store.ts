@@ -16,6 +16,11 @@ export interface ProcessorStore {
   releaseLock(key: string, token: string): Promise<boolean>;
   /** 固定窗計數：INCR，第一次建立時設 EXPIRE；回傳遞增後的值。 */
   incrementWindow(key: string, windowSeconds: number): Promise<number>;
+  /**
+   * SET NX EX：key 不存在才寫入並帶 TTL，回 OK 才 true（012 P9：`ai-metric:<jobId>` 以 jobId 只計一次 hit／miss）。
+   * 與 `tryAcquireLock` 同一條指令但語意是「一次性標記」、不會被釋放，故分開命名。Redis 錯誤照常拋出。
+   */
+  setIfAbsent(key: string, value: string, ttlSeconds: number): Promise<boolean>;
 }
 
 /**
@@ -47,6 +52,9 @@ export function createRedisStore(redis: StoreRedis): ProcessorStore {
     },
     async incrementWindow(key, windowSeconds) {
       return Number(await redis.eval(INCR_WINDOW_SCRIPT, 1, key, String(windowSeconds)));
+    },
+    async setIfAbsent(key, value, ttlSeconds) {
+      return (await redis.set(key, value, "EX", ttlSeconds, "NX")) === "OK";
     },
   };
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { DelayedError, UnrecoverableError } from "bullmq";
 import { DiagnosisResultSchema } from "@flow-gatekeeper/contracts";
-import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisResult } from "@flow-gatekeeper/contracts";
+import type { AiStreamEvent, DiagnosisJobPayload, DiagnosisJobProgress, DiagnosisResult } from "@flow-gatekeeper/contracts";
 import { AiProviderError } from "./ai/provider.js";
 import type { AiProvider, AiStreamResult } from "./ai/provider.js";
 import { buildPrompt, PROMPT_VERSION } from "./ai/prompt.js";
@@ -35,8 +35,14 @@ import { DIAGNOSIS_RESULT_JSON_SCHEMA } from "./lib/zod-json-schema.js";
 export interface ProcessorJob {
   readonly data: DiagnosisJobPayload;
   readonly attemptsMade: number;
+  /**
+   * BullMQ 於每次 `moveToActive` 遞增（含 stalled 重派與 `moveToDelayed` 後再執行），處理中的值 ≥ 1；
+   * 012 用作 `DiagnosisJobProgress.execution`（讀到 0 時以 1 代入，research R8）。
+   */
+  readonly attemptsStarted: number;
   readonly opts: { attempts?: number };
-  updateProgress(progress: number): Promise<void>;
+  /** 參數型別為 `number | DiagnosisJobProgress`（research R8，最終型別）；T055 之後呼叫端只送 `DiagnosisJobProgress`。 */
+  updateProgress(progress: number | DiagnosisJobProgress): Promise<void>;
   moveToDelayed(timestamp: number, token?: string): Promise<void>;
 }
 

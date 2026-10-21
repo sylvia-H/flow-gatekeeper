@@ -148,6 +148,7 @@ function makeJob(jobId: string, machineId: string): ProcessorJob {
   return {
     data,
     attemptsMade: 0,
+    attemptsStarted: 1,
     opts: { attempts: 3 },
     async updateProgress() {},
     async moveToDelayed() {},
@@ -420,6 +421,36 @@ describe.runIf(process.env.FG_INTEGRATION === "1")("RedisStore × 真 Redis（�
       const stored = await raw.get(cacheKeyRaw);
       expect(stored === null ? null : (JSON.parse(stored) as unknown)).toEqual(VALID_RESULT);
       expect(publisher.events.at(-1)).toMatchObject({ type: "ai/done", cached: false });
+    });
+  });
+
+  describe("(g) setIfAbsent：SET NX EX 一次性標記（012 FR-026、P9）", () => {
+    it("第一次回 true 並帶 TTL；第二次（另一副本）回 false、值與 TTL 不被覆寫", async () => {
+      const key = `ai-metric:g-${randomUUID()}`;
+      expect(await storeA.setIfAbsent(key, "1", 86_400)).toBe(true);
+      const ttl = await raw.pttl(`${PREFIX}${key}`);
+      expect(ttl).toBeGreaterThan(86_395_000);
+      expect(ttl).toBeLessThanOrEqual(86_400_000);
+
+      // 另一副本以不同值、較短 TTL 再寫：NX 擋下，原值與原 TTL 不變。
+      expect(await storeB.setIfAbsent(key, "2", 5)).toBe(false);
+      expect(await raw.get(`${PREFIX}${key}`)).toBe("1");
+      expect(await raw.pttl(`${PREFIX}${key}`)).toBeGreaterThan(86_390_000);
+    });
+
+    it("兩個副本並發 20 次，恰好只有一次回 true", async () => {
+      const key = `ai-metric:g2-${randomUUID()}`;
+      const results = await Promise.all(
+        Array.from({ length: 20 }, (_, i) => (i % 2 === 0 ? storeA : storeB).setIfAbsent(key, String(i), 60)),
+      );
+      expect(results.filter(Boolean)).toHaveLength(1);
+    });
+
+    it("TTL 到期後可再次寫入", async () => {
+      const key = `ai-metric:g3-${randomUUID()}`;
+      expect(await storeA.setIfAbsent(key, "1", 1)).toBe(true);
+      await waitUntilExpired(raw, `${PREFIX}${key}`, 3000);
+      expect(await storeB.setIfAbsent(key, "1", 1)).toBe(true);
     });
   });
 });
