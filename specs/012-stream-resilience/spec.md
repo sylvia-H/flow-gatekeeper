@@ -29,6 +29,16 @@
 - Q: 「重新派送」說明行何時顯示？ → A: 只在 `reason: "stalled"` 時顯示；`execution` 因重試或限流延後遞增時只清空串流、不顯示這行（見 FR-006、FR-035，D7／D13）。
 - Q: Pub/Sub 斷線且 worker 在串流中被 SIGKILL 時最長約 55 s 無事件，是否加機制？ → A: 接受、不加機制；keepalive 計時器維持由任何對外事件（含 `ai/token`）重設，watchdog 觸發後先 GET（見 Edge Cases、SC-001，D2 殘餘風險）。
 
+### Session 2026-10-21（clarify 階段，代理裁決第 17～21 條，待使用者覆核）
+
+clarify 覆蓋度掃描後補的 5 題，依影響排序；使用者離席期間採建議項，同步記於 ADR-003 §7 第 17～21 條。
+
+- Q: 網路閃斷後重連時，伺服器還沒回收舊的半開連線（心跳回收上限約 30 s），重連 GET 照 D8 規則會回 409，畫面誤顯示「正由另一個視窗接收」——怎麼處理？ → A: GET 新增 optional `previousSocketId`；web 對每個任務記住最後一次成功綁定的 socketId 並在 GET 時帶上；原綁定仍在線但等於 `previousSocketId` 時視同原綁定已離線、暫定改綁，不主動終止舊連線（見 FR-007、FR-009、FR-016、FR-032、SC-005；代理裁決第 17 條，待覆核）。
+- Q: GET 回 `failed` 或 `job/status: failed` 只帶 `failedReason` 原文、沒有錯誤碼時，`persist_failed` 怎麼顯示正確文案、又不露出 MongoDB 原始錯誤？ → A: `persist_failed` 的 `failedReason` 為固定英文句並含 `persist_failed` 字樣，MongoDB 原始錯誤只進日誌；web 在錯誤碼或訊息含 `persist_failed` 時都對映為「診斷結果無法寫入資料庫，請稍後重試」；GET 的 `failed` 回應不加 `code` 欄位（見 FR-027、FR-035；代理裁決第 18 條，待覆核）。
+- Q: 診斷進行中重新整理頁面（或關分頁再開），是否續接原診斷？ → A: 不續接，列 Out of Scope；web 不持久化 jobId，後端照常跑完並寫快取，同機台同狀態再按「診斷」以新 jobId 命中快取或等去重鎖、不多打 LLM；寫進 `PRODUCT.md` 已知產品限制（見 Edge Cases、FR-039、Out of Scope；代理裁決第 19 條，待覆核）。
+- Q: 重連續接後若以 `ai/done` 收尾，斷線期間的 token 已遺失，「原始串流」標題要不要標「不完整」？ → A: 要；執行期間經歷過 WS 重連（FR-016 的續接旗標曾被設起）的任務一律標「原始串流（不完整）」，仍不比對 `seq`（見 FR-035、FR-038；代理裁決第 20 條，待覆核）。
+- Q: 新增的冪等短路、`ai-fail`、`stalled`、rebind 等路徑要留什麼可觀測訊號？ → A: 只加結構化日誌（依 009 `log-fields.md`），`system/metrics`／`WorkerMetrics` 不加欄位；keepalive 補送不逐次記日誌；e2e 以既有 `LLM call` 日誌計數 LLM 呼叫（見 FR-047、SC-004；代理裁決第 21 條，待覆核）。
+
 ## User Scenarios & Testing *(mandatory)*
 
 本 feature 的「使用者」與 `apps/web/PRODUCT.md` 一致：**監控台操作者**（在監控台按「診斷」、等待 AI 結果的工程／維運人員）與**展示者／評估者**（看 demo、驗收「背壓、串流、快取」賣點的人）；另加**系統擁有者**（付 LLM 帳單、看成本與稽核數字的人，也就是部署這套 demo 的人）。
@@ -146,6 +156,10 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 - **`completed` 不帶 `result`**（舊版 worker 滾動升級、或 `returnvalue` 驗證失敗）：relay 照送不帶 `result` 的 `completed` 並記 warn；web 等 2 秒寬限、先 GET 一次，GET 回 completed 即完成，否則才轉「結果未送達」。
 - **GET 在 1 小時之後回 404**：快取命中的 job 不寫 `diagnoses`，`returnvalue` 隨 `removeOnComplete`（1 h）消失，之後 GET 回 404，畫面顯示「連線中斷期間的診斷結果已無法取回，請重試」。接受：重連續接的時間尺度是秒到分鐘；寫進 `PRODUCT.md` 已知產品限制。LLM 路徑的結果在 `removeOnComplete` 後仍可由 Mongo `diagnoses` 取回。
 - **原綁定仍在線時另一條連線 GET**：進行中的任務回 409、不改綁（畫面「這個診斷正由另一個視窗接收…」）；已完成或已失敗（含 10 s 終態寬限內）照常回結果、不 rebind。
+- **同一分頁重連時舊連線尚未被伺服器回收**（代理裁決第 17 條）：網路閃斷（換 Wi-Fi、睡醒）後，瀏覽器以 pong 逾時或 `online` 事件立刻重連，伺服器端要等心跳回收（`WS_HEARTBEAT_MS` 預設 15 s，上限約 30 s）才知道舊連線已死。重連 GET 帶 `previousSocketId`（該任務最後一次成功綁定的 socketId），原綁定等於它時視同已離線、改綁到新連線，不回 409；舊連線不主動終止，交給心跳回收。另一個視窗拿不到本分頁的 socketId（只經 `system/connected` 送給連線本身），兩個視窗不互搶的規則不變。
+- **重新整理頁面或關分頁再開**（代理裁決第 19 條，不在範圍）：web 不持久化進行中的 jobId，重新整理後面板回到未診斷狀態；後端照常跑完並寫快取。同機台同狀態再按「診斷」以新 jobId 命中快取（`AI_CACHE_TTL_SECONDS` 預設 600 s 內）或等待同簽章的去重鎖，不多打 LLM；狀態已改變則是新的一次診斷。寫進 `PRODUCT.md` 已知產品限制。
+- **重連續接後以 `ai/done` 收尾**（代理裁決第 20 條）：斷線期間的 `ai/token` 不補送，串流中間缺一段；執行期間經歷過重連的任務一律標「原始串流（不完整）」，即使串流其實完整（例如重連發生在首 token 前）也標——寧可多標不漏標。
+- **重連 GET 回 `failed` 且原因是寫庫失敗**（代理裁決第 18 條）：GET 與 `job/status: failed` 只帶 `failedReason` 原文、沒有錯誤碼；`persist_failed` 的 `failedReason` 為含 `persist_failed` 字樣的固定英文句，web 據此顯示「診斷結果無法寫入資料庫，請稍後重試」，不露出 MongoDB 原始錯誤。
 - **GET 查詢期間任務剛好完成**：GET 在任何 await 前先暫定綁定，查到 active 時保留綁定，因此查詢與綁定之間抵達的 `completed` 仍送得到新連線；查到終態時撤回暫定綁定（只撤回本次請求自己做的動作）。
 - **api 重啟期間錯過的 `completed`**：QueueEvents 在 api 重啟後從 `$` 開始讀、錯過重啟期間的事件；由重連後的 GET 補回（同一 api 行程內的 Redis 斷線則由 Stream 續讀補回，不遺失）。
 - **Redis 停頓 > 45 s 且落在 LLM 串流中**（殘餘風險）：停頓超過 `AI_DEDUPE_LOCK_SECONDS`（45 s）且正好落在 LLM 呼叫期間時，第二次執行可能在第一次寫入快取前取得 `ai-lock`、再打一次 LLM。罕見（兩條件同時成立），記為殘餘風險，不加第二把鎖（第二把鎖存在同一個 Redis，會在同一次停頓裡一起過期）。
@@ -176,9 +190,9 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 
 **結果讀取與 rebind（US2）**
 
-- **FR-007**: api MUST 提供 `GET /diagnoses/:jobId?socketId=`；`jobId`、`socketId` 皆以 UUID 驗證，不符 MUST 回 400（只回 issue 路徑與代碼，比照 POST）。（US2；SC-005）
+- **FR-007**: api MUST 提供 `GET /diagnoses/:jobId?socketId=[&previousSocketId=]`；`jobId`、`socketId` 與 optional 的 `previousSocketId` 皆以 UUID 驗證，不符 MUST 回 400（只回 issue 路徑與代碼，比照 POST）。`previousSocketId` 為呼叫端分頁上一次成功綁定此任務的 socketId，只用於 FR-009 的改綁判斷（代理裁決第 17 條）。（US2；SC-005）
 - **FR-008**: `socketId` 不是在線且已授權的連線時 MUST 回 409（訊息與 POST 相同）。（US2；SC-005）
-- **FR-009**: GET MUST 在任何 await 之前於 `JobRoutingRegistry` 完成暫定綁定（先綁定後查詢）：綁定不存在 → 暫定建立指向本 socketId；綁定已標記終態（10 s 寬限中）→ 不動、視為終態；原綁定連線已離線 → 暫定改綁並記下原綁定以便撤回；綁定等於本 socketId → 不動；原綁定仍在線且不等於本 socketId → 不動、記為「衝突」待查詢結果決定。（US2 情境 1、3；SC-003、SC-005）
+- **FR-009**: GET MUST 在任何 await 之前於 `JobRoutingRegistry` 完成暫定綁定（先綁定後查詢）：綁定不存在 → 暫定建立指向本 socketId；綁定已標記終態（10 s 寬限中）→ 不動、視為終態；原綁定連線已離線 → 暫定改綁並記下原綁定以便撤回；原綁定仍在線但等於請求的 `previousSocketId`（同一分頁重連、舊連線尚未被心跳回收）→ 比照「已離線」暫定改綁並記下原綁定，MUST NOT 主動終止舊連線；綁定等於本 socketId → 不動；原綁定仍在線、不等於本 socketId 也不等於 `previousSocketId` → 不動、記為「衝突」待查詢結果決定。（US2 情境 1、3；SC-003、SC-005；代理裁決第 17 條）
 - **FR-010**: GET 的查詢順序 MUST 為 BullMQ（`Job.fromId` 的 state 與 `returnvalue`）→ Mongo `diagnoses.findOne({ jobId })` → 404，並依結果處理綁定：
   - completed → 驗 `returnvalue` 後 200 `{ status: "completed", result, cached }`，撤回暫定動作（不 rebind）；衝突者照常回。
   - failed → 200 `{ status: "failed", error }`（`error` 為 `failedReason`），撤回暫定動作；衝突者照常回。
@@ -190,7 +204,7 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 - **FR-013**: GET 回應中的 `result`（不論來自 `returnvalue` 或 Mongo）MUST 經 `DiagnosisResultSchema` 驗證後才回，MUST NOT 回未驗證物件；`returnvalue` 驗證失敗時記 warn 並退到 Mongo 查詢，Mongo 也無合法結果則 404。（憲章 V；SC-005）
 - **FR-014**: api MUST 抽出 `JobRoutingRegistry` 持有 jobId ↔ 接收連線的綁定，提供綁定、rebind、終態寬限、刪除與孤兒回收；兩支 relay、`JobsService` 與 GET MUST 經它存取綁定。`completed` 與 `failed` 兩種終態 MUST 共用同一段 10 s 綁定寬限程式（2.1.0 的 `markCompleted`／`COMPLETED_BINDING_GRACE_MS` 一般化）；寬限內同 jobId 的 POST 維持回 409；寬限內 GET 依 FR-009 視為終態。（US2；US4 情境 2；SC-008）
 - **FR-015**: nginx MUST 為 GET 新增獨立 regex location `^/diagnoses/[0-9a-fA-F-]{36}$` 與限流區 `diag_read`（`rate=60r/m`、`burst=10 nodelay`、`limit_req_status 429`），沿用 `/diagnoses` 的 `proxy_pass` 寫法且 MUST NOT 寫 `add_header`（以繼承 server 層安全 header）；POST 維持既有 10 r/m、burst 5 的桶。（US2；Edge Cases）
-- **FR-016**: web 的 `onReconnect` MUST 只記下需續接的 active 任務並維持 active（顯示「已重新連線，正在取回診斷狀態…」，不新增 chip 種類）；MUST 在連線授權成功（`machine/subscribed`／`onAuthResult(true)`）之後才逐台 GET。GET 回應對映：completed → 完成；failed → 失敗；active／waiting → 留在 active 並重設 watchdog；404、409、網路錯誤與 429 → 依 FR-035 文案轉失敗。（US2 情境 1、2；SC-003）
+- **FR-016**: web 的 `onReconnect` MUST 只記下需續接的 active 任務並維持 active（顯示「已重新連線，正在取回診斷狀態…」，不新增 chip 種類），並在該任務上設「執行期間經歷過重連」旗標（收尾時供 FR-038 判斷，任務結束前不清除）；MUST 在連線授權成功（`machine/subscribed`／`onAuthResult(true)`）之後才逐台 GET。web MUST 對每個任務記住最後一次成功綁定的 socketId（POST 送出時的 socketId，或 GET 回 `rebound: true` 時的本次 socketId），所有 GET MUST 以 `previousSocketId` 帶上（代理裁決第 17 條）。GET 回應對映：completed → 完成；failed → 失敗；active／waiting → 留在 active 並重設 watchdog；404、409、網路錯誤與 429 → 依 FR-035 文案轉失敗。（US2 情境 1、2；SC-003）
 - **FR-017**: web 的診斷 API 模組 MUST 新增 GET 呼叫，回應以契約 schema 驗證，HTTP 狀態碼對映比照既有 `postDiagnose`。（US2；SC-005）
 
 **重派與 keepalive（US3）**
@@ -207,7 +221,7 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 - **FR-024**: processor MUST 在 `updateProgress(0)` 之後、建 context 之前，依序以 jobId 查 (i) Redis 暫存 `ai-result:<jobId>`、(ii) Mongo `diagnoses`；命中 (i) 時 MUST 只重做 `diagnoses` 寫入（成功後 DEL 暫存）；命中任一者後 MUST 冪等補寫 trigger（`cached: false`）→ `updateProgress(100)` → 送 `ai/done(cached: false)` → 回傳 `{ result, cached: false }`，MUST NOT 建 context、取鎖或呼叫 LLM。（US4 情境 1、3；SC-004）
 - **FR-025**: `diagnosisTriggers` MUST 新增 `{ jobId: 1 }` unique 索引（既有資料衝突時沿用 `ensureUniqueJobIdIndex` 的退回非 unique＋記 error 邏輯）；所有寫入點（快取命中、LLM 路徑、冪等命中、最終失敗 handler）MUST 改為以 jobId upsert（`$setOnInsert`）；一個 jobId MUST 只有一筆（成功或最終失敗，兩者互斥）。（US4 情境 1；SC-004）
 - **FR-026**: 快取 hit／miss 統計 MUST 以 jobId 只計一次（`SET ai-metric:<jobId> 1 NX EX 86400` 回 OK 才記）；MUST NOT 以 `attemptsStarted === 1` 判斷（限流延後的再執行也會遞增，會漏記真正打 LLM 的 miss）。（US4 情境 1；SC-004）
-- **FR-027**: LLM 成功且結果通過驗證後，worker MUST 先寫 `ai-result:<jobId>`（EX 3600）再寫 `diagnoses`；`diagnoses` 寫入失敗時 MUST 經既有失敗路徑以錯誤碼 `persist_failed`（可重試）送出，只在最終 attempt 送 `ai/error`；寫庫成功後 MUST DEL 暫存；快取 `ai-cache:<sig>` 的寫入 MUST 維持在 `diagnoses` 寫入之後。（US4 情境 2；SC-008）
+- **FR-027**: LLM 成功且結果通過驗證後，worker MUST 先寫 `ai-result:<jobId>`（EX 3600）再寫 `diagnoses`；`diagnoses` 寫入失敗時 MUST 經既有失敗路徑以錯誤碼 `persist_failed`（可重試）送出，只在最終 attempt 送 `ai/error`；寫庫成功後 MUST DEL 暫存；快取 `ai-cache:<sig>` 的寫入 MUST 維持在 `diagnoses` 寫入之後。`persist_failed` 傳給失敗路徑的訊息（即 BullMQ `failedReason` 與 `ai/error.message`）MUST 為含 `persist_failed` 字樣的固定英文句（例如 `persist_failed: diagnosis record could not be written`），MongoDB 原始錯誤 MUST 只進日誌的 `err` 欄位、MUST NOT 進訊息（代理裁決第 18 條）。（US4 情境 2；SC-008）
 - **FR-028**: worker MUST 實作同簽章負向標記 `ai-fail:<sig>`（值 `{ code, message, jobId, at }`，`SET … EX 10`）：
   - 寫入：LLM 階段的所有失敗（`provider_error`、`ai_timeout`、`schema_invalid`，含不可重試的安全攔截與截斷）；`no_context`、`persist_failed`、限流延後 MUST NOT 寫。
   - 讀取：等待者每輪輪詢與新 job 取鎖前，且 MUST 在限流 INCR 之前（被擋下的 job 不消耗 `AI_RPM`）；標記的 `jobId` 等於自己時 MUST 忽略。
@@ -219,7 +233,7 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 
 - **FR-030**: `job/status` MUST 新增 optional `attempt`（整數 ≥ 1）、`execution`（整數 ≥ 1）、`reason`（開放字串 `z.string()`，文件列舉已知值 `"stalled"`）、`cached`（boolean；`completed` 帶 `result` 時必帶）；`completed` 時填 `result`。新欄位皆為 optional，舊版 client 照常運作。（SC-010）
 - **FR-031**: `packages/contracts` MUST 新增跨 process 傳輸型別 `DiagnosisJobReturnValue` 與 `DiagnosisJobProgress`，以 Zod 定義、消費端 `safeParse`（憲章 III 例外 (c)），MUST NOT 在 api／worker 另寫平行型別。（SC-010）
-- **FR-032**: `http.ts` MUST 新增 `DiagnosisLookupQuerySchema` 與 `DiagnosisLookupResponseSchema`（以 `status` 區分的 discriminated union：completed／failed／waiting／active），型別由 `z.infer` 推導；400／404／409 錯誤 body 依憲章 III 例外 (b) 不另定 schema，但語意 MUST 記於 `asyncapi.yaml`／`CHANGELOG.md`。此要求由本 spec 規定，不待憲章修訂。（SC-005、SC-010）
+- **FR-032**: `http.ts` MUST 新增 `DiagnosisLookupQuerySchema`（`socketId` 必填、`previousSocketId` optional，皆 UUID）與 `DiagnosisLookupResponseSchema`（以 `status` 區分的 discriminated union：completed／failed／waiting／active），型別由 `z.infer` 推導；400／404／409 錯誤 body 依憲章 III 例外 (b) 不另定 schema，但語意 MUST 記於 `asyncapi.yaml`／`CHANGELOG.md`。此要求由本 spec 規定，不待憲章修訂。（SC-005、SC-010）
 - **FR-033**: `asyncapi.yaml` 的 `info.version` MUST 升為 1.4.0；`job/status` 描述 MUST 改為實際行為（`completed` 帶 `result` 與 `cached`，修正 DOC-29 的 "optionally carrying the final result"）；`ai/done` 描述 MUST 改為 ADR-003 D3 的 best-effort 敘述（MAY be delivered more than once、MAY be lost、consumers MUST treat the first completion as final）；`ai/error.code` 的已知值 MUST 補 `persist_failed`；漂移測試與文件版本測試 MUST 通過。（SC-010）
 - **FR-034**: `CHANGELOG.md` 契約小節 MUST 記 1.4.0；相容性注意 MUST 記「`ai/done` 可重複、可遺失，自寫 client 須以 jobId 去重」「BullMQ job 的 `progress` 改為物件」「BullMQ lock 參數 15／5／2」「新增 `GET /diagnoses/:jobId`」，並把 `[2.1.0]` 帶著發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治標為已修（012-lite）。（SC-010）
 
@@ -232,28 +246,28 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
   | `job/status: waiting`＋`reason: "stalled"` | 進度列下說明「後端處理程序中斷，任務已重新排入佇列（第 N 次執行）」；面板 chip 維持「進行中」、卡片 chip 維持「診斷中 N%」；串流清空並在「原始串流」收合區呈現新一次執行。只看 `reason`：`execution` 因重試或限流延後遞增時只清空串流、不顯示這行 | `CopilotDrawer.vue` 進行中區塊 |
   | 重連後、GET 尚未回應 | 維持「進行中」，說明「已重新連線，正在取回診斷狀態…」 | `copilot.store.ts` `onReconnect`（active 上的旗標，不新增 chip kind） |
   | GET 回 completed（重連、2 s 退路、watchdog 退路） | 結果整塊直接出現、不走逐字動畫；完成 meta 可加中性小字「重新連線後取回」；耗時照常顯示但不作為「上一次非快取耗時」的對比基準 | `CopilotDrawer.vue` 完成 meta；`diagnosis-timing.ts` |
-  | 以 `job/status`／GET 收尾 | 串流標題「原始串流（不完整）」（與「原始串流（中斷前）」「原始串流」區分） | `StreamDisclosure.vue`／`CopilotDrawer.vue` |
+  | 以 `job/status`／GET 收尾，或執行期間經歷過 WS 重連（不論收尾來源） | 串流標題「原始串流（不完整）」（與「原始串流（中斷前）」「原始串流」區分） | `StreamDisclosure.vue`／`CopilotDrawer.vue` |
   | `ai/done` 重複 | 不新增；螢幕閱讀器公告只念一次 | — |
   | 45 s watchdog，GET 後仍無結果 | 「超過 45 秒沒有收到進度，結果未知，請重試」 | `copilot.store.ts` `checkStalls` |
   | 重連 GET 404 | 「連線中斷期間的診斷結果已無法取回，請重試」 | `copilot.store.ts`；`diagnose-api.ts` GET 狀態碼對映 |
   | 重連 GET 409 | 「這個診斷正由另一個視窗接收，請在該視窗查看或重試」 | 同上 |
   | 重連 GET 網路錯誤或 429 | 「連線中斷，請重試」 | 同上 |
   | `failed`：`job stalled more than allowable limit` | 「後端處理程序多次中斷，診斷已停止，請重試」 | `copilot-reducer.ts` `humanizeError` |
-  | `ai/error.code = "persist_failed"` | 「診斷結果無法寫入資料庫，請稍後重試」 | 同上 |
+  | `ai/error.code = "persist_failed"`，或 `failed`（`job/status`／GET）的原因含 `persist_failed` 字樣 | 「診斷結果無法寫入資料庫，請稍後重試」 | 同上 |
   | 同簽章失敗標記命中 | 沿用既有分類文案，不加後綴 | 同上 |
   | 嘗試 N / 3 | 由 `job/status.attempt` 推進；job meta `<dl>` 維持兩項（佇列、嘗試） | `CopilotDrawer.vue` |
   | 結果未送達（2 s） | 文案不變，只在 GET 退路也失敗時出現 | `copilot.store.ts` `checkStalls`；PRODUCT.md |
 
 - **FR-036**: 畫面 MUST NOT 出現「worker」「stalled」字樣；「停滯」保留給機台資料 10 秒未更新，MUST NOT 用來形容診斷任務；新增術語（重新派送、取回、結果未知）MUST 補進 `apps/web/PRODUCT.md`。（US3；FR-035）
 - **FR-037**: 卡片的診斷 chip（診斷中 N%／AI：嚴重度／AI：嚴重度 · 快取／AI 失敗）MUST NOT 新增種類；重派、取回、重連續接都屬「診斷中」，只在面板內以說明行交代。（US2、US3；DESIGN.md「徽章出現或消失不改變容器高度」）
-- **FR-038**: 以 `job/status` 或 GET 收尾的診斷，「原始串流」標題 MUST 標「原始串流（不完整）」，判斷只看收尾來源，MUST NOT 比對 `seq` 與結果（寧可多標不漏標）。（US1；FR-035）
+- **FR-038**: 以 `job/status` 或 GET 收尾的診斷，以及執行期間經歷過 WS 重連（FR-016 的旗標）的診斷（不論收尾來源，含 `ai/done`），「原始串流」標題 MUST 標「原始串流（不完整）」；判斷只看收尾來源與重連旗標，MUST NOT 比對 `seq` 與結果（寧可多標不漏標；代理裁決第 20 條）。（US1、US2；FR-035）
 
 **文件回補（merge 回 `develop` 前 MUST，依 CLAUDE.md「跨 Feature 決策 MUST 回補真實來源」）**
 
 - **FR-039**: merge 前 MUST 新增 `docs/adr-003-completion-semantics.md`（ADR-003），並完成其 §6 回補清單，至少包括：
   - ADR-002：§3 第 5 列加「已變更（012-lite）」；§6.1 單實例狀態第 4 項改指 `JobRoutingRegistry`；§6.2「生產路徑：改用 Redis Streams」改寫為「已拒絕（ADR-003）」、「更正」段的「沒有讀取端點」標已落地；§6.5「結果讀取與完成語意」列與「api 行程內單實例狀態」列改為已落地；§6.5.1 WK-4 列與「失敗終態沒有 relay 寬限」列標已落地（012-lite 收掉）；§6.5.1 末尾補 012-lite 落地列（AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治含失敗終態寬限、WK-20、WEB-20 attempt 部分、DOC-29）。
   - README：「已知限制」四條（重連不 rebind、沒有讀取端點、92 秒靜默、at-most-once）與「第三輪審查的現況」條改寫；資料表 `diagnoses`「目前只寫不讀」改寫、`diagnosisTriggers` 補 jobId unique、Redis 職責補 `ai-fail:*`／`ai-result:*`／`ai-metric:*`；契約版本字串 1.3.0 → 1.4.0；nginx GET 獨立限流桶；BullMQ 參數具名常數說明。
-  - `apps/web/PRODUCT.md`：「已知產品限制」改為「AI token 串流 at-most-once（重連後不續播動畫，直接顯示結果）、快取命中的結果 1 小時後無法以 GET 取回、Mock 頻率控制無後端作用」；失敗語意段改寫為 2 s 退路先 GET；新增術語。
+  - `apps/web/PRODUCT.md`：「已知產品限制」改為「AI token 串流 at-most-once（重連後不續播動畫，直接顯示結果）、快取命中的結果 1 小時後無法以 GET 取回、重新整理頁面後不續接進行中的診斷（再按一次診斷會命中快取或等待同簽章的去重鎖）、Mock 頻率控制無後端作用」（代理裁決第 19 條）；README「已知限制」同步補「重新整理頁面後不續接」一條；失敗語意段改寫為 2 s 退路先 GET；新增術語。
   - `tests/e2e/README.md` 場景 3 的現況語意與「注意」段（GET 獨立限流桶、新增故障場景與耗時）。
   - 指南：§15.7 012-lite 藍圖（DOC-16）落地後狀態改「已落地」；§15.5「Redis Streams token 回放」候選方向標「已拒絕（ADR-003）」；§15.6「e2e 實測發現（留給 012-lite）」條加已落地註記；§15.6 現況摘要補 012-lite。
   - `asyncapi.yaml` 與 `CHANGELOG.md`（見 FR-033、FR-034）。
@@ -267,13 +281,14 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 - **FR-042**: 憲章 IV 的雙通道分流 MUST 維持：結果經 BullMQ QueueEvents（lifecycle 通道）送出、AI token 經 Redis Pub/Sub；worker MUST NOT 直接 emit WebSocket；MUST NOT 實作 Redis Streams token 回放。
 - **FR-043**: 憲章 VII MUST 維持：診斷結果仍持久化於 Mongo `diagnoses`（LLM 路徑），新增的 Redis 鍵（`ai-result:*`、`ai-fail:*`、`ai-metric:*`）皆為帶 TTL 的暫態用途。
 - **FR-044**: 既有 e2e 場景 1／2／4a／4b MUST 照過；`pnpm test:coverage` 全域與十個核心檔逐檔門檻（`vitest.config.ts`）MUST 照過；硬規則 1（token 不逐筆寫 reactive 的既有範圍）MUST NOT 惡化。（SC-011）
-- **FR-045**: 新增或修改的邏輯 MUST 各有單元測試：worker（回傳值形狀、jobId 冪等短路、trigger 冪等、hit／miss 只計一次、`ai-fail` 寫讀與忽略與清除、`persist_failed`、keepalive 計時）、api（`completed` 讀 `returnvalue` 的合法／不合法／缺值、`stalled` 轉發、attempt／execution 轉發、`JobRoutingRegistry` 的 rebind 與終態寬限與孤兒回收、GET 的 200 三種狀態與 400／404／409 與 Mongo 退回與先綁定後查詢）、web（三種到達順序收斂、onReconnect 授權後 GET 的各回應、`reason: "stalled"` 文案、GET 錯誤對映）。（SC-005～SC-009）
+- **FR-045**: 新增或修改的邏輯 MUST 各有單元測試：worker（回傳值形狀、jobId 冪等短路、trigger 冪等、hit／miss 只計一次、`ai-fail` 寫讀與忽略與清除、`persist_failed`（含訊息不夾帶原始錯誤）、keepalive 計時）、api（`completed` 讀 `returnvalue` 的合法／不合法／缺值、`stalled` 轉發、attempt／execution 轉發、`JobRoutingRegistry` 的 rebind 與終態寬限與孤兒回收、GET 的 200 三種狀態與 400／404／409 與 Mongo 退回與先綁定後查詢、`previousSocketId` 等於在線原綁定時改綁而不回 409）、web（三種到達順序收斂、onReconnect 授權後 GET 的各回應、GET 帶 `previousSocketId`、重連旗標使 `ai/done` 收尾也標「不完整」、`reason: "stalled"` 文案、GET 錯誤對映、`failed` 原因含 `persist_failed` 的文案對映）。（SC-005～SC-009）
 - **FR-046**: e2e harness MUST 為收到的訊息加時間戳（計算最長無事件間隔）、提供 GET helper 與「斷線後建新連線、訂閱、帶新 socketId GET」的流程、Pub/Sub 斷線迴圈 helper、以及查 Mongo `diagnosisTriggers` 筆數與計數 LLM 呼叫的方法；Redis 停頓 MUST 用 `docker compose pause redis`／`unpause`。（SC-001～SC-005）
+- **FR-047**: 新增路徑 MUST 依 `specs/009-observability-baseline/contracts/log-fields.md` 記結構化日誌（`jobId`、`sig` 等關聯鍵為欄位、不串進 `msg`；等級依該文件 §4）：jobId 冪等短路命中（info，帶來源 `ai-result` 或 `diagnoses`）、`ai-fail` 寫入（info，帶 `sig`、`code`）與命中（warn，帶 `sig`、`code`）、`persist_failed`（沿用失敗路徑既有的重試中 warn／最終 error）、relay 轉發 `stalled`（warn）、GET 的 rebind 與衝突 409（info）。keepalive 補送 MUST NOT 逐次記日誌（比照該文件 §9 高頻路徑）。`system/metrics`／`WorkerMetrics` MUST NOT 為本 feature 新增欄位；e2e 以既有每次 LLM 呼叫一則的 `LLM call` info 日誌計數 LLM 呼叫（代理裁決第 21 條）。（SC-004、SC-007、SC-008）
 
 ### Key Entities
 
 - **診斷任務（Diagnosis Job）**：一次診斷請求，以前端產生的 `jobId`（UUID v4，idempotency key）為身分，亦為 BullMQ job id。屬性：狀態（waiting／delayed／active／completed／failed）、`attempt`（`attemptsMade + 1`，與 `ai/*` 的 attempt 同義）、`execution`（`attemptsStarted`，涵蓋重試、stalled 重派、限流延後，單調遞增）、`result`（通過 `DiagnosisResultSchema` 的診斷結果）、`cached`（是否命中簽章快取）、`reason`（重回 waiting 的原因，已知值 `stalled`）。`returnvalue` 保留 1 h（`removeOnComplete`）、失敗保留 24 h（`removeOnFail`）。
-- **綁定（Job Routing Binding）**：jobId ↔ 接收該 job 事件的 WS 連線（clientId），由 `JobRoutingRegistry` 持有於 api 行程內（單實例）。屬性：目前接收連線、是否已達終態與終態時間（10 s 寬限）、建立時間（孤兒回收）。可在原連線離線或綁定不存在時 rebind 到新連線。
+- **綁定（Job Routing Binding）**：jobId ↔ 接收該 job 事件的 WS 連線（clientId），由 `JobRoutingRegistry` 持有於 api 行程內（單實例）。屬性：目前接收連線、是否已達終態與終態時間（10 s 寬限）、建立時間（孤兒回收）。可在原連線離線、綁定不存在，或原連線等於請求帶的 `previousSocketId`（同一分頁重連、舊連線尚未被心跳回收）時 rebind 到新連線；web 端對應記住每個任務最後一次成功綁定的 socketId。
 - **結果暫存（Per-job Result Stash）**：`ai-result:<jobId>`，LLM 成功後、`diagnoses` 寫入成功前的結果副本（EX 3600），讓寫庫失敗的重試只重做寫庫；寫庫成功即刪除。
 - **失敗標記（Negative Cache Marker）**：`ai-fail:<sig>`，同簽章（同機台同狀態同 prompt／model）最近一次 LLM 階段失敗的 `{ code, message, jobId, at }`，TTL 10 s；持鎖者成功寫快取時刪除。
 - **觸發紀錄（Diagnosis Trigger）**：`diagnosisTriggers` 中每個 jobId 恰一筆的稽核紀錄（成功含 `cached`，或最終失敗），以 jobId unique 與 upsert 保證冪等；TTL 30 天不變。
@@ -287,8 +302,8 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 - **SC-001**: worker 在串流中與首 token 前各被 SIGKILL 一次後，操作者畫面（e2e client）觀察到的**最長無事件間隔 < 45 秒**（設計上界 35 秒），任務最終完成、無 `ai/error`；Pub/Sub 同時斷線的複合故障（最長約 55 秒）已接受，不在本判準內。驗證：e2e 場景 3 改寫（訊息加收到時間戳、斷言最大間隔、記錄 worker 冷啟動時間）。
 - **SC-002**: 診斷期間 Pub/Sub 每 50 ms 被斷開一次（`CLIENT KILL TYPE pubsub` 迴圈），任務仍以帶 `result` 的 `job/status: completed` 收尾，`result` 通過 `DiagnosisResultSchema`，畫面直接轉為已完成、不經「結果未送達」。驗證：新 e2e 場景。
 - **SC-003**: 串流中重啟 api（`docker compose restart api`），重連後以新 socketId GET：job 已完成 → 200 completed＋result；仍進行 → 200 active 且之後收到 `completed`；兩種情況都在 api healthy 後 60 秒內完成。驗證：新 e2e 場景。
-- **SC-004**: 診斷中 Redis 停頓 50 秒（`docker compose pause redis` 後 unpause）：該 jobId 的觸發紀錄恰 1 筆、LLM 呼叫恰 1 次、快取 hit／miss 合計恰 1 次、最終完成結果的 `cached` 為 false。驗證：新 e2e 場景（查 Mongo 與 worker 日誌）。
-- **SC-005**: `GET /diagnoses/:jobId` 的六種回應全數符合：不存在的 jobId → 404；socketId 不在線或未授權 → 409；進行中且原綁定連線仍在線的他人 socketId → 409；jobId／socketId 非 UUID → 400；已完成 → 200 且 `result` 通過 schema（原綁定仍在線也照常回）；`removeOnComplete` 清掉後仍可由 Mongo 取回 LLM 結果。驗證：e2e（404／409）＋ api 單元／整合測試。
+- **SC-004**: 診斷中 Redis 停頓 50 秒（`docker compose pause redis` 後 unpause）：該 jobId 的觸發紀錄恰 1 筆、LLM 呼叫恰 1 次、快取 hit／miss 合計恰 1 次、最終完成結果的 `cached` 為 false。驗證：新 e2e 場景（查 Mongo 與 worker 日誌；LLM 呼叫以 `LLM call` 日誌計數，見 FR-047）。
+- **SC-005**: `GET /diagnoses/:jobId` 的七種回應全數符合：不存在的 jobId → 404；socketId 不在線或未授權 → 409；進行中且原綁定連線仍在線的他人 socketId（未帶或帶了不相符的 `previousSocketId`）→ 409；進行中、原綁定連線仍在線但等於請求的 `previousSocketId` → 200 active 且 `rebound: true`；jobId／socketId／`previousSocketId` 非 UUID → 400；已完成 → 200 且 `result` 通過 schema（原綁定仍在線也照常回）；`removeOnComplete` 清掉後仍可由 Mongo 取回 LLM 結果。驗證：e2e（404／409）＋ api 單元／整合測試。
 - **SC-006**: 四種完成事件順序（`ai/done`→`completed+result`、`completed+result`→`ai/done`、`completed` 無 result→GET→遲到 `ai/done`、`ai/done` 重複兩次）100% 收斂到相同的已完成狀態（`result`、`cached`、`jobId` 相同），耗時只結算一次、公告只一次。驗證：web 單元測試。
 - **SC-007**: 兩個同簽章請求、供應商持續失敗時，LLM 呼叫總數 ≤ 4（現況 6），第二個請求的錯誤碼與第一個相同，`AI_RPM` 計數不因第二個請求增加。驗證：worker 單元測試（fake store／fake timer）＋整合測試。
 - **SC-008**: Mongo 拒絕寫入 `diagnoses` 時，該 job 的 LLM 呼叫恰 1 次、最終 `ai/error.code` 為 `persist_failed`；`failed` 先於 `ai/error` 抵達 api 時，10 秒寬限內到達的 `ai/error` 仍送到原連線（畫面顯示具體文案而非籠統的 `worker_failed`）。驗證：worker 單元測試＋ relay 單元測試；可選整合測試（Mongo validator）。
@@ -306,6 +321,7 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 - 轉「結果未送達」之後再抵達的同 jobId 結果仍救回（三種來源），既有 AR-6 測試保留並擴充——已由 ADR-003 代理裁決第 15 條定案（2026-10-21），FR-005 已照此撰寫；原本留給 plan 決定的問題已關閉。（原句：ADR-003 D3 寫明 2.1.0「『結果未送達』失敗可被遲到 `ai/done` 救回」的例外「改由 D10 的規則（2 s 退路先 GET）取代」；plan 階段 MUST 明定轉失敗之後再抵達的同 jobId 結果是否仍救回，並據以調整既有 AR-6 單元測試（不改變 SC-006 的四種順序判準）。
 - FR-013「GET 時 `returnvalue` 驗證失敗退到 Mongo、仍無則 404」為本 spec 補的細節（ADR-003 D8 未寫驗證失敗的分支），已記為 ADR-003 代理裁決第 16 條、待覆核。
 - 憲章 Principle III 補列 GET 的 PATCH 修訂為建議，待使用者決定是否執行 `/speckit-constitution`（FR-041）。
+- clarify 階段補的 5 題（ADR-003 代理裁決第 17～21 條）全為代理裁決、待覆核：GET 的 `previousSocketId`（第 17 條，會新增一個 optional query 欄位）、`persist_failed` 的固定 `failedReason`（第 18 條）、重新整理頁面不續接（第 19 條）、重連過的任務標「原始串流（不完整）」（第 20 條）、只加結構化日誌不加指標欄位（第 21 條）。
 
 **環境與範圍假設**
 
@@ -315,6 +331,7 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 - **Gemini 額度**：實際 demo 與手動驗收使用 Gemini（預設 `gemini-3.5-flash-lite`）會消耗免費額度；自動化驗收一律走 fake provider，手動驗收以最少次數為原則。
 - **BullMQ 版本**：5.79.2；`completed` 事件帶 `returnvalue`、`stalled` 事件、`attemptsStarted`、`Job.fromId` 的語意以此版本為準（升 6.x 須重驗，ADR-003 §5）。
 - **單一 api 實例**：綁定在 api 行程內，rebind 只在收到 WS 的那一台成立；多實例不在範圍。
+- **伺服器端心跳**：`WS_HEARTBEAT_MS` 預設 15 s，半開連線最長約 30 s 才被回收；`previousSocketId`（FR-009）就是為了這段時間內同一分頁的重連不被誤判為衝突。
 - **demo 規模**：worker concurrency 個位數、一分鐘數次診斷；新增的 Redis 寫入（lock 續租 7.5 s、stalled 檢查 5 s、keepalive 10 s、三種新鍵）可忽略。
 - **沒有使用者身分**：jobId 即存取憑證；jobId 會出現在 nginx access log 的路徑，能讀 log 的人可讀結果——demo 結果為 mock 遙測的診斷，不含機密（ADR-002 §6.3）。
 - **`AI_TIMEOUT_MS` 預設 30 s**：上界推導以此為前提；其上限驗證（≤ 35 s）屬 010-lite。
@@ -326,6 +343,8 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 - **011 的效能量測**：`system/metrics` 的 `ws` 計數、背壓 badge 重定義、headless 量測 harness、bundle 預算。
 - Gateway 拆 `WsConnectionRegistry`／`SubscriptionService`／`TelemetryPipeline`（只抽 `JobRoutingRegistry`）。
 - 多 api 實例、綁定外置 Redis、使用者身分驗證、`wss://`。
+- **重新整理頁面或關分頁再開後續接進行中的診斷**（代理裁決第 19 條）：web 不把 jobId 存進 sessionStorage／localStorage；US2 的續接只涵蓋頁面仍在、WS 重連的情況。
+- 為冪等短路、`ai-fail` 命中等新路徑在 `system/metrics`／`WorkerMetrics` 新增計數欄位（代理裁決第 21 條；指標重定義屬 011）。
 - WEB-17 餘項（`jobs` 逐 token 寫 reactive、partial-json 每則重解析；使用者 2026-10-18 裁決 12 留在 backlog）。
 - 45 s watchdog 改用單調時鐘（留在 ADR-002 §6.5.1 backlog）。
 - 憲章修訂的實際執行（只建議，見 FR-041）。

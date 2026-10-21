@@ -320,7 +320,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 
 ## 7. 代理裁決清單（2026-10-21，使用者離席期間，待覆核）
 
-使用者離席期間授權對 012-lite 的技術決策採建議項，逐題記錄如下（第 1～11 條為首批，第 12～14 條為整理定稿時發現的矛盾與缺口，經協調者同日補裁；第 9 條同日改寫為「只建議、不在離席期間修訂」）。**第 1 條與第三輪報告的建議不同**，覆核時請優先看。覆核後若有推翻，於本節記為推翻紀錄（原提案／裁決），並移除檔頭的「待覆核」註。
+使用者離席期間授權對 012-lite 的技術決策採建議項，逐題記錄如下（第 1～11 條為首批，第 12～14 條為整理定稿時發現的矛盾與缺口，經協調者同日補裁；第 9 條同日改寫為「只建議、不在離席期間修訂」；第 15～16 條為 specify 階段補裁、第 17～21 條為 clarify 階段補裁，皆同日）。**第 1 條與第三輪報告的建議不同**，覆核時請優先看。覆核後若有推翻，於本節記為推翻紀錄（原提案／裁決），並移除檔頭的「待覆核」註。
 
 **1. BullMQ lock／stalled／maxStalled 與 keepalive 間隔**（D4）
 - 影響範圍：worker 被強制終止（SIGKILL、OOM）後，AI 診斷面板多久看到「重新派送」說明或結果、45 秒「結果未知，請重試」是否誤觸；worker 的 BullMQ Worker options（README 常數說明）；Redis 寫入頻率。
@@ -417,6 +417,36 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - 裁決：記 warn、改查 Mongo `diagnoses`；Mongo 也無合法結果則 404。不回未驗證物件（憲章 V）。
 - 理由：Mongo 是結果的持久來源，`returnvalue` 只是快路徑；壞掉的 `returnvalue` 不該讓一個已落庫的結果取不回。
 - 替代方案：直接 500（讓問題浮現，但使用者看到的是「連線中斷，請重試」而結果其實在庫裡）。
+
+**17. 同一分頁重連時舊連線尚未被回收的 409 誤判**（D8、D10；spec FR-007、FR-009、FR-016、FR-032、SC-005；clarify 階段補）
+- 影響範圍：網路閃斷（換 Wi-Fi、筆電睡醒）後重連的 AI 診斷面板——原本會誤顯示「這個診斷正由另一個視窗接收，請在該視窗查看或重試」，結果繼續送往已死的舊連線；`GET /diagnoses/:jobId` 的 query（新增 optional `previousSocketId`，`http.ts` 的 `DiagnosisLookupQuerySchema`）；`JobRoutingRegistry` 的改綁判斷；web 對每個任務多記一個 socketId。
+- 裁決：GET 新增 optional `previousSocketId`（UUID）。web 對每個任務記住最後一次成功綁定的 socketId（POST 送出時的 socketId，或 GET 回 `rebound: true` 時的本次 socketId），所有 GET 都帶上；伺服器端原綁定仍在線、但等於 `previousSocketId` 時，比照「原綁定已離線」暫定改綁並記下原綁定以便撤回；不主動終止舊連線，交給心跳回收。
+- 理由：伺服器以心跳回收半開連線，`WS_HEARTBEAT_MS` 預設 15 s、回收上限約 30 s；瀏覽器端 pong 逾時（15＋5 s）或 `online` 事件後就重連，新連線很可能在舊連線被回收前 GET，照 D8 規則回 409——使用者在唯一的視窗看到「正由另一個視窗接收」，最後只能對一個還在跑的診斷按重試。`clientId` 只經 `system/connected` 送給連線本身，別的分頁拿不到，所以不放寬「兩個視窗不互搶」。代價：query 多一個 optional 欄位、registry 多一個分支與對應測試。
+- 替代方案：web 收到 409 時延遲重試 GET，等舊連線被回收（web 不知道伺服器心跳設定、要猜等待時間；真正的雙視窗衝突也要多等約 30 s 才看到訊息）；原綁定在線時一律改綁（另一個真的在線的視窗會被搶走結果）；接受誤判、寫進已知限制（使用者看到錯誤的說明）。
+
+**18. `failed` 只帶原因原文時的 `persist_failed` 文案**（D6 第 4 點、D12；spec FR-027、FR-035）
+- 影響範圍：重連後 GET 回 `failed`、或 `job/status: failed` 在 10 s 寬限外才收到時，AI 診斷面板的失敗文案；worker 對 `persist_failed` 寫進 BullMQ `failedReason` 與 `ai/error.message` 的訊息內容；web `humanizeError` 的對映。
+- 裁決：`persist_failed` 的訊息為含 `persist_failed` 字樣的固定英文句（例如 `persist_failed: diagnosis record could not be written`），MongoDB 原始錯誤只進日誌的 `err` 欄位；web 在錯誤碼或訊息含 `persist_failed` 時都對映為「診斷結果無法寫入資料庫，請稍後重試」。GET 的 `failed` 回應不新增 `code` 欄位。
+- 理由：GET 與 `job/status: failed` 只有 `failedReason` 原文、沒有錯誤碼（`AiErrorCode` 屬 010-lite）；`humanizeError` 對 120 字以內的未知原文會照顯（`copilot-reducer.ts` `humanizeError` 末段），訊息若夾帶 MongoDB 錯誤，重連後的使用者會看到 `MongoServerSelectionError…` 之類的內部錯誤，違反 spec US4 情境 2。固定訊息加一條關鍵字對映，只動一個字串與一條判斷。
+- 替代方案：GET 的 `failed` 回應加 `code`（worker 要把錯誤碼另存進 job data、api 讀出，等於提前做 010-lite 的 `AiErrorCode`）；接受原文顯示（使用者看得到資料庫內部錯誤）。
+
+**19. 重新整理頁面後不續接**（D10；spec Edge Cases、FR-039、Out of Scope；clarify 階段補）
+- 影響範圍：診斷進行中按 F5 或關分頁再開時，AI 診斷面板是否接回原診斷；web 是否把進行中的 jobId 存進瀏覽器儲存；`apps/web/PRODUCT.md` 與 README 的已知限制多一條。
+- 裁決：不續接，列 Out of Scope。web 不持久化進行中的 jobId；重新整理後面板回到未診斷狀態，後端照常跑完並寫快取；同機台同狀態再按「診斷」以新 jobId 命中快取（`AI_CACHE_TTL_SECONDS` 預設 600 s 內）或等待同簽章的去重鎖，不多打 LLM。
+- 理由：續接要把 jobId、機台、最後綁定的 socketId 存進 sessionStorage，啟動時還原 store 狀態、處理過期與已完成的項目，另加一組測試；不做的代價只是重新整理後再按一次、等幾秒（快取或去重鎖），不多付 LLM 費用。US2 要解的是網路閃斷與 api 重啟，頁面本身還在。
+- 替代方案：sessionStorage 存進行中任務、重新整理後 GET 續接（同分頁有效）；localStorage 跨分頁共享（還要處理多個分頁同時續接同一個 job 的 409）。
+
+**20. 重連續接後以 `ai/done` 收尾的原始串流標題**（D13；spec FR-016、FR-035、FR-038；clarify 階段補）
+- 影響範圍：AI 診斷面板「原始串流」收合區的標題；`copilot.store.ts` 任務上的「執行期間經歷過重連」旗標。
+- 裁決：執行期間經歷過 WS 重連的任務，不論以哪個來源收尾（含 `ai/done`），都標「原始串流（不完整）」；判斷只看收尾來源與重連旗標，不比對 `seq`。
+- 理由：斷線期間的 `ai/token` 不補送（at-most-once），重連續接後即使以 `ai/done` 收尾，串流也缺了中間一段；只看收尾來源會把有缺口的串流標成完整，與第 10 條「寧可多標不漏標」相反。旗標本來就要為「已重新連線，正在取回診斷狀態…」設起，只是收尾時多讀一次。代價：重連發生在首 token 前、串流其實完整時也會被標「不完整」。
+- 替代方案：維持只看收尾來源（有缺口的串流被標成完整）；依 `seq` 是否連續精確判斷（多一套判斷與測試，第 10 條已拒絕同類做法）。
+
+**21. 新增路徑的可觀測訊號**（D5、D6、D8；spec FR-047、SC-004；clarify 階段補）
+- 影響範圍：worker／api 日誌（`docker compose logs` 排查與 e2e 驗收 SC-004 的計數依據）；`system/metrics` 與 `WorkerMetrics` 契約是否變動。
+- 裁決：只加結構化日誌、不加指標欄位。依 009 `log-fields.md`（`jobId`、`sig` 為欄位、不串進 `msg`；等級依 §4）記：jobId 冪等短路命中（info，帶來源 `ai-result`／`diagnoses`）、`ai-fail` 寫入（info）與命中（warn，皆帶 `sig`、`code`）、`persist_failed`（沿用失敗路徑既有的重試中 warn／最終 error）、relay 轉發 `stalled`（warn）、GET 的 rebind 與衝突 409（info）。keepalive 補送不逐次記日誌（比照 §9 高頻路徑）。`system/metrics`／`WorkerMetrics` 不新增欄位；e2e 以既有每次 LLM 呼叫一則的 `LLM call` 日誌計數。
+- 理由：SC-004、SC-008 要數 LLM 呼叫次數與確認走了冪等短路，現有 `LLM call` 日誌已能計數，新路徑各補一則就能從日誌看出每次再執行走了哪條路；加進 `system/metrics` 要改契約與 asyncapi，也碰到 011 的指標重定義。keepalive 每 10 s 一次，逐次記會讓每個 active job 每分鐘多 6 行。
+- 替代方案：`WorkerMetrics` 新增冪等短路、`ai-fail` 命中計數（契約變更、與 011 重疊）；不加日誌（e2e 要從 Mongo 與 Redis 狀態反推路徑，排查時看不出再執行的原因）。
 
 ### 7.1 整理時發現、不在首批 11 條內的待覆核點
 
