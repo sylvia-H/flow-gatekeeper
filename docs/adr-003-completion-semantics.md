@@ -7,7 +7,7 @@
 | 範圍 | 診斷 job 的「完成」以哪個訊號為準、結果如何讀回、重連如何續接、重複執行如何冪等、BullMQ 鎖參數與前端 45 s watchdog 的關係、同簽章失敗的去重 |
 | 相關 | 第三輪審查 `docs/20260927-research-review03.md` §3.2、§3.3、§5.2、§5.4（012-lite 列）、§5.5、§5.6、§7；ADR-001（原生 ws）；ADR-002 §3 第 5 列、§6.1（單實例狀態）、§6.2（Pub/Sub at-most-once，本 ADR 落地時改寫「生產路徑」）、§6.5「結果讀取與完成語意」列、§6.5.1 WK-4 列與「失敗終態沒有 relay 寬限」列；`CHANGELOG.md` `[2.1.0]` 相容性注意（AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治帶著發布）；指南 §15.5、§15.6「第三輪審查 quick-fix」（含「roadmap 版號順延」）、§15.7 012-lite 藍圖；憲章 Principle III／IV／V；roadmap **012-lite**（契約 asyncapi **1.4.0**） |
 | 行號基準 | 文中所有 `檔名:行號` 皆為 2.1.0（`27bc587`）的行號；行號會漂移，以檔名與符號名為準 |
-| 來源標記 | 每個決策點末尾一行「來源：」。「第三輪報告 §x.y」＝報告已有明確建議；「ADR-003 代理裁決第 n 條（待覆核）」＝報告未寫、或與報告不同，由本 ADR 補設計，並於 2026-10-21 由代理裁決採用，清單見 §7 |
+| 來源標記 | 每個決策點末尾一行「來源：」。「第三輪報告 §x.y」＝報告已有明確建議；「ADR-003 代理裁決第 n 條（待覆核）」＝報告未寫、或與報告不同，由本 ADR 補設計，並於 2026-10-21 由代理裁決採用，清單見 §7；「（已覆核 YYYY-MM-DD）」＝使用者已覆核維持／接受 |
 
 ---
 
@@ -43,7 +43,7 @@
    來源：第三輪報告 §3.2（AR-S7）、§5.4；ADR-003 代理裁決第 1 條（已覆核 2026-10-22）。
 5. **(e) 新增 `GET /diagnoses/:jobId?socketId=`**：沿用 POST 的授權閘門（`socketId` 必須在線且已授權）；查詢順序 BullMQ（`Job.fromId` → state／`returnvalue`）→ Mongo `diagnoses` → 404；進行中的 job 只有在原綁定的連線已離線（或綁定已不存在，例如 api 重啟後）才允許 rebind 到本次 socketId；已完成的 job 任何已授權連線都可讀；授權模型是「jobId 即 bearer capability」。綁定改由新抽出的 `JobRoutingRegistry` 持有，rebind 寫在它裡面；`completed` 與 `failed` 兩種終態後綁定都保留 10 s 寬限（同一段 registry 程式，D12）。nginx 對 GET 另設限流區。（D8、D9、D12）
    （clarify／checklist／實作階段更新，2026-10-21）端點形狀改為 **`GET /diagnoses/:jobId?socketId=[&previousSocketId=]`**；`previousSocketId`（optional UUID）是呼叫端分頁上一次成功綁定此任務的 socketId，只用於改綁判斷。進行中 job 的 rebind 條件改為三者之一：原綁定的連線已離線、綁定不存在，或**原綁定仍在線但等於請求帶的 `previousSocketId`**（同一分頁重連、舊連線尚未被心跳回收；不主動終止舊連線，第 17 條）。409 分兩種機器可讀 `code`：`socket_unauthorized`（連線不在線或未授權）與 `job_bound_elsewhere`（進行中且綁定在另一條在線連線，第 23 條）；Redis 或 Mongo 不可用、BullMQ 查詢超過 5 s 或 Mongo 查詢超過 3 s（合計上限 8 s）回 503（第 25 條）。`jobId` 與 `previousSocketId` 都會出現在 nginx access log（D8 方案 A 的代價）。
-   來源：第三輪報告 §5.3、§5.4、§5.6；ADR-003 代理裁決第 3、8、12 條；`previousSocketId` 為第 17 條（已覆核 2026-10-22）、409 `code` 為第 23 條、503 為第 25 條（23、25 待覆核）。
+   來源：第三輪報告 §5.3、§5.4、§5.6；ADR-003 代理裁決第 3、8、12 條；`previousSocketId` 為第 17 條（已覆核 2026-10-22）、409 `code` 為第 23 條、503 為第 25 條（3、8、12、23、25 待覆核）。
 6. **(f) keepalive 與負向快取。** worker 在一次執行中只要 10 s 沒有對外事件，就以 `job.updateProgress(目前里程碑)` 補送一次（D2）；同簽章的 LLM 階段失敗寫 `ai-fail:<sig>`（TTL 10 s），其他 job 在取鎖前與限流計數前看到它就不打 LLM（D5）。
    來源：第三輪報告 §3.3（WK-13）、§5.4；機制與數值為 ADR-003 代理裁決第 1 條（已覆核 2026-10-22）、第 4 條（待覆核）。
 7. **(g) 逾時語意定為「結果未知」**：45 s watchdog 觸發只代表「畫面這麼久沒收到進展」，不代表後端失敗；觸發時先 GET 一次，查得到結果就照常完成（D11）。
@@ -232,7 +232,7 @@ BullMQ 的 stalled 判定（`moveStalledJobsToWait-9.lua`）：每次檢查先�
 | C POST 回傳一次性 rebind token（HMAC(jobId)），GET 帶 token | 能把「讀結果」從 jobId 分離出來，但 api 要多管一把簽章金鑰（多實例時要共享）、契約多一個欄位、web 要保存 token；沒有使用者身分的前提下，token 與 jobId 一樣存在同一個前端記憶體裡，換不到實質安全 |
 | D 不用 HTTP，改 WS 控制訊息 `job/resume { jobIds }` | 不經 nginx 限流、沿用 WS 授權，但要新增第 13 個 channel（client→server）、Gateway 多一種控制訊息與入站限速分類，結果也要經 WS 下發；HTTP 版本可以用 curl 直接驗收，e2e 與排查都簡單 |
 
-來源：第三輪報告 §5.3（`JobRoutingRegistry` 隨 012-lite 抽出）、§5.4（閘門、`Job.fromId`→Mongo→404、原綁定離線才 rebind）、§5.6（jobId 即 bearer capability）；狀態分支、先綁定後查詢與回應形狀為 ADR-003 代理裁決第 3 條（待覆核）；憲章修訂建議為代理裁決第 9 條（實際修訂待使用者）；`returnvalue` 不合法退 Mongo 為第 16 條、`previousSocketId` 為第 17 條、null 綁定與 `deferred` 為第 22 條、409 `code` 為第 23 條、回應帶 `jobId` 為第 24 條、503 為第 25 條、`rebound` 恆為 true 為第 43 條、改綁更新 `boundAt` 為第 44 條（皆待覆核）；owner 核對與終態 × 進行中回 503 為實作階段補（§7.1，待覆核）。
+來源：第三輪報告 §5.3（`JobRoutingRegistry` 隨 012-lite 抽出）、§5.4（閘門、`Job.fromId`→Mongo→404、原綁定離線才 rebind）、§5.6（jobId 即 bearer capability）；狀態分支、先綁定後查詢與回應形狀為 ADR-003 代理裁決第 3 條（待覆核）；憲章修訂建議為代理裁決第 9 條（已覆核 2026-10-22，落地為憲章 1.6.1）；`returnvalue` 不合法退 Mongo 為第 16 條、`previousSocketId` 為第 17 條（已覆核 2026-10-22）、null 綁定與 `deferred` 為第 22 條、409 `code` 為第 23 條、回應帶 `jobId` 為第 24 條、503 為第 25 條、`rebound` 恆為 true 為第 43 條、改綁更新 `boundAt` 為第 44 條（16、22、23、24、25、43、44 待覆核）；owner 核對與終態 × 進行中回 503 為實作階段補（§7.1，2026-10-22 使用者覆核接受）。
 
 ### D9. nginx 對 GET 的限流
 
@@ -262,7 +262,7 @@ BullMQ 的 stalled 判定（`moveStalledJobsToWait-9.lua`）：每次檢查先�
   （合併門第 2 輪更新，2026-10-22）WS 斷線期間跳過 2 s 退路，交由重連 → 授權 → 續接收尾（第 63 條）；救回來源的實際範圍見 D3 的更新段（第 55 條）。
 - **attempt** 改由 `job/status.attempt` 推進；`ai/token` 的 attempt 判斷保留（換輪清空邏輯不變）。`MAX_ATTEMPTS`（`CopilotDrawer.vue:134`）收進 contracts 屬 010-lite，本 feature 不動。
 
-來源：第三輪報告 §5.4（`completed` 帶 result 即收尾、`onReconnect` 先 GET、Attempt 改用 `job/status.attempt`）；授權後才 GET、2 s 退路與失敗文案為 ADR-003 代理裁決第 10、11 條；救回為第 15 條、`previousSocketId` 為第 17 條、重連旗標為第 20 條、409 `code` 為第 23 條、503 為第 25 條、`recovered` 耗時為第 37 條、`onAuthorized` 為第 41 條、2 s 退路回進行中轉「結果未送達」為第 42 條、`rebound` 恆為 true 為第 43 條、授權失敗交給 watchdog 為第 47 條（皆待覆核）。
+來源：第三輪報告 §5.4（`completed` 帶 result 即收尾、`onReconnect` 先 GET、Attempt 改用 `job/status.attempt`）；授權後才 GET、2 s 退路與失敗文案為 ADR-003 代理裁決第 10、11 條；救回為第 15 條、`previousSocketId` 為第 17 條（已覆核 2026-10-22）、重連旗標為第 20 條、409 `code` 為第 23 條、503 為第 25 條、`recovered` 耗時為第 37 條、`onAuthorized` 為第 41 條、2 s 退路回進行中轉「結果未送達」為第 42 條、`rebound` 恆為 true 為第 43 條、授權失敗交給 watchdog 為第 47 條（15、20、23、25、37、41、42、43、47 待覆核）。
 
 ### D11. 逾時語意「結果未知」
 
@@ -356,8 +356,8 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - [x] **`specs/012-stream-resilience/contracts/diagnosis-lookup.contract.md` §8**（實作交叉審查補，2026-10-21）：`DiagnoseLookupError` 補 `kind`（`http`／`network`／`timeout`／`invalid`；`status` 只在 `http` 時必有、`code` 只在 409 時讀 body），與 `diagnose-api.ts` 實作一致。
 - [x] **`specs/012-stream-resilience/data-model.md` §5 步驟 10 的「失敗時」欄**（實作交叉審查補，2026-10-21）：改為逐步寫清楚——SET `ai-result` 失敗只 warn、照常寫庫（第 50 條）；`insertDiagnosis` 失敗 → `persist_failed`；DEL `ai-result`、DEL `ai-fail` 失敗只 warn、由 TTL 回收；SET `ai-cache`、`upsertTrigger` 等其他寫入失敗 → 拋出 → 重試（下次步驟 2 或 3 短路）。
 - [x] **research P24／P25 措辭**（實作交叉審查補，2026-10-21）：`specs/012-stream-resilience/research.md` P24「fake 第一個 token 約在 progress 40 後 500 ms」與實作不符，改為「fake 首 token 無延遲，e2e 以 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 拉開窗口」（第 51 條）；P25「SET `ai-result` 先於 exec2 的冪等短路查詢」改為「領先至少 1 個 Redis 往返」（第 46 條）。spec SC-004 末段與 `tests/e2e/src/worker-kill.e2e.test.ts` 檔頭註解有同一句，一併改。
-- [x] **憲章 Principle III**（2026-10-22 使用者裁決、已落地為 1.6.1；原記錄：**待使用者**；已由 `docs/20261022-adr003-review` 勾選）：建議 `/speckit-constitution` PATCH（1.6.0 → 1.6.1）補列 `GET /diagnoses/:jobId`；離席期間不執行，由使用者確認後才修訂。merge 前若仍未確認，在 spec 與本 ADR 保留「建議修訂、待使用者」的註記，GET 的 Zod 定義照做。（2026-10-22 合併門第 1 輪：保留未勾——憲章修訂待使用者確認）
-- [ ] **repo `CLAUDE.md` 開頭的現況段**：立案時改為「進行中：012-lite」，落地後改為最近一次完成。（2026-10-22 合併門第 1 輪：保留未勾——merge 時改（T076））
+- [x] **憲章 Principle III**（2026-10-22 使用者裁決、已落地為 1.6.1；原記錄：**待使用者**；已由 `docs/20261022-adr003-review` 勾選）：建議 `/speckit-constitution` PATCH（1.6.0 → 1.6.1）補列 `GET /diagnoses/:jobId`；離席期間不執行，由使用者確認後才修訂。merge 前若仍未確認，在 spec 與本 ADR 保留「建議修訂、待使用者」的註記，GET 的 Zod 定義照做。（2026-10-22 合併門第 1 輪：保留未勾——憲章修訂待使用者確認 → 同日使用者裁決後已勾）
+- [x] **repo `CLAUDE.md` 開頭的現況段**：立案時改為「進行中：012-lite」，落地後改為最近一次完成。（2026-10-22 合併門第 1 輪：保留未勾——merge 時改（T076）→ 已勾：T076 已於 `71f9eb6` 完成，CLAUDE.md 現況段已改為 012 最近一次完成）
 
 ---
 

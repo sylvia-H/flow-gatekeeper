@@ -1,7 +1,7 @@
 # Contract：`GET /diagnoses/:jobId`（結果讀取與 rebind）
 
 依憲章 III，query 與成功回應 MUST 以 Zod 定義於 `packages/contracts/src/http.ts`（spec FR-032；憲章 Principle III 補列此端點為
-**建議**、待使用者以 `/speckit-constitution` 決定，FR-041）。錯誤 body 依例外 (b) 不另定 schema，語意記於 `asyncapi.yaml`
+**建議**、待使用者以 `/speckit-constitution` 決定，FR-041；已變更，2026-10-22：使用者裁決、已落地為憲章 1.6.1，見 ADR-003 §7 第 9 條）。錯誤 body 依例外 (b) 不另定 schema，語意記於 `asyncapi.yaml`
 `info.description` 與 `CHANGELOG.md`。設計理由見 ADR-003 D8、D9，落地細節見 research R4、data-model §2。
 
 ## 1. 請求

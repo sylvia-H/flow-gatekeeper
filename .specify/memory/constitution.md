@@ -28,7 +28,9 @@ Templates requiring updates:
 - ✅ README.md「即時通道事件契約」段的「HTTP 端點」條已列 GET（012-lite），引用「憲章 Principle III」的句子仍成立
 
 Follow-up TODOs:
-- ℹ️ ADR-003 §7 第 9 條與 §7.1 由主 session 同步標「已於 1.6.1 補列」
+- ℹ️ ADR-003 §7 第 9 條與 §6 回補清單已標「已落地為 1.6.1」
+- ℹ️ specs/012 的 tasks.md／checklists 仍以「憲章補列為建議、待使用者」措辭，屬歷史工件豁免；plan／spec／contract
+  的現況句已加註
 - ⏳ 把 `POST /diagnoses`／`GET /diagnoses/:jobId` 寫進 `asyncapi.yaml` 結構並納入漂移比對，仍為
   1.5.0 起的待辦（未排程）
 
@@ -231,7 +233,8 @@ API/worker/web，MUST NOT 在各端另寫平行型別定義。
   schema 的漂移比對（`packages/contracts/src/asyncapi-drift.test.ts`：asyncapi 的每則 message 都須有
   對應 schema 做結構比對，漏列即測試失敗）；`POST /diagnoses` 與 `GET /diagnoses/:jobId` 的契約變化
   MUST 記於 `CHANGELOG.md` 的契約小節，日後寫進 `asyncapi.yaml` 結構時同樣 MUST 納入漂移比對
-  （現況：GET 的行為與錯誤碼語意以 `asyncapi.yaml` 的 `info.description` 敘述，POST 的回應碼記於 `CHANGELOG.md` 與 README；兩端點皆尚未納入結構比對）。
+  （現況：GET 的行為與錯誤碼語意以 `asyncapi.yaml` 的 `info.description` 敘述，POST 的回應碼記於
+  `CHANGELOG.md` 與 README；兩端點皆尚未納入結構比對）。
 - **例外 (a)**：`GET /healthz` 的回應是 api 內部型別、不進契約（運維探針，非三端契約）。
 - **例外 (b)**：由 NestJS exception 產生的 HTTP 錯誤 body（400／404／409／415／503 等）不另定
   schema，但各錯誤碼的語意 MUST 記於 `asyncapi.yaml`／`CHANGELOG.md`。
