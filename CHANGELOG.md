@@ -38,7 +38,8 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 維護分支 `fix/20261022-ui-tab-title-alert`（自 `fix/20261022-ui-humanize-error-zh` 尖端開出、併回 develop 時以 develop 為準）：013 UI 待辦「分頁 title／favicon 嚴重告警」；現況摘要見指南 §15.6「分頁標題與 favicon 告警」。
 
 維護分支 `fix/20261022-ui-steps-heading`（自 `fix/20261022-ui-tab-title-alert` 尖端開出、併回 develop 時以 develop 為準）：013 UI 待辦「進行中步驟清單加小標」；現況摘要見指南 §15.6「處理步驟小標」。
-維護分支 `docs/20261022-adr003-review`：使用者覆核 ADR-003 代理裁決（第 1、9、17、63 條與 §7.1）、憲章 1.6.1 補列 GET；現況摘要見指南 §15.6「ADR-003 覆核與憲章 1.6.1」。
+
+維護分支 `docs/20261022-adr003-review`（自 `develop` `5732795`）：使用者覆核 ADR-003 代理裁決（第 1、9、17、63 條與 §7.1）、憲章 1.6.1 補列 GET；現況摘要見指南 §15.6「ADR-003 覆核與憲章 1.6.1」。
 
 ### 相容性注意（升級前必讀）
 
@@ -112,7 +113,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
   - **WS**：`job/status` 新增 optional `attempt`／`execution`／`reason`（開放字串 `z.string()`，已知值 `"stalled"`）／`cached`，`completed` 帶 `result`（權威完成；描述修正 DOC-29 的 "optionally carrying the final result"）；`ai/done` 改為可重複、可遺失的 best-effort；`ai/error.code` 新增已知值 `persist_failed`。仍為 12 個 channel、無新 message。
   - **HTTP**：新增 `GET /diagnoses/:jobId?socketId=[&previousSocketId=]`——200 四種（`completed`／`failed`／`waiting`／`active`）、400、404、409 `socket_unauthorized`／`job_bound_elsewhere`、429（nginx）、503；query 與 200 回應以 Zod 定義（`DiagnosisLookupQuerySchema`、`DiagnosisLookupResponseSchema`），錯誤 body 依憲章 III 例外 (b) 不另定 schema、語意記於 `asyncapi.yaml` `info.description`。
   - **傳輸型別**：`DiagnosisJobReturnValue`（BullMQ `returnvalue`）、`DiagnosisJobProgress`（progress 物件），消費端 `safeParse`（憲章 III 例外 (c)）。
-  - 明細見下方「asyncapi 契約版本」1.4.0。憲章 Principle III 補列 GET 為建議、待使用者（未執行 `/speckit-constitution`）。
+  - 明細見下方「asyncapi 契約版本」1.4.0。憲章 Principle III 補列 GET 原為建議、待使用者；2026-10-22 使用者裁決後已落地為憲章 1.6.1（`docs/20261022-adr003-review`）。
 
 ## [2.1.0] - 2026-10-18
 

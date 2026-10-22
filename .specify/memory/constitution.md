@@ -12,8 +12,8 @@ Zod 定義於 `packages/contracts/src/http.ts`、型別由 `z.infer` 推導，�
 Modified principles:
 - III. 契約優先與全棧型別安全 — 「三端契約」的 HTTP 範圍由 `POST /diagnoses` 改為「診斷 HTTP 端點」
   （`POST /diagnoses` request body／成功 response、`GET /diagnoses/:jobId` query／成功 response）；
-  契約變化記 CHANGELOG 的義務同樣涵蓋 GET；補一句現況（兩端點以 asyncapi `info.description` 敘述、
-  尚未納入結構漂移比對）
+  契約變化記 CHANGELOG 的義務同樣涵蓋 GET；補一句現況（GET 以 asyncapi `info.description` 敘述、POST 回應碼記於 CHANGELOG／README，
+  兩端點皆尚未納入結構漂移比對）
 
 Added sections: 無
 Removed sections: 無
@@ -25,7 +25,7 @@ Templates requiring updates:
 - ✅ .specify/templates/checklist-template.md（無 constitution 專屬內容，無需變更）
 - ✅ CLAUDE.md「真實來源／通訊契約」條目為泛稱（Zod 單一來源、新增 event/payload 先改契約），
   已涵蓋 GET，無需變更
-- ✅ README.md「即時通道與 HTTP 契約」段已列 GET（012-lite），引用「憲章 Principle III」的句子仍成立
+- ✅ README.md「即時通道事件契約」段的「HTTP 端點」條已列 GET（012-lite），引用「憲章 Principle III」的句子仍成立
 
 Follow-up TODOs:
 - ℹ️ ADR-003 §7 第 9 條與 §7.1 由主 session 同步標「已於 1.6.1 補列」
@@ -231,7 +231,7 @@ API/worker/web，MUST NOT 在各端另寫平行型別定義。
   schema 的漂移比對（`packages/contracts/src/asyncapi-drift.test.ts`：asyncapi 的每則 message 都須有
   對應 schema 做結構比對，漏列即測試失敗）；`POST /diagnoses` 與 `GET /diagnoses/:jobId` 的契約變化
   MUST 記於 `CHANGELOG.md` 的契約小節，日後寫進 `asyncapi.yaml` 結構時同樣 MUST 納入漂移比對
-  （現況：兩端點的行為與錯誤碼語意以 `asyncapi.yaml` 的 `info.description` 敘述，尚未納入結構比對）。
+  （現況：GET 的行為與錯誤碼語意以 `asyncapi.yaml` 的 `info.description` 敘述，POST 的回應碼記於 `CHANGELOG.md` 與 README；兩端點皆尚未納入結構比對）。
 - **例外 (a)**：`GET /healthz` 的回應是 api 內部型別、不進契約（運維探針，非三端契約）。
 - **例外 (b)**：由 NestJS exception 產生的 HTTP 錯誤 body（400／404／409／415／503 等）不另定
   schema，但各錯誤碼的語意 MUST 記於 `asyncapi.yaml`／`CHANGELOG.md`。
