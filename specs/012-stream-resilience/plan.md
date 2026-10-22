@@ -3,7 +3,7 @@
 **Branch**: `012-stream-resilience` | **Date**: 2026-10-21 | **Spec**: [spec.md](./spec.md)
 
 **Input**: Feature specification from `/specs/012-stream-resilience/spec.md`（FR-001～FR-047、SC-001～SC-011、Clarifications 兩輪共 19 題）；
-設計依據 [ADR-003](../../docs/adr-003-completion-semantics.md)（D1～D13、§6 回補清單、§7 代理裁決第 1～21 條，皆待使用者覆核）。
+設計依據 [ADR-003](../../docs/adr-003-completion-semantics.md)（D1～D13、§6 回補清單、§7 代理裁決第 1～21 條，皆待使用者覆核）。（已變更，2026-10-22：第 1、9、17 條已由使用者覆核，其餘待覆核，見 ADR-003 §7。）
 
 > **使用者離席期間產出**：技術決策沿用 ADR-003 代理裁決；plan 階段才浮現、spec／ADR 未定的設計點（P1～P24；analyze 階段補 P25）一律採
 > 「對使用者可見行為最保守、實作代價最小」的做法，列於 [research.md](./research.md) 文末，待覆核後記入 ADR-003 §7（第 22 條起）。
@@ -68,7 +68,7 @@ compose 全棧＋fake provider）；`pnpm check`、`pnpm test:coverage`（全域
 | --- | --- | --- |
 | **I. 規格驅動開發** | ✅ PASS | `012-stream-resilience` 自 `develop` 開出，已走 specify → clarify → plan；merge 以 `--no-ff`；implement 以 phase 為遞交單位。 |
 | **II. 單一真實來源** | ✅ PASS | 新文案依 `apps/web/PRODUCT.md`／`DESIGN.md`，不新增色值與 chip 種類；架構取捨已在 ADR-003；跨 feature 決策的回補清單見下方「文件回補」（ADR-003 §6），merge 前 MUST 完成。 |
-| **III. 契約優先與型別安全** | ⚠️ PASS（需記錄） | 先改 `packages/contracts`（`job-status.ts`、`http.ts`、`jobs.ts`）與 `asyncapi.yaml` 1.4.0，再改三端；`JobStatus` 以 Zod 定義並納入漂移比對；api↔worker 的 `returnvalue`／progress 依例外 (c) 以 Zod 定義、消費端 `safeParse`；不另寫平行型別。**需記錄**：Principle III 的列舉只寫 `POST /diagnoses`，`GET /diagnoses/:jobId` 不在列舉內——本 feature 仍以 Zod 定義其 query 與成功回應（spec FR-032），憲章補列為建議修訂（PATCH 1.6.0 → 1.6.1），待使用者決定（FR-041，見 Complexity Tracking）。GET 錯誤 body 依例外 (b) 不另定 schema，語意記於 asyncapi `info.description` 與 CHANGELOG。`ai-fail` 標記為 worker 自寫自讀的內部值，以 worker 內部 Zod 驗證、不進 contracts（research P9）。 |
+| **III. 契約優先與型別安全** | ⚠️ PASS（需記錄） | 先改 `packages/contracts`（`job-status.ts`、`http.ts`、`jobs.ts`）與 `asyncapi.yaml` 1.4.0，再改三端；`JobStatus` 以 Zod 定義並納入漂移比對；api↔worker 的 `returnvalue`／progress 依例外 (c) 以 Zod 定義、消費端 `safeParse`；不另寫平行型別。**需記錄**：Principle III 的列舉只寫 `POST /diagnoses`，`GET /diagnoses/:jobId` 不在列舉內——本 feature 仍以 Zod 定義其 query 與成功回應（spec FR-032），憲章補列為建議修訂（PATCH 1.6.0 → 1.6.1），待使用者決定（FR-041，見 Complexity Tracking）（已變更，2026-10-22：使用者裁決、已落地為憲章 1.6.1，見 ADR-003 §7 第 9 條）。GET 錯誤 body 依例外 (b) 不另定 schema，語意記於 asyncapi `info.description` 與 CHANGELOG。`ai-fail` 標記為 worker 自寫自讀的內部值，以 worker 內部 Zod 驗證、不進 contracts（research P9）。 |
 | **IV. 即時通道架構紀律** | ✅ PASS | 原生 `ws` 不變、不新增 channel；結果經 BullMQ QueueEvents（lifecycle 通道）送出，keepalive 也是 `updateProgress`（同一通道），token 仍走 Pub/Sub，不混流（FR-042）；worker 不直接 emit ws；api 不跑 long-running——GET 只做有 5 s 上限的 Redis 讀與一次 Mongo `findOne`；Redis 連線分離：GET 的 `Job.fromId` 用 producer 的 command 連線，不借 subscriber 或 QueueEvents 的 blocking 連線；worker 新增的三種鍵（`ai-result`／`ai-metric`／`ai-fail`）走既有 cache 連線（`ProcessorStore`），不借 BullMQ Worker 或 Pub/Sub 的連線；`ai/token` 仍逐筆進 store 的既有範圍不擴大（硬規則 1）。 |
 | **V. AI 診斷紀律** | ✅ PASS | `AiProvider` interface 不動；cache before API 與簽章去重不變，另加負向標記 `ai-fail:<sig>`（同一簽章的成本控制，與原則同向）；所有結果在每個邊界都經 `DiagnosisResultSchema` 驗證：`returnvalue`（relay、GET）、`ai-result` 暫存、Mongo 讀回；不合法者不轉發、改走退路。 |
 | **VI. 祕密與設定衛生** | ✅ PASS | 無新環境變數與祕密（BullMQ 參數是具名常數，FR-018）；日誌不記 MongoDB 原始錯誤以外的敏感值，`persist_failed` 訊息為固定句（代理裁決第 18 條）。 |
@@ -322,9 +322,9 @@ e2e 場景隨各 story 交付（不另立 e2e phase）；與 tasks.md 的 phase 
 - [x] `apps/web/PRODUCT.md`：已知產品限制改寫（含「重新整理頁面後不續接」）、失敗段改為 2 s 退路先 GET、新術語（重新排入佇列（內部稱重新派送）、取回、結果未知）。
 - [x] `tests/e2e/README.md`：場景表（3a／3b、5～8）、場景 3 的現況語意、「注意」段（GET 獨立桶、新場景與耗時；實測約 4.6 分鐘（278 s，第 3 輪），規劃時估 10～15 分鐘）。
 - [x] `asyncapi.yaml`（FR-033）與 `CHANGELOG.md`（FR-034：契約 1.4.0、相容性注意四條＋升級順序、`[2.1.0]` 帶著發布的 012-lite 項標已修）。
-- [ ] 憲章 Principle III 補列 GET：**建議**、待使用者；merge 前仍未確認則 spec 與 ADR-003 保留「建議修訂、待使用者」註記（FR-041）。（2026-10-22 合併門第 1 輪：保留未勾——憲章修訂待使用者確認）
+- [x] 憲章 Principle III 補列 GET：**建議**、待使用者；merge 前仍未確認則 spec 與 ADR-003 保留「建議修訂、待使用者」註記（FR-041）。（2026-10-22 合併門第 1 輪：保留未勾——憲章修訂待使用者確認 → 已勾：2026-10-22 使用者裁決、已落地為憲章 1.6.1，見 ADR-003 §7 第 9 條）
 - [x] ADR-003：§6 勾選；§7 補記 plan／analyze 階段的 P1～P25（第 22 條起，待覆核）；檔頭「待覆核」註保留到使用者覆核（FR-040）。
-- [ ] repo `CLAUDE.md` 開頭現況段：落地後改為最近一次完成的 feature。（2026-10-22 合併門第 1 輪：保留未勾——merge 時改（T076））
+- [x] repo `CLAUDE.md` 開頭現況段：落地後改為最近一次完成的 feature。（2026-10-22 合併門第 1 輪：保留未勾——merge 時改（T076）→ 已勾：T076 已於 `71f9eb6` 完成）
 
 ---
 
@@ -332,6 +332,6 @@ e2e 場景隨各 story 交付（不另立 e2e phase）；與 tasks.md 的 phase 
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 | --- | --- | --- |
-| 憲章 III 的列舉只涵蓋 `POST /diagnoses`，新增的 `GET /diagnoses/:jobId` 不在條文內（需記錄，非違反） | 重連續接與 Pub/Sub 遺失的退路都需要讀取端點（US2、US1 情境 3） | 「不加 GET、只靠 `job/status.result`」解不了 api 重啟（QueueEvents 從 `$` 讀、錯過重啟期間的 `completed`）；改用 WS 控制訊息 `job/resume` 要新增第 13 個 channel（ADR-003 D8 方案 D）。處置：GET 照樣以 Zod 定義 query 與成功回應，憲章補列為建議 PATCH，待使用者以 `/speckit-constitution` 決定（FR-041，不在本 feature 自動執行） |
+| 憲章 III 的列舉只涵蓋 `POST /diagnoses`，新增的 `GET /diagnoses/:jobId` 不在條文內（需記錄，非違反） | 重連續接與 Pub/Sub 遺失的退路都需要讀取端點（US2、US1 情境 3） | 「不加 GET、只靠 `job/status.result`」解不了 api 重啟（QueueEvents 從 `$` 讀、錯過重啟期間的 `completed`）；改用 WS 控制訊息 `job/resume` 要新增第 13 個 channel（ADR-003 D8 方案 D）。處置：GET 照樣以 Zod 定義 query 與成功回應，憲章補列為建議 PATCH，待使用者以 `/speckit-constitution` 決定（FR-041，不在本 feature 自動執行）（已變更，2026-10-22：使用者裁決、已落地為憲章 1.6.1，見 ADR-003 §7 第 9 條） |
 | 憲章 VII：`ai-result:<jobId>` 讓診斷結果短暫只存在 Redis（需記錄，非違反） | 寫庫失敗時不重打 LLM（WK-4 補強，每 job 省 2 次計費） | 只加 `persist_failed`、接受重打（Mongo 拒寫時每 job 3 次 LLM 全數計費，2.1.0 已揭露的成本問題不消失）；先寫快取再寫 `diagnoses`（重試會回 `cached:true`、`diagnoses` 永遠缺這筆）。處置：TTL 1 h、寫庫成功即 DEL；寫庫終究失敗時 job 以 `persist_failed` 收尾，副本不被當作歷史資料 |
 | 新增兩個 api provider（`JobRoutingRegistry`、`DiagnosisLookupService`） | 綁定原由三處共用一個 Map、owner 不清；rebind、claim／撤回與終態寬限需要單一實作與窮舉測試 | 把 rebind 寫進 `AiStreamRelayService`（GET 與 job-status relay 都要跨服務改它的內部狀態，責任更混）；GET 塞進 `JobsService`（覆蓋率門檻檔、入列與讀取混在一起） |

@@ -1,6 +1,40 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.6.0 → 1.6.1
+Rationale: 012-lite（`specs/012-stream-resilience`，ADR-003）新增 HTTP 端點 `GET /diagnoses/:jobId`，
+其 query（`DiagnosisLookupQuerySchema`）與成功 response（`DiagnosisLookupResponseSchema`）自實作起即以
+Zod 定義於 `packages/contracts/src/http.ts`、型別由 `z.infer` 推導，但 Principle III「三端契約」的 HTTP
+範圍文字只列 `POST /diagnoses`。本次把既有原則的措辭延伸到新端點（ADR-003 代理裁決第 9 條；2026-10-22
+使用者裁決 PATCH 補列），不新增義務、不放寬任何 MUST，依版本政策以 PATCH（1.6.1）處理。錯誤 body
+仍適用例外 (b)。
+
+Modified principles:
+- III. 契約優先與全棧型別安全 — 「三端契約」的 HTTP 範圍由 `POST /diagnoses` 改為「診斷 HTTP 端點」
+  （`POST /diagnoses` request body／成功 response、`GET /diagnoses/:jobId` query／成功 response）；
+  契約變化記 CHANGELOG 的義務同樣涵蓋 GET；補一句現況（GET 以 asyncapi `info.description` 敘述、POST 回應碼記於 CHANGELOG／README，
+  兩端點皆尚未納入結構漂移比對）
+
+Added sections: 無
+Removed sections: 無
+
+Templates requiring updates:
+- ✅ .specify/templates/plan-template.md（Constitution Check gate 為泛用，未引用端點清單，無需變更）
+- ✅ .specify/templates/spec-template.md（無 constitution 專屬內容，無需變更）
+- ✅ .specify/templates/tasks-template.md（無 constitution 專屬內容，無需變更）
+- ✅ .specify/templates/checklist-template.md（無 constitution 專屬內容，無需變更）
+- ✅ CLAUDE.md「真實來源／通訊契約」條目為泛稱（Zod 單一來源、新增 event/payload 先改契約），
+  已涵蓋 GET，無需變更
+- ✅ README.md「即時通道事件契約」段的「HTTP 端點」條已列 GET（012-lite），引用「憲章 Principle III」的句子仍成立
+
+Follow-up TODOs:
+- ℹ️ ADR-003 §7 第 9 條與 §6 回補清單已標「已落地為 1.6.1」
+- ℹ️ specs/012 的 tasks.md／checklists 仍以「憲章補列為建議、待使用者」措辭，屬歷史工件豁免；plan／spec／contract
+  的現況句已加註
+- ⏳ 把 `POST /diagnoses`／`GET /diagnoses/:jobId` 寫進 `asyncapi.yaml` 結構並納入漂移比對，仍為
+  1.5.0 起的待辦（未排程）
+
+----- Prior amendment (1.5.0 → 1.6.0) -----
 Version change: 1.5.0 → 1.6.0
 Rationale: feature 013（UI 全面改版，T068；spec FR-035／FR-036）把前端視覺真實來源由
 `apps/web/design/design-spec.md` 與 `apps/web/design/refs/*.png`（2026-10 退役：design-spec.md
@@ -192,12 +226,15 @@ API/worker/web，MUST NOT 在各端另寫平行型別定義。
 **型別來源分層**：
 
 - **三端契約**——全部 WebSocket message（現 12 則，含 `ping`/`pong`、`system/connected`、
-  `machine/subscribed`、`system/unauthorized` 等控制訊息）與 `POST /diagnoses` 的 request body／
-  成功 response：MUST 以 Zod schema 定義於 `packages/contracts`，型別 MUST 由 `z.infer` 推導，
+  `machine/subscribed`、`system/unauthorized` 等控制訊息）與診斷 HTTP 端點——`POST /diagnoses`
+  的 request body／成功 response、`GET /diagnoses/:jobId` 的 query／成功 response（1.6.1 補列，
+  012-lite 新增）：MUST 以 Zod schema 定義於 `packages/contracts`，型別 MUST 由 `z.infer` 推導，
   MUST NOT 以手寫 TypeScript 型別另立定義。WebSocket message MUST 納入 `asyncapi.yaml` 與 Zod
   schema 的漂移比對（`packages/contracts/src/asyncapi-drift.test.ts`：asyncapi 的每則 message 都須有
-  對應 schema 做結構比對，漏列即測試失敗）；`POST /diagnoses` 的契約變化 MUST 記於 `CHANGELOG.md`
-  的契約小節，日後寫進 `asyncapi.yaml` 結構時同樣 MUST 納入漂移比對。
+  對應 schema 做結構比對，漏列即測試失敗）；`POST /diagnoses` 與 `GET /diagnoses/:jobId` 的契約變化
+  MUST 記於 `CHANGELOG.md` 的契約小節，日後寫進 `asyncapi.yaml` 結構時同樣 MUST 納入漂移比對
+  （現況：GET 的行為與錯誤碼語意以 `asyncapi.yaml` 的 `info.description` 敘述，POST 的回應碼記於
+  `CHANGELOG.md` 與 README；兩端點皆尚未納入結構比對）。
 - **例外 (a)**：`GET /healthz` 的回應是 api 內部型別、不進契約（運維探針，非三端契約）。
 - **例外 (b)**：由 NestJS exception 產生的 HTTP 錯誤 body（400／404／409／415／503 等）不另定
   schema，但各錯誤碼的語意 MUST 記於 `asyncapi.yaml`／`CHANGELOG.md`。
@@ -316,4 +353,4 @@ lock 等暫態用途。
   的 `info.version` 並在 `CHANGELOG.md` 的契約小節記錄；release 前 MUST 通過此檢查。版本
   策略（產品版本與契約版本各自獨立）以 `CLAUDE.md` 為準。
 
-**Version**: 1.6.0 | **Ratified**: 2026-06-30 | **Last Amended**: 2026-10-16
+**Version**: 1.6.1 | **Ratified**: 2026-06-30 | **Last Amended**: 2026-10-22

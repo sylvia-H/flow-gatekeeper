@@ -22,7 +22,7 @@
 - Q: e2e 的 Redis 停頓用哪種方式？ → A: `docker compose pause redis`（50 s 後 unpause），不用 `redis-cli CLIENT PAUSE`（見 FR-046、SC-004，D13）。
 - Q: 45 s watchdog 觸發時的語意與文案？ → A: 觸發先 GET 一次；文案「超過 45 秒沒有收到進度，結果未知，請重試」；不改單調時鐘（見 FR-022，D11）。
 - Q: nginx 對 GET 怎麼限流？ → A: GET 獨立 regex location 與限流區 `diag_read`（60 r/m、burst 10），POST 維持原桶（見 FR-015，D9）。
-- Q: 憲章 Principle III 是否補列 `GET /diagnoses/:jobId`？ → A: ADR-003 與本 spec 記錄**建議**以 PATCH（1.6.0 → 1.6.1）修訂，實際 `/speckit-constitution` 待使用者確認、不在本 feature 自動執行；GET 的 query 與成功回應仍以 Zod 定義（見 FR-032、FR-041，D8 第 6 點）。
+- Q: 憲章 Principle III 是否補列 `GET /diagnoses/:jobId`？ → A: ADR-003 與本 spec 記錄**建議**以 PATCH（1.6.0 → 1.6.1）修訂，實際 `/speckit-constitution` 待使用者確認、不在本 feature 自動執行；GET 的 query 與成功回應仍以 Zod 定義（見 FR-032、FR-041，D8 第 6 點）。（已變更，2026-10-22：使用者裁決、已落地為憲章 1.6.1，見 ADR-003 §7 第 9 條）
 - Q: UI 文案如何定？ → A: 採 FR-035 的 UI 文案表；以 `job/status`／GET 收尾即標「原始串流（不完整）」；同簽章失敗不加後綴；卡片 chip 不新增種類（見 FR-035～FR-038，D13）。
 - Q: 完成以哪個訊號為準？ → A: `ai/done`、帶 `result` 的 `job/status: completed`、GET 回 completed 三者先到者為準，之後到的忽略；`ai/done` 契約描述改為可重複、可遺失（見 FR-003、FR-004，D1／D3／D10）。
 - Q: `failed` 終態是否比照 `completed` 保留綁定寬限？ → A: 是，套用相同的 10 s 綁定寬限（同一段 registry 程式），ADR-002 §6.5.1「失敗終態沒有 relay 寬限」列由本 feature 收掉（見 FR-014，D12）。
@@ -277,7 +277,7 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
   - repo `CLAUDE.md` 開頭現況段：落地後改為最近一次完成的 feature。
   回補 MUST 不重寫歷史：原敘述保留、改過去式並標「已落地／已變更，現況見 ADR-003」。（SC-010）
 - **FR-040**: ADR-003 檔頭與 §7 的「代理裁決、待覆核」註記 MUST 保留到使用者覆核為止；覆核若有推翻，MUST 於 ADR-003 §7 記推翻紀錄並以 fix 分支修正 spec 與實作。plan 與 analyze 階段自行決定的設計點（`research.md` P1～P25）MUST 在 merge 前補進 ADR-003 §7（第 22 條起，同樣標「待覆核」），不得只留在 research（checklist 階段補，2026-10-21；依 plan「文件回補」）。
-- **FR-041**: 本 feature MUST NOT 自動執行 `/speckit-constitution`；憲章 Principle III 補列 `GET /diagnoses/:jobId`（PATCH 1.6.0 → 1.6.1）為**建議**，待使用者確認；merge 前若仍未確認，ADR-003 與本 spec MUST 保留「建議修訂、待使用者」的註記，GET 的 Zod 定義（FR-032）照做。
+- **FR-041**: 本 feature MUST NOT 自動執行 `/speckit-constitution`；憲章 Principle III 補列 `GET /diagnoses/:jobId`（PATCH 1.6.0 → 1.6.1）為**建議**，待使用者確認；merge 前若仍未確認，ADR-003 與本 spec MUST 保留「建議修訂、待使用者」的註記，GET 的 Zod 定義（FR-032）照做。（已變更，2026-10-22：使用者裁決、已落地為憲章 1.6.1，見 ADR-003 §7 第 9 條；「merge 前保留註記」的條件已解除）
 
 **不變量與驗收基礎建設（全 feature）**
 
@@ -318,13 +318,13 @@ LLM 供應商故障時，同一台機台同一狀態的多個診斷請求不各�
 
 **待使用者覆核的點（ADR-003 §7、§7.1）**
 
-- Clarifications 的 14 條全為代理裁決，待覆核；第 1 條（15／5／2）與第三輪報告的 15／10／2 不同，優先覆核。
-- ADR-003 D8／D10 整理時修正的兩處（GET 的 409 判斷延到查詢之後；404／409 文案以 UI 文案表為準）已由協調者同意採此修法，仍列待覆核。
-- ADR-003 D12 的兩點草稿補充隨定稿採用、待覆核：快取命中的結果 1 小時後 GET 回 404（不把 `result` 寫進 trigger）；POST 的 jobId 冪等延伸到 `removeOnComplete` 之後（不另改 POST）。
+- Clarifications 的 14 條全為代理裁決，待覆核；第 1 條（15／5／2）與第三輪報告的 15／10／2 不同，優先覆核。（已變更，2026-10-22：第 1 條與第 9 條已由使用者覆核維持，見 ADR-003 §7；其餘待覆核。）
+- ADR-003 D8／D10 整理時修正的兩處（GET 的 409 判斷延到查詢之後；404／409 文案以 UI 文案表為準）已由協調者同意採此修法，仍列待覆核。（已變更，2026-10-22：已由使用者覆核接受，見 ADR-003 §7.1。）
+- ADR-003 D12 的兩點草稿補充隨定稿採用、待覆核：快取命中的結果 1 小時後 GET 回 404（不把 `result` 寫進 trigger）；POST 的 jobId 冪等延伸到 `removeOnComplete` 之後（不另改 POST）。（已變更，2026-10-22：兩點已由使用者覆核接受，見 ADR-003 §7.1。）
 - 轉「結果未送達」之後再抵達的同 jobId 結果仍救回（三種來源），既有 AR-6 測試保留並擴充——已由 ADR-003 代理裁決第 15 條定案（2026-10-21），FR-005 已照此撰寫；原本留給 plan 決定的問題已關閉。（原句：ADR-003 D3 寫明 2.1.0「『結果未送達』失敗可被遲到 `ai/done` 救回」的例外「改由 D10 的規則（2 s 退路先 GET）取代」；plan 階段 MUST 明定轉失敗之後再抵達的同 jobId 結果是否仍救回，並據以調整既有 AR-6 單元測試（不改變 SC-006 的四種順序判準）。
 - FR-013「GET 時 `returnvalue` 驗證失敗退到 Mongo、仍無則 404」為本 spec 補的細節（ADR-003 D8 未寫驗證失敗的分支），已記為 ADR-003 代理裁決第 16 條、待覆核。
-- 憲章 Principle III 補列 GET 的 PATCH 修訂為建議，待使用者決定是否執行 `/speckit-constitution`（FR-041）。
-- clarify 階段補的 5 題（ADR-003 代理裁決第 17～21 條）全為代理裁決、待覆核：GET 的 `previousSocketId`（第 17 條，會新增一個 optional query 欄位）、`persist_failed` 的固定 `failedReason`（第 18 條）、重新整理頁面不續接（第 19 條）、重連過的任務標「原始串流（不完整）」（第 20 條）、只加結構化日誌不加指標欄位（第 21 條）。
+- 憲章 Principle III 補列 GET 的 PATCH 修訂為建議，待使用者決定是否執行 `/speckit-constitution`（FR-041）。（已變更，2026-10-22：使用者裁決、已落地為憲章 1.6.1，見 ADR-003 §7 第 9 條）
+- clarify 階段補的 5 題（ADR-003 代理裁決第 17～21 條）全為代理裁決、待覆核（已變更，2026-10-22：第 17 條已由使用者覆核維持，第 18～21 條仍待覆核，見 ADR-003 §7）：GET 的 `previousSocketId`（第 17 條，會新增一個 optional query 欄位）、`persist_failed` 的固定 `failedReason`（第 18 條）、重新整理頁面不續接（第 19 條）、重連過的任務標「原始串流（不完整）」（第 20 條）、只加結構化日誌不加指標欄位（第 21 條）。
 
 **環境與範圍假設**
 

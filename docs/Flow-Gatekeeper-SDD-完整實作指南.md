@@ -3194,7 +3194,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 > 進行中的任務改綁到新連線；BullMQ 的 QueueEvents 本身就是一條 Redis Stream，自行實作 Streams 只補得到「重連期間的 token 動畫」，
 > 卻要處理 `XADD`／`MAXLEN`／`XREAD`／last-id（第三輪報告 §5.5、§7 定案）。token 串流維持 at-most-once，重連後直接顯示結果、
 > 不續播。上方「Redis Streams token 回放」一條保留為原規劃敘述；012-lite 藍圖見 §15.7，決策與推翻條件見
-> [ADR-003](adr-003-completion-semantics.md)（2026-10-21 代理裁決、待覆核）。
+> [ADR-003](adr-003-completion-semantics.md)（2026-10-21 代理裁決、待覆核；第 1、9、17、63 條與 §7.1 已於 2026-10-22 覆核，其餘待覆核）。
 
 ### 15.6 1.0.0 之後的現況摘要
 
@@ -3223,6 +3223,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 13 | `fix/20261022-ui-humanize-error-zh` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：AI 診斷失敗時未能分類的英文原文不再當主訊息，改顯通用繁中句、原文收進預設收合的「技術細節」 | 失敗訊息英文後援改繁中 |
 | 14 | `fix/20261022-ui-tab-title-alert` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：分頁標題與 favicon 隨嚴重台數與離線狀態變化（favicon 在執行期依目前主題的 token 組成） | 分頁標題與 favicon 告警 |
 | 15 | `fix/20261022-ui-steps-heading` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：AI 診斷面板進行中的步驟清單加小標「處理步驟」並以分隔線與原始串流隔開 | 處理步驟小標 |
+| 16 | `docs/20261022-adr003-review` | （以 `git log --first-parent --merges` 為準） | 使用者覆核 ADR-003 代理裁決第 1、9、17、63 條與 §7.1；憲章 1.6.1（Principle III 補列 `GET /diagnoses/:jobId`） | ADR-003 覆核與憲章 1.6.1 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」與「012-lite 串流韌性」；後者的完整藍圖與落地摘要在 §15.7），但不列入本表。
 
@@ -3510,6 +3511,11 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 - **驗證**：`CopilotDrawer.test.ts` 新增推擠式側欄與 bottom sheet 兩種版面下：進行中有唯一的「處理步驟」小標、`ol[aria-labelledby]` 對上小標 id 且有步驟、區塊帶 `border-t border-edge`、不在原始串流展開區之內且位在其後；閒置、已完成、失敗三態不渲染小標與步驟區塊；既有「步驟標籤全中文」測試改由 `copilot-steps` 區塊取清單。web 全套 vitest（70 檔、1420 測試）、`typecheck`、`lint` 通過。
 - **README 截圖**：`docs/screenshots/copilot-streaming.png` 拍於本分支之前，畫面中的步驟清單仍無小標、無分隔線；依「二進位資產只留最終版」本分支不重拍，於下次 release 重拍截圖時更新（`apps/web/scripts/screenshots.cjs --readme`）。README §9 的進行中區塊文字已改為現況（進度列下為目前步驟與任務 meta，最下方是帶小標的處理步驟清單）。
 
+**ADR-003 覆核與憲章 1.6.1**（`docs/20261022-adr003-review`，自 `develop` `5732795`；merge 以 `git log --first-parent --merges` 為準，2026-10-22；變更明細見 `CHANGELOG.md` `[Unreleased]`）：
+
+- **做了什麼**：使用者回來後逐題覆核離席期間的代理裁決——ADR-003 §7 第 1 條（BullMQ 15／5／2＋keepalive 10 s）、第 17 條（`previousSocketId`）、第 63 條（斷線凍結 watchdog）與 §7.1 全部待覆核點（owner 核對、終態×進行中 503、D12 兩點、合併門第 1 輪實作補 (a)～(f)、第 2 輪實作補、D8／D10 修法）皆維持／接受，各條下加「覆核」行、檔頭狀態列改寫；第 9 條（憲章 Principle III 補列 GET）裁決現在做：`/speckit-constitution` PATCH 1.6.0 → 1.6.1，「三端契約」的 HTTP 範圍由 `POST /diagnoses` 延伸為診斷 HTTP 端點（含 `GET /diagnoses/:jobId` 的 query／成功 response），契約變化記 CHANGELOG 的義務同樣涵蓋 GET。
+- **未覆核**：ADR-003 §7 其餘條（2～8、10～16、18～62）與指南 §15.6「分頁標題與 favicon 告警」的 UI-3（favicon 不開憲章例外）仍標待覆核；T081 瀏覽器手動演練待使用者驗收。
+
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 
 前端整套視覺改為「實驗室玻璃與蝕刻刻度」，視覺真實來源由 design-spec＋refs 切換為 impeccable 工件 `apps/web/PRODUCT.md`＋`apps/web/DESIGN.md`。全部是前端改動：`packages/contracts`、`asyncapi.yaml` 與後端行為不變（FR-039），只消費既有 12 則 WS 訊息與 `POST /diagnoses`；高頻遙測仍是「先進 buffer、每幀至多一次批次提交」（硬規則 1）。
@@ -3646,7 +3652,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   `ai/done` 描述改為可重複可遺失；`http.ts` 加 GET 的 query 與回應 schema；contracts 加傳輸型別
   `DiagnosisJobReturnValue`、`DiagnosisJobProgress`。
 - **憲章**：GET 的 query 與成功回應以 Zod 定義；建議以 PATCH 修訂 Principle III 補列 `GET /diagnoses/:jobId`，
-  實際 `/speckit-constitution` 待使用者確認（不在離席期間做）。
+  實際 `/speckit-constitution` 待使用者確認（不在離席期間做）。（已變更：2026-10-22 使用者裁決、已落地為憲章 1.6.1，見 ADR-003 §7 第 9 條）
 - **文件回補**：清單見 ADR-003 §6（ADR-002 §3／§6.1／§6.2／§6.5／§6.5.1、本指南 §15.5、README「已知限制」與資料表、
   PRODUCT.md、`tests/e2e/README.md`、`asyncapi.yaml`、`CHANGELOG.md`），merge 前 MUST 完成。
 
@@ -3672,7 +3678,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 6. **e2e Redis 停頓方式** → `docker compose pause redis`。
 7. **45 s watchdog** → 觸發先 GET 一次；文案「超過 45 秒沒有收到進度，結果未知，請重試」；不改單調時鐘。
 8. **nginx** → GET 獨立 regex location＋`diag_read` 60 r/m、burst 10。
-9. **憲章** → 建議以 PATCH 修訂 Principle III 補列 GET，實際修訂待使用者確認；GET 回應仍以 Zod 定義。
+9. **憲章** → 建議以 PATCH 修訂 Principle III 補列 GET，實際修訂待使用者確認；GET 回應仍以 Zod 定義。（已變更：2026-10-22 落地為憲章 1.6.1）
 10. **UI 文案** → 採 spec 接點表；原始串流以「`job/status`／GET 收尾」判斷不完整；同簽章失敗不加後綴；卡片 chip 不新增種類。
 11. **完成來源** → 三來源先到者為準；`ai/done` 契約描述改為可重複可遺失。
 12. **失敗終態寬限** → `failed` 套用與 `completed` 相同的 10 s 綁定寬限（同一段 registry 程式）；ADR-002 §6.5.1 該列由 012-lite 收掉。
@@ -3718,7 +3724,7 @@ e2e 仍只在本機跑（CI 不含 e2e）；改寫場景 3（SC-001）並新增�
 
 #### 15.7.6 落地摘要（2026-10-21）
 
-以下為 implement 之後的現況；設計理由與代理裁決（第 1～63 條，待覆核）見 ADR-003，逐條細節以 spec 與 `CHANGELOG.md` `[Unreleased]` 為準。
+以下為 implement 之後的現況；設計理由與代理裁決（第 1～63 條；第 1、9、17、63 條與 §7.1 已於 2026-10-22 覆核，其餘待覆核）見 ADR-003，逐條細節以 spec 與 `CHANGELOG.md` `[Unreleased]` 為準。
 
 - **契約 asyncapi 1.4.0**（向後相容的 minor）：`job/status` 新增 optional `attempt`／`execution`／`reason`（開放字串，已知值 `"stalled"`）／`cached`，`completed` 帶 `result`；`ai/done` 改為可重複、可遺失的 best-effort；`ai/error.code` 新增 `persist_failed`；`http.ts` 新增 `DiagnosisLookupQuerySchema`／`DiagnosisLookupResponseSchema`；傳輸型別 `DiagnosisJobReturnValue`、`DiagnosisJobProgress`。
 - **完成語意**：worker 以 BullMQ `returnvalue` 回傳 `{ result, cached }`，api relay 驗證後放進 `job/status: completed`；web 以 `ai/done`、帶 `result` 的 `completed`、GET 回 completed 三者先到者收尾，之後的忽略；`completed` 不帶 result 時 2 s 後先 GET。
@@ -3727,7 +3733,7 @@ e2e 仍只在本機跑（CI 不含 e2e）；改寫場景 3（SC-001）並新增�
 - **冪等與成本**：processor 開頭以 jobId 查 `ai-result:<jobId>` → `diagnoses`；再執行命中快取前先查自己的結果；trigger 以 jobId upsert；hit／miss 以 `ai-metric:<jobId>` 只計一次；`ai-fail:<sig>` 負向標記（TTL 10 s）；`ai-result` 暫存寫入 best-effort。
 - **UI**：說明行「後端處理程序中斷，任務已重新排入佇列（第 N 次執行）」「已重新連線，正在取回診斷狀態…」、完成 meta「重新連線後取回」、「原始串流（不完整）」（以 `job/status`／GET 收尾或執行期間經歷過重連）、新失敗文案；術語補進 PRODUCT.md；DESIGN.md 補記進度說明行允許改變進行中區塊高度。
 - **e2e**：場景 3 改寫為 3a（串流中 kill）／3b（首 token 前 kill，fake provider 以 `FAKE_AI_FIRST_TOKEN_DELAY_MS=2000` 留出窗口），新增 5（Pub/Sub 斷線迴圈）、6a／6b（api 重啟）、7（Redis 停頓 50 s）、8（GET 回應形狀）。實測數字（2026-10-21 第 3 輪重跑，各場景單次）：3a `maxGap` **14.0 s**（kill → completed 28.7 s）、3b `maxGap` **18.8 s**（kill → completed 31.8 s，kill 前 0 個 token）、`W` **3.8 s／3.7 s**（容器側時鐘；先前一次 7.4 s／12.9 s），兩題皆收到 `reason:"stalled"` 且 execution 2；場景 7：解凍後 4.9 s completed、trigger 1、LLM call 1、hit＋miss 1、收到 stalled、execution 2、短路 `source: diagnoses`（P25 預期 ai-result，實測兩次皆為 diagnoses）；場景 5：踢掉 358 條 Pub/Sub 連線、只收 2/20 token 仍以 completed＋result 收尾；6a healthy 後 41 ms GET 到 completed、6b healthy 後 41 ms rebound、4.1 s completed；全套 14 條 **278.0 s**（build 走快取）。
-- **文件回補**：ADR-002（§3 第 5 列、§6.1、§6.2、§6.5、§6.5.1）、README、PRODUCT.md、DESIGN.md、`tests/e2e/README.md`、`CHANGELOG.md`、009 `log-fields.md`；憲章 Principle III 補列 GET 仍為**建議、待使用者**（未執行 `/speckit-constitution`）。
+- **文件回補**：ADR-002（§3 第 5 列、§6.1、§6.2、§6.5、§6.5.1）、README、PRODUCT.md、DESIGN.md、`tests/e2e/README.md`、`CHANGELOG.md`、009 `log-fields.md`；憲章 Principle III 補列 GET 原為**建議、待使用者**（當時未執行 `/speckit-constitution`）；已變更：2026-10-22 使用者裁決、經 `/speckit-constitution` PATCH 落地為憲章 1.6.1，見 §15.6「ADR-003 覆核與憲章 1.6.1」。
 
 ---
 

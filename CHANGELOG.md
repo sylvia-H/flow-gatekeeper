@@ -29,7 +29,7 @@
 
 維護分支 `fix/20261021-ci-and-flaky`（自 `develop` `27bc587`）；現況摘要與裁決見指南 §15.6「CI 恢復自動觸發與 flaky 測試」。
 
-SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1cdb69`；spec／plan／tasks 見 `specs/012-stream-resilience/`，設計決策見 `docs/adr-003-completion-semantics.md`，代理裁決第 1～63 條待使用者覆核）；契約升 asyncapi **1.4.0**。修掉 2.1.0 帶著發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治（含失敗終態寬限）。
+SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1cdb69`；spec／plan／tasks 見 `specs/012-stream-resilience/`，設計決策見 `docs/adr-003-completion-semantics.md`，代理裁決第 1～63 條原待使用者覆核；第 1、9、17、63 條與 §7.1 已於 2026-10-22 覆核，其餘待覆核）；契約升 asyncapi **1.4.0**。修掉 2.1.0 帶著發布的 AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治（含失敗終態寬限）。
 
 維護分支 `fix/20261022-ui-zero-count-neutral`（自 `develop` `eb60786`）：013 UI 待辦「零值計數改中性色」；現況摘要見指南 §15.6「零值計數中性色」。
 
@@ -38,6 +38,8 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 維護分支 `fix/20261022-ui-tab-title-alert`（自 `fix/20261022-ui-humanize-error-zh` 尖端開出、併回 develop 時以 develop 為準）：013 UI 待辦「分頁 title／favicon 嚴重告警」；現況摘要見指南 §15.6「分頁標題與 favicon 告警」。
 
 維護分支 `fix/20261022-ui-steps-heading`（自 `fix/20261022-ui-tab-title-alert` 尖端開出、併回 develop 時以 develop 為準）：013 UI 待辦「進行中步驟清單加小標」；現況摘要見指南 §15.6「處理步驟小標」。
+
+維護分支 `docs/20261022-adr003-review`（自 `develop` `5732795`）：使用者覆核 ADR-003 代理裁決（第 1、9、17、63 條與 §7.1）、憲章 1.6.1 補列 GET；現況摘要見指南 §15.6「ADR-003 覆核與憲章 1.6.1」。
 
 ### 相容性注意（升級前必讀）
 
@@ -101,6 +103,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 
 - **`JobRoutingRegistry` 自 `AiStreamRelayService` 抽出**：兩支 relay、`JobsService` 與新的 `DiagnosisLookupService` 都經它存取綁定；孤兒回收的 warn 日誌 context 由 relay 改為 `JobRoutingRegistry`（009 `log-fields.md` §3 已同步）。
 - **逐檔覆蓋率門檻由 10 檔增為 13 檔**（合併門第 1 輪）：`vitest.config.ts` 加入 `job-routing-registry.ts`、`diagnosis-lookup.service.ts`、`job-status-payload.ts`，推翻 plan 階段「新檔不加入逐檔門檻」的決定（ADR-003 §7.1）。另新增真 Redis 整合測試 `apps/api/src/integration/diagnosis-lookup.int.test.ts` 與 `apps/worker/src/integration/bullmq-lifecycle.int.test.ts`。
+- **憲章 1.6.1（`docs/20261022-adr003-review`）**：Principle III「三端契約」的 HTTP 範圍補列 `GET /diagnoses/:jobId`（query／成功 response 以 Zod 定義於 contracts），依 ADR-003 第 9 條由使用者裁決 PATCH；ADR-003 第 1、9、17、63 條與 §7.1 待覆核點（T081 除外）已由使用者覆核、皆維持（各條下「覆核」行）。
 
 - **修正 `TopBar.test.ts`「Escape 收回」的不穩定**（2026-10-19 nightly mutation 的 dry run 失敗，`expected false to be true`；同一 commit 前後兩天都通過）：Vue 的事件 invoker 會略過時間戳 ≤ 監聽器掛上時間的事件，時間戳精度只到毫秒；覆蓋式搜尋剛展開、同一毫秒內從輸入框送出的 Escape，冒泡到覆蓋外框時被當成「掛上前的事件」略過，沒有 `preventDefault`。真實按鍵不會在掛載的同一毫秒內發生，元件不改；該 describe 改以假時鐘固定 `Date`，展開後明確推進 1 ms，結果不再取決於機器快慢。同組的「輸入法組字中的 Escape」原本也可能因同一原因空過，現在確實走到元件的組字判斷。
 
@@ -110,7 +113,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
   - **WS**：`job/status` 新增 optional `attempt`／`execution`／`reason`（開放字串 `z.string()`，已知值 `"stalled"`）／`cached`，`completed` 帶 `result`（權威完成；描述修正 DOC-29 的 "optionally carrying the final result"）；`ai/done` 改為可重複、可遺失的 best-effort；`ai/error.code` 新增已知值 `persist_failed`。仍為 12 個 channel、無新 message。
   - **HTTP**：新增 `GET /diagnoses/:jobId?socketId=[&previousSocketId=]`——200 四種（`completed`／`failed`／`waiting`／`active`）、400、404、409 `socket_unauthorized`／`job_bound_elsewhere`、429（nginx）、503；query 與 200 回應以 Zod 定義（`DiagnosisLookupQuerySchema`、`DiagnosisLookupResponseSchema`），錯誤 body 依憲章 III 例外 (b) 不另定 schema、語意記於 `asyncapi.yaml` `info.description`。
   - **傳輸型別**：`DiagnosisJobReturnValue`（BullMQ `returnvalue`）、`DiagnosisJobProgress`（progress 物件），消費端 `safeParse`（憲章 III 例外 (c)）。
-  - 明細見下方「asyncapi 契約版本」1.4.0。憲章 Principle III 補列 GET 為建議、待使用者（未執行 `/speckit-constitution`）。
+  - 明細見下方「asyncapi 契約版本」1.4.0。憲章 Principle III 補列 GET 原為建議、待使用者；2026-10-22 使用者裁決後已落地為憲章 1.6.1（`docs/20261022-adr003-review`）。
 
 ## [2.1.0] - 2026-10-18
 
