@@ -2,7 +2,7 @@
 
 | 項目 | 內容 |
 | --- | --- |
-| 狀態 | Accepted（2026-10-21，離席期間代理裁決、待使用者覆核；覆核後移除此註） |
+| 狀態 | Accepted（2026-10-21 離席期間代理裁決；2026-10-22 使用者覆核第 1、9、17、63 條與 §7.1 全部待覆核點（T081 除外），皆維持／接受，第 9 條落地為憲章 1.6.1；其餘條仍待覆核，覆核完畢後移除此註） |
 | 日期 | 2026-10-21 |
 | 範圍 | 診斷 job 的「完成」以哪個訊號為準、結果如何讀回、重連如何續接、重複執行如何冪等、BullMQ 鎖參數與前端 45 s watchdog 的關係、同簽章失敗的去重 |
 | 相關 | 第三輪審查 `docs/20260927-research-review03.md` §3.2、§3.3、§5.2、§5.4（012-lite 列）、§5.5、§5.6、§7；ADR-001（原生 ws）；ADR-002 §3 第 5 列、§6.1（單實例狀態）、§6.2（Pub/Sub at-most-once，本 ADR 落地時改寫「生產路徑」）、§6.5「結果讀取與完成語意」列、§6.5.1 WK-4 列與「失敗終態沒有 relay 寬限」列；`CHANGELOG.md` `[2.1.0]` 相容性注意（AR-4、AR-S7、WK-13、WK-4 補強、AR-5 根治帶著發布）；指南 §15.5、§15.6「第三輪審查 quick-fix」（含「roadmap 版號順延」）、§15.7 012-lite 藍圖；憲章 Principle III／IV／V；roadmap **012-lite**（契約 asyncapi **1.4.0**） |
@@ -363,9 +363,10 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 
 ## 7. 代理裁決清單（2026-10-21，使用者離席期間，待覆核）
 
-使用者離席期間授權對 012-lite 的技術決策採建議項，逐題記錄如下（第 1～11 條為首批，第 12～14 條為整理定稿時發現的矛盾與缺口，經協調者同日補裁；第 9 條同日改寫為「只建議、不在離席期間修訂」；第 15～16 條為 specify 階段補裁、第 17～21 條為 clarify 階段補裁；第 22～46 條為 plan 階段自行決定的設計點（`specs/012-stream-resilience/research.md` 文末 P1～P25，第 n 條＝P(n−21)；P25 為 analyze 階段補）、第 47～48 條為 checklist 階段推導（`checklists/resilience.md` Notes 第 3 點）、第 49～51 條為實作交叉審查補裁，三批皆於 T075 補錄（spec FR-040）；第 52～54 條為 web 交叉審查補裁（US2），皆同日；第 55～56 條為 2026-10-22 合併門第 1 輪 web 審查補裁、第 57 條為同輪契約／文件審查補裁；第 58～63 條為合併門第 2 輪補裁——58～60 worker 審查、61～62 api 審查、63 web 審查）。**第 1 條與第三輪報告的建議不同**，覆核時請優先看；第 45 條的前提已由第 51 條更正，兩條請一起看。覆核後若有推翻，於本節記為推翻紀錄（原提案／裁決），並移除檔頭的「待覆核」註。
+使用者離席期間授權對 012-lite 的技術決策採建議項，逐題記錄如下（第 1～11 條為首批，第 12～14 條為整理定稿時發現的矛盾與缺口，經協調者同日補裁；第 9 條同日改寫為「只建議、不在離席期間修訂」；第 15～16 條為 specify 階段補裁、第 17～21 條為 clarify 階段補裁；第 22～46 條為 plan 階段自行決定的設計點（`specs/012-stream-resilience/research.md` 文末 P1～P25，第 n 條＝P(n−21)；P25 為 analyze 階段補）、第 47～48 條為 checklist 階段推導（`checklists/resilience.md` Notes 第 3 點）、第 49～51 條為實作交叉審查補裁，三批皆於 T075 補錄（spec FR-040）；第 52～54 條為 web 交叉審查補裁（US2），皆同日；第 55～56 條為 2026-10-22 合併門第 1 輪 web 審查補裁、第 57 條為同輪契約／文件審查補裁；第 58～63 條為合併門第 2 輪補裁——58～60 worker 審查、61～62 api 審查、63 web 審查）。**第 1 條與第三輪報告的建議不同**，覆核時請優先看；第 45 條的前提已由第 51 條更正，兩條請一起看。覆核後若有推翻，於本節記為推翻紀錄（原提案／裁決），並移除檔頭的「待覆核」註。**2026-10-22 使用者覆核**：第 1、9、17、63 條與 §7.1 全部待覆核點（T081 除外）逐題確認，皆維持／接受（各條下「覆核」行）；第 9 條落地為憲章 1.6.1。其餘條待下次覆核。
 
 **1. BullMQ lock／stalled／maxStalled 與 keepalive 間隔**（D4）
+- **覆核**：2026-10-22 使用者覆核——維持 15／5／2＋keepalive 10 s。
 - 影響範圍：worker 被強制終止（SIGKILL、OOM）後，AI 診斷面板多久看到「重新派送」說明或結果、45 秒「結果未知，請重試」是否誤觸；worker 的 BullMQ Worker options（README 常數說明）；Redis 寫入頻率。
 - 裁決：lock 15 s／stalled 5 s／maxStalled 2、keepalive 10 s。**與第三輪報告不同**（報告 15／10／2）。
 - 理由：報告值在 keepalive 10 s 下最壞無事件時間是 10＋15＋2×10＝45 s，正好等於 watchdog——首 token 前被殺時使用者會看到「結果未知，請重試」，3～5 s 後重派又開始跑，按了重試就多一個請求；stalled 5 s 把上界壓到 35 s，代價只是每 5 s 一次 stalled Lua（微秒級），誤判率不變（看的是 lock）。報告的「上界約 35 s」是 L＋2S，沒算 keepalive 間隔。
@@ -414,6 +415,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - 替代方案：共用 POST 的桶；GET 不限流。
 
 **9. 憲章 Principle III 補列 GET**（D8 第 6 點）
+- **覆核**：2026-10-22 使用者裁決——現在 PATCH 補列；已落地為憲章 1.6.1（`.specify/memory/constitution.md` Principle III「三端契約」）。
 - 影響範圍：`.specify/memory/constitution.md` Principle III（1.6.0 → 1.6.1）；GET 回應 schema 的義務層級。
 - 裁決：ADR-003 與 spec 記錄**建議**以 PATCH 修訂 Principle III、補列 `GET /diagnoses/:jobId`；實際 `/speckit-constitution` **待使用者確認**，不在離席期間做（改流程規則屬單向門）。GET 的 query 與成功回應仍以 Zod 定義於 contracts（由本 ADR 與 spec 要求，不等憲章修訂）。
 - 理由：GET 回應沒有 Zod 定義的話，之後改 handler 可能只回手寫物件，web 的 schema 驗證與 api 對不上時沒有閘門擋，所以 Zod 定義現在就做；憲章補列只是把既有原則延伸到新端點的措辭澄清，晚一點修訂不影響實作，但屬單向門，要使用者本人決定。
@@ -462,6 +464,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - 替代方案：直接 500（讓問題浮現，但使用者看到的是「連線中斷，請重試」而結果其實在庫裡）。
 
 **17. 同一分頁重連時舊連線尚未被回收的 409 誤判**（D8、D10；spec FR-007、FR-009、FR-016、FR-032、SC-005；clarify 階段補）
+- **覆核**：2026-10-22 使用者覆核——維持 `previousSocketId`（本專案無多分頁的產品需求，此欄位解的是單一分頁閃斷重連被誤判為第二個視窗）。
 - 影響範圍：網路閃斷（換 Wi-Fi、筆電睡醒）後重連的 AI 診斷面板——原本會誤顯示「這個診斷正由另一個視窗接收，請在該視窗查看或重試」，結果繼續送往已死的舊連線；`GET /diagnoses/:jobId` 的 query（新增 optional `previousSocketId`，`http.ts` 的 `DiagnosisLookupQuerySchema`）；`JobRoutingRegistry` 的改綁判斷；web 對每個任務多記一個 socketId。
 - 裁決：GET 新增 optional `previousSocketId`（UUID）。web 對每個任務記住最後一次成功綁定的 socketId（POST 送出時的 socketId，或 GET 回 `rebound: true` 時的本次 socketId），所有 GET 都帶上；伺服器端原綁定仍在線、但等於 `previousSocketId` 時，比照「原綁定已離線」暫定改綁並記下原綁定以便撤回；不主動終止舊連線，交給心跳回收。
 - 理由：伺服器以心跳回收半開連線，`WS_HEARTBEAT_MS` 預設 15 s、回收上限約 30 s；瀏覽器端 pong 逾時（15＋5 s）或 `online` 事件後就重連，新連線很可能在舊連線被回收前 GET，照 D8 規則回 409——使用者在唯一的視窗看到「正由另一個視窗接收」，最後只能對一個還在跑的診斷按重試。`clientId` 只經 `system/connected` 送給連線本身，別的分頁拿不到，所以不放寬「兩個視窗不互搶」。代價：query 多一個 optional 欄位、registry 多一個分支與對應測試。
@@ -755,6 +758,7 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 **以下第 63 條：合併門第 2 輪 web 審查補裁（2026-10-22，待覆核）**
 
 **63. 斷線期間凍結 45 s watchdog 與 2 s 退路**（D10、D11；取代 §7.1「斷線超過約 45 s 時不再續接」的接受；來源：合併門第 2 輪 web 審查 M1）
+- **覆核**：2026-10-22 使用者覆核——維持凍結。
 - 影響範圍：WS 斷線期間 AI 診斷面板的進行中任務——不再在斷線中途轉「超過 45 秒沒有收到進度，結果未知，請重試」或「結果未送達」；`copilot.store.ts` `checkStalls` 的觸發條件。
 - 裁決：`checkStalls` 以連線狀態為條件：連線**斷開**時跳過 45 s watchdog 與 2 s 退路，交由重連 → 授權 → 續接 GET 收尾；已連線但尚未授權時不跳過（授權失敗仍由 watchdog 承接，第 47 條）。
 - 理由：斷線時 watchdog 與退路發出的 GET 帶的是舊 socketId，必回 409 `socket_unauthorized` 或網路錯誤，把可能已在後端完成的診斷誤標「結果未知」，而且任務已不是進行中，重連後也不會再續接——使用者只能對已完成的診斷按重試。代價：長時間斷線時任務一直停在「進行中」（頂部橫幅顯示斷線、使用者可中止診斷）。
@@ -766,25 +770,25 @@ watchdog 維持牆上時鐘（ADR-002 §6.5.1「45 s watchdog 仍用牆上時鐘
 - D12：「失敗終態沒有 relay 寬限」原本未處理，ADR-002 §6.5.1 該列的追蹤位置要改。→ 已由第 12 條裁決納入 012-lite。
 - 接點表 #11：以 `execution > 1` 顯示「重新派送」會誤標重試與限流延後。→ 已由第 13 條裁決改為只看 `reason`。
 - D8／D10：GET 的 409 先後矛盾、404／409 文案與接點表不一致，整理時已修正（協調者同意採此修法）。→ 之後再由第 17 條（`previousSocketId`）、第 23 條（409 分 `code`）、第 25 條（503）擴充，D8、D10 本文已於 T075 同步（2026-10-21）；修法本身仍待覆核。
-- D12：快取命中 1 h 後 GET 404、POST 冪等延伸到 1 h 後，兩點為草稿補充、隨定稿採用，仍待覆核。
+- D12：快取命中 1 h 後 GET 404、POST 冪等延伸到 1 h 後，兩點為草稿補充、隨定稿採用。→ 2026-10-22 使用者覆核接受。
 - （T075 補，2026-10-21）D3「『結果未送達』救回的例外改由 D10 取代」與第 15 條（保留並擴充救回）矛盾。→ 已以第 15 條為準，D3 加更新段。
 - （T075 補）research P1～P25 只留在 research、未進 ADR（spec FR-040）。→ 已補錄為第 22～46 條。
 - （T075 補）checklist 階段推導的兩點（重連後授權失敗、SC-004 須證明重派）未進 ADR。→ 已補錄為第 47、48 條。
 - （T075 補）§4 殘餘風險原寫「停頓 > 45 s 且落在 LLM 串流中」，有了 `ai-result` 短路後窗口實際在「取鎖之後、送出 LLM 請求之前」；且有一種不雙打但 `cached` 標錯的情況。→ §4 已改寫；標錯的情況已由第 49 條吸收。
 - （T075 補）P24 的前提（fake 首 token 約在 progress 40 後 500 ms）與實作不符。→ 已由第 51 條更正；research P24／P25 的措辭修正列於 §6。
 - （T075 補）`ai-result` 暫存寫入失敗時中斷流程會多打一次 LLM。→ 已由第 50 條改為 best-effort。
-- （實作階段補，未編條，待覆核）**GET 回 `rebound: true` 前核對 owner**：BullMQ 查詢期間綁定可能已被另一個 GET 改綁走，回應前確認 `JobRoutingRegistry` 的 owner 仍是本次 socketId，不是就回 409 `job_bound_elsewhere`（D8 第 4 點）。代價只是一次 Map 讀取；不核對時兩個 GET 都會回 `rebound: true`，其中一個分頁以為自己在收事件、實際收不到，只能等 45 s watchdog。已寫入 data-model §2.4 與 contracts/diagnosis-lookup §3（2026-10-21 補，合併門第 1 輪確認）。
-- （實作階段補，未編條，待覆核）**終態綁定 × BullMQ 仍進行中回 503、不重判**（data-model §2.4「實作時更新」）：照理不可達；回 503 讓 web 稍後重試，不猜測要不要改綁（D8 第 4 點）。
+- （實作階段補，未編條，2026-10-22 使用者覆核接受）**GET 回 `rebound: true` 前核對 owner**：BullMQ 查詢期間綁定可能已被另一個 GET 改綁走，回應前確認 `JobRoutingRegistry` 的 owner 仍是本次 socketId，不是就回 409 `job_bound_elsewhere`（D8 第 4 點）。代價只是一次 Map 讀取；不核對時兩個 GET 都會回 `rebound: true`，其中一個分頁以為自己在收事件、實際收不到，只能等 45 s watchdog。已寫入 data-model §2.4 與 contracts/diagnosis-lookup §3（2026-10-21 補，合併門第 1 輪確認）。
+- （實作階段補，未編條，2026-10-22 使用者覆核接受）**終態綁定 × BullMQ 仍進行中回 503、不重判**（data-model §2.4「實作時更新」）：照理不可達；回 503 讓 web 稍後重試，不猜測要不要改綁（D8 第 4 點）。
 - （合併門第 1 輪補，2026-10-22）**瀏覽器端 UI 演練（T081）待使用者**：由第 57 條裁決交使用者驗收——quickstart §4 演練 2／3 的說明行、「重新連線後取回」、「原始串流（不完整）」與無「worker」「stalled」字樣，需在一鍵 demo（`AI_PROVIDER=fake`）實際操作確認；確認前 T081 維持 `[ ]`。
 - （合併門第 1 輪 web 審查補，2026-10-22）**斷線超過約 45 s 時不再續接**：→ **已由第 63 條處理**（合併門第 2 輪：斷線期間凍結 watchdog 與 2 s 退路，下列敘述為處理前的情況）。原記錄：斷線期間 45 s watchdog 照常計時，觸發時以**舊 socketId** 發 GET——舊連線已不在線，必回 409 `socket_unauthorized`，任務轉「超過 45 秒沒有收到進度，結果未知，請重試」，之後重連也不再續接（已不是進行中）。重連退避 1／2／4／8／16 s 加 30% 抖動，api 冷啟動超過約 19 s 時，重連成功到 watchdog 觸發只剩約 5～14 s 的餘裕。行為符合 D11「結果未知」的語意（後端可能已完成，使用者按重試以新 jobId 命中快取），列為待覆核的上界。替代方案：斷線期間凍結 watchdog（重連後才繼續計時；要改 `checkStalls` 與對應測試，且整條通道長時間壞掉時畫面會一直停在進行中）。
-- （合併門第 1 輪實作補，2026-10-21，未編條，待覆核；`561dee6`、`bac9426`、`97487f7`）：
+- （合併門第 1 輪實作補，2026-10-21，未編條，2026-10-22 使用者覆核接受（含 (f) 覆蓋率 13 檔）；`561dee6`、`bac9426`、`97487f7`）：
   - (a) **GET 先讀 state、再讀 job hash**（正確性條件）：反過來讀時，讀 hash 當下 job 仍在跑（沒有 `returnvalue`）、讀 state 時已 completed，會被當成 `returnvalue` 不合法而退到 MongoDB；快取命中的 job 不寫 `diagnoses`，於是誤回 404。先讀 state 的話，state 為 completed 時 hash 裡一定已有 `returnvalue`。寫入 data-model §2.4 與 contracts/diagnosis-lookup §3。
   - (b) POST 入列失敗時只刪本次建立的綁定（`deleteIfCurrent`），不誤刪別人的。
   - (c) worker 把 job 交回佇列（限流延後、關閉中）前先停 keepalive，避免交回後仍以舊執行送 progress。
   - (d) worker 端 `findDiagnosisResult` 加 `maxTimeMS` 5000（比照 context 查詢），Mongo 卡頓時冪等短路不無限期掛著。
   - (e) web `onAuthorized` 略過 POST 仍在往返的機台（job 可能還沒入列，GET 會 404 而誤轉「無法取回」），由 `resumeAfterPost` 在 POST 結束後補一次續接；`retryOnNewSocket` 作廢 GET 往返期間重連造成的結果，改以新連線重發。
   - (f) 逐檔覆蓋率門檻由 10 檔增為 13 檔：加入 `job-routing-registry.ts`、`diagnosis-lookup.service.ts`、`job-status-payload.ts`（推翻 research R11「新檔不加入逐檔門檻」；新檔都是行為核心，納入後重構時退步會被擋下）。
-- （合併門第 2 輪實作補，2026-10-22，未編條，待覆核；`0d97fc8`、`eb36537`、`48a20f7`）：
+- （合併門第 2 輪實作補，2026-10-22，未編條，同日使用者覆核接受；`0d97fc8`、`eb36537`、`48a20f7`）：
   - worker：第 58～60 條的落地細節見 data-model §3、§5（`ai-fail` 值加 `attempt`／`retryable`，只在 `marker.jobId === jobId && marker.attempt < attempt` 時忽略；等待者以 `retryable` 決定是否直接最終失敗；SET `ai-cache` 失敗只 warn）。
   - web：`lookup/result` 的 progress 只往前（大於目前值或目前為 null 才採用；回應讓任務換到新一輪或新一次執行時採用回應值）；重連時清掉 2 s 寬限起點 `backendCompletedAt`；同 jobId 的 `ai/token`／`job/status` 抵達即清「正在取回」，此後該次續接 GET 若失敗不轉失敗、交 watchdog（新連線確實在收事件，GET 失敗不代表取不回）。
   - api（第 61、62 條的落地細節）：`revertClaim` 把改綁期間補的 machineId／attempt／execution／deferred 寫回原物件再放回（參照不變）；新增 `touch(jobId, clientId, now)` 就地刷新 `boundAt`（僅綁定仍送往該 clientId 且未終態），unchanged × 進行中時呼叫；讀取期間綁定消失回 503（warn `binding vanished while reading job`）、owner 為別條連線回 409；`job.data.machineId` 非字串或不在機台名冊回 503 並撤回（rebound 且原綁定已有 machineId 時照常回應）；job hash 解析失敗（SyntaxError）warn 後退 MongoDB，其他錯誤仍 503；讀到終態且綁定為本 socket 原本那份、尚未標終態時 `markTerminal`；第一次讀到終態直接回應；Redis／Mongo 不可用的 warn 共用節流器、以 key 分開；rebound／衝突 info 的 clientId 改記 sha256 前 12 碼；400 的 `issues` params 與 query 各最多 5 則；新 job 的 GET 回 `progress: 0`（BullMQ 預設）；新增真 Redis 整合測試 `apps/api/src/integration/diagnosis-lookup.int.test.ts`。

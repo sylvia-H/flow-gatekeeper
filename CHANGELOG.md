@@ -38,6 +38,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 維護分支 `fix/20261022-ui-tab-title-alert`（自 `fix/20261022-ui-humanize-error-zh` 尖端開出、併回 develop 時以 develop 為準）：013 UI 待辦「分頁 title／favicon 嚴重告警」；現況摘要見指南 §15.6「分頁標題與 favicon 告警」。
 
 維護分支 `fix/20261022-ui-steps-heading`（自 `fix/20261022-ui-tab-title-alert` 尖端開出、併回 develop 時以 develop 為準）：013 UI 待辦「進行中步驟清單加小標」；現況摘要見指南 §15.6「處理步驟小標」。
+維護分支 `docs/20261022-adr003-review`：使用者覆核 ADR-003 代理裁決（第 1、9、17、63 條與 §7.1）、憲章 1.6.1 補列 GET；現況摘要見指南 §15.6「ADR-003 覆核與憲章 1.6.1」。
 
 ### 相容性注意（升級前必讀）
 
@@ -101,6 +102,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 
 - **`JobRoutingRegistry` 自 `AiStreamRelayService` 抽出**：兩支 relay、`JobsService` 與新的 `DiagnosisLookupService` 都經它存取綁定；孤兒回收的 warn 日誌 context 由 relay 改為 `JobRoutingRegistry`（009 `log-fields.md` §3 已同步）。
 - **逐檔覆蓋率門檻由 10 檔增為 13 檔**（合併門第 1 輪）：`vitest.config.ts` 加入 `job-routing-registry.ts`、`diagnosis-lookup.service.ts`、`job-status-payload.ts`，推翻 plan 階段「新檔不加入逐檔門檻」的決定（ADR-003 §7.1）。另新增真 Redis 整合測試 `apps/api/src/integration/diagnosis-lookup.int.test.ts` 與 `apps/worker/src/integration/bullmq-lifecycle.int.test.ts`。
+- **憲章 1.6.1（`docs/20261022-adr003-review`）**：Principle III「三端契約」的 HTTP 範圍補列 `GET /diagnoses/:jobId`（query／成功 response 以 Zod 定義於 contracts），依 ADR-003 第 9 條由使用者裁決 PATCH；ADR-003 第 1、9、17、63 條與 §7.1 待覆核點已由使用者覆核、皆維持（各條下「覆核」行）。
 
 - **修正 `TopBar.test.ts`「Escape 收回」的不穩定**（2026-10-19 nightly mutation 的 dry run 失敗，`expected false to be true`；同一 commit 前後兩天都通過）：Vue 的事件 invoker 會略過時間戳 ≤ 監聽器掛上時間的事件，時間戳精度只到毫秒；覆蓋式搜尋剛展開、同一毫秒內從輸入框送出的 Escape，冒泡到覆蓋外框時被當成「掛上前的事件」略過，沒有 `preventDefault`。真實按鍵不會在掛載的同一毫秒內發生，元件不改；該 describe 改以假時鐘固定 `Date`，展開後明確推進 1 ms，結果不再取決於機器快慢。同組的「輸入法組字中的 Escape」原本也可能因同一原因空過，現在確實走到元件的組字判斷。
 

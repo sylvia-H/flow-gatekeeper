@@ -3223,6 +3223,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 13 | `fix/20261022-ui-humanize-error-zh` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：AI 診斷失敗時未能分類的英文原文不再當主訊息，改顯通用繁中句、原文收進預設收合的「技術細節」 | 失敗訊息英文後援改繁中 |
 | 14 | `fix/20261022-ui-tab-title-alert` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：分頁標題與 favicon 隨嚴重台數與離線狀態變化（favicon 在執行期依目前主題的 token 組成） | 分頁標題與 favicon 告警 |
 | 15 | `fix/20261022-ui-steps-heading` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：AI 診斷面板進行中的步驟清單加小標「處理步驟」並以分隔線與原始串流隔開 | 處理步驟小標 |
+| 16 | `docs/20261022-adr003-review` | （以 `git log --first-parent --merges` 為準） | 使用者覆核 ADR-003 代理裁決第 1、9、17、63 條與 §7.1；憲章 1.6.1（Principle III 補列 `GET /diagnoses/:jobId`） | ADR-003 覆核與憲章 1.6.1 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」與「012-lite 串流韌性」；後者的完整藍圖與落地摘要在 §15.7），但不列入本表。
 
@@ -3509,6 +3510,10 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **進度列下的「目前步驟」摘要不動、不加小標**：那行是 12px「目前步驟 · 佇列 · 嘗試」，骨架填滿後清單被擠到捲動區下方時仍看得到目前步驟（critique 第二輪 Minor）；它是摘要、不是第二份清單。進度說明行的高度例外（代理裁決第 54 條）不受影響。
 - **驗證**：`CopilotDrawer.test.ts` 新增推擠式側欄與 bottom sheet 兩種版面下：進行中有唯一的「處理步驟」小標、`ol[aria-labelledby]` 對上小標 id 且有步驟、區塊帶 `border-t border-edge`、不在原始串流展開區之內且位在其後；閒置、已完成、失敗三態不渲染小標與步驟區塊；既有「步驟標籤全中文」測試改由 `copilot-steps` 區塊取清單。web 全套 vitest（70 檔、1420 測試）、`typecheck`、`lint` 通過。
 - **README 截圖**：`docs/screenshots/copilot-streaming.png` 拍於本分支之前，畫面中的步驟清單仍無小標、無分隔線；依「二進位資產只留最終版」本分支不重拍，於下次 release 重拍截圖時更新（`apps/web/scripts/screenshots.cjs --readme`）。README §9 的進行中區塊文字已改為現況（進度列下為目前步驟與任務 meta，最下方是帶小標的處理步驟清單）。
+
+**ADR-003 覆核與憲章 1.6.1**（`docs/20261022-adr003-review`，merge 以 `git log --first-parent --merges` 為準，2026-10-22）：
+- **做了什麼**：使用者回來後逐題覆核離席期間的代理裁決——ADR-003 §7 第 1 條（BullMQ 15／5／2＋keepalive 10 s）、第 17 條（`previousSocketId`）、第 63 條（斷線凍結 watchdog）與 §7.1 全部待覆核點（owner 核對、終態×進行中 503、D12 兩點、合併門第 1 輪實作補 (a)～(f)、第 2 輪實作補）皆維持／接受，各條下加「覆核」行、檔頭狀態列改寫；第 9 條（憲章 Principle III 補列 GET）裁決現在做：`/speckit-constitution` PATCH 1.6.0 → 1.6.1，「三端契約」的 HTTP 範圍由 `POST /diagnoses` 延伸為診斷 HTTP 端點（含 `GET /diagnoses/:jobId` 的 query／成功 response），契約變化記 CHANGELOG 的義務同樣涵蓋 GET。
+- **未覆核**：ADR-003 §7 其餘條（2～8、10～16、18～62）與指南 §15.6「分頁標題與 favicon 告警」的 UI-3（favicon 不開憲章例外）仍標待覆核；T081 瀏覽器手動演練待使用者驗收。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 
