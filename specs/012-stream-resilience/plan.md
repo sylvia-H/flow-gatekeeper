@@ -3,7 +3,7 @@
 **Branch**: `012-stream-resilience` | **Date**: 2026-10-21 | **Spec**: [spec.md](./spec.md)
 
 **Input**: Feature specification from `/specs/012-stream-resilience/spec.md`（FR-001～FR-047、SC-001～SC-011、Clarifications 兩輪共 19 題）；
-設計依據 [ADR-003](../../docs/adr-003-completion-semantics.md)（D1～D13、§6 回補清單、§7 代理裁決第 1～21 條，皆待使用者覆核）。
+設計依據 [ADR-003](../../docs/adr-003-completion-semantics.md)（D1～D13、§6 回補清單、§7 代理裁決第 1～21 條，皆待使用者覆核）。（已變更，2026-10-22：第 1、9、17 條已由使用者覆核，其餘待覆核，見 ADR-003 §7。）
 
 > **使用者離席期間產出**：技術決策沿用 ADR-003 代理裁決；plan 階段才浮現、spec／ADR 未定的設計點（P1～P24；analyze 階段補 P25）一律採
 > 「對使用者可見行為最保守、實作代價最小」的做法，列於 [research.md](./research.md) 文末，待覆核後記入 ADR-003 §7（第 22 條起）。

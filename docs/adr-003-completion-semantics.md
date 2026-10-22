@@ -262,7 +262,7 @@ BullMQ 的 stalled 判定（`moveStalledJobsToWait-9.lua`）：每次檢查先�
   （合併門第 2 輪更新，2026-10-22）WS 斷線期間跳過 2 s 退路，交由重連 → 授權 → 續接收尾（第 63 條）；救回來源的實際範圍見 D3 的更新段（第 55 條）。
 - **attempt** 改由 `job/status.attempt` 推進；`ai/token` 的 attempt 判斷保留（換輪清空邏輯不變）。`MAX_ATTEMPTS`（`CopilotDrawer.vue:134`）收進 contracts 屬 010-lite，本 feature 不動。
 
-來源：第三輪報告 §5.4（`completed` 帶 result 即收尾、`onReconnect` 先 GET、Attempt 改用 `job/status.attempt`）；授權後才 GET、2 s 退路與失敗文案為 ADR-003 代理裁決第 10、11 條；救回為第 15 條、`previousSocketId` 為第 17 條（已覆核 2026-10-22）、重連旗標為第 20 條、409 `code` 為第 23 條、503 為第 25 條、`recovered` 耗時為第 37 條、`onAuthorized` 為第 41 條、2 s 退路回進行中轉「結果未送達」為第 42 條、`rebound` 恆為 true 為第 43 條、授權失敗交給 watchdog 為第 47 條（15、20、23、25、37、41、42、43、47 待覆核）。
+來源：第三輪報告 §5.4（`completed` 帶 result 即收尾、`onReconnect` 先 GET、Attempt 改用 `job/status.attempt`）；授權後才 GET、2 s 退路與失敗文案為 ADR-003 代理裁決第 10、11 條；救回為第 15 條、`previousSocketId` 為第 17 條（已覆核 2026-10-22）、重連旗標為第 20 條、409 `code` 為第 23 條、503 為第 25 條、`recovered` 耗時為第 37 條、`onAuthorized` 為第 41 條、2 s 退路回進行中轉「結果未送達」為第 42 條、`rebound` 恆為 true 為第 43 條、授權失敗交給 watchdog 為第 47 條（10、11、15、20、23、25、37、41、42、43、47 待覆核）。
 
 ### D11. 逾時語意「結果未知」
 
