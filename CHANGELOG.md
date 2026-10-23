@@ -41,6 +41,8 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 
 維護分支 `docs/20261022-adr003-review`（自 `develop` `5732795`）：使用者覆核 ADR-003 代理裁決（第 1、9、17、63 條與 §7.1）、憲章 1.6.1 補列 GET；現況摘要見指南 §15.6「ADR-003 覆核與憲章 1.6.1」。
 
+維護分支 `fix/20261023-deps-security`（自 `develop` `f7a7396`）：相依套件與 Node 基底映像的資安修補（2026-10-23 audit）；現況摘要見指南 §15.6「相依套件資安修補」。
+
 ### 相容性注意（升級前必讀）
 
 - **`ai/done` 可重複、可遺失**（契約 1.4.0，ADR-003 D3）：同一 jobId 再執行（stalled 重派、重試）時會再送一則 `ai/done`，通常帶相同結果；罕見的殘餘情況（ADR-003 §4：停頓剛好落在取鎖之後、送出 LLM 請求之前）下再執行可能帶不同結果，client 以先收到者為準，Pub/Sub 斷線時也可能收不到。權威完成是帶 `result` 的 `job/status: completed`。**自寫 WS client MUST 以 jobId 去重**、以收到的第一個完成為準；只認 `ai/done` 的 client 會把同一結果顯示兩次，或在 Pub/Sub 斷線時永遠等不到結果。
@@ -88,6 +90,14 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 - **機群健康的零值計數改中性色**（013 critique 2026-10-17「零值計數仍染狀態色」）：rail 面板與手機摘要條的四類計數為 0 時，數字由狀態色（`*-fg`／停滯 ink）改為中性 `ink-3`，非 0 維持原色；「嚴重 0」不再染紅。狀態點仍保留狀態色作圖例鍵，比例條 0 佔比本來就不渲染；比例條與摘要條的可讀名稱不變。
 - **未能分類的錯誤不再照顯英文原文**（013 critique 2026-10-17「`humanizeError` < 120 字後援可能英文」）：AI 診斷失敗時，錯誤沒命中已知分類（金鑰、限流、逾時、連線、格式、寫庫、多次中斷）且原文是短的英文句，主訊息由英文原文改為「診斷失敗，請重試。」，原文收進失敗訊息下方預設收合的「技術細節」（12px 小字展開鈕，展開後以等寬字顯示）供排錯；原文已是中文的短句照顯，長堆疊與多行原文維持只顯示通用句、不上畫面。已知分類的固定句與判斷順序不變；live region 公告只念主訊息。依英文原文做畫面比對的劇本需改比對「診斷失敗，請重試。」。
 - **進行中的處理步驟清單加小標「處理步驟」**（013 critique 2026-10-17「進行中步驟清單緊接『原始串流』鈕下方像其內容」）：AI 診斷面板進行中時，最下方的步驟清單前加小標「處理步驟」（字級與結果區段標頭相同），並以分隔線與上方的「原始串流」展開區隔開，不再被看成串流的展開內容；清單的可讀名稱改由小標提供（`aria-labelledby`，原本是 `aria-label`「診斷處理步驟」）。進度列下的「目前步驟」摘要不變。推擠式側欄與 bottom sheet 相同。
+
+### Security
+
+- **相依套件資安修補**（`fix/20261023-deps-security`，2026-10-23 `pnpm audit`：critical 1／high 3／moderate 10／low 1 → 只剩 high 1）：
+  - **執行期**：`proxy-addr` 2.0.7 → **2.0.8**（critical GHSA-jqcg-44mw-7w3h，經 `@nestjs/platform-express` → express，IPv4-mapped IPv6 可偽造 trust 子網的來源 IP）、`fast-copy` 4.0.4 → **4.2.0**（moderate GHSA-jggr-w7fw-pc2j，經 `packages/shared` 的 `pino-pretty`）。皆以 root `pnpm.overrides` 設下限，與既有 postcss／nanoid 同法。
+  - **建置與開發工具**：`vite` 7.3.6 → **7.3.7**（apps/web，high GHSA-587h-7wmj-h5pm 等 5 項）、`vitest`／`@vitest/coverage-v8` 4.1.11 → **4.1.12**（帶入 `@vitest/mocker` 4.1.12，moderate 2 項；同主版號）；overrides 另加 `source-map-js` → **1.2.2**（high，經 `@vitest/coverage-v8`）、`qs` → **6.16.0**（moderate 3 項，經 `@stryker-mutator/core`）、`postcss-selector-parser` → **7.1.6**（moderate GHSA-rj75-hqrm-r3gf，經 tailwindcss 3；tailwind 3 宣告 `^6.1.2`，6.x 線沒有修正版，override 跨主版號——`apps/web` 的 `vite build` 產物在 override 前後逐位元組相同）。
+  - **Docker 基底映像**：api／worker（builder 與 runtime stage）與 web（builder stage）由 `node:22.23.3-alpine` 改釘 **`node:22.23.4-alpine`**（同線修補版，tag＋digest 一起改）；部署者需重建映像才會換上。redis／mongo 映像不變。
+  - **仍殘留（無修正版、僅開發用）**：`braces` 3.0.3（high GHSA-vfj7-8cjw-p6xm，經 `@stoplight/spectral-cli` → fast-glob → micromatch，只在 `pnpm contract:lint` 使用；上游 patched range 為 `<0.0.0`），保留 spectral-cli、待上游修正。
 
 ### Fixed
 

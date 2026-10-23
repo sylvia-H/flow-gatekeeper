@@ -321,7 +321,7 @@ worker ──publish── ai-stream:<jobId> (Redis Pub/Sub) ──▶ Gateway �
 - **瀏覽器只面對單一入口** `http://localhost:8080`：nginx 同時提供 web 靜態產物、並把 `/ws`、`/diagnoses` 同源反向代理至 `api:3000`——api **不對外暴露連接埠**，拓樸關鍵值（`API_PORT`、`REDIS_HOST`、`MONGO_URL`）一律由 compose `environment` 釘死，不受各 app `.env` 檔漂移影響。
 - 開發模式（host 直跑，`dev-up.ps1`）與 demo 容器模式共用**同一份** `docker-compose.yml`，只以 profile 分組切換，不是兩份平行設定；兩者刻意不同時啟動（`redis`／`mongo` 為共用資料層，混跑會互相干擾）。
 - `docker compose --profile demo down -v` 連同 volume 清除，重新 `up` 即回到初始狀態——demo 劇本因此**可重播**，不必擔心殘留狀態污染下一次展示。
-- **運維加固（2026-09 審查修復）**：base image 一律「tag＋digest」雙釘（`node:22.23.3-alpine`、`nginxinc/nginx-unprivileged:1.31.6-alpine`、`redis:7.4.11-alpine`、`mongo:7.0.43`）；建置用 BuildKit cache mount＋`pnpm fetch`＋`install --offline`，runtime image 不帶 packages 的 src／測試（`deploy --legacy` 產出的相依版本與 lockfile 一致，2026-09-27 乾淨 cache 實測，見「技術棧」部署列）；redis／mongo 加 healthcheck，api／worker／seed 以 `service_healthy` 等依賴真正可用；每個服務都有 `deploy.resources.limits` 與 json-file log 輪替（10MB × 3）；redis 設 `maxmemory 256mb`＋`noeviction`（BullMQ 要求）；web 改非 root 的 `nginx-unprivileged`，並加安全 header（CSP 等）、gzip 與靜態資源快取策略。
+- **運維加固（2026-09 審查修復）**：base image 一律「tag＋digest」雙釘（`node:22.23.4-alpine`（2026-10-23 由 22.23.3 升級）、`nginxinc/nginx-unprivileged:1.31.6-alpine`、`redis:7.4.11-alpine`、`mongo:7.0.43`）；建置用 BuildKit cache mount＋`pnpm fetch`＋`install --offline`，runtime image 不帶 packages 的 src／測試（`deploy --legacy` 產出的相依版本與 lockfile 一致，2026-09-27 乾淨 cache 實測，見「技術棧」部署列）；redis／mongo 加 healthcheck，api／worker／seed 以 `service_healthy` 等依賴真正可用；每個服務都有 `deploy.resources.limits` 與 json-file log 輪替（10MB × 3）；redis 設 `maxmemory 256mb`＋`noeviction`（BullMQ 要求）；web 改非 root 的 `nginx-unprivileged`，並加安全 header（CSP 等）、gzip 與靜態資源快取策略。
 
 ### 🔭 11. 可觀測性基線（009）
 

@@ -250,7 +250,7 @@ flow-gatekeeper/
 | 工具 | 建議版本 | 用途 | 確認指令 |
 | --- | --- | --- | --- |
 | Git | 最新穩定版 | branch、commit、Spec Kit feature flow | `git -v` |
-| Node.js | 22（以 repo 根 `.nvmrc` 為準，CI 同讀此檔；root `engines` 要求 `>=22.12`（Vite 7／plugin-vue 6 的最低需求）；Dockerfile 另釘 `node:22.23.3-alpine`，同屬 22 線且滿足 engines，三者關係見 §15.6 技術棧升級小節） | web/api/worker runtime | `node -v` |
+| Node.js | 22（以 repo 根 `.nvmrc` 為準，CI 同讀此檔；root `engines` 要求 `>=22.12`（Vite 7／plugin-vue 6 的最低需求）；Dockerfile 另釘 `node:22.23.4-alpine`（2026-10-23 由 22.23.3 升級），同屬 22 線且滿足 engines，三者關係見 §15.6 技術棧升級小節） | web/api/worker runtime | `node -v` |
 | pnpm | 10（以 root `package.json` 的 `packageManager` 為準，現釘 `pnpm@10.34.5`；`corepack enable` 自動取得） | monorepo workspace | `pnpm -v` |
 | Docker Desktop | 最新穩定版 | Redis + MongoDB | `docker -v` |
 | uv | 最新穩定版 | 安裝 Spec Kit CLI | `uv --version` |
@@ -284,7 +284,7 @@ corepack enable   # 依 root package.json 的 packageManager 取得對應 pnpm�
 pnpm -v
 ```
 
-使用 Node 22（版本單一來源為 repo 根的 `.nvmrc`，CI 以 `node-version-file: .nvmrc` 讀取、Dockerfile 用 `node:22.23.3-alpine`（tag＋digest 雙釘）；root `engines.node` 要求 `>=22.12`，本機 22 線請用 22.12 以上）。若你用 nvm/nvs/fnm，先切好版本再初始化專案。PATH 上沒有 `pnpm` 時，可一律改用 `corepack pnpm <指令>`。
+使用 Node 22（版本單一來源為 repo 根的 `.nvmrc`，CI 以 `node-version-file: .nvmrc` 讀取、Dockerfile 用 `node:22.23.4-alpine`（tag＋digest 雙釘）；root `engines.node` 要求 `>=22.12`，本機 22 線請用 22.12 以上）。若你用 nvm/nvs/fnm，先切好版本再初始化專案。PATH 上沒有 `pnpm` 時，可一律改用 `corepack pnpm <指令>`。
 
 > 由來：起草時建議 Node 24 LTS、CI 範例寫 Node 20，三處不一致；2026-09-27 審查修復統一為 22 並以 `.nvmrc` 為單一來源（已落地）。
 
@@ -1019,7 +1019,7 @@ jobs:
       - uses: pnpm/action-setup@v4   # 版本讀 root package.json 的 packageManager
       - uses: actions/setup-node@v5
         with:
-          node-version-file: .nvmrc   # Node 版本單一來源（22）；須滿足 engines >=22.12，Dockerfile 另釘 22.23.3
+          node-version-file: .nvmrc   # Node 版本單一來源（22）；須滿足 engines >=22.12，Dockerfile 另釘 22.23.4
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm contract:lint
@@ -3224,6 +3224,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 14 | `fix/20261022-ui-tab-title-alert` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：分頁標題與 favicon 隨嚴重台數與離線狀態變化（favicon 在執行期依目前主題的 token 組成） | 分頁標題與 favicon 告警 |
 | 15 | `fix/20261022-ui-steps-heading` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：AI 診斷面板進行中的步驟清單加小標「處理步驟」並以分隔線與原始串流隔開 | 處理步驟小標 |
 | 16 | `docs/20261022-adr003-review` | （以 `git log --first-parent --merges` 為準） | 使用者覆核 ADR-003 代理裁決第 1、9、17、63 條與 §7.1；憲章 1.6.1（Principle III 補列 `GET /diagnoses/:jobId`） | ADR-003 覆核與憲章 1.6.1 |
+| 17 | `fix/20261023-deps-security` | （以 `git log --first-parent --merges` 為準） | 相依套件資安修補（proxy-addr critical、vite、vitest 4.1.12、source-map-js、qs、postcss-selector-parser、fast-copy）與 `node:22.23.4-alpine` 基底映像 | 相依套件資安修補 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」與「012-lite 串流韌性」；後者的完整藍圖與落地摘要在 §15.7），但不列入本表。
 
@@ -3281,7 +3282,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - `stop_grace_period`：worker 45s（AI 逾時 30s＋寫入 ≤10s＋緩衝；dedupe 等待迴圈會交回佇列、不計入；調高 `AI_TIMEOUT_MS`
     MUST 一併調高）、api 15s（stopProducer → flush 5s → `app.close()`）。**已變更**（2026-10-18）：兩端另有行程內關閉總時限——api 12 s、worker `AI_TIMEOUT_MS`＋10 s，逾時記 warn 後 `exit(0)`；兩端都對第一次訊號後 1 秒內的同名訊號視為重送而忽略，見下方「第三輪審查 quick-fix」。
   - base image tag＋digest 雙釘（`node:22.23.3-alpine`、`nginxinc/nginx-unprivileged:1.31.6-alpine`、`redis:7.4.11-alpine`、
-    `mongo:7.0.43`）；升版流程：`docker buildx imagetools inspect <image>:<tag>` 取新 digest，tag 與 digest 一起改。
+    `mongo:7.0.43`；**已變更**（2026-10-23）：node 改釘 `22.23.4-alpine`，見下方「相依套件資安修補」）；升版流程：`docker buildx imagetools inspect <image>:<tag>` 取新 digest，tag 與 digest 一起改。
   - 建置：BuildKit `RUN --mount=type=cache`＋`pnpm fetch`＋`pnpm install --offline --filter <app>...`；`pnpm deploy --legacy --prefer-offline`
     （legacy deploy 會跑一次解析、需要 registry metadata，**但版本仍依共用 lockfile**——2026-09-27 乾淨 cache 實測 api image 全部 production 套件與 `pnpm-lock.yaml` 逐一相同（計數方法與數字見 README「技術棧」部署列），見 ADR-002 §6.5；撰寫時曾寫「不讀 lockfile」，已更正。pnpm 10 起非 injected workspace 須加 `--legacy`，否則 `ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE`）。全棧 demo 需 BuildKit（Docker 23+ 預設）。
   - web runtime 改 `nginx-unprivileged`（uid 101），容器內 `listen 8080`、compose `8080:8080`（對外入口不變；現況為 `${WEB_BIND:-127.0.0.1}:8080:8080`，預設只綁本機）；`server_tokens off`、
@@ -3317,7 +3318,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   workspace 須加 **`--legacy`**（api／worker Dockerfile 已改）。root `engines.node` 由 `>=22` 收緊為 **`>=22.12`**（Vite 7／plugin-vue 6 最低需求）。
   Node 版本三者關係：repo 根 `.nvmrc` 為 **`22`**（開發與 CI 的版本單一來源，CI 以 `node-version-file` 讀取），Dockerfile 釘
   **`node:22.23.3-alpine`**（tag＋digest）作可重現建置，root `engines.node >=22.12` 是最低可用門檻——`.nvmrc` 解析出的 22 線最新版與
-  Dockerfile 的 22.23.3 都滿足它。
+  Dockerfile 的 22.23.3 都滿足它（**已變更**（2026-10-23）：Dockerfile 改釘 `node:22.23.4-alpine`，見下方「相依套件資安修補」）。
 - **建置**：`packages/shared` 補 `tsconfig.build.json` 排除測試檔。
 
 **第二輪審查修復**（`fix/20260927-research-review02`，merge `898ccfc`，報告 `docs/20260927-research-review02.md`）：
@@ -3515,6 +3516,15 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 
 - **做了什麼**：使用者回來後逐題覆核離席期間的代理裁決——ADR-003 §7 第 1 條（BullMQ 15／5／2＋keepalive 10 s）、第 17 條（`previousSocketId`）、第 63 條（斷線凍結 watchdog）與 §7.1 全部待覆核點（owner 核對、終態×進行中 503、D12 兩點、合併門第 1 輪實作補 (a)～(f)、第 2 輪實作補、D8／D10 修法）皆維持／接受，各條下加「覆核」行、檔頭狀態列改寫；第 9 條（憲章 Principle III 補列 GET）裁決現在做：`/speckit-constitution` PATCH 1.6.0 → 1.6.1，「三端契約」的 HTTP 範圍由 `POST /diagnoses` 延伸為診斷 HTTP 端點（含 `GET /diagnoses/:jobId` 的 query／成功 response），契約變化記 CHANGELOG 的義務同樣涵蓋 GET。
 - **未覆核**：ADR-003 §7 其餘條（2～8、10～16、18～62）與指南 §15.6「分頁標題與 favicon 告警」的 UI-3（favicon 不開憲章例外）仍標待覆核；T081 瀏覽器手動演練待使用者驗收。
+
+**相依套件資安修補**（`fix/20261023-deps-security`，自 `develop` `f7a7396`；merge 以 `git log --first-parent --merges` 為準，2026-10-23；變更明細見 `CHANGELOG.md` `[Unreleased]` 的 Security）：
+
+- **做了什麼**：`pnpm audit` 由 critical 1／high 3／moderate 10／low 1 降為只剩 high 1（braces，見下）。直接依賴：`apps/web` 的 `vite` `^7.3.7`、六處 `vitest` `^4.1.12` 與 root `@vitest/coverage-v8` `4.1.12`（同主版號 patch）。傳遞依賴以 root `pnpm.overrides` 設下限（與既有 postcss／nanoid 同法）：`proxy-addr@<2.0.8`、`source-map-js@<1.2.2`、`qs@<6.16.0`、`postcss-selector-parser@<7.1.6`、`fast-copy@<4.1.0`。三份 Dockerfile 的 node 基底由 `node:22.23.3-alpine` 改釘 `node:22.23.4-alpine@sha256:fe4f6d74…`（Docker Hub index digest，與 `docker buildx imagetools inspect` 一致）；redis／mongo 不動（主版號升級另案）。
+- **取捨**：
+  - **用 overrides、不等上游**：qs 被 stryker 的 typed-rest-client 2.3.1 釘死在 `6.15.1`、postcss-selector-parser 被 tailwind 3 限在 6.x，只能 override；proxy-addr（express `^2.0.7`）、source-map-js（magicast `^1.2.1`）、fast-copy（pino-pretty `^4.0.0`）在宣告範圍內重新解析也能修，但 lockfile 重生時不保證停在修正版，一併以 override 設下限，之後任何重新解析都不會退回有弱點的版本。
+  - **postcss-selector-parser 跨主版號**：tailwindcss 3 宣告 `^6.1.2`，6.x 線沒有修正版（GHSA-rj75-hqrm-r3gf 只在 7.1.6 修），override 讓 tailwind 吃 7.x。7.0.0 的破壞性變更只有「迭代中插入節點改為安全」；驗證方式是 override 前後各跑一次 `vite build`，`apps/web/dist` 逐位元組相同。
+  - **braces 保留**：`braces` 3.0.3（high GHSA-vfj7-8cjw-p6xm）由 `@stoplight/spectral-cli` → fast-glob → micromatch 帶入，上游 patched range 為 `<0.0.0`（無修正版），只在 `pnpm contract:lint` 開發時使用；使用者裁決保留 spectral-cli、不改 dlx。
+- **驗證**（Node 22.23.4）：`pnpm check`（contract:lint、typecheck、lint、五套件＋e2e harness 單元測試 2551 支）、`pnpm test:coverage`（148 檔、2520 支，門檻通過）、`pnpm build`、`pnpm test:e2e`（6 檔、14 場景，映像以 `node:22.23.4-alpine` 重建）全數通過。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：
 
