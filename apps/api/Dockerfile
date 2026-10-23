@@ -15,7 +15,7 @@
 # store 本身不進任何 image layer。base image 以「tag + digest」雙釘（重建可重現，升版兩者一起改）。
 
 # ---- builder：安裝 api 建置鏈、建置 contracts/shared/api、裁剪 production 依賴 ----
-FROM node:22.23.3-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402 AS builder
+FROM node:22.23.4-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS builder
 # corepack 依 root package.json 的 packageManager 取得 lockfile 對應的 pnpm（MUST 先有 package.json 在場，
 # 否則 corepack 會退回它自己的預設版本）
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -69,7 +69,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/root/.local/share/pnpm/store \
     pnpm --filter @flow-gatekeeper/api deploy --legacy --prod --prefer-offline --store-dir /root/.local/share/pnpm/store /out
 
 # ---- runtime：只帶裁剪產物，入口為建置產物（dev 工具不進 prod image）----
-FROM node:22.23.3-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+FROM node:22.23.4-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=builder /out .
