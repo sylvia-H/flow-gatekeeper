@@ -50,7 +50,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
-          # 與 Dockerfile（node:22.23.3-alpine）、root engines 同一來源：.nvmrc
+          # 與 Dockerfile（node:22.23.4-alpine）、root engines 同一來源：.nvmrc
           node-version-file: .nvmrc
           cache: pnpm
       # 不需先 build packages/*：typecheck／test 透過 exports 的 "development" condition 直接吃 src。
@@ -72,3 +72,23 @@ jobs:
       # 最後走一次 production 建置路徑（customConditions: [] → 解析 dist），
       # 補上 typecheck 改吃 src 後不再覆蓋到的「packages build → apps 依 dist 編譯」這段。
       - run: pnpm build
+
+  # prod 依賴的資安門檻（2026-10-23，使用者裁決：拆成獨立 job、與 check 並行；permissions／concurrency／觸發沿用上方 workflow 層級設定）。
+  # 防止新的 prod 依賴把 critical／high 帶進正式環境：只看 prod、只擋 high 以上，dev-only 的公告不會擋。
+  # 既有 prod 依賴出新公告時也會紅燈：先升級或加 override；確定是誤報（例如公告已撤銷但 registry 未更新）時，
+  # 在 root package.json 的 `pnpm.auditConfig.ignoreGhsas` 列入，並附理由與移除條件。
+  # 不加 `--ignore-registry-errors`：registry 故障時寧可紅燈，也不悄悄跳過檢查。
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4   # 版本讀 root package.json 的 packageManager
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          # setup-node v5 看到 packageManager 是 pnpm 會自動開 pnpm 快取；這個 job 不安裝依賴、pnpm store 不存在，
+          # 收尾存快取時會報 Path Validation Error 讓 job 失敗，所以明確關掉。
+          package-manager-cache: false
+      # 不裝依賴、不設 cache：pnpm audit 只讀 pnpm-lock.yaml；lockfile 能否安裝由並行的 check job 驗證（2026-10-23，使用者裁決）。
+      - run: pnpm audit --prod --audit-level=high
