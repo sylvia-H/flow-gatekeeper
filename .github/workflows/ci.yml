@@ -87,7 +87,5 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
-          cache: pnpm
-      # --ignore-scripts：audit 只需要依賴樹，不跑任何 lifecycle script。
-      - run: pnpm install --frozen-lockfile --ignore-scripts
+      # 不裝依賴、不設 cache：pnpm audit 只讀 pnpm-lock.yaml；lockfile 能否安裝由並行的 check job 驗證（2026-10-23，使用者裁決）。
       - run: pnpm audit --prod --audit-level=high
