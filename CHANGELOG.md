@@ -93,11 +93,11 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
 
 ### Security
 
-- **相依套件資安修補**（`fix/20261023-deps-security`，2026-10-23 `pnpm audit`：critical 1／high 3／moderate 10／low 1 → 只剩 high 1）：
-  - **執行期**：`proxy-addr` 2.0.7 → **2.0.8**（critical GHSA-jqcg-44mw-7w3h，經 `@nestjs/platform-express` → express，IPv4-mapped IPv6 可偽造 trust 子網的來源 IP）、`fast-copy` 4.0.4 → **4.2.0**（moderate GHSA-jggr-w7fw-pc2j，經 `packages/shared` 的 `pino-pretty`）。皆以 root `pnpm.overrides` 設下限，與既有 postcss／nanoid 同法。
-  - **建置與開發工具**：`vite` 7.3.6 → **7.3.7**（apps/web，high GHSA-587h-7wmj-h5pm 等 5 項）、`vitest`／`@vitest/coverage-v8` 4.1.11 → **4.1.12**（帶入 `@vitest/mocker` 4.1.12，moderate 2 項；同主版號）；overrides 另加 `source-map-js` → **1.2.2**（high，經 `@vitest/coverage-v8`）、`qs` → **6.16.0**（moderate 3 項，經 `@stryker-mutator/core`）、`postcss-selector-parser` → **7.1.6**（moderate GHSA-rj75-hqrm-r3gf，經 tailwindcss 3；tailwind 3 宣告 `^6.1.2`，6.x 線沒有修正版，override 跨主版號——`apps/web` 的 `vite build` 產物在 override 前後逐位元組相同）。
+- **相依套件資安修補**（`fix/20261023-deps-security`，2026-10-23 `pnpm audit`：critical 1／high 3／moderate 10／low 1 → 只列出已撤銷的 braces 公告，見下）：
+  - **執行期**：`proxy-addr` 2.0.7 → **2.0.8**（critical GHSA-jqcg-44mw-7w3h，經 `@nestjs/platform-express` → express，IPv4-mapped IPv6 可偽造 trust 子網的來源 IP），以 root `pnpm.overrides` 設下限，與既有 postcss／nanoid 同法。
+  - **建置與開發工具**：`vite` 7.3.6 → **7.3.7**（apps/web，high GHSA-587h-7wmj-h5pm 等 5 項）、`vitest`／`@vitest/coverage-v8` 4.1.11 → **4.1.12**（root 與六個子專案共七份 `package.json`；帶入 `@vitest/mocker` 4.1.12，moderate 2 項；同主版號）；overrides 另加 `source-map-js` → **1.2.2**（high，經 `@vitest/coverage-v8`，以及經 postcss 與 `@vue/compiler-*` 進 `vite build`）、`fast-copy` 4.0.4 → **4.2.0**（moderate GHSA-jggr-w7fw-pc2j，經 `packages/shared` 的 devDependency `pino-pretty`，只用於 dev 的 pretty log；prod 映像以 `pnpm deploy --prod` 建置、不含它；override 只比對 4.0.x）、`qs` → **6.16.0**（moderate 3 項，經 `@stryker-mutator/core`）、`postcss-selector-parser` → **7.1.6**（moderate GHSA-rj75-hqrm-r3gf，經 tailwindcss 3；tailwind 3 宣告 `^6.1.2`，6.x 線沒有修正版，override 跨主版號——`apps/web` 的 `vite build` 產物在 override 前後逐位元組相同）。
   - **Docker 基底映像**：api／worker（builder 與 runtime stage）與 web（builder stage）由 `node:22.23.3-alpine` 改釘 **`node:22.23.4-alpine`**（同線修補版，tag＋digest 一起改）；部署者需重建映像才會換上。redis／mongo 映像不變。
-  - **仍殘留（無修正版、僅開發用）**：`braces` 3.0.3（high GHSA-vfj7-8cjw-p6xm，經 `@stoplight/spectral-cli` → fast-glob → micromatch，只在 `pnpm contract:lint` 使用；上游 patched range 為 `<0.0.0`），保留 spectral-cli、待上游修正。
+  - **已撤銷的公告**：`braces` 3.0.3 的 GHSA-vfj7-8cjw-p6xm 已於 2026-10-23 撤銷；`pnpm audit` 在 registry 更新前仍可能列出（high），非實際弱點。路徑為 `@stoplight/spectral-cli` → fast-glob → micromatch，以及 tailwindcss 3.4.19 → chokidar 3.6.0／micromatch 4.0.8／fast-glob 3.3.3，用於建置與開發期（tailwind、contract:lint）。spectral-cli 保留。
 
 ### Fixed
 
