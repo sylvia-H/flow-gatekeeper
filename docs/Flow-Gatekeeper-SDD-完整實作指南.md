@@ -1022,6 +1022,7 @@ jobs:
           node-version-file: .nvmrc   # Node 版本單一來源（22）；須滿足 engines >=22.12，Dockerfile 另釘 22.23.4
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --prod --audit-level=high   # 只看 prod、high 以上才擋（2026-10-23 加入）
       - run: pnpm contract:lint
       - run: pnpm typecheck
       - run: pnpm lint
@@ -3224,7 +3225,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
 | 14 | `fix/20261022-ui-tab-title-alert` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：分頁標題與 favicon 隨嚴重台數與離線狀態變化（favicon 在執行期依目前主題的 token 組成） | 分頁標題與 favicon 告警 |
 | 15 | `fix/20261022-ui-steps-heading` | （以 `git log --first-parent --merges` 為準） | 013 UI 待辦：AI 診斷面板進行中的步驟清單加小標「處理步驟」並以分隔線與原始串流隔開 | 處理步驟小標 |
 | 16 | `docs/20261022-adr003-review` | （以 `git log --first-parent --merges` 為準） | 使用者覆核 ADR-003 代理裁決第 1、9、17、63 條與 §7.1；憲章 1.6.1（Principle III 補列 `GET /diagnoses/:jobId`） | ADR-003 覆核與憲章 1.6.1 |
-| 17 | `fix/20261023-deps-security` | （以 `git log --first-parent --merges` 為準） | 相依套件資安修補（proxy-addr critical、vite、vitest 4.1.12、source-map-js、qs、postcss-selector-parser、fast-copy）與 `node:22.23.4-alpine` 基底映像 | 相依套件資安修補 |
+| 17 | `fix/20261023-deps-security` | （以 `git log --first-parent --merges` 為準） | 相依套件資安修補（proxy-addr critical、vite、vitest 4.1.12、source-map-js、qs、postcss-selector-parser、fast-copy）與 `node:22.23.4-alpine` 基底映像；CI 加 `pnpm audit --prod --audit-level=high` | 相依套件資安修補 |
 
 之後的維護分支落地時，MUST 在本表補一列並在下方新增對應小節。改動跨 feature 現況的 SDD feature 也在本節末尾新增小節（目前為「013 UI 全面改版」與「012-lite 串流韌性」；後者的完整藍圖與落地摘要在 §15.7），但不列入本表。
 
@@ -3524,6 +3525,7 @@ feature 各自的範圍紀律。記錄在此，待三部曲收尾後再決定是
   - **用 overrides、不等上游**：qs 被 stryker 的 typed-rest-client 2.3.1 釘死在 `6.15.1`、postcss-selector-parser 被 tailwind 3 限在 6.x，只能 override；proxy-addr（express `^2.0.7`）、source-map-js（magicast `^1.2.1`）、fast-copy（pino-pretty `^4.0.0`）的修正版都在宣告範圍內，重新解析本來就會拿到；仍設 override 是為了防止 lockfile 被還原或合併時退回有弱點的版本。可移除條件：上游的宣告下限已涵蓋修正版（例如 express 改宣告 `^2.0.8`）、或該路徑的套件已不在依賴樹中時，逐條移除。
   - **postcss-selector-parser 跨主版號**：tailwindcss 3 宣告 `^6.1.2`，6.x 線沒有修正版（GHSA-rj75-hqrm-r3gf 只在 7.1.6 修），override 讓 tailwind 吃 7.x；同一條 override 也把 tailwind 帶入的 postcss-nested 6.2.0（宣告 `^6.1.1`）換成 7.x，但 `apps/web/postcss.config.js` 只用 `tailwindcss` 與 `autoprefixer`、未用 `tailwindcss/nesting`，目前沒有實際影響。7.0.0 的破壞性變更只有「迭代中插入節點改為安全」。驗證：override 前後各跑一次 `vite build`，`apps/web/dist` 逐位元組相同；合併門第 1 輪審查另以同一份 tailwind 3.4.19 分別搭 6.1.4 與 7.1.6 編譯，涵蓋 `[&>li]`、`[&.foo.bar:hover]`、`group-[.is-active]`、`hover:before:`、`has-[.x]`、`@apply` 等變體，輸出逐位元組相同（6574 bytes）。移除條件：tailwind 升 4，或上游把 postcss-selector-parser 的宣告範圍放寬到 7.x 時移除。
   - **braces 公告已撤銷**：`braces` 3.0.3 的 GHSA-vfj7-8cjw-p6xm 已於 2026-10-23 撤銷（`withdrawn_at` 2026-10-23T12:53:02Z，summary 為「Withdrawn Advisory」；patched `<0.0.0` 是撤銷標記，不是「尚無修正」）；`pnpm audit` 在 registry 更新前仍可能列出（high），非實際弱點。路徑為 `@stoplight/spectral-cli` → fast-glob → micromatch，以及 tailwindcss 3.4.19 → chokidar 3.6.0／micromatch 4.0.8／fast-glob 3.3.3，用於建置與開發期（tailwind、contract:lint，含 `apps/web` 的 `vite build`、dev server 與 web Dockerfile 的 builder stage）。spectral-cli 保留（使用者先前裁決，不改 dlx）。
+- **CI 加 prod audit 門檻**（合併門第 1 輪 L7，使用者裁決放進本分支）：`ci.yml` 在 `pnpm install --frozen-lockfile` 之後、契約 lint 之前加 `pnpm audit --prod --audit-level=high`，防止新的 prod 依賴把 critical／high 帶進正式環境。只看 prod 依賴、只擋 high 以上：dev-only 的公告（例如已撤銷但 registry 仍列出的 braces）不會擋；放在安裝之後第一步，有問題時不必等完整測試跑完。本機 2026-10-23 實跑結果為 `No known vulnerabilities found`、exit 0。README「一鍵全檢」與 ADR-002 §6.5.1 的 INF-8 餘項同步。
 - **驗證**（Node 22.23.4）：`pnpm check`（contract:lint、typecheck、lint、五套件＋e2e harness 單元測試 2551 支）、`pnpm test:coverage`（148 檔、2520 支，門檻通過）、`pnpm build`、`pnpm test:e2e`（6 檔、14 場景，映像以 `node:22.23.4-alpine` 重建）全數通過。lockfile 另有 `@jridgewell/sourcemap-codec` 1.5.5 → 1.6.0 的去重（升級 vite／vitest 時的連帶變動）。
 
 **013 UI 全面改版**（SDD feature `013-ui-redesign`，spec／plan／tasks 見 `specs/013-ui-redesign/`；屬 SDD feature 而非維護分支，不列入上表；變更明細見 `CHANGELOG.md` `[2.0.0]`）：

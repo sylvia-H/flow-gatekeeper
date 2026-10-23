@@ -98,6 +98,7 @@ SDD feature `012-stream-resilience`（012-lite 串流韌性，自 `develop` `e1c
   - **建置與開發工具**：`vite` 7.3.6 → **7.3.7**（apps/web，high GHSA-587h-7wmj-h5pm 等 5 項）、`vitest`／`@vitest/coverage-v8` 4.1.11 → **4.1.12**（root 與六個子專案共七份 `package.json`；帶入 `@vitest/mocker` 4.1.12，moderate 2 項；同主版號）；overrides 另加 `source-map-js` → **1.2.2**（high，經 `@vitest/coverage-v8`，以及經 postcss 與 `@vue/compiler-*` 進 `vite build`）、`fast-copy` 4.0.4 → **4.2.0**（moderate GHSA-jggr-w7fw-pc2j，經 `packages/shared` 的 devDependency `pino-pretty`，只用於 dev 的 pretty log；prod 映像以 `pnpm deploy --prod` 建置、不含它；override 只比對 4.0.x）、`qs` → **6.16.0**（moderate 3 項，經 `@stryker-mutator/core`）、`postcss-selector-parser` → **7.1.6**（moderate GHSA-rj75-hqrm-r3gf，經 tailwindcss 3；tailwind 3 宣告 `^6.1.2`，6.x 線沒有修正版，override 跨主版號——`apps/web` 的 `vite build` 產物在 override 前後逐位元組相同）。
   - **Docker 基底映像**：api／worker（builder 與 runtime stage）與 web（builder stage）由 `node:22.23.3-alpine` 改釘 **`node:22.23.4-alpine`**（同線修補版，tag＋digest 一起改）；部署者需重建映像才會換上。redis／mongo 映像不變。
   - **已撤銷的公告**：`braces` 3.0.3 的 GHSA-vfj7-8cjw-p6xm 已於 2026-10-23 撤銷；`pnpm audit` 在 registry 更新前仍可能列出（high），非實際弱點。路徑為 `@stoplight/spectral-cli` → fast-glob → micromatch，以及 tailwindcss 3.4.19 → chokidar 3.6.0／micromatch 4.0.8／fast-glob 3.3.3，用於建置與開發期（tailwind、contract:lint）。spectral-cli 保留。
+  - **CI 加 prod audit 門檻**：`.github/workflows/ci.yml` 在依賴安裝後跑 `pnpm audit --prod --audit-level=high`——只看 prod 依賴、high 以上才擋，dev-only 的公告不會擋；新的 prod 依賴帶進 critical／high 時 CI 會紅燈。
 
 ### Fixed
 

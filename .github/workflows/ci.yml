@@ -55,6 +55,8 @@ jobs:
           cache: pnpm
       # 不需先 build packages/*：typecheck／test 透過 exports 的 "development" condition 直接吃 src。
       - run: pnpm install --frozen-lockfile
+      # 防止新的 prod 依賴把 critical／high 帶進正式環境：只看 prod、只擋 high 以上，dev-only 的公告不會擋（2026-10-23，使用者裁決）。
+      - run: pnpm audit --prod --audit-level=high
       - run: pnpm contract:lint
       - run: pnpm typecheck
       - run: pnpm lint
